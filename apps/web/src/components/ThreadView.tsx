@@ -56,6 +56,7 @@ export function ThreadView({
   // Subscribes this client to the thread's timeline on the server.
   useEffect(() => {
     connection.send({ type: "thread.open", threadId: thread.id });
+    return () => void connection.send({ type: "thread.leave", threadId: thread.id });
   }, [thread.id]);
   // A thread opens at its end, unless it opens on a message picked in the quick search.
   // Set before the effects below, so the timeline sent back on opening keeps that message.

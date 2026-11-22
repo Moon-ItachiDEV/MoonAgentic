@@ -448,8 +448,26 @@ export class Hub {
         client.send({ type: "items", threadId: id, items: this.items(id) });
         return;
       }
+      case "thread.leave":
+        if (client.openThreadId === message.threadId) delete client.openThreadId;
+        return;
+      case "thread.setUnread":
+        this.requireThread(message.threadId);
+        this.updateThread(message.threadId, { unread: message.unread });
+        return;
+      case "project.markRead":
+        for (const t of this.store.listThreads()) {
+          if (t.projectId === message.projectId && t.unread) {
+            this.updateThread(t.id, { unread: false });
+          }
+        }
+        return;
       case "thread.open":
         client.openThreadId = message.threadId;
+        // Opened: read.
+        if (this.store.getThread(message.threadId)?.unread) {
+          this.updateThread(message.threadId, { unread: false });
+        }
         client.send({
           type: "items",
           threadId: message.threadId,
@@ -1278,6 +1296,12 @@ export class Hub {
         const summary = summaryOf(this.lastReply(threadId));
         const now = this.store.getThread(threadId);
         if (summary && now && now.summary !== summary) this.updateThread(threadId, { summary });
+        // Answered with no window on it: unread, until it is opened. A team's members are
+        // read through their lead, and a coordinator on its project's page.
+        const seen = [...this.clients].some((c) => c.openThreadId === threadId);
+        if (summary && now && !seen && !cancelled && !now.parentId && now.kind !== "coordinator") {
+          this.updateThread(threadId, { unread: true });
+        }
       }
       // Last, so the team can give the thread its next message. A server stopping leaves
       // its teams as they are, for the next start to find them cut short.
