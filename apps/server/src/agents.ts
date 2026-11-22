@@ -148,6 +148,8 @@ const definitions: AgentDefinition[] = [
     {
       hint: "Installe Antigravity CLI (commande agy), puis lance « agy » une fois pour te connecter.",
       login: "lance « agy »",
+      // Only called when agy lists it: an API key or Vertex set-up is left alone.
+      authMethodId: "oauth-personal",
     },
   ),
   nativeAcp({ id: "cursor", name: "Cursor", short: "Cu" }, ["cursor-agent", "agent"], {

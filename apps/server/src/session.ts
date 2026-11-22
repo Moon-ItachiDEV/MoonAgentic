@@ -151,6 +151,64 @@ export const needsSignIn = (error: unknown): boolean =>
   (error as { cause?: { code?: unknown } } | null)?.cause?.code === AUTH_REQUIRED ||
   (error as { code?: unknown } | null)?.code === AUTH_REQUIRED;
 
+/**
+ * What an agent prints on its standard output, among its messages, when the user must sign
+ * in with the agent's own tool first. Antigravity writes "Open the following link to
+ * authenticate the ACP server: https://…".
+ */
+const SIGN_IN_LINE = /open the following link to authenticate|\bauthenticate\b.*https?:\/\//i;
+const OTHER_LINE_MAX = 2000;
+
+/**
+ * Lets an agent's messages through, one JSON object per line, and hands every other line to
+ * `onOther` instead: plain text there would be answered with a protocol error and leave the
+ * start waiting for nothing. Messages pass untouched, without being held back.
+ */
+export function jsonLines(onOther: (line: string) => void): TransformStream<Uint8Array> {
+  let inside: "message" | "other" | undefined;
+  let kept: Uint8Array[] = [];
+  let size = 0;
+  const flush = () => {
+    const line = Buffer.concat(kept).toString("utf8").trim();
+    kept = [];
+    size = 0;
+    if (line) onOther(line);
+  };
+  return new TransformStream({
+    transform(chunk, controller) {
+      let i = 0;
+      while (i < chunk.length) {
+        if (!inside) {
+          const byte = chunk[i];
+          // Spaces and empty lines between two messages.
+          if (byte === 0x20 || byte === 0x09 || byte === 0x0d || byte === 0x0a) {
+            i += 1;
+            continue;
+          }
+          inside = byte === 0x7b ? "message" : "other";
+        }
+        const newline = chunk.indexOf(0x0a, i);
+        const end = newline === -1 ? chunk.length : newline + 1;
+        const piece = chunk.subarray(i, end);
+        if (inside === "message") {
+          controller.enqueue(piece);
+        } else if (size < OTHER_LINE_MAX) {
+          kept.push(piece.subarray(0, OTHER_LINE_MAX - size));
+          size += piece.length;
+        }
+        if (newline !== -1) {
+          if (inside === "other") flush();
+          inside = undefined;
+        }
+        i = end;
+      }
+    },
+    flush() {
+      if (inside === "other") flush();
+    },
+  });
+}
+
 /** One agent process and its ACP session, owned by one thread. */
 export class AgentSession {
   readonly sessionId: string;
@@ -304,11 +362,26 @@ export class AgentSession {
       );
 
     await spawned;
+    let askSignIn = () => undefined as void;
+    const signInAsked = new Promise<never>((_, reject) => {
+      askSignIn = () =>
+        reject(
+          Object.assign(new Error("L'agent demande d'abord une connexion avec son propre outil."), {
+            code: AUTH_REQUIRED,
+          }),
+        );
+    });
+    signInAsked.catch(() => undefined);
+    const messages = (Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>).pipeThrough(
+      jsonLines((line) => {
+        // The sign-in link itself is neither kept nor shown: the user signs in with the
+        // agent's own tool.
+        if (SIGN_IN_LINE.test(line)) askSignIn();
+        else stderr = `${stderr}${line}\n`.slice(-STDERR_TAIL);
+      }),
+    );
     const connection = app.connect(
-      acp.ndJsonStream(
-        Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
-        Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
-      ),
+      acp.ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, messages),
     );
     let exited = false;
     let stopping = false;
@@ -414,7 +487,7 @@ export class AgentSession {
     };
 
     try {
-      return await Promise.race([handshake(), aborted]);
+      return await Promise.race([handshake(), aborted, signInAsked]);
     } catch (error) {
       // Its process is gone before the failure is reported, so nothing is left running.
       await kill();
