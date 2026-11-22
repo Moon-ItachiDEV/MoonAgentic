@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Agents } from "./agents.ts";
 import { preparePrivateDataDir } from "./data-dir.ts";
-import { createHttpServer } from "./http.ts";
+import { createHttpServer, newToken } from "./http.ts";
 import { Hub } from "./hub.ts";
 import { Store } from "./store.ts";
 
@@ -27,8 +26,7 @@ const { values } = parseArgs({
 const dataDir = path.resolve(values["data-dir"]);
 preparePrivateDataDir(dataDir);
 const tokenFile = path.join(dataDir, "token");
-if (!existsSync(tokenFile))
-  writeFileSync(tokenFile, randomBytes(24).toString("base64url"), { mode: 0o600 });
+if (!existsSync(tokenFile)) writeFileSync(tokenFile, newToken(), { mode: 0o600 });
 const token = readFileSync(tokenFile, "utf8").trim();
 
 const webDir = fileURLToPath(new URL("../../web/dist", import.meta.url));
@@ -39,6 +37,8 @@ const hub = new Hub(store, new Agents({ demo: values.dev || values.demo }), {
 const server = createHttpServer({
   hub,
   token,
+  // Written over the old one: the file keeps its owner-only access.
+  onTokenRenewed: (renewed) => writeFileSync(tokenFile, renewed, { mode: 0o600 }),
   ...(!values.dev && existsSync(webDir) ? { webDir } : {}),
 });
 

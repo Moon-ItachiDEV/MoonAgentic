@@ -1,12 +1,13 @@
 import { useSyncExternalStore } from "react";
 
-export type SettingsSection = "general" | "appearance" | "agents" | "models" | "mcp";
+export type SettingsSection = "general" | "appearance" | "agents" | "models" | "mcp" | "remote";
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   "general",
   "appearance",
   "agents",
   "models",
   "mcp",
+  "remote",
 ];
 
 export type Route =

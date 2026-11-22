@@ -1,10 +1,16 @@
-import { timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, statSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
-import { ClientMessage, type ServerMessage } from "@moonagentic/protocol";
+import { ClientMessage, type RemoteAccess, type ServerMessage } from "@moonagentic/protocol";
 import { WebSocketServer } from "ws";
 import type { Client, Hub } from "./hub.ts";
+import { findRemoteAccess } from "./remote.ts";
+
+/** A fresh access token: long enough that it cannot be guessed. */
+export const newToken = () => randomBytes(24).toString("base64url");
+/** Why a connection is closed when the token it came in with is replaced. */
+export const TOKEN_RENEWED = 4001;
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -102,15 +108,69 @@ export function decode(data: string): { message: ClientMessage } | { error: Serv
   };
 }
 
-/** Serves the built web app (when there is one) and the `/ws` endpoint clients talk to. */
-export function createHttpServer(options: { hub: Hub; token: string; webDir?: string }): Server {
-  const { hub, token, webDir } = options;
+/**
+ * Serves the built web app (when there is one), the `/ws` endpoint clients talk to, and what
+ * the settings need about the server itself: how to reach it from another device, and a new
+ * token on request.
+ */
+export function createHttpServer(options: {
+  hub: Hub;
+  token: string;
+  webDir?: string;
+  /** Keeps a renewed token, so it is still the one after a restart. */
+  onTokenRenewed?: (token: string) => void;
+  /** How the server can be reached from elsewhere; asked again each time, as it changes. */
+  remoteAccess?: (host: string, port: number) => Promise<RemoteAccess>;
+}): Server {
+  const { hub, webDir } = options;
+  let token = options.token;
+  const remote = options.remoteAccess ?? findRemoteAccess;
+  const json = (res: ServerResponse, status: number, body: unknown) => {
+    res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify(body));
+  };
   const server = createServer((req, res) => {
     for (const [name, value] of Object.entries(securityHeaders(req.headers.host)))
       res.setHeader(name, value);
+    const given = req.headers.authorization?.replace(/^Bearer /, "") ?? null;
     if (req.url === "/api/auth") {
-      const given = req.headers.authorization?.replace(/^Bearer /, "") ?? null;
       res.writeHead(sameToken(given, token) ? 204 : 401).end();
+      return;
+    }
+    if (req.url === "/api/remote" || req.url === "/api/remote/token") {
+      if (!sameToken(given, token)) {
+        res.writeHead(401).end();
+        return;
+      }
+      const renew = req.url === "/api/remote/token";
+      if (req.method !== (renew ? "POST" : "GET")) {
+        res.writeHead(405).end();
+        return;
+      }
+      if (renew) {
+        const next = newToken();
+        try {
+          options.onTokenRenewed?.(next);
+        } catch (error) {
+          // The old token stays: one that a restart would forget must not be handed out.
+          json(res, 500, { message: error instanceof Error ? error.message : String(error) });
+          return;
+        }
+        token = next;
+        // Every device still on the old token is shown out, once this one has the new one.
+        res.once("close", () => {
+          for (const socket of wss.clients) socket.close(TOKEN_RENEWED, "token renewed");
+        });
+        json(res, 200, { token });
+        return;
+      }
+      const address = server.address();
+      const listening = typeof address === "object" && address ? address : undefined;
+      remote(listening?.address ?? "127.0.0.1", listening?.port ?? 0).then(
+        (access) => json(res, 200, access),
+        (error: unknown) =>
+          json(res, 500, { message: error instanceof Error ? error.message : String(error) }),
+      );
       return;
     }
     if (!webDir) {
