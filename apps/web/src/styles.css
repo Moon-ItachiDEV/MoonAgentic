@@ -935,6 +935,11 @@ svg {
   color: var(--fg);
   background: var(--hover);
 }
+.btn.danger {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--del-bg);
+}
 .btn:disabled {
   opacity: 0.4;
   cursor: default;

@@ -126,11 +126,13 @@ export class Hub {
         return;
       }
       case "mcp.setEnabled":
+        if (!this.mcpServers().some((s) => s.id === message.id)) return;
         this.updateMcpServers((servers) =>
           servers.map((s) => (s.id === message.id ? { ...s, enabled: message.enabled } : s)),
         );
         return;
       case "mcp.remove":
+        if (!this.mcpServers().some((s) => s.id === message.id)) return;
         this.updateMcpServers((servers) => servers.filter((s) => s.id !== message.id));
         return;
       case "agent.discover":
@@ -234,7 +236,8 @@ export class Hub {
 
   /** Registers an MCP server for every agent session started from now on. */
   addMcpServer(input: McpServerInput): string {
-    if (this.mcpServers().some((s) => s.name === input.name)) {
+    const key = input.name.trim().toLowerCase();
+    if (this.mcpServers().some((s) => s.name.trim().toLowerCase() === key)) {
       throw new Error(`Un serveur MCP s'appelle déjà « ${input.name} ».`);
     }
     const id = randomUUID();

@@ -136,7 +136,15 @@ export type ServerMessage =
 
 const id = z.string().min(1).max(200);
 const text = z.string().min(1).max(200_000);
-const secret = z.object({ name: z.string().trim().min(1).max(200), value: z.string().max(10_000) });
+/** Names an MCP secret may take: an environment variable, or an HTTP header (RFC 9110 token). */
+export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+export const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+const secrets = (name: RegExp, sameName: (a: string, b: string) => boolean) =>
+  z
+    .array(z.object({ name: z.string().max(200).regex(name), value: z.string().max(10_000) }))
+    .max(50)
+    .refine((list) => list.every((s, i) => list.findIndex((o) => sameName(o.name, s.name)) === i));
 
 export const McpServerInput = z.object({
   name: z.string().trim().min(1).max(120),
@@ -145,12 +153,12 @@ export const McpServerInput = z.object({
       type: z.literal("stdio"),
       command: z.string().trim().min(1).max(4096),
       args: z.array(z.string().max(4096)).max(100),
-      env: z.array(secret).max(50),
+      env: secrets(ENV_NAME, (a, b) => a === b),
     }),
     z.object({
       type: z.literal("http"),
       url: z.url({ protocol: /^https?$/ }).max(4096),
-      headers: z.array(secret).max(50),
+      headers: secrets(HEADER_NAME, (a, b) => a.toLowerCase() === b.toLowerCase()),
     }),
   ]),
 });

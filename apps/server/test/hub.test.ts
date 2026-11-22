@@ -361,7 +361,7 @@ describe("Hub with the demo agent", () => {
     await hub.handle(client, { type: "mcp.setEnabled", id: off, enabled: false });
     expect(() =>
       hub.addMcpServer({
-        name: "web",
+        name: "Web",
         transport: { type: "stdio", command: "x", args: [], env: [] },
       }),
     ).toThrow("déjà");
@@ -385,6 +385,10 @@ describe("Hub with the demo agent", () => {
 
     await hub.handle(client, { type: "mcp.remove", id: off });
     expect(hub.snapshot().mcpServers.map((m) => m.name)).toEqual(["fichiers", "web"]);
+    const sent = client.messages.length;
+    await hub.handle(client, { type: "mcp.remove", id: off });
+    await hub.handle(client, { type: "mcp.setEnabled", id: "inconnu", enabled: false });
+    expect(client.messages.length).toBe(sent);
   });
 
   it("rejects a project folder that does not exist", () => {

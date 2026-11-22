@@ -4,6 +4,8 @@ import { connection } from "../connection.ts";
 import { mcpServerInput } from "../mcp-input.ts";
 
 function ServerRow({ server }: { server: McpServerInfo }) {
+  // Removing drops secrets nobody can read back, so it takes a second, deliberate press.
+  const [confirming, setConfirming] = useState(false);
   return (
     <li className="mcp-row">
       <div className="mcp-tx">
@@ -23,11 +25,16 @@ function ServerRow({ server }: { server: McpServerInfo }) {
         <span />
       </label>
       <button
-        className="btn quiet sm"
-        aria-label={`Retirer ${server.name}`}
-        onClick={() => connection.send({ type: "mcp.remove", id: server.id })}
+        className={confirming ? "btn danger sm" : "btn quiet sm"}
+        aria-label={
+          confirming ? `Confirmer le retrait de ${server.name}` : `Retirer ${server.name}`
+        }
+        onBlur={() => setConfirming(false)}
+        onClick={() =>
+          confirming ? connection.send({ type: "mcp.remove", id: server.id }) : setConfirming(true)
+        }
       >
-        Retirer
+        {confirming ? "Confirmer ?" : "Retirer"}
       </button>
     </li>
   );
@@ -122,7 +129,14 @@ export function McpDialog({ servers, onClose }: { servers: McpServerInfo[]; onCl
             {error && <p className="error">{error}</p>}
             <div className="row">
               {servers.length > 0 && (
-                <button type="button" className="btn quiet" onClick={() => setAdding(false)}>
+                <button
+                  type="button"
+                  className="btn quiet"
+                  onClick={() => {
+                    setAdding(false);
+                    setError(null);
+                  }}
+                >
                   Annuler
                 </button>
               )}
