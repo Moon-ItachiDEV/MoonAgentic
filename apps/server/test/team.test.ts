@@ -48,6 +48,8 @@ describe("readVerdict, readBrief and diffText", () => {
     expect(readVerdict("**Verdict: à corriger**")).toBe("fix");
     expect(readVerdict("VERDICT : À CORRIGER\n… puis, revu : VERDICT : OK")).toBe("ok");
     expect(readVerdict("VERDICT : A CORRIGER")).toBe("fix");
+    expect(readVerdict("VERDICT :`OK`")).toBe("ok");
+    expect(readVerdict("VERDICT : OKAY, presque")).toBeUndefined();
     expect(readVerdict("Ça me paraît correct.")).toBeUndefined();
   });
 

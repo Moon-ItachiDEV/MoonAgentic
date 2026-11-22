@@ -17,7 +17,7 @@ function headline(team: Team): string {
       return `L'équipe travaille : ${done} sur ${team.tasks.length} ${plural(done, "terminée", "terminées")}.`;
     case "blocked": {
       const left = team.tasks.filter((t) => t.status === "blocked").length;
-      return `${left} ${plural(left, "sous-tâche t'attend", "sous-tâches t'attendent")} : ouvre son fil, puis relance-la.`;
+      return `${left} ${plural(left, "sous-tâche t'attend", "sous-tâches t'attendent")} : ${plural(left, "ouvre son fil, puis relance-la", "ouvre leurs fils, puis relance-les")}.`;
     }
     case "done":
       return "Terminé : chaque sous-tâche est prête sur sa branche.";
@@ -81,8 +81,15 @@ export function TeamCard({
     if (!isActive) setStopping(false);
   }, [isActive]);
   const byId = (id: string | undefined) => (id ? threads.find((t) => t.id === id) : undefined);
-  const retry = (index: number) =>
-    connection.send({ type: "team.retry", threadId: thread.id, index });
+  // A piece asked to start again waits for its new state rather than being asked twice.
+  const [retrying, setRetrying] = useState<number[]>([]);
+  const states = team.tasks.map((t) => t.status).join();
+  useEffect(() => setRetrying([]), [states]);
+  const retry = (index: number) => {
+    if (connection.send({ type: "team.retry", threadId: thread.id, index })) {
+      setRetrying((r) => [...r, index]);
+    }
+  };
   return (
     <div className="card team-card" role="region" aria-label="Équipe">
       <div className="card-h">
@@ -129,6 +136,7 @@ export function TeamCard({
                         <button
                           className="btn sm"
                           aria-label={`Relancer « ${task.title} »`}
+                          disabled={retrying.includes(i)}
                           onClick={() => retry(i)}
                         >
                           Relancer

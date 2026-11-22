@@ -208,7 +208,7 @@ export function readBrief(reply: string): string | undefined {
 
 /** The reviewer's or tester's last verdict: `ok`, `fix`, or undefined when it gave none. */
 export function readVerdict(reply: string): "ok" | "fix" | undefined {
-  const last = [...reply.matchAll(/VERDICT\s*:?[\s*_]*(OK|[ÀA]\s+CORRIGER)/giu)].at(-1);
+  const last = [...reply.matchAll(/VERDICT\s*:?[\s*_`]*(OK\b|[ÀA]\s+CORRIGER)/giu)].at(-1);
   if (!last) return undefined;
   return /^ok$/i.test(last[1] ?? "") ? "ok" : "fix";
 }
@@ -305,9 +305,16 @@ export class Teams {
     });
   }
 
-  /** Whether the thread leads a team still at work, which then cannot be put away. */
+  /**
+   * Whether the thread leads a team still at work, or is one of its threads: it then cannot
+   * be put away, as its reviewer or tester may be working in its folder.
+   */
   isActive(threadId: string): boolean {
-    return active(this.host.thread(threadId)?.team);
+    const thread = this.host.thread(threadId);
+    if (!thread) return false;
+    return (
+      active(thread.team) || (!!thread.parentId && active(this.host.thread(thread.parentId)?.team))
+    );
   }
 
   /** Resolves once the checks being started have started. */
@@ -357,10 +364,16 @@ export class Teams {
     }
     if (team.phase === "planning") throw new Error("Le chef prépare encore le plan.");
     const { note: _note, reasked: _reasked, ...rest } = task;
-    const fresh: TeamTask = { ...rest, tries: 0, leadHelped: false, status: "waiting" };
-    if (task.threadId) {
+    let fresh: TeamTask = { ...rest, tries: 0, leadHelped: false, status: "waiting" };
+    if (task.threadId && !this.host.thread(task.threadId)) {
+      // Its coder's thread was deleted: the piece starts over with a new coder, and new
+      // reviewer and tester, whose folder would have been the old coder's.
+      const { threadId: _c, reviewThreadId: _r, testThreadId: _t, ...gone } = fresh;
+      fresh = gone;
+    }
+    if (fresh.threadId) {
       // Throws while the user is still talking to the coder, and then nothing changes.
-      this.host.send(task.threadId, RESUME_PROMPT);
+      this.host.send(fresh.threadId, RESUME_PROMPT);
       fresh.status = "running";
     }
     const { error: _error, ...kept } = team;
@@ -568,7 +581,8 @@ export class Teams {
       if (!member) throw new Error("ce rôle n'a pas d'agent.");
       const text = role === "reviewer" ? reviewPrompt(team, task, diff) : testPrompt(team, task);
       const existing = role === "reviewer" ? task.reviewThreadId : task.testThreadId;
-      if (existing) {
+      // A thread the user deleted is made again.
+      if (existing && this.host.thread(existing)) {
         this.host.send(existing, text);
         return;
       }
@@ -656,8 +670,17 @@ export class Teams {
         try {
           this.host.send(lead.id, leadHelpPrompt(task));
           leadTask = waiting;
-        } catch {
-          // The user is talking to the lead: it gets the piece when that turn ends.
+        } catch (error) {
+          // The user is talking to the lead: it gets the piece when that turn ends. Anything
+          // else would leave it waiting forever, so it goes to the user.
+          const status = this.host.thread(lead.id)?.status;
+          if (status !== "running" && status !== "waiting") {
+            tasks = tasks.with(waiting, {
+              ...task,
+              status: "blocked",
+              note: `Le chef n'a pas pu revoir la consigne : ${message(error)}\n\n${task.note ?? ""}`.trim(),
+            });
+          }
         }
       }
     }
