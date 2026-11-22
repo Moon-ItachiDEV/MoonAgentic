@@ -5,7 +5,7 @@ import type { Item, ServerMessage } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { type Client, Hub } from "../src/hub.ts";
-import { modelOption } from "../src/session.ts";
+import { LEGACY_MODE, modelOption } from "../src/session.ts";
 import { Store } from "../src/store.ts";
 
 class TestClient implements Client {
@@ -302,20 +302,69 @@ describe("Hub with the demo agent", () => {
     expect(demo?.models).toHaveLength(2);
   });
 
-  it("picks models on agents that still use the older session/set_model", async () => {
+  it("picks models and modes on agents that still use session/set_model and set_mode", async () => {
     demoModels("legacy");
     const { hub, store, projectId } = setup();
     const threadId = hub.createThread({
       projectId,
       agentId: "demo",
       permissionMode: "full",
+      settings: { [LEGACY_MODE]: "plan" },
       text: "Un",
     });
     await hub.whenIdle(threadId);
 
-    expect(store.getThread(threadId)?.model).toBe("precis");
+    expect(store.getThread(threadId)).toMatchObject({
+      model: "precis",
+      settings: { [LEGACY_MODE]: "plan" },
+    });
     const replies = store.listItems(threadId).filter((i) => i.kind === "agent");
-    expect(replies.map((i) => ("text" in i ? i.text : "")).join()).toContain("(modèle precis)");
+    expect(replies.map((i) => ("text" in i ? i.text : "")).join()).toContain(
+      "Mode plan (modèle precis",
+    );
+  });
+
+  it("runs a thread in the mode and effort it was given, and follows its context use", async () => {
+    const { hub, store, projectId } = setup();
+    await hub.discover("demo", projectId);
+    const settings = () => hub.snapshot().agents.find((a) => a.id === "demo")?.settings;
+    expect(settings()).toMatchObject([
+      { id: "mode", kind: "mode", current: "agent", choices: [{ id: "agent" }, { id: "plan" }] },
+      { id: "effort", kind: "effort", current: "moyen" },
+    ]);
+
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      settings: { mode: "plan", effort: "haut" },
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    const lastReply = () => {
+      const reply = store.listItems(threadId).findLast((i) => i.kind === "agent");
+      return reply && "text" in reply ? reply.text : "";
+    };
+    expect(lastReply()).toContain("Mode plan (modèle precis, effort haut)");
+    expect(store.listItems(threadId).some((i) => i.kind === "tool")).toBe(false);
+    expect(store.getThread(threadId)).toMatchObject({
+      settings: { mode: "plan", effort: "haut" },
+      usage: { used: 24_000, size: 200_000 },
+      canCompact: true,
+    });
+    // The thread's choices are not the agent's defaults.
+    expect(settings()?.map((s) => s.current)).toEqual(["agent", "moyen"]);
+
+    await hub.setSetting(threadId, "mode", "agent");
+    await expect(hub.setSetting(threadId, "mode", "yolo")).rejects.toThrow("Réglage inconnu");
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+    expect(lastReply()).toContain("C'est fait");
+    expect(store.getThread(threadId)?.usage?.used).toBe(48_000);
+
+    hub.send(threadId, "/compact");
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)?.usage?.used).toBe(3_000);
   });
 
   it("stops an agent still starting up when the server stops", async () => {

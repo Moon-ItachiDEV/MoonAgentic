@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { connection } from "../connection.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
+import { ContextGauge } from "./ContextGauge.tsx";
 import { IconArrowUp, IconBranch, IconShield, IconStop } from "./icons.tsx";
 import { Picker } from "./Picker.tsx";
 
@@ -26,6 +27,8 @@ export function Composer(props: {
   const input = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const [modelPicks, setModelPicks] = useState<Record<string, string>>({});
+  /** Settings picked for a new thread, by `<agent>.<setting>`. */
+  const [settingPicks, setSettingPicks] = useState<Record<string, string>>({});
 
   const agentId =
     thread?.agentId ??
@@ -39,6 +42,21 @@ export function Composer(props: {
     (agent?.models?.some((m) => m.id === pickedModel) ? pickedModel : agent?.defaultModel) ??
     undefined;
   const modelName = agent?.models?.find((m) => m.id === model)?.name ?? model;
+  const settings = Object.fromEntries(
+    (agent?.settings ?? []).map((s) => {
+      const key = `${agent?.id}.${s.id}`;
+      const picked = thread
+        ? thread.settings?.[s.id]
+        : (settingPicks[key] ?? readPref(`setting.${key}`));
+      return [s.id, picked && s.choices.some((c) => c.id === picked) ? picked : s.current];
+    }),
+  );
+  // The mode shows on the chip only when it is not the agent's usual one.
+  const modeSetting = agent?.settings?.find((s) => s.kind === "mode");
+  const modeName =
+    modeSetting && settings[modeSetting.id] !== modeSetting.current
+      ? modeSetting.choices.find((c) => c.id === settings[modeSetting.id])?.name
+      : undefined;
   const running = thread?.status === "running" || thread?.status === "waiting";
   // The model is switched between turns only, so a turn starting (here or on another
   // device) closes the picker for good rather than hiding it until the turn ends.
@@ -80,6 +98,9 @@ export function Composer(props: {
       return;
     }
     setBusy(true);
+    const changed = Object.entries(settings).filter(
+      ([id, value]) => agent?.settings?.find((s) => s.id === id)?.current !== value,
+    );
     try {
       const id = await connection.request({
         type: "thread.create",
@@ -88,6 +109,7 @@ export function Composer(props: {
         agentId,
         permissionMode: newMode,
         ...(model ? { model } : {}),
+        ...(changed.length ? { settings: Object.fromEntries(changed) } : {}),
         ...(project.git ? { isolated } : {}),
         text: value,
       });
@@ -149,6 +171,8 @@ export function Composer(props: {
           <AgentBadge agent={agent} />
           <span className="lbl">
             {agent?.name ?? "Aucun agent installé"}
+            {modeName && <span className="sep"> · </span>}
+            {modeName && <span className="mode">{modeName}</span>}
             {modelName && <span className="sep"> · </span>}
             {modelName}
           </span>
@@ -185,6 +209,21 @@ export function Composer(props: {
           <IconShield />
           {mode === "full" ? "Accès complet" : "Supervisé"}
         </button>
+        {thread?.usage && (
+          <ContextGauge usage={thread.usage}>
+            {thread.canCompact && (
+              <button
+                className="btn sm"
+                disabled={running}
+                onClick={() =>
+                  connection.send({ type: "thread.send", threadId: thread.id, text: "/compact" })
+                }
+              >
+                Compacter la conversation
+              </button>
+            )}
+          </ContextGauge>
+        )}
         {running ? (
           <button
             className="send stop"
@@ -214,6 +253,16 @@ export function Composer(props: {
           favorites={props.favorites}
           projectId={project?.id}
           showAgents={!thread}
+          settings={settings}
+          onPickSetting={(settingId, value) => {
+            if (thread)
+              connection.send({ type: "thread.setSetting", threadId: thread.id, settingId, value });
+            else if (agent) {
+              const key = `${agent.id}.${settingId}`;
+              setSettingPicks((p) => ({ ...p, [key]: value }));
+              writePref(`setting.${key}`, value);
+            }
+          }}
           onPickAgent={(id) => {
             setPickedAgentId(id);
             writePref("agent", id);

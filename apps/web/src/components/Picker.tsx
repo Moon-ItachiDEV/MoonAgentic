@@ -1,4 +1,4 @@
-import type { AgentInfo, Favorites, ModelChoice } from "@moonagentic/protocol";
+import type { AgentInfo, AgentSetting, Favorites, ModelChoice } from "@moonagentic/protocol";
 import { useEffect } from "react";
 import { connection } from "../connection.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
@@ -12,8 +12,11 @@ export function Picker(props: {
   favorites: Favorites;
   projectId: string | undefined;
   showAgents: boolean;
+  /** The current value of each of the agent's settings. */
+  settings: Record<string, string>;
   onPickAgent: (agentId: string) => void;
   onPickModel: (model: string) => void;
+  onPickSetting: (settingId: string, value: string) => void;
   onClose: () => void;
 }) {
   const { agent, favorites } = props;
@@ -101,6 +104,15 @@ export function Picker(props: {
             ))}
           </>
         )}
+        {agent?.available &&
+          agent.settings?.map((setting) => (
+            <SettingRow
+              key={setting.id}
+              setting={setting}
+              value={props.settings[setting.id] ?? setting.current}
+              onPick={(value) => props.onPickSetting(setting.id, value)}
+            />
+          ))}
         {agent?.available && (
           <div className="menu-models">
             {favoriteModels.length > 0 && <div className="menu-h">Favoris</div>}
@@ -135,5 +147,38 @@ export function Picker(props: {
         </button>
       </div>
     </>
+  );
+}
+
+const SETTING_LABELS: Record<AgentSetting["kind"], string> = {
+  mode: "Mode",
+  effort: "Raisonnement",
+};
+
+/** One of the agent's settings, as a row of choices; picking one keeps the menu open. */
+function SettingRow(props: {
+  setting: AgentSetting;
+  value: string;
+  onPick: (value: string) => void;
+}) {
+  const { setting } = props;
+  const label = SETTING_LABELS[setting.kind];
+  return (
+    <div className="menu-setting">
+      <div className="menu-h">{label}</div>
+      <div className="seg" role="radiogroup" aria-label={label}>
+        {setting.choices.map((c) => (
+          <button
+            key={c.id}
+            role="radio"
+            aria-checked={c.id === props.value}
+            title={c.description}
+            onClick={() => props.onPick(c.id)}
+          >
+            {c.name}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

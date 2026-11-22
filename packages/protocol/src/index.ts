@@ -22,6 +22,24 @@ export interface AgentInfo {
   defaultModel?: string;
   /** Why the agent could not list its models, while it has none on record. */
   modelsError?: string;
+  /** Other settings the agent offers, such as its mode (plan, agent…) or reasoning effort. */
+  settings?: AgentSetting[];
+}
+
+/** A setting an agent offers for its sessions, other than the model. */
+export interface AgentSetting {
+  /** The agent's own id for the setting. */
+  id: string;
+  kind: "mode" | "effort";
+  choices: ModelChoice[];
+  /** What the agent picks on its own for a new session. */
+  current: string;
+}
+
+/** How much of the agent's context window the conversation fills, as the agent reports it. */
+export interface ContextUsage {
+  used: number;
+  size: number;
 }
 
 /**
@@ -86,6 +104,12 @@ export interface Thread {
   permissionMode: PermissionMode;
   /** The model the agent runs, once known. */
   model?: string;
+  /** The value of each of the agent's other settings, by setting id. */
+  settings?: Record<string, string>;
+  /** Hidden when the agent does not report it. */
+  usage?: ContextUsage;
+  /** True when the agent offers a /compact command to shrink its context. */
+  canCompact?: boolean;
   /** Set when the thread works on its own branch rather than in the project folder. */
   workspace?: Workspace;
   /** Set when the last turn ended with an error. */
@@ -216,6 +240,10 @@ export const ClientMessage = z.discriminatedUnion("type", [
     agentId: id,
     permissionMode: z.enum(["supervised", "full"]),
     model: id.optional(),
+    settings: z
+      .record(id, id)
+      .refine((r) => Object.keys(r).length <= 20)
+      .optional(),
     /** Gives the thread its own branch and worktree, when the project is a git repository. */
     isolated: z.boolean().optional(),
     text,
@@ -237,6 +265,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     permissionMode: z.enum(["supervised", "full"]),
   }),
   z.object({ type: z.literal("thread.setModel"), threadId: id, model: id }),
+  z.object({ type: z.literal("thread.setSetting"), threadId: id, settingId: id, value: id }),
   /** Stars or unstars one model, so two devices editing favorites never overwrite each other. */
   z.object({
     type: z.literal("favorites.toggle"),

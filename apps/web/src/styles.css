@@ -448,6 +448,68 @@ svg {
   color: var(--warn);
   border-color: color-mix(in srgb, var(--warn) 35%, transparent);
 }
+.gauge-wrap {
+  position: relative;
+  flex: none;
+}
+.gauge {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--accent);
+}
+.gauge:hover {
+  background: var(--hover);
+}
+.gauge svg {
+  width: 18px;
+  height: 18px;
+  transform: rotate(-90deg);
+}
+.gauge circle {
+  fill: none;
+  stroke-width: 2.5;
+}
+.gauge .track {
+  stroke: var(--line2);
+}
+.gauge .fill {
+  stroke: currentColor;
+  stroke-linecap: round;
+}
+.gauge.high {
+  color: var(--warn);
+}
+.gauge.full {
+  color: var(--err);
+}
+.gauge-pop {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 10px);
+  z-index: 30;
+  width: max-content;
+  max-width: min(280px, calc(100vw - 48px));
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+.gauge-pop span {
+  color: var(--muted);
+}
+.gauge-pop .btn {
+  margin-top: 6px;
+}
+.agentchip .mode {
+  color: var(--accent);
+}
 .send {
   width: 34px;
   height: 34px;
@@ -615,6 +677,27 @@ svg {
   line-height: 1.35;
 }
 .menu .on-mark {
+  color: var(--accent);
+}
+.menu-setting {
+  padding-bottom: 4px;
+}
+.seg {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 6px;
+}
+.menu .seg button {
+  padding: 5px 11px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.menu .seg button[aria-checked="true"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: var(--accent);
 }
 

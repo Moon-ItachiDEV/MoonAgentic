@@ -10,7 +10,16 @@ const pause = Number(process.env.MOONAGENTIC_DEMO_DELAY_MS ?? 0);
 const modelStyle = process.env.MOONAGENTIC_DEMO_MODELS ?? "options";
 const cancelled = new Set<string>();
 const models = new Map<string, string>();
+const modes = new Map<string, string>();
+const efforts = new Map<string, string>();
+const used = new Map<string, number>();
 const mcpNames = new Map<string, string[]>();
+const CONTEXT_SIZE = 200_000;
+
+const modeChoices = [
+  { id: "agent", name: "Agent", description: "Lit et modifie le code" },
+  { id: "plan", name: "Plan", description: "Propose sans rien modifier" },
+];
 
 const configOptions = (sessionId: string): acp.SessionConfigOption[] => [
   {
@@ -24,7 +33,32 @@ const configOptions = (sessionId: string): acp.SessionConfigOption[] => [
       { value: "precis", name: "Démo précis", description: "Prend son temps" },
     ],
   },
+  {
+    id: "mode",
+    name: "Mode",
+    category: "mode",
+    type: "select",
+    currentValue: modes.get(sessionId) ?? "agent",
+    options: modeChoices.map((m) => ({ value: m.id, name: m.name, description: m.description })),
+  },
+  {
+    id: "effort",
+    name: "Effort",
+    category: "thought_level",
+    type: "select",
+    currentValue: efforts.get(sessionId) ?? "moyen",
+    options: [
+      { value: "bas", name: "Bas" },
+      { value: "moyen", name: "Moyen" },
+      { value: "haut", name: "Haut" },
+    ],
+  },
 ];
+
+const legacyModes = (sessionId: string): acp.SessionModeState => ({
+  availableModes: modeChoices,
+  currentModeId: modes.get(sessionId) ?? "agent",
+});
 
 const legacyModels = (sessionId: string) => ({
   availableModels: [
@@ -49,13 +83,24 @@ const app = acp
       agentInfo: { name: "moonagentic-demo", version: "0.1.0" },
     };
   })
-  .onRequest("session/new", ({ params }) => {
+  .onRequest("session/new", ({ params, client }) => {
     const sessionId = randomUUID();
     mcpNames.set(
       sessionId,
       params.mcpServers.map((m) => m.name),
     );
-    if (modelStyle === "legacy") return { sessionId, models: legacyModels(sessionId) };
+    // Lists its commands right behind the reply naming the session, often in the same read.
+    queueMicrotask(() => {
+      void client.notify("session/update", {
+        sessionId,
+        update: {
+          sessionUpdate: "available_commands_update",
+          availableCommands: [{ name: "compact", description: "Résume la conversation" }],
+        },
+      });
+    });
+    if (modelStyle === "legacy")
+      return { sessionId, models: legacyModels(sessionId), modes: legacyModes(sessionId) };
     if (modelStyle === "none") return { sessionId };
     return { sessionId, configOptions: configOptions(sessionId) };
   })
@@ -81,9 +126,15 @@ const app = acp
     return { configOptions: configOptions(sessionId) };
   })
   .onRequest("session/set_config_option", ({ params }) => {
-    if ("value" in params && typeof params.value === "string")
-      models.set(params.sessionId, params.value);
+    if ("value" in params && typeof params.value === "string") {
+      const settings = { model: models, mode: modes, effort: efforts }[params.configId];
+      settings?.set(params.sessionId, params.value);
+    }
     return { configOptions: configOptions(params.sessionId) };
+  })
+  .onRequest("session/set_mode", ({ params }) => {
+    modes.set(params.sessionId, params.modeId);
+    return {};
   })
   .onNotification("session/cancel", ({ params }) => {
     cancelled.add(params.sessionId);
@@ -103,6 +154,24 @@ const app = acp
     };
 
     if (ask.includes("boom")) throw new Error("Le démo a planté exprès.");
+    const usage = async (tokens: number) => {
+      used.set(sessionId, tokens);
+      await update({ sessionUpdate: "usage_update", used: tokens, size: CONTEXT_SIZE });
+    };
+    if (ask.trim() === "/compact") {
+      await say("Contexte compacté.", "agent_message_chunk");
+      await usage(3_000);
+      return { stopReason: "end_turn" };
+    }
+    await usage((used.get(sessionId) ?? 0) + 24_000);
+    if (modes.get(sessionId) === "plan") {
+      await say(
+        `Mode plan (modèle ${models.get(sessionId) ?? "rapide"}, effort ${efforts.get(sessionId) ?? "moyen"}) : ` +
+          "je lirais src/app.ts puis je passerais answer à 42. Je ne modifie rien.",
+        "agent_message_chunk",
+      );
+      return { stopReason: "end_turn" };
+    }
 
     await say("Je regarde le projet avant de toucher quoi que ce soit.", "agent_thought_chunk");
     await update({
