@@ -2,6 +2,7 @@ import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
 import { useState } from "react";
 import { readPref, writePref } from "../prefs.ts";
+import { recentAlwaysShown } from "../recent.ts";
 import {
   IconArchive,
   IconChevron,
@@ -15,9 +16,6 @@ import {
   IconShield,
 } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
-
-/** Recent threads shown before « Voir plus ». */
-const RECENT = 5;
 
 function ThreadStatus({ thread }: { thread: Thread }) {
   if (thread.status === "running") return <span className="spin" aria-label="En cours" />;
@@ -72,17 +70,8 @@ export function Sidebar(props: {
     t.status === "waiting";
   const pinned = top.filter((t) => t.pinned);
   const recent = top.filter((t) => !t.pinned);
-  // The first few, and beyond them only the open thread and those still at work or waiting.
-  const recentShown = showAll
-    ? recent
-    : recent.filter(
-        (t, i) =>
-          i < RECENT ||
-          t.id === props.activeThreadId ||
-          t.status === "running" ||
-          t.status === "waiting",
-      );
-  const hidden = recent.length - recentShown.length;
+  const { always, foldable } = recentAlwaysShown(recent, childrenOf, props.activeThreadId);
+  const recentShown = showAll ? recent : always;
   // Coders in the order the lead handed out their pieces.
   const tree = (t: Thread) => [
     row(t),
@@ -119,7 +108,7 @@ export function Sidebar(props: {
       <div className="side-top">
         <Wordmark />
         <button
-          className={`ib side-plug${state.status === "open" && !available ? " warn" : ""}`}
+          className={`ib side-plug${state.ready && state.status === "open" && !available ? " warn" : ""}`}
           aria-label="Connexions"
           title={`Connexions : ${available} ${available > 1 ? "agents prêts" : "agent prêt"} · ${
             state.mcpServers.filter((m) => m.enabled).length
@@ -185,9 +174,9 @@ export function Sidebar(props: {
         {pinned.flatMap(tree)}
         {recent.length > 0 && <div className="sec-h">Récents</div>}
         {recentShown.flatMap(tree)}
-        {(showAll ? recent.length > RECENT : hidden > 0) && (
+        {foldable > 0 && (
           <button className="more" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>
-            {showAll ? "Voir moins" : `Voir plus (${hidden})`}
+            {showAll ? "Voir moins" : `Voir plus (${foldable})`}
           </button>
         )}
         {archived.length > 0 && (

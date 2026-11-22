@@ -70,6 +70,9 @@
   border-top: none;
   padding: 10px 12px 14px;
 }
+.side-foot .set-gear {
+  margin-left: 0;
+}
 .side-search {
   flex: 1;
   min-width: 0;
@@ -122,6 +125,9 @@
   font-size: 12.5px;
   font-weight: 600;
   flex: none;
+}
+.inbbtn:hover {
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
 }
 .inbbtn:active {
   transform: scale(0.96);
