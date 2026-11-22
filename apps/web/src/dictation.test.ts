@@ -9,6 +9,12 @@ describe("readResults", () => {
       { final: "Ajoute un test", interim: "pour le bouton" },
     );
   });
+  it("puts a space between segments that come without one", () => {
+    expect(readResults([result("Ajoute un test", true), result("pour le bouton", true)])).toEqual({
+      final: "Ajoute un test pour le bouton",
+      interim: "",
+    });
+  });
 });
 
 describe("joinDictation", () => {
