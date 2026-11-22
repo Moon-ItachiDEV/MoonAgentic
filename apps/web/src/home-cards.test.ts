@@ -50,6 +50,16 @@ describe("homeCards", () => {
     expect(card?.sub).toBe("1 agent au travail · 1 sur 3 terminés");
     expect(card?.pieces).toEqual(["done", "busy", "todo"]);
     expect(card?.agentIds).toEqual(["claude", "codex", "agy"]);
+
+    // A coder asking for permission puts the whole team in the waiting tone.
+    const [asking] = homeCards({
+      threads: [
+        thread("équipe", { team }),
+        thread("codeur", { parentId: "équipe", status: "waiting" }),
+      ],
+      reviews: {},
+    });
+    expect([asking?.tone, asking?.sub]).toEqual(["wait", "Attend ta réponse"]);
   });
 
   it("shows changes waiting for review, with their count", () => {

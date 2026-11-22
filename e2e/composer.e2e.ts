@@ -567,8 +567,55 @@ describe("composer", () => {
     await page.getByLabel("Nom du projet").press("Enter");
     await page.getByRole("heading", { name: "equipe", exact: true }).waitFor();
 
-    // On a phone, nothing spills past the screen.
+    // The coordinator: one agent to talk to about the whole project. Its agent calls
+    // MoonAgentic's own tools, here to open a thread on a branch of its own.
+    await page.getByLabel("Agent du coordinateur").selectOption({ label: "Agent de démo" });
+    await page.getByRole("button", { name: "Activer le coordinateur" }).click();
+    // Its conversation takes the page, the threads beside it.
+    await page.locator(".pp-panel").waitFor();
+    await expect.poll(() => composer(page).isEnabled()).toBe(true);
+    await composer(page).fill("/ouvre Export Safari");
+    await composer(page).press("Enter");
+    const card = page.locator(".opened-card", { hasText: "Fil ouvert : Export Safari" });
+    await card.waitFor();
+    await page.getByText("J'ai ouvert le fil « Export Safari ».").waitFor();
+    // The threads stay beside the conversation, the new one among them with its real state.
+    const beside = page.locator(".pp-panel .pp-row", { hasText: "Export Safari" });
+    await beside.waitFor();
+    await expect.poll(() => card.locator(".oc-state").textContent()).toBe("En attente");
+    // The coordinator is no thread of the lists: not in the sidebar, not among the project's.
+    expect(await page.locator(".side .thr", { hasText: "Coordinateur" }).count()).toBe(0);
+    expect(await page.locator(".pp-row", { hasText: "Coordinateur" }).count()).toBe(0);
+    if (shots) await page.waitForTimeout(300);
+    await shot(page, "p5-coordinateur");
+    await card.getByRole("button", { name: "Ouvrir" }).click();
+    await page.getByText("Corrige : Export Safari").first().waitFor();
+    await inSidebar.click();
+
+    // On a phone, the conversation and the threads take turns; nothing spills past the screen.
     await page.setViewportSize({ width: 390, height: 780 });
+    await page.getByRole("tab", { name: "Fils" }).click();
+    await page.locator(".pp-row", { hasText: "Export Safari" }).waitFor();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    // The coordinator's composer goes with its conversation: nothing is sent out of sight.
+    expect(await composer(page).count()).toBe(0);
+    if (shots) await page.waitForTimeout(400);
+    await shot(page, "p6-mobile-fils");
+    await page.getByRole("tab", { name: "Coordinateur" }).click();
+    await card.waitFor();
+    await composer(page).waitFor();
+    // The quick search lists threads, never the coordinator as one of them.
+    await page.keyboard.press("Control+k");
+    await page.getByRole("dialog").getByText("Export Safari").first().waitFor();
+    expect(
+      await page
+        .getByRole("dialog")
+        .getByText(/^Coordinateur · /)
+        .count(),
+    ).toBe(0);
+    await page.keyboard.press("Escape");
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );

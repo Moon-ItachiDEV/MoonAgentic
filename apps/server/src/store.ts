@@ -49,6 +49,9 @@ type ThreadExtra = Pick<
   | "archived"
   | "pr"
   | "summary"
+  | "kind"
+  | "openedBy"
+  | "taskKey"
   | "parentId"
   | "role"
   | "worksIn"
@@ -65,6 +68,9 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.archived ? { archived: true } : {}),
     ...(thread.pr ? { pr: thread.pr } : {}),
     ...(thread.summary ? { summary: thread.summary } : {}),
+    ...(thread.kind ? { kind: thread.kind } : {}),
+    ...(thread.openedBy ? { openedBy: thread.openedBy } : {}),
+    ...(thread.taskKey ? { taskKey: thread.taskKey } : {}),
     ...(thread.parentId ? { parentId: thread.parentId } : {}),
     ...(thread.role ? { role: thread.role } : {}),
     ...(thread.worksIn ? { worksIn: thread.worksIn } : {}),

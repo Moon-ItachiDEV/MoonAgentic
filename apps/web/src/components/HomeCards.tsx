@@ -30,6 +30,10 @@ export function homeCards(state: Pick<State, "threads" | "reviews">, max = 4): H
     .sort((a, b) => b.updatedAt - a.updatedAt);
   for (const thread of threads) {
     const team = thread.team;
+    // A member asking for your permission stops the team as much as a blocked phase does.
+    const asking =
+      team?.phase === "blocked" ||
+      state.threads.some((t) => t.parentId === thread.id && t.status === "waiting");
     if (team && !["done", "failed", "stopped"].includes(team.phase)) {
       const done = team.tasks.filter((p) => p.status === "done").length;
       const busy = team.tasks.filter((p) => BUSY.has(p.status)).length;
@@ -39,13 +43,12 @@ export function homeCards(state: Pick<State, "threads" | "reviews">, max = 4): H
       cards.push({
         thread,
         agentIds: [...new Set(members)],
-        tone: team.phase === "blocked" ? "wait" : "work",
-        sub:
-          team.phase === "blocked"
-            ? "Attend ta réponse"
-            : team.tasks.length
-              ? `${plural(busy, "agent au travail", "agents au travail")} · ${done} sur ${team.tasks.length} terminés`
-              : "Le chef découpe la tâche",
+        tone: asking ? "wait" : "work",
+        sub: asking
+          ? "Attend ta réponse"
+          : team.tasks.length
+            ? `${plural(busy, "agent au travail", "agents au travail")} · ${done} sur ${team.tasks.length} terminés`
+            : "Le chef découpe la tâche",
         pieces: team.tasks.map((p) =>
           p.status === "done" ? "done" : BUSY.has(p.status) ? "busy" : "todo",
         ),
@@ -72,14 +75,15 @@ export function homeCards(state: Pick<State, "threads" | "reviews">, max = 4): H
 export function HomeCards(props: {
   state: State;
   agents: AgentInfo[];
-  onOpen: (threadId: string) => void;
+  /** Opens the card: the thread, or the project's page for a project's coordinator. */
+  onOpen: (thread: Thread) => void;
 }) {
   const cards = homeCards(props.state);
   if (!cards.length) return null;
   return (
     <div className="qcards" aria-label="En cours">
       {cards.map((c) => (
-        <button key={c.thread.id} className="qcard" onClick={() => props.onOpen(c.thread.id)}>
+        <button key={c.thread.id} className="qcard" onClick={() => props.onOpen(c.thread)}>
           <span className={`stk${c.agentIds.length > 1 ? " many" : ""}`}>
             {c.agentIds.slice(0, 4).map((id) => (
               <AgentBadge

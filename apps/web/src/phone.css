@@ -109,14 +109,14 @@
 }
 @media (max-width: 860px) {
   .home-route .dock:has(.tabbar) {
-    padding-bottom: max(6px, env(safe-area-inset-bottom));
+    padding-bottom: env(safe-area-inset-bottom);
   }
   .tabbar {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     width: 100%;
     padding: 0 8px;
-    margin: 6px 0 -8px;
+    margin-top: 6px;
   }
   .tabbar button {
     position: relative;

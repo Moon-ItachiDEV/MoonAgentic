@@ -426,8 +426,10 @@ function Detail({
   const known = useRef({ title: card.title, description: card.description ?? "" });
   useEffect(() => {
     const next = { title: card.title, description: card.description ?? "" };
-    setTitle((t) => (t === known.current.title ? next.title : t));
-    setDescription((d) => (d === known.current.description ? next.description : d));
+    // Read now: React may run these later, once « known » already holds what came.
+    const before = known.current;
+    setTitle((t) => (t === before.title ? next.title : t));
+    setDescription((d) => (d === before.description ? next.description : d));
     known.current = next;
   }, [card.title, card.description]);
   const update = (
