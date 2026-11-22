@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { findCommand, shortName } from "../src/agents.ts";
+import { agyPlaces, findCommand, shortName } from "../src/agents.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -25,6 +25,18 @@ describe("agents the user adds", () => {
     expect(findCommand("~/bin/absent", home)).toBeUndefined();
     expect(findCommand("~/bin", home)).toBeUndefined();
     expect(findCommand(path.basename(process.execPath).replace(/\.exe$/, ""))).toBeDefined();
+  });
+
+  it("finds agy where its installer puts it, off the PATH", () => {
+    const home = mkdtempSync(path.join(os.tmpdir(), "moonagentic-home-"));
+    cleanups.push(() => rmSync(home, { recursive: true, force: true }));
+    const [place] = agyPlaces({ LOCALAPPDATA: path.join(home, "AppData", "Local") }, home);
+    expect(findCommand(place!)).toBeUndefined();
+    mkdirSync(path.dirname(place!), { recursive: true });
+    const file = process.platform === "win32" ? `${place}.exe` : place!;
+    writeFileSync(file, "");
+    chmodSync(file, 0o755);
+    expect(findCommand(place!)).toBe(file);
   });
 
   it("gives an agent two letters for its badge", () => {

@@ -187,6 +187,26 @@ describe("skills for $ and project commands", () => {
     },
   );
 
+  it("reads Antigravity's skills, from the project and from the home folder", () => {
+    const dir = folder({
+      ".gemini/skills/deploie/SKILL.md": "---\nname: deploie\ndescription: Met en ligne\n---\n",
+      ".agent/skills/audit/SKILL.md": "# Audit\n",
+      // The home folder's places mean nothing inside a project.
+      ".gemini/config/skills/ailleurs/SKILL.md": "# Ailleurs\n",
+    });
+    const home = folder({
+      ".gemini/config/skills/perso/SKILL.md": "# Perso\n",
+      ".gemini/antigravity-cli/skills/cli/SKILL.md": "# Cli\n",
+      ".gemini/skills/deploie/SKILL.md": "---\nname: deploie\ndescription: autre\n---\n",
+    });
+    expect(findSkills(dir, home).map((s) => [s.name, s.scope, s.path])).toEqual([
+      ["audit", "project", ".agent/skills/audit/SKILL.md"],
+      ["cli", "user", ".gemini/antigravity-cli/skills/cli/SKILL.md"],
+      ["deploie", "project", ".gemini/skills/deploie/SKILL.md"],
+      ["perso", "user", ".gemini/config/skills/perso/SKILL.md"],
+    ]);
+  });
+
   it("embeds small text files when the agent accepts it, and links the others", () => {
     const dir = folder({ "a.txt": "bonjour", "b.bin": "\0\0" });
     const targets = [
