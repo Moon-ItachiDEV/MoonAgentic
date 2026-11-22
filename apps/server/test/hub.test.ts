@@ -806,6 +806,12 @@ describe("Composer: files, skills, commands, pins and search", () => {
     // `%` and `_` are searched as themselves.
     await hub.handle(client, { type: "search", requestId: "s2", query: "1_0" });
     expect(client.messages.at(-1)).toMatchObject({ type: "searched", hits: [] });
+    // Neither case nor accents get in the way, in French as in English.
+    await hub.handle(client, { type: "search", requestId: "s3", query: "OU EST" });
+    expect(client.messages.at(-1)).toMatchObject({
+      type: "searched",
+      hits: [{ kind: "agent" }, { kind: "user", snippet: "Où est la fonction 100% fiable ?" }],
+    });
   });
 
   it("pins a thread for every device", async () => {

@@ -99,6 +99,7 @@ export function composerCommands(options: {
       source: "project",
       by: "Projet",
       template: c.template,
+      ...(c.template.includes("$ARGUMENTS") ? { hint: "arguments" } : {}),
     })),
     ...(options.agentCommands ?? agent?.commands ?? []).map((c): ComposerCommand => ({
       name: c.name,
@@ -188,16 +189,21 @@ export function replaceTrigger(
   return { text: next, caret: trigger.start + value.length + 1 };
 }
 
+/** How a file is written after `@`: between quotes when its path holds a space. */
+export const mention = (file: string): string =>
+  /\s/.test(file) && !file.includes('"') ? `@"${file}"` : `@${file}`;
+
 /** Splits a message into plain text and the `@file` and `$skill` words it holds. */
 export function messageTokens(text: string): { text: string; kind?: "file" | "skill" }[] {
   const parts: { text: string; kind?: "file" | "skill" }[] = [];
-  const pattern = /(?<=^|[\s(])([@$])([^\s@$]+)/g;
+  const pattern = /(?<=^|[\s(])([@$])("[^"\n]+"|[^\s@$]+)/g;
   let last = 0;
   for (const match of text.matchAll(pattern)) {
     const at = match.index;
     if (match[1] === "$" && !/^[A-Za-z]/.test(match[2] ?? "")) continue;
-    // A sentence may end right after the word.
-    const word = match[0].replace(/[.,;:!?)\]'"»]+$/, "");
+    // A sentence may end right after the word, unless it is between quotes.
+    const quoted = match[2]?.startsWith('"');
+    const word = quoted ? match[0] : match[0].replace(/[.,;:!?)\]'"»]+$/, "");
     if (word.length < 2) continue;
     if (at > last) parts.push({ text: text.slice(last, at) });
     parts.push({ text: word, kind: match[1] === "@" ? "file" : "skill" });

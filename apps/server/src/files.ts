@@ -130,8 +130,11 @@ export function resolveInside(dir: string, rel: string): string | undefined {
   }
 }
 
-/** `@path` written in a message: after a space or at the start, up to the next space. */
-const MENTION = /(?<=^|[\s(])@([^\s@]+)/g;
+/**
+ * `@path` written in a message: after a space or at the start, up to the next space, or
+ * `@"path with spaces"` between quotes.
+ */
+const MENTION = /(?<=^|[\s(])@(?:"([^"\n]+)"|([^\s@]+))/g;
 /** `$name` written in a message, in the same way. */
 const SKILL_CALL = /(?<=^|[\s(])\$([A-Za-z0-9][\w.:-]*)/g;
 const MAX_MENTIONS = 20;
@@ -141,7 +144,7 @@ export function mentionedFiles(text: string, dir: string): { rel: string; abs: s
   const found = new Map<string, string>();
   for (const match of text.matchAll(MENTION)) {
     if (found.size >= MAX_MENTIONS) break;
-    const raw = match[1] ?? "";
+    const raw = match[1] ?? match[2] ?? "";
     // A sentence may end right after the path.
     for (const rel of [raw, raw.replace(/[.,;:!?)\]'"»]+$/, "")]) {
       const abs = rel && resolveInside(dir, rel);
@@ -198,7 +201,13 @@ export function findSkills(dir: string, home: string): SkillRecord[] {
       }
       for (const entry of entries) {
         if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-        const file = path.join(base, root, entry.name, "SKILL.md");
+        // A cloned project may hold links to files outside it, such as a key or a token:
+        // its skills must stay inside it. Links in the home folder are the user's own.
+        const file =
+          scope === "project"
+            ? resolveInside(base, `${root}/${entry.name}/SKILL.md`)
+            : path.join(base, root, entry.name, "SKILL.md");
+        if (!file) continue;
         let source: string;
         try {
           if (statSync(file).size > MAX_SKILL_FILE) continue;
@@ -213,7 +222,7 @@ export function findSkills(dir: string, home: string): SkillRecord[] {
           name,
           description: fields.description || firstLine(body),
           scope,
-          path: path.relative(base, file).replaceAll("\\", "/"),
+          path: `${root}/${entry.name}/SKILL.md`,
           file,
         });
       }
@@ -243,11 +252,15 @@ export function findProjectCommands(dir: string): ProjectCommand[] {
   return entries
     .flatMap((entry): ProjectCommand[] => {
       const name = entry.name.replace(/\.md$/i, "").toLowerCase();
-      if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".md")) return [];
+      if (!entry.isFile() && !entry.isSymbolicLink()) return [];
+      if (!entry.name.toLowerCase().endsWith(".md")) return [];
       if (!/^[a-z0-9][a-z0-9_-]*$/.test(name)) return [];
+      // Read only when it stays inside the project, links included, and is not too big.
+      const file = resolveInside(dir, `${COMMANDS_DIR}/${entry.name}`);
+      if (!file) return [];
       try {
-        const source = readFileSync(path.join(dir, COMMANDS_DIR, entry.name), "utf8");
-        if (source.length > MAX_SKILL_FILE) return [];
+        if (statSync(file).size > MAX_SKILL_FILE) return [];
+        const source = readFileSync(file, "utf8");
         const { fields, body } = frontMatter(source);
         const template = body.trim();
         if (!template) return [];

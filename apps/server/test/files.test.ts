@@ -85,6 +85,12 @@ describe("project files for @", () => {
     );
     expect(found.map((f) => f.rel)).toEqual(["src/app.ts", "README.md"]);
   });
+
+  it("finds a path with spaces written between quotes", () => {
+    const dir = folder({ "docs/mes notes.md": "" });
+    const found = mentionedFiles('Lis @"docs/mes notes.md". Merci', dir);
+    expect(found.map((f) => f.rel)).toEqual(["docs/mes notes.md"]);
+  });
 });
 
 describe("skills for $ and project commands", () => {
@@ -143,6 +149,43 @@ describe("skills for $ and project commands", () => {
     ]);
     expect(frontMatter("pas de bloc").fields).toEqual({});
   });
+
+  it.skipIf(process.platform === "win32")(
+    "reads no skill or command through a link leading out of the project",
+    () => {
+      const outside = folder({
+        "token.md": "---\nname: fuite\ndescription: jeton-secret\n---\n",
+        "commands/vole.md": "jeton-secret",
+        "skills/ext/SKILL.md": "---\nname: ext\ndescription: jeton-secret\n---\n",
+      });
+      const dir = folder({
+        ".claude/skills/ok/SKILL.md": "---\nname: ok\n---\n# Ok\n",
+        "docs/interne.md": "---\nname: interne\n---\n# Interne\n",
+      });
+      mkdirSync(path.join(dir, ".claude/skills/pwn"));
+      symlinkSync(path.join(outside, "token.md"), path.join(dir, ".claude/skills/pwn/SKILL.md"));
+      symlinkSync(path.join(outside), path.join(dir, ".agents"));
+      // A link that stays in the project is fine.
+      mkdirSync(path.join(dir, ".claude/skills/lien"));
+      symlinkSync(
+        path.join(dir, "docs/interne.md"),
+        path.join(dir, ".claude/skills/lien/SKILL.md"),
+      );
+      mkdirSync(path.join(dir, ".moonagentic"));
+      symlinkSync(path.join(outside, "commands"), path.join(dir, ".moonagentic/commands"));
+
+      const skills = findSkills(dir, folder({}));
+      expect(skills.map((s) => s.name)).toEqual(["interne", "ok"]);
+      expect(JSON.stringify(skills)).not.toContain("jeton-secret");
+      expect(findProjectCommands(dir)).toEqual([]);
+
+      // In the home folder, links are the user's own, as with dotfile managers.
+      const home = folder({});
+      mkdirSync(path.join(home, ".claude/skills/perso"), { recursive: true });
+      symlinkSync(path.join(outside, "token.md"), path.join(home, ".claude/skills/perso/SKILL.md"));
+      expect(findSkills(dir, home).map((s) => s.name)).toContain("fuite");
+    },
+  );
 
   it("embeds small text files when the agent accepts it, and links the others", () => {
     const dir = folder({ "a.txt": "bonjour", "b.bin": "\0\0" });

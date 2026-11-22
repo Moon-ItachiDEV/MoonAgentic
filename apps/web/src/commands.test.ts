@@ -4,6 +4,7 @@ import {
   composerCommands,
   fillTemplate,
   matchCommands,
+  mention,
   messageTokens,
   planModes,
   replaceTrigger,
@@ -128,5 +129,22 @@ describe("the word being typed", () => {
       { text: "$revue", kind: "skill" },
       { text: ". Coût : $5" },
     ]);
+  });
+
+  it("writes a path with spaces between quotes, and reads it back whole", () => {
+    expect(mention("src/app.ts")).toBe("@src/app.ts");
+    expect(mention("docs/mes notes.md")).toBe('@"docs/mes notes.md"');
+    expect(messageTokens('Lis @"docs/mes notes.md". Merci')).toEqual([
+      { text: "Lis " },
+      { text: '@"docs/mes notes.md"', kind: "file" },
+      { text: ". Merci" },
+    ]);
+  });
+
+  it("shows that a project command takes arguments", () => {
+    expect(list().find((c) => c.name === "deploy")).toMatchObject({
+      source: "project",
+      hint: "arguments",
+    });
   });
 });

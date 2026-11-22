@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { messageTokens } from "../commands.ts";
 import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
-import { onFocusRequest, takeFocus } from "../focus.ts";
+import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -32,7 +32,11 @@ export function ThreadView({
   // Subscribes this client to the thread's timeline on the server.
   useEffect(() => {
     connection.send({ type: "thread.open", threadId: thread.id });
-    pinned.current = true;
+  }, [thread.id]);
+  // A thread opens at its end, unless it opens on a message picked in the quick search.
+  // Set before the effects below, so the timeline sent back on opening keeps that message.
+  useLayoutEffect(() => {
+    pinned.current = !hasFocus(thread.id);
   }, [thread.id]);
 
   // A message picked in the quick search is shown once the timeline is here.
