@@ -87,3 +87,9 @@ export const IconBranch = ({ size = 15 }: P) => (
     <path d="M18 9c0 5-6 4-11.5 8.5" />
   </svg>
 );
+export const IconUndo = ({ size = 13 }: P) => (
+  <svg {...base(size)}>
+    <path d="M9 14 4 9l5-5" />
+    <path d="M4 9h11a5 5 0 0 1 0 10h-3" />
+  </svg>
+);

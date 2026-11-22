@@ -370,10 +370,14 @@ export class AgentSession {
     }
   }
 
-  async prompt(text: string): Promise<acp.StopReason> {
+  /** Sends the user's message, after the earlier conversation when the agent lacks it. */
+  async prompt(text: string, history?: string): Promise<acp.StopReason> {
     const response = await this.connection.agent.request("session/prompt", {
       sessionId: this.sessionId,
-      prompt: [{ type: "text", text }],
+      prompt: [
+        ...(history ? [{ type: "text" as const, text: history }] : []),
+        { type: "text", text },
+      ],
     });
     return response.stopReason;
   }

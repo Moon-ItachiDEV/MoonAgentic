@@ -710,14 +710,71 @@ svg {
   flex-direction: column;
   gap: 18px;
 }
-.u {
+.u-wrap {
   align-self: flex-end;
   max-width: 85%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.u {
   background: var(--card);
   border-radius: 20px 20px 6px 20px;
   padding: 10px 16px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.u-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--faint);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.u-act:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+/* With a mouse, the way back shows only around the message it belongs to. */
+@media (hover: hover) {
+  .u-act {
+    opacity: 0;
+  }
+  .u-wrap:hover .u-act,
+  .u-act:focus-visible {
+    opacity: 1;
+  }
+}
+.u-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: right;
+}
+.u-err {
+  margin: 0;
+  color: var(--err);
+  font-size: 12.5px;
+}
+.handoff {
+  align-self: center;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--faint);
 }
 .a {
   display: grid;

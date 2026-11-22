@@ -136,7 +136,14 @@ export type ToolContent =
   | { type: "diff"; path: string; oldText: string | null; newText: string };
 
 export type Item =
-  | { id: string; kind: "user"; text: string; at: number }
+  | {
+      id: string;
+      kind: "user";
+      text: string;
+      /** The thread's files just before this message, for threads with their own branch. */
+      checkpoint?: string;
+      at: number;
+    }
   | { id: string; kind: "agent"; text: string; at: number }
   | { id: string; kind: "thought"; text: string; at: number }
   | {
@@ -157,7 +164,9 @@ export type Item =
       outcome: string | null;
       at: number;
     }
-  | { id: string; kind: "plan"; entries: PlanEntry[]; at: number };
+  | { id: string; kind: "plan"; entries: PlanEntry[]; at: number }
+  /** The thread went from one agent to another; agent items before it are `from`'s. */
+  | { id: string; kind: "handoff"; from: AgentId; to: AgentId; at: number };
 
 export type ItemKind = Item["kind"];
 
@@ -194,6 +203,8 @@ export type ServerMessage =
     }
   /** Reply to a create request, so the client can navigate to what it made. */
   | { type: "created"; requestId: string; id: string }
+  /** Reply to a request that makes nothing new, once it succeeded. */
+  | { type: "done"; requestId: string }
   | { type: "error"; requestId?: string; message: string };
 
 const id = z.string().min(1).max(200);
@@ -259,6 +270,10 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread.open"), threadId: id }),
   z.object({ type: z.literal("thread.send"), threadId: id, text }),
   z.object({ type: z.literal("thread.cancel"), threadId: id }),
+  /** Puts the files back as they were before this message and forgets what came after. */
+  z.object({ type: z.literal("thread.restore"), requestId: id, threadId: id, itemId: id }),
+  /** Hands the thread to another agent, which gets the conversation so far. */
+  z.object({ type: z.literal("thread.switchAgent"), threadId: id, agentId: id }),
   z.object({
     type: z.literal("thread.setPermissionMode"),
     threadId: id,

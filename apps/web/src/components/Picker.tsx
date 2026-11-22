@@ -4,14 +4,15 @@ import { connection } from "../connection.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconCheck, IconStar } from "./icons.tsx";
 
-/** Agent and model menu above the composer. Agents are listed only for a new thread. */
+/** Agent, settings and model menu above the composer. */
 export function Picker(props: {
   agents: AgentInfo[];
   agent: AgentInfo | undefined;
   model: string | undefined;
   favorites: Favorites;
   projectId: string | undefined;
-  showAgents: boolean;
+  /** Heading of the agent list: picking one in a thread hands the thread over. */
+  agentsTitle: string;
   /** The current value of each of the agent's settings. */
   settings: Record<string, string>;
   onPickAgent: (agentId: string) => void;
@@ -81,31 +82,27 @@ export function Picker(props: {
     <>
       <div className="menu-scrim" onClick={props.onClose} />
       <div className="menu" role="menu">
-        {props.showAgents && (
-          <>
-            <div className="menu-h">Agent</div>
-            {props.agents.map((a) => (
-              <button
-                key={a.id}
-                role="menuitemradio"
-                aria-checked={a.id === agent?.id}
-                disabled={!a.available}
-                onClick={() => props.onPickAgent(a.id)}
-              >
-                <AgentBadge agent={a} />
-                <span className="tx">
-                  {a.name}
-                  {!a.available && a.hint && <small>{a.hint}</small>}
-                </span>
-                {a.id === agent?.id && (
-                  <span className="on-mark">
-                    <IconCheck />
-                  </span>
-                )}
-              </button>
-            ))}
-          </>
-        )}
+        <div className="menu-h">{props.agentsTitle}</div>
+        {props.agents.map((a) => (
+          <button
+            key={a.id}
+            role="menuitemradio"
+            aria-checked={a.id === agent?.id}
+            disabled={!a.available}
+            onClick={() => props.onPickAgent(a.id)}
+          >
+            <AgentBadge agent={a} />
+            <span className="tx">
+              {a.name}
+              {!a.available && a.hint && <small>{a.hint}</small>}
+            </span>
+            {a.id === agent?.id && (
+              <span className="on-mark">
+                <IconCheck />
+              </span>
+            )}
+          </button>
+        ))}
         {agent?.available &&
           agent.settings?.map((setting) => (
             <SettingRow

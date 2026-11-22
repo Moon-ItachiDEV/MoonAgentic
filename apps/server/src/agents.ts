@@ -102,22 +102,28 @@ const definitions: AgentDefinition[] = [
   }),
 ];
 
-const demoAgent: AgentDefinition = {
-  id: "demo",
-  name: "Agent de démo",
-  short: "Dm",
+const demoAgent = (id: string, name: string, short: string): AgentDefinition => ({
+  id,
+  name,
+  short,
   preferredModel: /précis/i,
   resolve: () => ({
     command: process.execPath,
     args: [fileURLToPath(new URL("./demo-agent.ts", import.meta.url))],
   }),
-};
+});
+
+// Two of them, so handing a thread to another agent can be tried for free.
+const demoAgents = [
+  demoAgent("demo", "Agent de démo", "Dm"),
+  demoAgent("demo-2", "Second agent de démo", "D2"),
+];
 
 export class Agents {
   private readonly all: AgentDefinition[];
 
   constructor(options: { demo: boolean }) {
-    this.all = options.demo ? [...definitions, demoAgent] : definitions;
+    this.all = options.demo ? [...definitions, ...demoAgents] : definitions;
   }
 
   list(): AgentInfo[] {

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Item, ServerMessage } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
+import { historyBefore } from "../src/history.ts";
 import { type Client, Hub } from "../src/hub.ts";
 import { LEGACY_MODE, modelOption } from "../src/session.ts";
 import { Store } from "../src/store.ts";
@@ -398,6 +399,75 @@ describe("Hub with the demo agent", () => {
     hub.send(threadId, "/compact");
     await hub.whenIdle(threadId);
     expect(store.getThread(threadId)?.usage?.used).toBe(3_000);
+  });
+
+  it("hands a thread to another agent between turns, with the conversation so far", async () => {
+    const { hub, store, client, projectId } = setup();
+    const asked = client.next(isPermissionRequest);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      settings: { mode: "agent" },
+      text: "Un",
+    });
+    client.openThreadId = threadId;
+    await asked;
+    await expect(hub.switchAgent(threadId, "demo-2")).rejects.toThrow("fin de la réponse");
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+    const firstSession = store.getSessionId(threadId);
+    await expect(hub.switchAgent(threadId, "inconnu")).rejects.toThrow("Agent inconnu");
+
+    await hub.switchAgent(threadId, "demo-2");
+    expect(store.getThread(threadId)).toMatchObject({ agentId: "demo-2" });
+    expect(store.getThread(threadId)).not.toHaveProperty("settings");
+    expect(store.listItems(threadId).at(-1)).toMatchObject({
+      kind: "handoff",
+      from: "demo",
+      to: "demo-2",
+    });
+    // Changing again before any message moves that one hand-off rather than adding more.
+    await hub.switchAgent(threadId, "demo");
+    expect(store.listItems(threadId).some((i) => i.kind === "handoff")).toBe(false);
+    await hub.switchAgent(threadId, "demo-2");
+    expect(store.listItems(threadId).filter((i) => i.kind === "handoff")).toHaveLength(1);
+    hub.setPermissionMode(threadId, "full");
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+
+    expect(store.getSessionId(threadId)).not.toBe(firstSession);
+    expect(store.listItems(threadId).findLast((i) => i.kind === "agent")).toMatchObject({
+      text: expect.stringContaining(
+        "« Deux » (modèle precis). J'ai reçu l'historique, qui commence par « Un ».",
+      ),
+    });
+    // Only the first prompt of the new session carries the history.
+    hub.send(threadId, "Trois");
+    await hub.whenIdle(threadId);
+    expect(store.listItems(threadId).findLast((i) => i.kind === "agent")).toMatchObject({
+      text: expect.not.stringContaining("historique"),
+    });
+  });
+
+  it("keeps the most recent part of a long conversation for the next agent", () => {
+    const items: Item[] = Array.from({ length: 60 }, (_, n) => ({
+      id: `agent:${n}`,
+      kind: "agent",
+      text: `${n} ${"x".repeat(3_000)}`,
+      at: n,
+    }));
+    const name = (id: string) => id;
+    const history = historyBefore(
+      [...items, { id: "user:now", kind: "user", text: "?", at: 60 }],
+      "user:now",
+      name,
+    )!;
+    expect(history).toContain("(Le début de la conversation est coupé.)");
+    expect(history).toContain("Agent : 59 ");
+    expect(history).not.toContain("Agent : 0 ");
+    expect(history.length).toBeLessThan(45_000);
+    expect(historyBefore(items.slice(0, 1), "agent:0", name)).toBeUndefined();
   });
 
   it("stops an agent still starting up when the server stops", async () => {

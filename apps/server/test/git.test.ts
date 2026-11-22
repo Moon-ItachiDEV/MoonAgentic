@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ServerMessage } from "@moonagentic/protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { branchName, githubRepo, parseDiff } from "../src/git.ts";
 import { Hub } from "../src/hub.ts";
@@ -92,10 +92,13 @@ describe("thread workspaces", () => {
 
   it("ships one branch at a time, never during a turn, and only from the thread's branch", async () => {
     const { hub, store, projectId } = repository();
+    let asked = () => {};
+    const waiting = new Promise<void>((resolve) => (asked = resolve));
     const client = {
       messages: [] as ServerMessage[],
       send(m: ServerMessage) {
         this.messages.push(m);
+        if (m.type === "thread" && m.thread.status === "waiting") asked();
       },
     };
     hub.connect(client);
@@ -107,7 +110,7 @@ describe("thread workspaces", () => {
       text: "Un",
     });
     // The demo agent waits for this answer, so its turn is still running.
-    await vi.waitUntil(() => store.getThread(threadId)?.status === "waiting");
+    await waiting;
     await expect(hub.ship(threadId, "x", false)).rejects.toThrow("Attends la fin");
     await hub.cancel(threadId);
     await hub.whenIdle(threadId);
@@ -116,7 +119,7 @@ describe("thread workspaces", () => {
     writeFileSync(path.join(workspace.path, "a.txt"), "a\n");
     const first = hub.ship(threadId, "Ajoute a", false);
     expect(() => hub.send(threadId, "Deux")).toThrow("envoi de la branche");
-    await expect(hub.ship(threadId, "x", false)).rejects.toThrow("déjà en cours");
+    await expect(hub.ship(threadId, "x", false)).rejects.toThrow("envoi de la branche");
     await first;
 
     git(workspace.path, "checkout", "-q", "-b", "autre");
@@ -131,6 +134,66 @@ describe("thread workspaces", () => {
       type: "review",
       files: [],
       error: expect.any(String),
+    });
+  });
+
+  it("goes back to the files before a message, and the agent starts over from what is left", async () => {
+    const { hub, store, projectId } = repository();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: true,
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    const dir = store.getThread(threadId)!.workspace!.path;
+    writeFileSync(path.join(dir, "README.md"), "# Demo\npremier tour\n");
+    writeFileSync(path.join(dir, ".gitignore"), "cache/\n");
+    mkdirSync(path.join(dir, "cache"));
+    writeFileSync(path.join(dir, "cache", "garde.txt"), "ignoré\n");
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+    const second = store.listItems(threadId).filter((i) => i.kind === "user")[1]!;
+    expect(second).toMatchObject({
+      text: "Deux",
+      checkpoint: expect.stringMatching(/^[0-9a-f]{40}$/),
+    });
+
+    // What the second turn did, which going back must undo.
+    writeFileSync(path.join(dir, "README.md"), "# Demo\nsecond tour\n");
+    mkdirSync(path.join(dir, "src", "neuf"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "neuf", "a.ts"), "export {};\n");
+    // Without its rule, the ignored file would pass for one the turn made.
+    rmSync(path.join(dir, ".gitignore"));
+    // Handed to another agent since: going back goes back to the agent of that time too.
+    await hub.switchAgent(threadId, "demo-2");
+    await hub.restore(threadId, second.id);
+    expect(store.getThread(threadId)?.agentId).toBe("demo");
+    expect(store.listItems(threadId).some((i) => i.kind === "handoff")).toBe(false);
+
+    // Git writes restored files with the line endings its config asks for (CRLF on Windows).
+    expect(readFileSync(path.join(dir, "README.md"), "utf8").replaceAll("\r\n", "\n")).toBe(
+      "# Demo\npremier tour\n",
+    );
+    expect(existsSync(path.join(dir, ".gitignore"))).toBe(true);
+    expect(existsSync(path.join(dir, "src"))).toBe(false);
+    expect(readFileSync(path.join(dir, "cache", "garde.txt"), "utf8")).toBe("ignoré\n");
+    expect(
+      store
+        .listItems(threadId)
+        .filter((i) => i.kind === "user")
+        .map((i) => i.text),
+    ).toEqual(["Un"]);
+    expect(store.getSessionId(threadId)).toBeNull();
+    expect(git(dir, "for-each-ref", "--format=%(refname)", "refs/moonagentic")).not.toContain(
+      second.id.replace("user:", ""),
+    );
+
+    hub.send(threadId, "Trois");
+    await hub.whenIdle(threadId);
+    expect(store.listItems(threadId).findLast((i) => i.kind === "agent")).toMatchObject({
+      text: expect.stringContaining("J'ai reçu l'historique, qui commence par « Un »."),
     });
   });
 
@@ -164,6 +227,9 @@ describe("thread workspaces", () => {
     hub.createProject("empty", empty);
     expect(hub.snapshot().projects.find((p) => p.name === "empty")?.git).toBeUndefined();
     await expect(hub.ship(direct, "x", false)).rejects.toThrow("sans branche");
+    // Nor a way back to an earlier message.
+    const first = store.listItems(direct)[0]!;
+    await expect(hub.restore(direct, first.id)).rejects.toThrow("pas de point de retour");
     expect(existsSync(path.join(root, "worktrees"))).toBe(false);
   });
 });

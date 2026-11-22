@@ -219,6 +219,7 @@ export class Store {
       Pick<
         Thread,
         | "status"
+        | "agentId"
         | "permissionMode"
         | "title"
         | "model"
@@ -239,10 +240,11 @@ export class Store {
     const error = patch.error === undefined ? (current.error ?? null) : patch.error;
     this.db
       .prepare(
-        `UPDATE threads SET status = ?, permission_mode = ?, title = ?, model = ?, workspace = ?, extra = ?, error = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE threads SET status = ?, agent_id = ?, permission_mode = ?, title = ?, model = ?, workspace = ?, extra = ?, error = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.status,
+        next.agentId,
         next.permissionMode,
         next.title,
         next.model ?? null,
@@ -261,7 +263,8 @@ export class Store {
     return row?.acp_session_id ?? null;
   }
 
-  setSessionId(threadId: string, sessionId: string): void {
+  /** Null forgets the agent's session, so the thread's next turn starts a new one. */
+  setSessionId(threadId: string, sessionId: string | null): void {
     this.db.prepare(`UPDATE threads SET acp_session_id = ? WHERE id = ?`).run(sessionId, threadId);
   }
 
@@ -295,6 +298,18 @@ export class Store {
          ON CONFLICT (thread_id, id) DO UPDATE SET data = excluded.data`,
       )
       .run(threadId, item.id, threadId, JSON.stringify(item));
+  }
+
+  /** Removes the item and every item after it; returns what was removed. */
+  removeItemsFrom(threadId: string, id: string): Item[] {
+    const from = `(SELECT seq FROM items WHERE thread_id = ? AND id = ?)`;
+    const removed = this.db
+      .prepare(`SELECT data FROM items WHERE thread_id = ? AND seq >= ${from} ORDER BY seq`)
+      .all(threadId, threadId, id) as { data: string }[];
+    this.db
+      .prepare(`DELETE FROM items WHERE thread_id = ? AND seq >= ${from}`)
+      .run(threadId, threadId, id);
+    return removed.map((r) => JSON.parse(r.data) as Item);
   }
 
   close(): void {
