@@ -70,6 +70,27 @@ export const COORDINATOR_TOOLS: CoordinatorTool[] = [
     },
   },
   {
+    name: "start_team",
+    description:
+      "Lance une équipe d'agents sur une tâche trop grosse pour un seul fil : un chef la découpe, des codeurs travaillent en même temps, puis relecture, tests et fusion. Elle reprend l'équipe que l'utilisateur a réglée la dernière fois. Seulement quand l'utilisateur demande une équipe ou que la tâche a clairement plusieurs morceaux indépendants.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        task_key: {
+          type: "string",
+          description:
+            "Nom stable du sujet, en minuscules avec des tirets. Garde le même si tu réessaies.",
+        },
+        task: {
+          type: "string",
+          description:
+            "La tâche complète pour le chef d'équipe, qui ne voit pas cette conversation.",
+        },
+      },
+      required: ["task_key", "task"],
+    },
+  },
+  {
     name: "message_thread",
     description:
       "Envoie une suite à un fil existant du projet, plutôt que d'en ouvrir un autre sur le même sujet. Si son agent travaille, le message attend la fin de son tour (queue) ; steer l'arrête pour lui donner le message tout de suite.",

@@ -1,4 +1,15 @@
-import type { AgentInfo, Favorites, McpServerInfo, Project } from "@moonagentic/protocol";
+import {
+  type AgentInfo,
+  type CoordinatorSettings,
+  DEFAULT_PARALLEL,
+  MAX_PARALLEL,
+  type Favorites,
+  type McpServerInfo,
+  type Project,
+  type TeamMember,
+  WORK_KINDS,
+  type WorkKind,
+} from "@moonagentic/protocol";
 import { type ReactNode, useState } from "react";
 import { connection } from "../connection.ts";
 import {
@@ -15,6 +26,7 @@ import { readTheme, setTheme, type Theme } from "../theme.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import {
   IconBack,
+  IconBranch,
   IconFolder,
   IconGear,
   IconPlug,
@@ -30,6 +42,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
   { id: "appearance", label: "Apparence", icon: <span className="set-half" aria-hidden /> },
   { id: "agents", label: "Agents", icon: <IconShield size={15} /> },
   { id: "models", label: "Modèles", icon: <IconStar size={15} /> },
+  { id: "coordinator", label: "Coordinateur", icon: <IconBranch size={15} /> },
   { id: "mcp", label: "Serveurs MCP", icon: <IconPlug size={15} /> },
   { id: "remote", label: "Accès distant", icon: <IconWifi size={15} /> },
 ];
@@ -62,6 +75,14 @@ export function SettingsNav(props: {
     </aside>
   );
 }
+
+const KIND_LABEL: Record<WorkKind, string> = {
+  question: "Question",
+  bug: "Bug",
+  fonctionnalite: "Fonctionnalité",
+  relecture: "Relecture",
+  tests: "Tests",
+};
 
 function Row(props: { title: string; text?: ReactNode; children?: ReactNode }) {
   return (
@@ -174,6 +195,7 @@ export function SettingsPage(props: {
   section: SettingsSection;
   agents: AgentInfo[];
   favorites: Favorites;
+  coordinator: CoordinatorSettings;
   projects: Project[];
   projectId: string | undefined;
   mcpServers: McpServerInfo[];
@@ -347,6 +369,114 @@ export function SettingsPage(props: {
           Aucun favori pour l'instant. Ouvre le menu modèle du composer, puis « Tous », et touche
           l'étoile d'un modèle : il rejoint la roue des favoris.
         </p>
+      );
+      break;
+    }
+    case "coordinator": {
+      const ready = props.agents.filter((a) => a.available);
+      const named = (m: TeamMember) => {
+        const agent = props.agents.find((a) => a.id === m.agentId);
+        const model = m.model && (agent?.models?.find((x) => x.id === m.model)?.name ?? m.model);
+        return `${agent?.name ?? m.agentId}${model ? ` · ${model}` : ""}`;
+      };
+      const team = props.coordinator.team;
+      body = (
+        <>
+          <p className="set-empty">
+            Quand un coordinateur ouvre un fil, il l'envoie à l'agent choisi ici pour ce type de
+            travail. Sans choix, le fil garde l'agent du coordinateur.
+          </p>
+          <div className="set-card">
+            {WORK_KINDS.map((kind) => {
+              const route = props.coordinator.routes[kind];
+              const agent = props.agents.find((a) => a.id === route?.agentId);
+              const set = (agentId: string, model?: string) =>
+                connection.send({
+                  type: "coordinator.setRoute",
+                  kind,
+                  ...(agentId ? { agentId } : {}),
+                  ...(agentId && model ? { model } : {}),
+                });
+              return (
+                <Row key={kind} title={KIND_LABEL[kind]}>
+                  <label className="set-select">
+                    <select
+                      aria-label={`Agent pour ${KIND_LABEL[kind]}`}
+                      value={route?.agentId ?? ""}
+                      onChange={(e) => set(e.target.value)}
+                    >
+                      <option value="">Agent du coordinateur</option>
+                      {/* A route to an agent that is gone stays shown, so it can be changed. */}
+                      {route && !ready.some((a) => a.id === route.agentId) && (
+                        <option value={route.agentId}>
+                          {agent?.name ?? route.agentId} (indisponible)
+                        </option>
+                      )}
+                      {ready.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {route && !!agent?.models?.length && (
+                    <label className="set-select">
+                      <select
+                        aria-label={`Modèle pour ${KIND_LABEL[kind]}`}
+                        value={route.model ?? ""}
+                        onChange={(e) => set(route.agentId, e.target.value)}
+                      >
+                        <option value="">Modèle par défaut</option>
+                        {agent.models.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </Row>
+              );
+            })}
+          </div>
+          <div className="set-card">
+            <Row
+              title="Fils en même temps"
+              text="Au-delà, les fils qu'un coordinateur ouvre attendent en file et démarrent dès qu'une place se libère."
+            >
+              <label className="set-select">
+                <select
+                  aria-label="Fils en même temps"
+                  value={props.coordinator.parallel ?? DEFAULT_PARALLEL}
+                  onChange={(e) =>
+                    connection.send({
+                      type: "coordinator.setParallel",
+                      parallel: Number(e.target.value),
+                    })
+                  }
+                >
+                  {Array.from({ length: MAX_PARALLEL }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </Row>
+            <Row
+              title="Équipe lancée par un coordinateur"
+              text={
+                team
+                  ? `Chef : ${named(team.lead)}. ${team.coders} codeur${team.coders > 1 ? "s" : ""} : ${named(team.coder)}.${
+                      team.reviewer ? ` Relecture : ${named(team.reviewer)}.` : ""
+                    }${team.tester ? ` Tests : ${named(team.tester)}.` : ""}${
+                      team.merger ? ` Fusion : ${named(team.merger)}.` : ""
+                    } C'est la dernière équipe que tu as lancée avec /equipe.`
+                  : "Aucune pour l'instant. Lance une équipe toi-même une fois avec /equipe : un coordinateur reprendra la même."
+              }
+            />
+          </div>
+        </>
       );
       break;
     }
