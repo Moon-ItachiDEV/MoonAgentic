@@ -287,6 +287,71 @@ const cutShort = (team: Team): Team => {
 
 /** Events kept per team, the oldest dropped first. */
 const TIMELINE_LIMIT = 600;
+const PHASE_TEXT: Record<Team["phase"], string> = {
+  planning: "le chef découpe la tâche",
+  coding: "les codeurs travaillent",
+  merging: "les parts sont fusionnées sur une seule branche",
+  blocked: "l'équipe attend l'utilisateur",
+  done: "terminée",
+  failed: "échouée",
+  stopped: "arrêtée",
+};
+const TASK_TEXT: Record<TeamTask["status"], string> = {
+  waiting: "en attente d'un codeur libre",
+  running: "le codeur travaille",
+  reviewing: "en relecture",
+  testing: "en tests",
+  lead: "le chef réécrit sa consigne",
+  blocked: "bloquée, attend l'utilisateur",
+  done: "terminée",
+  failed: "échouée",
+  stopped: "arrêtée",
+};
+/** Characters of a coder's last words, and of a note, given to the lead. */
+const STATUS_CUT = 400;
+const tail = (text: string) => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > STATUS_CUT ? `…${flat.slice(-STATUS_CUT)}` : flat;
+};
+const minutes = (ms: number) => {
+  const min = Math.max(0, Math.round(ms / 60_000));
+  return min < 1 ? "moins d'une minute" : `${min} min`;
+};
+
+/**
+ * The team's real state, written for its lead: the server runs the pieces, so a lead the
+ * user talks to would otherwise know nothing past its own plan.
+ */
+export function teamStatus(team: Team, now: number, lastReply: (id: string) => string): string {
+  const started = team.timeline?.[0]?.at;
+  const lines = [
+    "[État réel de ton équipe, donné par MoonAgentic : c'est le serveur qui lance les codeurs, la relecture, les tests et la fusion d'après ton plan. L'utilisateur ne voit pas ce bloc ; sers-t'en pour lui répondre.]",
+    `Phase : ${PHASE_TEXT[team.phase]}${started === undefined ? "" : `, depuis ${minutes(now - started)}`}.`,
+  ];
+  const steps = [
+    team.reviewer && "relecture",
+    team.tester && "tests",
+    team.tasks.length > 1 && (team.merger ? "fusion vérifiée" : "fusion"),
+  ].filter(Boolean);
+  if (steps.length) lines.push(`Après le code de chaque part : ${steps.join(", ")}.`);
+  if (team.error) lines.push(`Erreur : ${tail(team.error)}`);
+  const done = team.tasks.filter((t) => t.status === "done").length;
+  lines.push(`Parts : ${done} sur ${team.tasks.length} terminées.`);
+  team.tasks.forEach((task, i) => {
+    let line = `${i + 1}. « ${task.title} » : ${TASK_TEXT[task.status]}`;
+    if (task.merged) line += ", fusionnée";
+    if (task.tries)
+      line += `, ${task.tries} correction${task.tries > 1 ? "s" : ""} demandée${task.tries > 1 ? "s" : ""}`;
+    line += ".";
+    if (task.note) line += ` Remarques : ${tail(task.note)}`;
+    const said = task.threadId ? tail(lastReply(task.threadId)) : "";
+    if (said) line += ` Dernier message du codeur : ${said}`;
+    lines.push(line);
+  });
+  lines.push("[Fin de l'état. Message de l'utilisateur :]");
+  return lines.join("\n");
+}
+
 export const LEAD_LANE = -1;
 export const MERGE_LANE = -2;
 

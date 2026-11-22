@@ -852,6 +852,8 @@ svg {
 
 .tool {
   display: grid;
+  /* A long command shrinks to its ellipsis instead of widening the feed. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
 }
 .tool-h {
@@ -863,6 +865,7 @@ svg {
   min-height: 26px;
   text-align: left;
   width: 100%;
+  min-width: 0;
 }
 .tool-h:hover {
   color: var(--fg);

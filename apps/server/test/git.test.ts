@@ -720,6 +720,27 @@ describe("teams", () => {
     expect(asked?.kind === "user" && asked.text).toContain("Ajoute une ligne sur answer");
   });
 
+  it("tells the lead the team's real state when the user writes to it, unseen in the thread", async () => {
+    const { hub, store, projectId } = repository();
+    const client = { send: () => {} };
+    hub.connect(client);
+    const leadId = team(hub, projectId, "Corrige answer et documente-la");
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    await hub.handle(client, { type: "thread.send", threadId: leadId, text: "ETA" });
+    // The demo agent repeats what it was asked: the lead got the state before the message.
+    const reply = () =>
+      store
+        .listItems(leadId)
+        .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
+        .at(-1) ?? "";
+    await expect.poll(reply, { timeout: 10_000 }).toContain("ETA");
+    expect(reply()).toContain("Phase : terminée");
+    expect(reply()).toContain("« Corriger answer » : terminée, fusionnée.");
+    // The user's bubble holds only what they wrote.
+    expect(asked(store, leadId).at(-1)).toBe("ETA");
+    await hub.cancel(leadId);
+  }, 40_000);
+
   it("merges every piece's branch onto one, in a thread the user can review and ship", async () => {
     const { hub, store, repo, projectId } = repository();
     const leadId = team(hub, projectId, "Corrige answer et documente-la");
