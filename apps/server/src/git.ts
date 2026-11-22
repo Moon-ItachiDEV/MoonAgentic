@@ -106,10 +106,20 @@ export const branchExists = (dir: string, branch: string): Promise<boolean> =>
 async function isWorktreeRoot(dir: string): Promise<boolean> {
   try {
     const top = (await git(dir, ["rev-parse", "--show-toplevel"])).trim();
-    return path.relative(realpathSync(top), realpathSync(dir)) === "";
+    return samePath(top, dir);
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether two paths name the same folder. Windows may give a folder by its short 8.3 name
+ * (`C:\Users\RUNNER~1\…`, as the temp folder often is) where git gives the long one: only
+ * the system's own `realpath` turns one into the other, and Windows paths ignore case.
+ */
+function samePath(a: string, b: string): boolean {
+  const [x, y] = [realpathSync.native(a), realpathSync.native(b)];
+  return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
 /** The worktree change running on each repository, so the next one waits for it. */

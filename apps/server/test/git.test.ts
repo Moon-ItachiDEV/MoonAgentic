@@ -366,6 +366,20 @@ describe("git helpers", () => {
     expect(git(repo, "worktree", "list").split("\n")).toHaveLength(6);
   });
 
+  it("leaves a worktree it already made as it is, merge under way included", async () => {
+    // On Windows the temp folder is often given by its short name (RUNNER~1), and git by
+    // the long one: the worktree must still be recognised, not made again from scratch.
+    const { root, repo } = repository();
+    const base = git(repo, "rev-parse", "HEAD");
+    const dir = path.join(root, "worktrees", "kept");
+    await ensureWorktree(repo, dir, "kept", base);
+    writeFileSync(path.join(dir, "brouillon.txt"), "pas encore commité\n");
+    git(dir, "update-ref", "MERGE_HEAD", base);
+    await ensureWorktree(repo, dir, "kept", base);
+    expect(existsSync(path.join(dir, "brouillon.txt"))).toBe(true);
+    expect(git(dir, "rev-parse", "MERGE_HEAD")).toBe(base);
+  });
+
   it("reads GitHub remotes in their https and ssh forms only", () => {
     for (const url of [
       "https://github.com/moon/app.git",
