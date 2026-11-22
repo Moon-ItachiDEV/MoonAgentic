@@ -2,6 +2,7 @@ import type { GithubRepo, GithubStatus } from "@moonagentic/protocol";
 import { useEffect, useMemo, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import {
+  canClone,
   filterRepos,
   githubOwner,
   githubStatusText,
@@ -80,6 +81,8 @@ export function NewProjectDialog({
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
+    // A profile address is never cloned, even with a name typed.
+    if (source === "github" && !canClone(repo, parent, name)) return;
     setBusy(true);
     setError(null);
     try {
@@ -105,10 +108,7 @@ export function NewProjectDialog({
     }
   };
 
-  const ready =
-    source === "local"
-      ? !!path.trim() && !!derivedName
-      : !!repo.trim() && !!parent.trim() && !!derivedName;
+  const ready = source === "local" ? !!path.trim() && !!derivedName : canClone(repo, parent, name);
   const status = github.status && githubStatusText(github.status);
 
   return (
