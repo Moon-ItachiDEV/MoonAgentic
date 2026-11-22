@@ -1,8 +1,25 @@
 import { useSyncExternalStore } from "react";
 
-export type Route = { name: "home" } | { name: "thread"; threadId: string };
+export type SettingsSection = "general" | "appearance" | "agents" | "models" | "mcp";
+export const SETTINGS_SECTIONS: SettingsSection[] = [
+  "general",
+  "appearance",
+  "agents",
+  "models",
+  "mcp",
+];
+
+export type Route =
+  | { name: "home" }
+  | { name: "thread"; threadId: string }
+  | { name: "settings"; section: SettingsSection };
 
 const parse = (pathname: string): Route => {
+  const settings = /^\/reglages(?:\/([a-z]+))?$/.exec(pathname);
+  if (settings) {
+    const section = SETTINGS_SECTIONS.find((s) => s === settings[1]) ?? "general";
+    return { name: "settings", section };
+  }
   const match = /^\/t\/([^/]+)$/.exec(pathname);
   try {
     if (match?.[1]) return { name: "thread", threadId: decodeURIComponent(match[1]) };
@@ -20,7 +37,12 @@ window.addEventListener("popstate", () => {
 });
 
 export function navigate(route: Route): void {
-  const path = route.name === "thread" ? `/t/${encodeURIComponent(route.threadId)}` : "/";
+  const path =
+    route.name === "thread"
+      ? `/t/${encodeURIComponent(route.threadId)}`
+      : route.name === "settings"
+        ? `/reglages/${route.section}`
+        : "/";
   if (path !== location.pathname) history.pushState(null, "", path);
   current = route;
   for (const l of listeners) l();

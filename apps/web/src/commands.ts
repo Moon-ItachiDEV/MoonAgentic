@@ -12,6 +12,7 @@ export type AppAction =
   | "search"
   | "requests"
   | "connections"
+  | "settings"
   | "archive"
   | "delete"
   | "team";
@@ -107,6 +108,7 @@ export function composerCommands(options: {
   add("chercher", "Chercher dans les fils et les messages (Ctrl K)", "search");
   add("demandes", "Voir ce que les agents attendent de toi", "requests");
   add("connexions", "Voir l'état des agents et les serveurs MCP", "connections");
+  add("reglages", "Ouvrir les réglages de MoonAgentic", "settings");
 
   const all: ComposerCommand[] = [
     ...app,
