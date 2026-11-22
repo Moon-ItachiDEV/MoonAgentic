@@ -9,6 +9,7 @@ import type {
   TeamTask,
   Thread,
 } from "@moonagentic/protocol";
+import type { ShipResult } from "./git.ts";
 
 /** Pieces of work a lead may hand out, so a plan never floods the machine with agents. */
 const MAX_TASKS = 8;
@@ -52,6 +53,8 @@ export interface TeamHost {
    * Returns the files left in conflict, the merge then still under way; empty when merged.
    */
   mergeInto(intoId: string, fromId: string, message: string): Promise<string[]>;
+  /** Commits what is left, pushes the thread's branch and opens its pull request. */
+  ship(threadId: string, message: string, title: string): Promise<ShipResult>;
   /** The files still in conflict while a merge is under way in the thread's folder. */
   unfinishedMerge(threadId: string): Promise<string[] | undefined>;
   /** Whether the `from` thread's branch is part of the `into` thread's. */
@@ -418,7 +421,41 @@ export class Teams {
 
   /** Keeps the team, and in its timeline what changed. */
   private save(leadId: string, team: Team): void {
+    const before = this.host.thread(leadId)?.team?.phase;
     this.host.setTeam(leadId, recordTimeline(team, Date.now()));
+    // Done, the team ends the way a cloud agent does: with its pull request open.
+    if (team.phase === "done" && before !== "done") void this.ship(leadId);
+  }
+
+  /**
+   * Pushes the branch that holds the team's work, the merge's or its only piece's, and
+   * opens its pull request with the user's \`gh\`. What went wrong is kept on the team.
+   */
+  ship(leadId: string): Promise<void> {
+    const team = this.host.thread(leadId)?.team;
+    if (!team || team.phase !== "done") {
+      return Promise.reject(new Error("L'équipe n'a pas fini : rien à envoyer pour l'instant."));
+    }
+    const target =
+      team.mergeThreadId ?? (team.tasks.length === 1 ? team.tasks[0]?.threadId : undefined);
+    if (!target) return Promise.resolve();
+    const work = this.host.ship(target, team.task, team.task).then(
+      (result) => {
+        const now = this.host.thread(leadId)?.team;
+        if (!now) return;
+        const { shipError: _error, ...rest } = now;
+        this.host.setTeam(leadId, {
+          ...rest,
+          shipped: { ...(result.url ? { url: result.url } : {}), opened: result.prOpened },
+        });
+      },
+      (error: unknown) => {
+        const now = this.host.thread(leadId)?.team;
+        if (now) this.host.setTeam(leadId, { ...now, shipError: cut(message(error)) });
+      },
+    );
+    this.track(work);
+    return work;
   }
 
   /** The access the team's agents get from now on, set from its lead. */

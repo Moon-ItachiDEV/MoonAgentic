@@ -210,6 +210,7 @@ export class Hub {
         if (lead) this.planner.syncTeam(lead);
       },
       mergeInto: (intoId, fromId, title) => this.mergeInto(intoId, fromId, title),
+      ship: (id, message, title) => this.ship(id, message, true, undefined, title),
       contains: async (intoId, fromId) => {
         const into = this.store.getThread(intoId)?.workspace;
         const from = this.store.getThread(fromId)?.workspace;
@@ -357,6 +358,10 @@ export class Hub {
       }
       case "team.stop":
         await this.teams.stop(message.threadId);
+        return;
+      case "team.ship":
+        await this.teams.ship(message.threadId);
+        client.send({ type: "done", requestId: message.requestId });
         return;
       case "team.retry":
         await this.teams.retry(message.threadId, message.index);
@@ -731,6 +736,8 @@ export class Hub {
     message: string,
     pr: boolean,
     files?: string[],
+    /** The pull request's title; otherwise the thread's. */
+    title?: string,
   ): Promise<ShipResult> {
     const thread = this.requireLiveThread(threadId);
     const workspace = thread.workspace;
@@ -741,7 +748,7 @@ export class Hub {
         branch: workspace.branch,
         message,
         pr,
-        title: thread.title,
+        title: title ?? thread.title,
         ...(files ? { files } : {}),
         ...(workspace.baseBranch ? { baseBranch: workspace.baseBranch } : {}),
       });

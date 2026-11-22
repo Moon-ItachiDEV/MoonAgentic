@@ -340,12 +340,18 @@ describe("composer", () => {
     const card = page.getByRole("region", { name: "Équipe", exact: true });
     await card.getByText("Terminé : tout est réuni sur une branche").waitFor({ timeout: 30_000 });
     // One calm step per role: the lead's plan, each piece with its coder, then the merge.
-    expect(await card.getByRole("listitem").allTextContents()).toEqual([
-      "Découper la tâcheChef · Agent de démo2 sous-tâches",
-      "Corriger answerCodeur · Agent de démofusionnéeRelectureTests",
-      "Documenter answerCodeur · Agent de démofusionnéeRelectureTests",
-      "Réunir les sous-tâchesFusionneur · Agent de démofaiteOuvrir la fusion",
-    ]);
+    await expect
+      .poll(() => card.getByRole("listitem").allTextContents())
+      .toEqual([
+        "Découper la tâcheChef · Agent de démo2 sous-tâches",
+        "Corriger answerCodeur · Agent de démofusionnéeRelectureTests",
+        "Documenter answerCodeur · Agent de démofusionnéeRelectureTests",
+        "Réunir les sous-tâchesFusionneur · Agent de démofaiteOuvrir la fusion",
+        // This repository has no remote: the team says so, and can try again.
+        expect.stringMatching(
+          /^Ouvrir la PRL'équipe, avec ton compte GitHubà toi de voir.*remote.*Réessayer$/s,
+        ),
+      ]);
     // The lead's internal prompt and plan stay folded: only « Voir le détail » shows.
     expect(await page.getByText("Tu es le chef d'une équipe").count()).toBe(0);
     await page.locator(".team-detail-h").first().click();

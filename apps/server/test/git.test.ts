@@ -773,6 +773,31 @@ describe("teams", () => {
     ]);
   });
 
+  it("pushes its branch by itself once done, as a cloud agent would, or says why it could not", async () => {
+    const { hub, store, repo, remote, projectId } = repository();
+    const leadId = team(hub, projectId, "Corrige answer et documente-la");
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    // The remote is no GitHub repository: the branch is pushed, with no pull request to open.
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.shipped, { timeout: 10_000 })
+      .toEqual({ opened: false });
+    const branch = store.getThread(store.getThread(leadId)!.team!.mergeThreadId!)!.workspace!
+      .branch;
+    expect(git(remote, "show", `${branch}:equipe/corriger-answer.md`)).toBe("# Corriger answer");
+
+    // Without a remote, the team stays done and says why; asked again, it tries again.
+    git(repo, "remote", "remove", "origin");
+    const client = { send: () => {} };
+    hub.connect(client);
+    await expect(
+      hub.handle(client, { type: "team.ship", requestId: "s", threadId: leadId }),
+    ).resolves.toBeUndefined();
+    expect(store.getThread(leadId)?.team).toMatchObject({
+      phase: "done",
+      shipError: expect.stringContaining("remote"),
+    });
+  }, 40_000);
+
   it("leaves a conflict to the user without a merger, and merges on once it is settled", async () => {
     const { hub, store, repo, projectId } = repository();
     const leadId = team(hub, projectId, "Écris en conflit");

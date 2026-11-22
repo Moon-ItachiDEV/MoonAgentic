@@ -34,6 +34,7 @@ function headline(team: Team): string {
       return `${left} ${plural(left, "sous-tâche t'attend", "sous-tâches t'attendent")} : ${plural(left, "ouvre son fil, puis relance-la", "ouvre leurs fils, puis relance-les")}.`;
     }
     case "done":
+      if (team.shipped?.opened) return "Terminé : la PR est ouverte, prête à relire.";
       return team.mergeThreadId
         ? "Terminé : tout est réuni sur une branche, prête à relire et à envoyer."
         : "Terminé : chaque sous-tâche est prête sur sa branche.";
@@ -87,6 +88,15 @@ function leadState(team: Team): string {
   if (team.tasks.some((t) => t.status === "lead")) return "revoit une consigne";
   const n = team.tasks.length;
   return n ? `${n} ${plural(n, "sous-tâche", "sous-tâches")}` : "pas de plan";
+}
+
+/** Where the team's pull request is: it is opened by the team itself, once done. */
+function shipState(team: Team): { dot: string; text: string } {
+  if (team.shipped?.opened) return { dot: "done", text: "ouverte" };
+  if (team.shipped) return { dot: "done", text: "branche envoyée" };
+  if (team.shipError) return { dot: "blocked", text: "à toi de voir" };
+  if (team.phase === "done") return { dot: "running", text: "en cours" };
+  return { dot: "waiting", text: "à la fin" };
 }
 
 /** What the merge is at; before it starts, it waits on the coders. */
@@ -144,6 +154,17 @@ export function TeamCard({
     team.error && (team.phase === "blocked" || team.phase === "failed" || team.phase === "stopped")
       ? team.error
       : undefined;
+  const ship = shipState(team);
+  const [shipping, setShipping] = useState(false);
+  const shipAgain = () => {
+    setShipping(true);
+    connection
+      .request({ type: "team.ship", requestId: newId(), threadId: thread.id })
+      .catch((error: unknown) =>
+        connection.notify(error instanceof Error ? error.message : String(error)),
+      )
+      .finally(() => setShipping(false));
+  };
   // -1 stands for the merge. The button waits for the server's answer, not for a guess.
   const retry = (index: number) => {
     setRetrying((r) => [...r, index]);
@@ -288,6 +309,37 @@ export function TeamCard({
             )}
           </li>
         )}
+        <li className={`team-task step ${ship.dot}`} aria-label="Pull request">
+          <span className="dot" aria-hidden />
+          <span className="team-what">
+            <span>Ouvrir la PR</span>
+            <span className="team-who">L'équipe, avec ton compte GitHub</span>
+          </span>
+          <small>{ship.text}</small>
+          {(team.shipped?.url || team.shipError) && (
+            <div className="team-more">
+              {team.shipError && (
+                <div className="team-note">
+                  <Clamp>
+                    <Markdown text={team.shipError} />
+                  </Clamp>
+                </div>
+              )}
+              <div className="team-links">
+                {team.shipped?.url && (
+                  <a className="lnk sm" href={team.shipped.url} target="_blank" rel="noreferrer">
+                    {team.shipped.opened ? "Voir la PR" : "Créer la PR sur GitHub"}
+                  </a>
+                )}
+                {team.shipError && (
+                  <button className="btn sm" disabled={shipping} onClick={shipAgain}>
+                    Réessayer
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </li>
       </ul>
       {error && !(hasMerge && mergeBlocked) && (
         <div className="team-note">
