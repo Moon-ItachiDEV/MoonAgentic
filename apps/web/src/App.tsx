@@ -1,6 +1,7 @@
 import type { Thread } from "@moonagentic/protocol";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Composer } from "./components/Composer.tsx";
+import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Home } from "./components/Home.tsx";
@@ -351,19 +352,21 @@ export function App() {
           onClose={() => setReviewOpen(false)}
         />
       )}
-      {teamTask !== null && project && (
-        <TeamDialog
-          project={project}
-          agents={state.agents}
-          task={teamTask}
-          onClose={() => setTeamTask(null)}
-          onStarted={(id) => {
-            setTeamTask(null);
-            navigate({ name: "thread", threadId: id });
-          }}
-        />
-      )}
-      {creatingProject && (
+      <Presence show={teamTask !== null && !!project}>
+        {teamTask !== null && project && (
+          <TeamDialog
+            project={project}
+            agents={state.agents}
+            task={teamTask}
+            onClose={() => setTeamTask(null)}
+            onStarted={(id) => {
+              setTeamTask(null);
+              navigate({ name: "thread", threadId: id });
+            }}
+          />
+        )}
+      </Presence>
+      <Presence show={creatingProject}>
         <NewProjectDialog
           onClose={() => setCreatingProject(false)}
           onCreated={(id) => {
@@ -372,8 +375,8 @@ export function App() {
             go({ name: "home" });
           }}
         />
-      )}
-      {connectionsOpen && (
+      </Presence>
+      <Presence show={connectionsOpen}>
         <ConnectionsDialog
           agents={state.agents}
           mcpServers={state.mcpServers}
@@ -383,8 +386,8 @@ export function App() {
           }}
           onClose={() => setConnectionsOpen(false)}
         />
-      )}
-      {requestsOpen && (
+      </Presence>
+      <Presence show={requestsOpen}>
         <RequestsDialog
           requests={state.requests}
           threads={state.threads}
@@ -395,9 +398,13 @@ export function App() {
           }}
           onClose={() => setRequestsOpen(false)}
         />
-      )}
-      {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
-      {mcpOpen && <McpDialog servers={state.mcpServers} onClose={() => setMcpOpen(false)} />}
+      </Presence>
+      <Presence show={!!confirm}>
+        {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
+      </Presence>
+      <Presence show={mcpOpen}>
+        <McpDialog servers={state.mcpServers} onClose={() => setMcpOpen(false)} />
+      </Presence>
       {searchOpen && (
         <QuickSearch
           state={state}

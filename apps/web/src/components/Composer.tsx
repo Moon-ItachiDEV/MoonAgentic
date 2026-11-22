@@ -25,6 +25,7 @@ import { readPref, writePref } from "../prefs.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { ContextGauge } from "./ContextGauge.tsx";
 import { IconArrowUp, IconBranch, IconShield, IconStop } from "./icons.tsx";
+import { Presence } from "./Presence.tsx";
 import { Picker } from "./Picker.tsx";
 import { PlusMenu } from "./PlusMenu.tsx";
 import { type Suggestion, Suggestions } from "./Suggestions.tsx";
@@ -641,7 +642,7 @@ export function Composer(props: {
           onHover={setActive}
         />
       )}
-      {pickerOpen && (
+      <Presence show={pickerOpen}>
         <Picker
           agents={agents}
           agent={agent}
@@ -691,7 +692,7 @@ export function Composer(props: {
           }}
           onClose={() => setMenu(false)}
         />
-      )}
+      </Presence>
     </div>
   );
 }

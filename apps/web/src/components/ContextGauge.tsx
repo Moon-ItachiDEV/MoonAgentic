@@ -1,6 +1,7 @@
 import type { ContextUsage } from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
 import { money } from "../status.ts";
+import { Presence } from "./Presence.tsx";
 
 const tokens = (n: number) =>
   n >= 1_000_000
@@ -60,7 +61,7 @@ export function ContextGauge({
           />
         </svg>
       </button>
-      {open && (
+      <Presence show={open}>
         <div className="gauge-pop" role="dialog" aria-label="Contexte de l'agent">
           <b>Contexte : {percent} %</b>
           <span>
@@ -80,7 +81,7 @@ export function ContextGauge({
             </button>
           )}
         </div>
-      )}
+      </Presence>
     </div>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { IconPlus } from "./icons.tsx";
+import { Presence } from "./Presence.tsx";
 
 const ITEMS = [
   { insert: "@", label: "Joindre un fichier du projet", key: "@" },
@@ -43,7 +44,7 @@ export function PlusMenu(props: {
       >
         <IconPlus />
       </button>
-      {props.open && (
+      <Presence show={props.open}>
         <div className="menu plus-menu" role="menu">
           {ITEMS.map((item) => (
             <button key={item.key} role="menuitem" onClick={() => props.onPick(item.insert)}>
@@ -52,7 +53,7 @@ export function PlusMenu(props: {
             </button>
           ))}
         </div>
-      )}
+      </Presence>
     </div>
   );
 }
