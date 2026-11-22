@@ -809,7 +809,11 @@ describe("teams", () => {
 
     // A piece whose coder's thread was deleted starts over with a new coder.
     const gone = blocked.tasks[1]!;
+    // Its reviewer's agent, working in its folder, stops first (Windows holds the folder).
+    const live = hub.liveAgents;
     await hub.deleteThread(gone.threadId!);
+    expect(hub.liveAgents).toBe(live - 2);
+    expect(store.getThread(gone.reviewThreadId!)).toBeDefined();
     await hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId, index: 1 });
     const again = store.getThread(leadId)!.team!.tasks[1]!;
     expect(again.threadId).toBeDefined();
