@@ -238,7 +238,9 @@ describe("composer", () => {
     await shot(page, "c6-mobile");
     await page.close();
   });
-  it("lists the user's GitHub repositories to clone, and explains a profile address", async () => {
+  // The stand-in « gh » is a POSIX shell script that Windows cannot run (the server does not take
+  // a .cmd as the GitHub CLI, on purpose). The canClone rule itself is covered by github.test.ts.
+  it.skipIf(process.platform === "win32")("lists the user's GitHub repositories to clone, and explains a profile address", async () => {
     const page = await browser.newPage();
     await page.goto(url);
     await page.getByRole("button", { name: "Nouveau projet" }).first().click();
