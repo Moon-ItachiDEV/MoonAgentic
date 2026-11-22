@@ -2428,6 +2428,10 @@ kbd {
 .tl-l[role="button"]:hover {
   background: var(--hover);
 }
+.tl-after .tl-who b {
+  color: var(--muted);
+  font-weight: 500;
+}
 .tl-who {
   display: grid;
   min-width: 0;

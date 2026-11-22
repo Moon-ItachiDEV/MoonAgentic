@@ -331,6 +331,11 @@ describe("composer", () => {
     await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Agent de démo" });
     await shot(page, "c10-equipe-lancer");
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
+    // Every role is on the timeline from the start, the agent and model of each said.
+    const strip = page.getByRole("region", { name: "Frise de l'équipe" });
+    await strip.getByText(/^Fusionneur · Agent de démo/).waitFor();
+    await dialog.waitFor({ state: "hidden" });
+    await shot(page, "c10b-equipe-depart");
 
     const card = page.getByRole("region", { name: "Équipe", exact: true });
     await card.getByText("Terminé : tout est réuni sur une branche").waitFor({ timeout: 30_000 });
@@ -359,7 +364,6 @@ describe("composer", () => {
     await page.getByRole("button", { name: /^Déplier l'équipe/ }).click();
     // The timeline, drawn from what the team really did: a lane for the lead, each piece
     // and the merge, ended.
-    const strip = page.getByRole("region", { name: "Frise de l'équipe" });
     expect(
       await strip
         .getByRole("button", { name: /^(Chef|Corriger answer|Documenter answer|Fusion) :/ })
