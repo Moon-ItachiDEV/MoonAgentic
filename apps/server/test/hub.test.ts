@@ -334,6 +334,63 @@ describe("Hub with the demo agent", () => {
     expect(() => hub.toggleFavorite("__proto__", "x", true)).toThrow("Agent inconnu");
   });
 
+  it("hands enabled MCP servers to agents, and never shows their secrets to clients", async () => {
+    const { hub, store, client, projectId } = setup();
+    hub.addMcpServer({
+      name: "fichiers",
+      transport: {
+        type: "stdio",
+        command: "npx",
+        args: ["-y", "mcp fichiers"],
+        env: [{ name: "TOKEN", value: "s3cret" }],
+      },
+    });
+    // The demo agent cannot reach HTTP servers, so it must not be given one.
+    hub.addMcpServer({
+      name: "web",
+      transport: {
+        type: "http",
+        url: "https://mcp.example.com",
+        headers: [{ name: "Authorization", value: "Bearer s3cret" }],
+      },
+    });
+    const off = hub.addMcpServer({
+      name: "coupé",
+      transport: { type: "stdio", command: "off", args: [], env: [] },
+    });
+    await hub.handle(client, { type: "mcp.setEnabled", id: off, enabled: false });
+    expect(() =>
+      hub.addMcpServer({
+        name: "Web",
+        transport: { type: "stdio", command: "x", args: [], env: [] },
+      }),
+    ).toThrow("déjà");
+
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+
+    const reply = store.listItems(threadId).find((i) => i.kind === "agent");
+    expect(reply && "text" in reply ? reply.text : "").toContain("Serveurs MCP reçus : fichiers.");
+    expect(hub.snapshot().mcpServers).toMatchObject([
+      { name: "fichiers", enabled: true, target: 'npx -y "mcp fichiers"', secretNames: ["TOKEN"] },
+      { name: "web", transport: "http", secretNames: ["Authorization"] },
+      { name: "coupé", enabled: false },
+    ]);
+    expect(JSON.stringify([hub.snapshot(), client.messages])).not.toContain("s3cret");
+
+    await hub.handle(client, { type: "mcp.remove", id: off });
+    expect(hub.snapshot().mcpServers.map((m) => m.name)).toEqual(["fichiers", "web"]);
+    const sent = client.messages.length;
+    await hub.handle(client, { type: "mcp.remove", id: off });
+    await hub.handle(client, { type: "mcp.setEnabled", id: "inconnu", enabled: false });
+    expect(client.messages.length).toBe(sent);
+  });
+
   it("rejects a project folder that does not exist", () => {
     const { hub, dir } = setup();
     expect(() => hub.createProject("x", path.join(dir, "missing"))).toThrow("n'existe pas");

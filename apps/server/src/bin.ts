@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Agents } from "./agents.ts";
+import { preparePrivateDataDir } from "./data-dir.ts";
 import { createHttpServer } from "./http.ts";
 import { Hub } from "./hub.ts";
 import { Store } from "./store.ts";
@@ -24,7 +25,7 @@ const { values } = parseArgs({
 });
 
 const dataDir = path.resolve(values["data-dir"]);
-mkdirSync(dataDir, { recursive: true });
+preparePrivateDataDir(dataDir);
 const tokenFile = path.join(dataDir, "token");
 if (!existsSync(tokenFile))
   writeFileSync(tokenFile, randomBytes(24).toString("base64url"), { mode: 0o600 });

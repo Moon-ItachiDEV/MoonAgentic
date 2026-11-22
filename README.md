@@ -24,6 +24,8 @@ Agents reconnus : Claude Code et Codex (inclus), Antigravity (`agy`), Cursor (`a
 
 Connexion aux agents : connecte-toi une fois avec ton propre compte dans l'outil officiel de chaque agent (`claude` puis `/login`, `codex login`, `agent login`, `agy`), ou fournis ta propre clé API. MoonAgentic lance ces outils tels quels sur ta machine et ne voit, ne stocke ni ne relaie jamais tes identifiants.
 
+Serveurs MCP : ajoute-les une fois dans « Serveurs MCP » (une commande ou une adresse, avec leurs secrets). Chaque agent les reçoit au démarrage d'un fil. Les secrets restent dans `~/.moonagentic` et ne sont jamais envoyés à l'interface.
+
 `node apps/server/src/bin.ts --demo` ajoute un agent de démo gratuit pour essayer l'interface.
 
 ## Développer

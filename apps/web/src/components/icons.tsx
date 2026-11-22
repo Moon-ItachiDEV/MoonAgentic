@@ -71,3 +71,10 @@ export const IconStar = ({ size = 14, filled = false }: P & { filled?: boolean }
     <path d="m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9Z" />
   </svg>
 );
+export const IconPlug = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <path d="M9 2v5M15 2v5" />
+    <path d="M6 7h12v4a6 6 0 0 1-12 0Z" />
+    <path d="M12 17v5" />
+  </svg>
+);

@@ -24,6 +24,30 @@ const sameToken = (given: string | null, expected: string) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
+/**
+ * Reads a client message. A rejected request still names its `requestId`, so the client
+ * waiting on it hears back instead of waiting forever.
+ */
+export function decode(data: string): { message: ClientMessage } | { error: ServerMessage } {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(data);
+  } catch {
+    return { error: { type: "error", message: "Message illisible." } };
+  }
+  const parsed = ClientMessage.safeParse(raw);
+  if (parsed.success) return { message: parsed.data };
+  const requestId =
+    typeof raw === "object" && raw !== null && "requestId" in raw ? raw.requestId : undefined;
+  return {
+    error: {
+      type: "error",
+      ...(typeof requestId === "string" && requestId.length <= 200 ? { requestId } : {}),
+      message: "Message invalide.",
+    },
+  };
+}
+
 /** Serves the built web app (when there is one) and the `/ws` endpoint clients talk to. */
 export function createHttpServer(options: { hub: Hub; token: string; webDir?: string }): Server {
   const { hub, token, webDir } = options;
@@ -68,22 +92,16 @@ export function createHttpServer(options: { hub: Hub; token: string; webDir?: st
       const disconnect = hub.connect(client);
       ws.on("close", disconnect);
       ws.on("message", (data) => {
-        let raw: unknown;
-        try {
-          raw = JSON.parse(data.toString());
-        } catch {
-          client.send({ type: "error", message: "Message illisible." });
+        const decoded = decode(data.toString());
+        if ("error" in decoded) {
+          client.send(decoded.error);
           return;
         }
-        const parsed = ClientMessage.safeParse(raw);
-        if (!parsed.success) {
-          client.send({ type: "error", message: "Message invalide." });
-          return;
-        }
-        hub.handle(client, parsed.data).catch((error: unknown) => {
+        const message = decoded.message;
+        hub.handle(client, message).catch((error: unknown) => {
           client.send({
             type: "error",
-            ...("requestId" in parsed.data ? { requestId: parsed.data.requestId } : {}),
+            ...("requestId" in message ? { requestId: message.requestId } : {}),
             message: error instanceof Error ? error.message : String(error),
           });
         });
