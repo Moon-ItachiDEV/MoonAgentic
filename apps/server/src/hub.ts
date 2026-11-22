@@ -1,9 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
-import { threadPullRequest } from "@moonagentic/protocol";
+import { threadGroup, threadPullRequest } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   AgentSetting,
@@ -61,10 +62,16 @@ import {
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { historyBefore } from "./history.ts";
 import { Planner } from "./planner.ts";
+import {
+  BRIDGE_TOKEN_ENV,
+  BRIDGE_URL_ENV,
+  COORDINATOR_TOOLS,
+  THREAD_KINDS,
+} from "./coordinator-tools.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
 import { Teams, teamStatus } from "./team.ts";
-import { mcpInfo } from "./mcp.ts";
+import { mcpInfo, type McpServerRecord } from "./mcp.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import type { Store } from "./store.ts";
@@ -114,6 +121,26 @@ export interface HubOptions {
   prWatchMs?: number;
 }
 
+/** Threads a coordinator may open while answering one message, so a mistake cannot flood. */
+const MAX_OPENED_PER_TURN = 4;
+/** Messages of a thread shown to the coordinator that reads it, and characters of each. */
+const READ_MESSAGES = 8;
+const READ_CLIP = 1_500;
+
+const BRIDGE = fileURLToPath(new URL("./coordinator-bridge.ts", import.meta.url));
+
+/** What a coordinator is told before each message: its part, and how it acts. */
+export const coordinatorPrompt = (project: string) =>
+  `Tu es le coordinateur du projet « ${project} » dans MoonAgentic. L'utilisateur te parle de tout le projet ; chaque sujet de travail vit dans son propre fil, avec son agent et sa branche.
+
+Ce que tu fais :
+- Une question rapide ou un point d'avancement : tu réponds toi-même, en quelques phrases. Pour l'avancement, lis l'état réel avec list_threads, puis read_thread si on te demande le détail d'un fil. N'invente jamais un état.
+- Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne complète, car l'agent du fil ne voit pas cette conversation.
+- Un sujet qui a déjà son fil : tu le relances avec message_thread plutôt que d'en ouvrir un second.
+- resolve_thread seulement quand l'utilisateur dit que le sujet est clos.
+
+Après un outil, dis en une phrase ce que tu as fait. Reste bref : pas de plan, pas de récapitulatif. Réponds dans la langue de l'utilisateur.`;
+
 /** A known, open pull request is asked about again this often. */
 const PR_WATCH_MS = 60_000;
 /** Characters kept of what an agent last said, for lists of threads. */
@@ -150,6 +177,13 @@ const TEAM_AT_WORK = "Cette équipe travaille encore : arrête-la d'abord.";
 
 /** A step back under way, kept until it is done so a stop in the middle is finished later. */
 type PendingRestore = { itemId: string; tree: string };
+
+/** A coordinator's call that came with no token of this server's: answered 401. */
+export class CoordinatorRefused extends Error {
+  constructor() {
+    super("Accès refusé.");
+  }
+}
 
 /** Owns threads and their agent sessions, and keeps every connected client in sync. */
 export class Hub {
@@ -201,6 +235,12 @@ export class Hub {
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
   private readonly pullRequests: () => PullRequests | undefined;
+  /** What each coordinator's bridge may reach, by its token: one project, kept in memory only. */
+  private readonly coordinatorTokens = new Map<string, { projectId: string; threadId: string }>();
+  /** Threads each coordinator opened while answering the current message. */
+  private readonly openedThisTurn = new Map<string, number>();
+  /** Where this server answers a coordinator's bridge, once it listens. */
+  coordinatorUrl: string | undefined;
   /** True while known pull requests are being asked about, so rounds never pile up. */
   private watching = false;
   private readonly prTimer: NodeJS.Timeout | undefined;
@@ -374,8 +414,19 @@ export class Hub {
         });
         return;
       case "thread.send":
-        this.send(message.threadId, message.text, this.leadContext(message.threadId));
+        this.send(
+          message.threadId,
+          message.text,
+          this.leadContext(message.threadId) ?? this.coordinatorContext(message.threadId),
+        );
         return;
+      case "coordinator.open": {
+        const id = this.openCoordinator(message.projectId, message.agentId, message.model);
+        client.openThreadId = id;
+        client.send({ type: "created", requestId: message.requestId, id });
+        client.send({ type: "items", threadId: id, items: this.items(id) });
+        return;
+      }
       case "thread.cancel":
         await this.cancel(message.threadId);
         return;
@@ -590,6 +641,8 @@ export class Hub {
     team?: Team | undefined;
     /** The first message is the team engine's, not the user's. */
     byTeam?: boolean | undefined;
+    /** The coordinator that opened it. */
+    openedBy?: string | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
@@ -613,6 +666,7 @@ export class Hub {
       ...(input.model ? { model: input.model } : {}),
       ...(input.settings ? { settings: input.settings } : {}),
       ...(workspace ? { workspace } : {}),
+      ...(input.openedBy ? { openedBy: input.openedBy } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.role ? { role: input.role } : {}),
       ...(input.worksIn ? { worksIn: input.worksIn } : {}),
@@ -661,6 +715,215 @@ export class Hub {
       tester: input.tester && member(input.tester),
       merger: input.merger && member(input.merger),
     });
+  }
+
+  /** The project's coordinator, made with this agent when the project has none yet. */
+  openCoordinator(projectId: string, agentId: string, model?: string): string {
+    const known = this.store
+      .listThreads()
+      .find((t) => t.projectId === projectId && t.kind === "coordinator");
+    if (known) return known.id;
+    const project = this.store.getProject(projectId);
+    if (!project || this.removingProjects.has(projectId)) throw new Error("Projet introuvable.");
+    this.agents.launch(agentId);
+    const now = Date.now();
+    const thread: Thread = {
+      id: randomUUID(),
+      projectId,
+      title: `Coordinateur · ${project.name}`,
+      agentId,
+      status: "idle",
+      // It reads and routes; anything it would change still asks first.
+      permissionMode: "supervised",
+      ...(model ? { model } : {}),
+      kind: "coordinator",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.store.addThread(thread);
+    this.broadcast({ type: "thread", thread });
+    return thread.id;
+  }
+
+  /** For the user writing to a coordinator: its part, given before the message. */
+  private coordinatorContext(threadId: string): string | undefined {
+    const thread = this.store.getThread(threadId);
+    if (thread?.kind !== "coordinator") return undefined;
+    this.openedThisTurn.delete(threadId);
+    return coordinatorPrompt(this.store.getProject(thread.projectId)?.name ?? "");
+  }
+
+  /** The MCP server given to a coordinator's agent, with a token for its project alone. */
+  private coordinatorServer(thread: Thread): McpServerRecord[] {
+    if (thread.kind !== "coordinator" || !this.coordinatorUrl) return [];
+    for (const [token, scope] of this.coordinatorTokens) {
+      if (scope.threadId === thread.id) this.coordinatorTokens.delete(token);
+    }
+    const token = randomBytes(32).toString("base64url");
+    this.coordinatorTokens.set(token, { projectId: thread.projectId, threadId: thread.id });
+    return [
+      {
+        id: "moonagentic",
+        name: "moonagentic",
+        enabled: true,
+        transport: {
+          type: "stdio",
+          command: process.execPath,
+          args: [BRIDGE],
+          env: [
+            { name: BRIDGE_URL_ENV, value: this.coordinatorUrl },
+            { name: BRIDGE_TOKEN_ENV, value: token },
+          ],
+        },
+      },
+    ];
+  }
+
+  /** What a coordinator is shown of a thread: its real state, nothing made up. */
+  private threadForCoordinator(t: Thread) {
+    const blocked = t.team?.tasks.find((task) => task.status === "blocked");
+    return {
+      id: t.id,
+      title: t.title,
+      state: { waiting: "en attente", running: "en cours", idle: "inactif", resolved: "résolu" }[
+        threadGroup(t)
+      ],
+      agent: t.agentId,
+      ...(t.model ? { model: t.model } : {}),
+      ...(t.status === "waiting" ? { waits_on: "une réponse de l'utilisateur" } : {}),
+      ...(t.error ? { error: t.error } : {}),
+      ...(t.team
+        ? {
+            team: {
+              phase: t.team.phase,
+              pieces: t.team.tasks.map((task) => `${task.title} : ${task.status}`),
+              ...(blocked?.note ? { blocked_because: blocked.note } : {}),
+            },
+          }
+        : {}),
+      ...(t.pr
+        ? {
+            pull_request: {
+              number: t.pr.number,
+              url: t.pr.url,
+              state: t.pr.state,
+              checks: t.pr.checks,
+              ...(t.pr.conflicts ? { conflicts: true } : {}),
+            },
+          }
+        : {}),
+      ...(t.workspace?.base ? { branch: t.workspace.branch } : {}),
+      ...(t.summary ? { last_said: t.summary } : {}),
+      updated: new Date(t.updatedAt).toISOString(),
+    };
+  }
+
+  /**
+   * One tool call of a coordinator, from its bridge. The token says which project it may
+   * touch: a thread of another project, a team's member or a coordinator is never reached.
+   */
+  async coordinatorCall(token: string, tool: string, args: unknown): Promise<unknown> {
+    const scope = this.coordinatorTokens.get(token);
+    const coordinator = scope && this.store.getThread(scope.threadId);
+    if (!scope || coordinator?.kind !== "coordinator") throw new CoordinatorRefused();
+    if (!COORDINATOR_TOOLS.some((t) => t.name === tool)) throw new Error(`Outil inconnu : ${tool}`);
+    const input =
+      typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+    const str = (key: string, max: number) => {
+      const value = input[key];
+      if (value === undefined || value === null || value === "") return undefined;
+      if (typeof value !== "string" || value.length > max)
+        throw new Error(`« ${key} » doit être un texte d'au plus ${max} caractères.`);
+      return value.trim() || undefined;
+    };
+    const need = (key: string, max: number) => {
+      const value = str(key, max);
+      if (!value) throw new Error(`« ${key} » est requis.`);
+      return value;
+    };
+    const mine = () =>
+      this.store
+        .listThreads()
+        .filter((t) => t.projectId === scope.projectId && !t.parentId && t.kind !== "coordinator");
+    const one = () => {
+      const id = need("thread_id", 200);
+      const thread = mine().find((t) => t.id === id);
+      if (!thread) throw new Error("Ce fil n'existe pas dans ce projet.");
+      return thread;
+    };
+    switch (tool) {
+      case "list_threads":
+        return mine().map((t) => this.threadForCoordinator(t));
+      case "read_thread": {
+        const thread = one();
+        const messages = this.items(thread.id)
+          .flatMap((i) =>
+            (i.kind === "user" && !i.byTeam) || i.kind === "agent"
+              ? [
+                  {
+                    from: i.kind === "user" ? "utilisateur" : "agent",
+                    text: i.text.length > READ_CLIP ? `${i.text.slice(0, READ_CLIP)}…` : i.text,
+                  },
+                ]
+              : [],
+          )
+          .slice(-READ_MESSAGES);
+        const asks = this.pendingRequests()
+          .filter((r) => r.threadId === thread.id)
+          .map((r) => r.title);
+        return {
+          ...this.threadForCoordinator(thread),
+          ...(asks.length ? { asks_permission_for: asks } : {}),
+          last_messages: messages,
+        };
+      }
+      case "open_thread": {
+        const title = need("title", 120);
+        const brief = need("brief", 20_000);
+        const kind = str("kind", 40);
+        if (kind && !(THREAD_KINDS as readonly string[]).includes(kind))
+          throw new Error(`« kind » doit être l'un de : ${THREAD_KINDS.join(", ")}.`);
+        const opened = this.openedThisTurn.get(coordinator.id) ?? 0;
+        if (opened >= MAX_OPENED_PER_TURN)
+          throw new Error(
+            `Tu as déjà ouvert ${opened} fils pour ce message : demande à l'utilisateur avant d'en ouvrir d'autres.`,
+          );
+        const agentId = str("agent", 200) ?? coordinator.agentId;
+        const model =
+          str("model", 200) ?? (agentId === coordinator.agentId ? coordinator.model : undefined);
+        const id = this.createThread({
+          projectId: scope.projectId,
+          agentId,
+          model,
+          permissionMode: coordinator.permissionMode,
+          isolated: true,
+          title,
+          text: brief,
+          openedBy: coordinator.id,
+        });
+        this.openedThisTurn.set(coordinator.id, opened + 1);
+        this.putItem(coordinator.id, {
+          id: `opened:${id}`,
+          kind: "opened",
+          threadId: id,
+          title: this.requireThread(id).title,
+          at: Date.now(),
+        });
+        return { opened: this.threadForCoordinator(this.requireThread(id)) };
+      }
+      case "message_thread": {
+        const thread = one();
+        this.send(thread.id, need("text", 20_000), this.leadContext(thread.id));
+        return { sent_to: thread.title };
+      }
+      case "resolve_thread": {
+        const thread = one();
+        await this.setArchived(thread.id, true);
+        return { resolved: thread.title };
+      }
+      default:
+        throw new Error(`Outil inconnu : ${tool}`);
+    }
   }
 
   /**
@@ -1652,7 +1915,7 @@ export class Hub {
       launch: this.agents.launch(thread.agentId),
       cwd,
       previousSessionId: this.store.getSessionId(thread.id),
-      mcpServers: this.catalog.mcpServers(),
+      mcpServers: [...this.catalog.mcpServers(), ...this.coordinatorServer(thread)],
       signal: AbortSignal.any([stop, AbortSignal.timeout(START_TIMEOUT_MS)]),
       handlers: {
         onUpdate: (update) => this.applyUpdate(thread.id, update),

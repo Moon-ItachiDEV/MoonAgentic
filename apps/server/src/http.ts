@@ -4,7 +4,8 @@ import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { ClientMessage, type RemoteAccess, type ServerMessage } from "@moonagentic/protocol";
 import { WebSocketServer } from "ws";
-import type { Client, Hub } from "./hub.ts";
+import { COORDINATOR_PATH } from "./coordinator-tools.ts";
+import { type Client, CoordinatorRefused, type Hub } from "./hub.ts";
 import { findRemoteAccess } from "./remote.ts";
 
 /** A fresh access token: long enough that it cannot be guessed. */
@@ -22,6 +23,11 @@ const TYPES: Record<string, string> = {
   ".json": "application/json",
   ".webmanifest": "application/manifest+json",
 };
+
+/** Where a request from this very machine comes from. */
+const LOCAL = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
+/** A coordinator's call is a tool name and a brief: never large. */
+const MAX_COORDINATOR_BODY = 256 * 1024;
 
 const sameToken = (given: string | null, expected: string) => {
   if (!given) return false;
@@ -137,6 +143,45 @@ export function createHttpServer(options: {
       res.writeHead(sameToken(given, token) ? 204 : 401).end();
       return;
     }
+    if (req.url === COORDINATOR_PATH) {
+      // Only a coordinator's bridge, started on this machine, comes here: never a browser,
+      // never through the remote access. Its own token says which project it may touch;
+      // the app's token opens nothing here.
+      const from = req.socket.remoteAddress ?? "";
+      if (!LOCAL.has(from) || req.headers["x-forwarded-for"] || req.headers.origin) {
+        res.writeHead(403).end();
+        return;
+      }
+      if (req.method !== "POST") {
+        res.writeHead(405).end();
+        return;
+      }
+      const chunks: Buffer[] = [];
+      let size = 0;
+      req.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > MAX_COORDINATOR_BODY) req.destroy();
+        else chunks.push(chunk);
+      });
+      req.on("error", () => undefined);
+      req.on("end", () => {
+        let body: { tool?: unknown; args?: unknown };
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as typeof body;
+        } catch {
+          json(res, 400, { error: "Requête illisible." });
+          return;
+        }
+        hub.coordinatorCall(given ?? "", String(body?.tool ?? ""), body?.args).then(
+          (result) => json(res, 200, { result }),
+          (error: unknown) =>
+            json(res, error instanceof CoordinatorRefused ? 401 : 400, {
+              error: error instanceof Error ? error.message : String(error),
+            }),
+        );
+      });
+      return;
+    }
     if (req.url === "/api/remote" || req.url === "/api/remote/token") {
       if (!sameToken(given, token)) {
         res.writeHead(401).end();
@@ -231,6 +276,18 @@ export function createHttpServer(options: {
         });
       });
     });
+  });
+  // A coordinator's bridge runs on this machine: it reaches the server on the loopback.
+  server.on("listening", () => {
+    const address = server.address();
+    if (typeof address === "object" && address) {
+      const host =
+        address.address === "::" || address.address === "0.0.0.0" || LOCAL.has(address.address)
+          ? "127.0.0.1"
+          : undefined;
+      // Bound to one outside address only: no loopback to answer on, so no coordinator tools.
+      hub.coordinatorUrl = host ? `http://${host}:${address.port}` : undefined;
+    }
   });
   server.on("close", () => wss.close());
   return server;

@@ -1,9 +1,10 @@
 // A small, free ACP agent for development and tests. It streams text, runs a fake tool,
 // asks permission before a fake edit, and shares a plan, like a real coding agent would.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { Readable, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import * as acp from "@agentclientprotocol/sdk";
@@ -17,6 +18,47 @@ const modes = new Map<string, string>();
 const efforts = new Map<string, string>();
 const used = new Map<string, number>();
 const mcpNames = new Map<string, string[]>();
+/** The MCP servers each session was given, to call the tools of one as a real agent does. */
+const mcpServers = new Map<string, acp.McpServer[]>();
+
+/**
+ * Calls a tool of the « moonagentic » MCP server the session was given, as a real agent
+ * would: the server is started, greeted, asked, then stopped. Returns what the tool said.
+ */
+async function callMoonAgentic(sessionId: string, name: string, args: unknown): Promise<string> {
+  const server = mcpServers.get(sessionId)?.find((m) => m.name === "moonagentic");
+  if (!server || !("command" in server)) return "Aucun outil MoonAgentic dans cette session.";
+  const child = spawn(server.command, server.args, {
+    env: { ...process.env, ...Object.fromEntries(server.env.map((e) => [e.name, e.value])) },
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const answers = createInterface({ input: child.stdout });
+  const waiting = new Map<number, (result: unknown) => void>();
+  answers.on("line", (line) => {
+    const message = JSON.parse(line) as { id: number; result?: unknown; error?: unknown };
+    waiting.get(message.id)?.(message.result ?? message.error);
+  });
+  let next = 0;
+  const ask = (method: string, params: unknown) =>
+    new Promise<unknown>((resolve) => {
+      next += 1;
+      waiting.set(next, resolve);
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: next, method, params })}\n`);
+    });
+  try {
+    await ask("initialize", { protocolVersion: "2025-06-18", capabilities: {} });
+    child.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
+    );
+    const result = (await ask("tools/call", { name, arguments: args })) as {
+      content?: { text: string }[];
+    };
+    return result.content?.[0]?.text ?? JSON.stringify(result);
+  } finally {
+    child.stdin.end();
+  }
+}
+
 /** The folder each session works in. */
 const cwds = new Map<string, string>();
 
@@ -103,6 +145,7 @@ const app = acp
       sessionId,
       params.mcpServers.map((m) => m.name),
     );
+    mcpServers.set(sessionId, params.mcpServers);
     // Lists its commands right behind the reply naming the session, often in the same read.
     queueMicrotask(() => {
       void client.notify("session/update", {
@@ -207,6 +250,34 @@ const app = acp
         ...(priced ? { cost: { amount: tokens / 100_000, currency: "USD" } } : {}),
       });
     };
+    // As a coordinator's agent does: a real call to MoonAgentic's own tools.
+    const opening = ask.match(/^\/ouvre (.+)$/);
+    if (opening) {
+      const said = await callMoonAgentic(sessionId, "open_thread", {
+        title: opening[1],
+        brief: `Corrige : ${opening[1]}`,
+        kind: "bug",
+      });
+      await say(
+        said.includes('"opened"') ? `J'ai ouvert le fil « ${opening[1]} ».` : said,
+        "agent_message_chunk",
+      );
+      return { stopReason: "end_turn" };
+    }
+    if (ask.trim() === "/fils") {
+      const said = await callMoonAgentic(sessionId, "list_threads", {});
+      let count: number | undefined;
+      try {
+        count = (JSON.parse(said) as unknown[]).length;
+      } catch {
+        // not a list: what the tool said is shown as it is
+      }
+      await say(
+        count === undefined ? said : `Ce projet a ${count} fil${count > 1 ? "s" : ""}.`,
+        "agent_message_chunk",
+      );
+      return { stopReason: "end_turn" };
+    }
     if (ask.trim() === "/compact") {
       await say("Contexte compacté.", "agent_message_chunk");
       // Only the tokens this time, as some agents do.
