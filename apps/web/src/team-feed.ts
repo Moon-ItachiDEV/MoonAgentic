@@ -26,8 +26,8 @@ export function teamFeed(thread: Thread, items: Item[]): FeedBlock[] {
     const byTeam = first?.kind === "user" && (!!first.byTeam || (start === 0 && !!thread.role));
     const turn = Array.from({ length: end - start }, (_, i) => start + i);
     const lastAgent = turn.findLast((i) => items[i]?.kind === "agent");
-    const hidden: number[] = [];
-    const shown: FeedBlock[] = [];
+    // In order, so the thread reads as it ran: a hidden item joins the detail just before
+    // it, or opens one. Turns with nothing to show thus fold into one detail.
     for (const i of turn) {
       const item = items[i]!;
       const keep =
@@ -36,23 +36,16 @@ export function teamFeed(thread: Thread, items: Item[]): FeedBlock[] {
         item.kind === "handoff" ||
         (item.kind === "tool" && !!item.questions) ||
         (item.kind === "agent" && (!byTeam || (i === lastAgent && thread.role !== "lead")));
-      if (keep)
-        shown.push({
+      const before = blocks.at(-1);
+      if (keep) {
+        blocks.push({
           kind: "item",
           index: i,
           ...(byTeam && item.kind === "agent" ? { clamp: true as const } : {}),
         });
-      else hidden.push(i);
+      } else if (before?.kind === "detail") before.indices.push(i);
+      else blocks.push({ kind: "detail", key: item.id, indices: [i] });
     }
-    // The user's own message comes first, then what was done for it.
-    const lead = shown[0]?.kind === "item" && shown[0].index === start ? [shown.shift()!] : [];
-    blocks.push(...lead);
-    // Turns with nothing to show fold into one detail, not a detail each.
-    const before = blocks.at(-1);
-    if (hidden.length && before?.kind === "detail" && !lead.length) before.indices.push(...hidden);
-    else if (hidden.length)
-      blocks.push({ kind: "detail", key: items[hidden[0]!]!.id, indices: hidden });
-    blocks.push(...shown);
     start = end;
   }
   return blocks;

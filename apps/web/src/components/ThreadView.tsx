@@ -59,19 +59,29 @@ export function ThreadView({
   // A message picked in the quick search is shown once the timeline is here.
   const [focusTick, setFocusTick] = useState(0);
   useEffect(() => onFocusRequest(() => setFocusTick((n) => n + 1)), []);
+  // A message folded in a team's detail opens it first, then is shown on the next pass.
+  const [reveal, setReveal] = useState<string>();
+  const revealing = useRef<string>(undefined);
   useLayoutEffect(() => {
     if (!items) return;
-    const itemId = takeFocus(thread.id);
+    const itemId = takeFocus(thread.id) ?? revealing.current;
+    revealing.current = undefined;
     const el =
       itemId && view.current?.querySelector<HTMLElement>(`[data-item="${CSS.escape(itemId)}"]`);
-    if (!el) return;
+    if (!el) {
+      if (itemId && itemId !== reveal && items.some((i) => i.id === itemId)) {
+        revealing.current = itemId;
+        setReveal(itemId);
+      }
+      return;
+    }
     pinned.current = false;
     el.scrollIntoView({ block: "center" });
     el.classList.remove("flash");
     // Restarts the highlight when the same message is picked twice.
     void el.offsetWidth;
     el.classList.add("flash");
-  }, [items, thread.id, focusTick]);
+  }, [items, thread.id, focusTick, reveal]);
 
   // Keep following new output while the reader is at the bottom.
   useLayoutEffect(() => {
@@ -92,7 +102,7 @@ export function ThreadView({
   const lastUser = items?.findLastIndex((i) => i.kind === "user") ?? -1;
   const working = thread.status === "running" || thread.status === "waiting";
 
-  const renderItem = (i: number, clamp?: boolean) => {
+  const renderItem = (i: number, clamp?: boolean, showBy?: boolean) => {
     const item = items![i]!;
     return (
       <div key={item.id} className="item" data-item={item.id}>
@@ -101,7 +111,7 @@ export function ThreadView({
           thread={thread}
           agents={agents}
           agent={agents.find((a) => a.id === authors[i])}
-          showBy={startsAgentBlock(items!, i)}
+          showBy={showBy ?? startsAgentBlock(items!, i)}
           openQuestion={openQuestion}
           live={working && i > lastUser}
           clamp={clamp}
@@ -139,19 +149,28 @@ export function ThreadView({
         )}
         {items &&
           (isTeamThread(thread)
-            ? teamFeed(thread, items).map((block) =>
-                block.kind === "detail" ? (
-                  <TeamDetail
-                    key={block.key}
-                    items={items}
-                    indices={block.indices}
-                    live={working && block.indices.some((i) => i > lastUser)}
-                    render={renderItem}
-                  />
-                ) : (
-                  renderItem(block.index, block.clamp)
-                ),
-              )
+            ? teamFeed(thread, items).map((block, b, blocks) => {
+                if (block.kind === "detail") {
+                  return (
+                    <TeamDetail
+                      key={block.key}
+                      items={items}
+                      indices={block.indices}
+                      live={working && block.indices.some((i) => i > lastUser)}
+                      revealed={!!reveal && block.indices.some((i) => items[i]?.id === reveal)}
+                      onFold={() => setReveal(undefined)}
+                      render={renderItem}
+                    />
+                  );
+                }
+                // An answer gets its agent's name unless the block just above is one too:
+                // what is folded away does not count.
+                const above = blocks[b - 1];
+                const showBy =
+                  items[block.index]?.kind === "agent" &&
+                  !(above?.kind === "item" && items[above.index]?.kind === "agent");
+                return renderItem(block.index, block.clamp, showBy);
+              })
             : items.map((_, i) => renderItem(i)))}
         {thread.team && (
           <TeamCard
@@ -293,20 +312,33 @@ function TeamDetail({
   items,
   indices,
   live,
+  revealed,
+  onFold,
   render,
 }: {
   items: Item[];
   indices: number[];
   live: boolean;
+  /** Holds a message picked in the quick search: it stays open to show it. */
+  revealed: boolean;
+  onFold: () => void;
   render: (index: number) => ReactNode;
 }) {
-  const [open, setOpen] = useState(false);
+  const [opened, setOpened] = useState(false);
+  const open = opened || revealed;
   const steps = indices.filter((i) => items[i]?.kind === "tool").length;
   const lastTool = indices.map((i) => items[i]).findLast((i) => i?.kind === "tool");
   const label = live && lastTool?.kind === "tool" ? lastTool.title : "Voir le détail";
   return (
     <div className={`team-detail${open ? " open" : ""}`}>
-      <button className="team-detail-h" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+      <button
+        className="team-detail-h"
+        aria-expanded={open}
+        onClick={() => {
+          if (open) onFold();
+          setOpened(!open);
+        }}
+      >
         {live ? <span className="spin" /> : <IconChevron />}
         <span className="nm">{label}</span>
         {steps > 0 && (

@@ -351,6 +351,16 @@ describe("composer", () => {
     await page.locator(".team-detail-h").first().click();
     await page.getByText("Tu es le chef d'une équipe").waitFor();
     await page.locator(".team-detail-h").first().click();
+    // Ctrl K leaves the team's own messages out, and opens the detail that holds a hit.
+    await page.keyboard.press("Control+k");
+    const search = page.getByRole("combobox", { name: "Rechercher" });
+    await search.fill("Tu es le chef d'une équipe");
+    await page.getByText("Aucun résultat.").waitFor();
+    await search.fill("Voici le plan");
+    await page.getByRole("option", { name: /Voici le plan/ }).click();
+    await page.getByText("Voici le plan.").waitFor();
+    expect(await page.locator(".team-detail.open").count()).toBe(1);
+    await page.locator(".team-detail-h").first().click();
     // The team is one line of its project in the sidebar; open, its lead shows every member
     // under it: two coders, their reviewers and testers, and the merge.
     expect(await page.locator(".thr-row.lead").count()).toBe(1);

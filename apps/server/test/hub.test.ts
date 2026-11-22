@@ -800,7 +800,7 @@ describe("Composer: files, skills, commands, pins and search", () => {
   });
 
   it("searches project files, lists skills and commands, and finds messages", async () => {
-    const { dir, hub, client, projectId } = setup();
+    const { dir, hub, store, client, projectId } = setup();
     write(dir, {
       "src/app.ts": "",
       "src/other.ts": "",
@@ -853,6 +853,21 @@ describe("Composer: files, skills, commands, pins and search", () => {
     expect(client.messages.at(-1)).toMatchObject({
       type: "searched",
       hits: [{ kind: "agent" }, { kind: "user", snippet: "Où est la fonction 100% fiable ?" }],
+    });
+    // A team's own message to its agent is not the user's: the search leaves it out.
+    const briefed = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Consigne interne zorglub",
+      byTeam: true,
+    });
+    await hub.whenIdle(briefed);
+    expect(store.listItems(briefed)[0]).toMatchObject({ kind: "user", byTeam: true });
+    await hub.handle(client, { type: "search", requestId: "s4", query: "zorglub" });
+    expect(client.messages.at(-1)).toMatchObject({
+      type: "searched",
+      hits: [{ threadId: briefed, kind: "agent" }],
     });
   });
 

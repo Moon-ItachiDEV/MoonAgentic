@@ -96,3 +96,31 @@ describe("teamFeed, turn after turn", () => {
     ]);
   });
 });
+
+describe("teamFeed keeps the order things happened in", () => {
+  it("puts the detail between the answers it came between", () => {
+    const items = [
+      user("brief", true),
+      user("why?"),
+      agent("I check"),
+      tool("read"),
+      agent("here"),
+    ];
+    expect(teamFeed(thread({ role: "coder", parentId: "lead" }), items)).toEqual([
+      { kind: "detail", key: "brief", indices: [0] },
+      { kind: "item", index: 1 },
+      { kind: "item", index: 2 },
+      { kind: "detail", key: "read", indices: [3] },
+      { kind: "item", index: 4 },
+    ]);
+  });
+
+  it("puts the steps after a permission below it, where the work goes on", () => {
+    const items = [user("brief", true), tool("a"), permission("ok?"), tool("b"), tool("c")];
+    expect(teamFeed(thread({ role: "coder", parentId: "lead" }), items)).toEqual([
+      { kind: "detail", key: "brief", indices: [0, 1] },
+      { kind: "item", index: 2 },
+      { kind: "detail", key: "b", indices: [3, 4] },
+    ]);
+  });
+});

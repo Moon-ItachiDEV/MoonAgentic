@@ -78,11 +78,12 @@ function taskState(task: TeamTask, byId: (id: string | undefined) => Thread | un
 }
 
 /** A verdict line is for the server: the note says what it means already. */
-const noteText = (note: string) => note.replace(/^\s*VERDICT\s*:.*$/gim, "").trim();
+const noteText = (note: string) => note.replace(/^\s*VERDICT\s*:.*$/gim, "").trim() || note.trim();
 
 /** What the lead is at: the plan, then the pieces it is asked to look at again. */
 function leadState(team: Team): string {
   if (team.phase === "planning") return "en cours";
+  if (!team.tasks.length && team.phase === "stopped") return "arrêté";
   if (team.tasks.some((t) => t.status === "lead")) return "revoit une consigne";
   const n = team.tasks.length;
   return n ? `${n} ${plural(n, "sous-tâche", "sous-tâches")}` : "pas de plan";
@@ -158,7 +159,14 @@ export function TeamCard({
       )
       .finally(() => setRetrying((r) => r.filter((i) => i !== index)));
   };
-  const lead = team.phase === "planning" ? "running" : team.tasks.length ? "done" : "failed";
+  const lead =
+    team.phase === "planning" || (isActive && team.tasks.some((t) => t.status === "lead"))
+      ? "running"
+      : team.tasks.length
+        ? "done"
+        : team.phase === "stopped"
+          ? "stopped"
+          : "failed";
   const mergeDot =
     team.phase === "merging"
       ? "running"
