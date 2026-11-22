@@ -21,23 +21,31 @@ const mcpNames = new Map<string, string[]>();
 const cwds = new Map<string, string>();
 
 /**
- * Aborts the merge under way in `cwd`. MoonAgentic may be reading the folder at the same
- * moment (a `git status` holds the index lock for a while on Windows), so it tries again
- * a few times before it gives up, with git's own words.
+ * Aborts the merge under way in `cwd`, if one still is. MoonAgentic may be reading the
+ * folder at the same moment (Windows then refuses to rewrite a file), so it tries again a
+ * few times before it gives up, with git's own words.
  */
 async function abortMerge(cwd: string) {
-  for (let tries = 1; ; tries++) {
+  const merging = () => {
+    try {
+      execFileSync("git", ["rev-parse", "-q", "--verify", "MERGE_HEAD"], { cwd, stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const errors: string[] = [];
+  for (let tries = 1; merging(); tries++) {
     try {
       execFileSync("git", ["merge", "--abort"], { cwd, stdio: ["ignore", "ignore", "pipe"] });
       return;
     } catch (error) {
-      if (tries >= 10) {
-        const stderr = (error as { stderr?: Buffer }).stderr?.toString().trim();
-        throw new Error(`git merge --abort : ${stderr || String(error)}`);
-      }
+      errors.push((error as { stderr?: Buffer }).stderr?.toString().trim() || String(error));
+      if (tries >= 10) throw new Error(`git merge --abort : ${errors.join(" | ")}`);
       await delay(200);
     }
   }
+  if (errors.length) process.stderr.write(`git merge --abort : ${errors.join(" | ")}\n`);
 }
 const CONTEXT_SIZE = 200_000;
 
