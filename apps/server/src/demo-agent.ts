@@ -41,7 +41,7 @@ const app = acp
     if (modelStyle === "fail") throw new Error("Connecte-toi d'abord.");
     return {
       protocolVersion: acp.PROTOCOL_VERSION,
-      agentCapabilities: { loadSession: false },
+      agentCapabilities: { loadSession: modelStyle === "load" },
       agentInfo: { name: "moonagentic-demo", version: "0.1.0" },
     };
   })
@@ -59,6 +59,15 @@ const app = acp
       return {};
     },
   )
+  // Like a real agent reloading a saved session: it replays the model the session last ran.
+  .onRequest("session/load", async ({ params, client }) => {
+    const { sessionId } = params;
+    await client.notify("session/update", {
+      sessionId,
+      update: { sessionUpdate: "config_option_update", configOptions: configOptions(sessionId) },
+    });
+    return { configOptions: configOptions(sessionId) };
+  })
   .onRequest("session/set_config_option", ({ params }) => {
     if ("value" in params && typeof params.value === "string")
       models.set(params.sessionId, params.value);

@@ -39,7 +39,9 @@ export function Composer(props: {
     undefined;
   const modelName = agent?.models?.find((m) => m.id === model)?.name ?? model;
   const running = thread?.status === "running" || thread?.status === "waiting";
-  // The model is switched between turns only; a new thread can still pick its agent.
+  // The model is switched between turns only, so a turn starting (here or on another
+  // device) closes the picker for good rather than hiding it until the turn ends.
+  if (menu && thread && running) setMenu(false);
   const pickerOpen = menu && !(thread && running);
 
   // Close the picker on Escape or on any press outside the composer.

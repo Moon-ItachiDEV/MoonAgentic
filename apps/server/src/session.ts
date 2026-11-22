@@ -124,7 +124,7 @@ export class AgentSession {
       configId: model.configId,
       value,
     });
-    this.state.options = response.configOptions;
+    absorb(this.state, response);
   }
 
   static async start(options: {
@@ -165,7 +165,8 @@ export class AgentSession {
         if (params.sessionId !== sessionId) return;
         if (params.update.sessionUpdate === "config_option_update") {
           state.options = params.update.configOptions;
-          handlers.onConfig?.(state.options);
+          // A replayed setting is the past; the thread's own model choice still wins.
+          if (!replaying) handlers.onConfig?.(state.options);
         } else if (!replaying) handlers.onUpdate(params.update);
       })
       .onRequest("session/request_permission", ({ params, signal }) =>

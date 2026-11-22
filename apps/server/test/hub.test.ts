@@ -45,7 +45,7 @@ function setup() {
 }
 
 /** Makes demo agents started from now on offer their models in another way. */
-function demoModels(style: "legacy" | "none" | "hang" | "fail") {
+function demoModels(style: "legacy" | "none" | "hang" | "fail" | "load") {
   process.env.MOONAGENTIC_DEMO_MODELS = style;
   cleanups.push(() => {
     delete process.env.MOONAGENTIC_DEMO_MODELS;
@@ -222,6 +222,31 @@ describe("Hub with the demo agent", () => {
       .map((i) => ("text" in i ? i.text : ""));
     expect(replies.some((t) => t.includes("« Un » (modèle rapide)"))).toBe(true);
     expect(replies.some((t) => t.includes("« Deux » (modèle precis)"))).toBe(true);
+    expect(store.getThread(threadId)?.model).toBe("precis");
+  });
+
+  it("keeps a model picked while the thread's agent was stopped, despite the session replay", async () => {
+    demoModels("load");
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      model: "rapide",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    await hub.close();
+
+    // A restarted server: the agent reloads its saved session, which replays "rapide".
+    const restarted = new Hub(store, new Agents({ demo: true }));
+    cleanups.unshift(() => restarted.close());
+    await restarted.setModel(threadId, "precis");
+    restarted.send(threadId, "Deux");
+    await restarted.whenIdle(threadId);
+
+    const replies = store.listItems(threadId).filter((i) => i.kind === "agent");
+    expect(replies.at(-1)).toMatchObject({ text: expect.stringContaining("(modèle precis)") });
     expect(store.getThread(threadId)?.model).toBe("precis");
   });
 
