@@ -1,6 +1,6 @@
 // First end-to-end check: the built app, the real server, the demo agent, a real browser.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,11 +51,26 @@ beforeAll(async () => {
   git("commit", "-q", "-m", "init");
   const home = path.join(dir, "home");
   mkdirSync(home);
+  // A stand-in for the user's signed-in GitHub CLI: it knows one account and its repositories.
+  const bin = path.join(dir, "bin");
+  write(bin, {
+    gh: [
+      "#!/bin/sh",
+      'case "$2" in',
+      "  user) echo moon ;;",
+      `  user/repos*) echo '{"f":"moon/app","p":false,"d":"Une appli","t":null}'; echo '{"f":"moon/site","p":true,"d":null,"t":null}' ;;`,
+      "  *) exit 1 ;;",
+      "esac",
+      "",
+    ].join("\n"),
+  });
+  chmodSync(path.join(bin, "gh"), 0o755);
+  const PATH = `${bin}${path.delimiter}${process.env.PATH ?? ""}`;
   server = spawn(
     process.execPath,
     ["apps/server/src/bin.ts", "--demo", "--port", "0", "--data-dir", path.join(dir, "data")],
     // A home of its own, so the user's personal skills stay out of the test.
-    { cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home }, stdio: "pipe" },
+    { cwd: root, env: { ...process.env, PATH, HOME: home, USERPROFILE: home }, stdio: "pipe" },
   );
   url = await new Promise<string>((resolve, reject) => {
     let out = "";
@@ -221,6 +236,24 @@ describe("composer", () => {
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
     expect(width).toBeLessThanOrEqual(390);
     await shot(page, "c6-mobile");
+    await page.close();
+  });
+  it("lists the user's GitHub repositories to clone, and explains a profile address", async () => {
+    const page = await browser.newPage();
+    await page.goto(url);
+    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
+    await page.getByRole("radio", { name: "Cloner depuis GitHub" }).click();
+    // The list arrives: it used to stay on « Chargement de tes dépôts… » forever.
+    const list = page.getByRole("list", { name: "Tes dépôts GitHub" });
+    await expect.poll(() => list.getByRole("button").count()).toBe(2);
+    await page.getByRole("textbox", { name: "Dépôt" }).fill("https://github.com/moon");
+    await page.getByText("C'est l'adresse du compte @moon").waitFor();
+    await expect.poll(() => page.getByRole("button", { name: "Cloner" }).isDisabled()).toBe(true);
+    await list.getByRole("button", { name: /moon\/site/ }).click();
+    expect(await page.getByRole("textbox", { name: "Dépôt" }).inputValue()).toBe("moon/site");
+    expect(await page.getByRole("textbox", { name: "Nom" }).getAttribute("placeholder")).toBe(
+      "site",
+    );
     await page.close();
   });
   it("archives a thread, brings it back, deletes it, then removes the project", async () => {

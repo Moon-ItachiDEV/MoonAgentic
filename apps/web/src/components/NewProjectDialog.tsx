@@ -1,7 +1,13 @@
 import type { GithubRepo, GithubStatus } from "@moonagentic/protocol";
 import { useEffect, useMemo, useState } from "react";
 import { connection, newId } from "../connection.ts";
-import { filterRepos, githubStatusText, parentFolder, repoFolderName } from "../github.ts";
+import {
+  filterRepos,
+  githubOwner,
+  githubStatusText,
+  parentFolder,
+  repoFolderName,
+} from "../github.ts";
 
 type Source = "local" | "github";
 
@@ -10,8 +16,12 @@ function useGithub(active: boolean) {
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [repos, setRepos] = useState<GithubRepo[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Bumped by Vérifier, to ask again. */
+  const [check, setCheck] = useState(0);
   useEffect(() => {
-    if (!active || status) return;
+    // The status and the list arrive in the same run, so nothing this run sets may be one of its
+    // dependencies: a change would cancel the run before the list is in, leaving it loading.
+    if (!active) return;
     let live = true;
     connection
       .ask({ type: "github.status", requestId: newId() })
@@ -26,12 +36,13 @@ function useGithub(active: boolean) {
     return () => {
       live = false;
     };
-  }, [active, status]);
+  }, [active, check]);
   /** Asks again, after the user signed in to `gh` with the dialog open. */
   const recheck = () => {
     setError(null);
     setRepos(null);
     setStatus(null);
+    setCheck((n) => n + 1);
   };
   return { status, repos, error, recheck };
 }
@@ -61,6 +72,7 @@ export function NewProjectDialog({
     (source === "local"
       ? path.trim().split(/[\\/]/).filter(Boolean).pop() || ""
       : repoFolderName(repo));
+  const owner = source === "github" ? githubOwner(repo) : undefined;
   const shown = useMemo(
     () => filterRepos(github.repos ?? [], repo).slice(0, 50),
     [github.repos, repo],
@@ -175,11 +187,23 @@ export function NewProjectDialog({
                 disabled={busy}
               />
             </label>
+            {owner && (
+              <p className="np-hint">
+                C'est l'adresse du compte @{owner}, pas celle d'un dépôt.{" "}
+                {github.status?.login
+                  ? "Choisis un de ses dépôts dans la liste."
+                  : `Ajoute le nom du dépôt : github.com/${owner}/nom-du-dépôt.`}
+              </p>
+            )}
             {github.status?.login && !github.error && (
               <ul className="np-repos" aria-label="Tes dépôts GitHub">
                 {github.repos === null && <li className="np-empty">Chargement de tes dépôts…</li>}
                 {github.repos !== null && shown.length === 0 && (
-                  <li className="np-empty">Aucun de tes dépôts ne correspond.</li>
+                  <li className="np-empty">
+                    {owner
+                      ? `Aucun de tes dépôts n'appartient à @${owner}. Ajoute le nom du dépôt à l'adresse.`
+                      : "Aucun de tes dépôts ne correspond."}
+                  </li>
                 )}
                 {shown.map((r) => (
                   <li key={r.fullName}>

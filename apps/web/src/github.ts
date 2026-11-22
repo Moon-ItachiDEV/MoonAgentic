@@ -35,8 +35,25 @@ export function githubStatusText(status: GithubStatus): {
   };
 }
 
-/** The repositories matching what is typed, all of them when it is empty or an address. */
+/**
+ * The account when what is typed is a GitHub profile address, such as
+ * `https://github.com/moon`: an account, not a repository, so nothing can be cloned from it.
+ */
+export function githubOwner(input: string): string | undefined {
+  const match =
+    /^(?:https?:\/\/)?(?:www\.)?github\.com\/([A-Za-z0-9][A-Za-z0-9-]{0,38})\/?(?:[?#].*)?$/i.exec(
+      input.trim(),
+    );
+  return match?.[1];
+}
+
+/**
+ * The repositories matching what is typed: all of them when it is empty or a repository address,
+ * the account's own when it is a profile address.
+ */
 export function filterRepos(repos: GithubRepo[], query: string): GithubRepo[] {
+  const owner = githubOwner(query)?.toLowerCase();
+  if (owner) return repos.filter((r) => r.fullName.toLowerCase().startsWith(`${owner}/`));
   const q = query.trim().toLowerCase();
   if (!q || q.includes("github.com") || q.startsWith("git@")) return repos;
   return repos.filter(
@@ -46,6 +63,7 @@ export function filterRepos(repos: GithubRepo[], query: string): GithubRepo[] {
 
 /** The folder name a repository clones into: the last part of `owner/name` or its address. */
 export function repoFolderName(input: string): string {
+  if (githubOwner(input)) return "";
   const last = input
     .trim()
     .replace(/[#?].*$/, "")

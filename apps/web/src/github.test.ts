@@ -1,6 +1,12 @@
 import type { GithubRepo, GithubStatus } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
-import { filterRepos, githubStatusText, parentFolder, repoFolderName } from "./github.ts";
+import {
+  filterRepos,
+  githubOwner,
+  githubStatusText,
+  parentFolder,
+  repoFolderName,
+} from "./github.ts";
 
 const status = (extra: Partial<GithubStatus>): GithubStatus => ({
   git: true,
@@ -53,5 +59,26 @@ describe("parentFolder", () => {
     expect(parentFolder("C:\\Users\\me\\code\\app")).toBe("C:\\Users\\me\\code");
     expect(parentFolder("C:\\app")).toBe("C:\\");
     expect(parentFolder("/app")).toBe("");
+  });
+});
+
+describe("githubOwner", () => {
+  it("reads a profile address, not a repository", () => {
+    expect(githubOwner("https://github.com/Moon-ItachiDEV")).toBe("Moon-ItachiDEV");
+    expect(githubOwner("github.com/moon/")).toBe("moon");
+    expect(githubOwner("https://github.com/moon?tab=repositories")).toBe("moon");
+    expect(githubOwner("https://github.com/moon/app")).toBeUndefined();
+    expect(githubOwner("moon/app")).toBeUndefined();
+    expect(githubOwner("moon")).toBeUndefined();
+  });
+  it("lists only that account's repositories and names no folder", () => {
+    const repos: GithubRepo[] = [
+      { fullName: "Moon/app", private: false },
+      { fullName: "other/moon", private: false },
+    ];
+    expect(filterRepos(repos, "https://github.com/moon").map((r) => r.fullName)).toEqual([
+      "Moon/app",
+    ]);
+    expect(repoFolderName("https://github.com/Moon-ItachiDEV")).toBe("");
   });
 });
