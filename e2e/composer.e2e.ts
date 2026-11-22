@@ -493,9 +493,18 @@ describe("composer", () => {
     await page.keyboard.press("Escape");
     await composer(page).fill("Dis bonjour");
     await composer(page).press("Enter");
-    // The new thread opens by itself: only then back to the project, or it would take over.
+    // The new thread opens by itself, then back to the project.
     await page.waitForURL(/\/t\//);
     await inSidebar.click();
+    await page.getByRole("heading", { name: "equipe" }).waitFor();
+    // Sent, then gone to another page before the thread exists: the user stays where they went.
+    await page.getByRole("button", { name: "Fil", exact: true }).click();
+    await composer(page).fill("Dis au revoir");
+    await composer(page).press("Enter");
+    await inSidebar.click();
+    await page.locator(".pp-row", { hasText: "Dis au revoir" }).waitFor();
+    await page.waitForTimeout(300);
+    expect(new URL(page.url()).pathname).toMatch(/^\/p\//);
     const group = (name: string) => page.locator(".pp-group", { hasText: name });
     const fold = (name: string) => page.locator(".pp-gh", { hasText: name });
     // Its agent asks before changing a file: the thread waits on the user, and says so.
@@ -519,7 +528,12 @@ describe("composer", () => {
       .first()
       .click();
     const requests = page.getByRole("dialog", { name: "À traiter" });
-    await requests.getByRole("button", { name: "Autoriser" }).first().click();
+    // Both threads opened here ask the same thing.
+    const allow = requests.getByRole("button", { name: "Autoriser" });
+    await expect.poll(() => allow.count()).toBe(2);
+    await allow.first().click();
+    await expect.poll(() => allow.count()).toBe(1);
+    await allow.first().click();
     await requests.getByRole("button", { name: "Fermer" }).click();
     const idle = group("Inactif").locator(".pp-row", { hasText: "Dis bonjour" });
     await idle.waitFor();
