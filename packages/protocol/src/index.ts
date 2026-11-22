@@ -152,6 +152,13 @@ export interface Workspace {
   base?: string;
   /** The branch it started from, which a pull request targets. */
   baseBranch?: string;
+  /**
+   * Where the project sits inside the repository (`apps/web`), when it is not at its root:
+   * the agent works in that folder of the worktree.
+   */
+  subdir?: string;
+  /** While the thread is archived: the files it had, uncommitted ones included, as a tree. */
+  archivedTree?: string;
   /** The pull request, or the page to open one, after the last push. */
   prUrl?: string;
   prOpened?: boolean;
@@ -194,6 +201,8 @@ export interface Thread {
   commands?: AgentCommand[];
   /** Kept at the top of the sidebar. */
   pinned?: boolean;
+  /** Put away: out of the sidebar's lists, its worktree removed until it comes back. */
+  archived?: boolean;
   /** Set when the thread works on its own branch rather than in the project folder. */
   workspace?: Workspace;
   /** Set when the last turn ended with an error. */
@@ -275,6 +284,10 @@ export type ServerMessage =
   | { type: "mcpServers"; servers: McpServerInfo[] }
   | { type: "project"; project: Project }
   | { type: "thread"; thread: Thread }
+  /** The thread was deleted, its timeline with it. */
+  | { type: "threadRemoved"; threadId: string }
+  /** The project was removed from MoonAgentic, with its threads; its folder stays. */
+  | { type: "projectRemoved"; projectId: string }
   | { type: "items"; threadId: string; items: Item[] }
   | { type: "item"; threadId: string; item: Item }
   /** Streaming text appended to an existing agent or thought item. */
@@ -383,6 +396,9 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread.setModel"), threadId: id, model: id }),
   z.object({ type: z.literal("thread.setSetting"), threadId: id, settingId: id, value: id }),
   z.object({ type: z.literal("thread.setPinned"), threadId: id, pinned: z.boolean() }),
+  z.object({ type: z.literal("thread.setArchived"), threadId: id, archived: z.boolean() }),
+  z.object({ type: z.literal("thread.delete"), threadId: id }),
+  z.object({ type: z.literal("project.remove"), projectId: id }),
   /** Looks for project files to mention with `@`, in the thread's folder when given. */
   z.object({
     type: z.literal("files.search"),

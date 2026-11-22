@@ -204,4 +204,36 @@ describe("composer", () => {
     await shot(page, "c6-mobile");
     await page.close();
   });
+  it("archives a thread, brings it back, deletes it, then removes the project", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    await page.getByRole("button", { name: "Corrige la réponse" }).first().click();
+    const menu = page.getByRole("button", { name: "Actions du fil" });
+
+    await menu.click();
+    await page.getByRole("menuitem", { name: "Archiver" }).click();
+    await page.getByText("Cette discussion est archivée.").waitFor();
+    await page.getByRole("button", { name: "Archivés (1)" }).click();
+    await shot(page, "c9-archive");
+    await page.getByRole("button", { name: "Désarchiver" }).click();
+    await expect.poll(() => composer(page).count()).toBe(1);
+
+    await menu.click();
+    await page.getByRole("menuitem", { name: "Supprimer…" }).click();
+    const confirm = page.getByRole("alertdialog", { name: "Supprimer cette discussion ?" });
+    await confirm.getByRole("button", { name: "Supprimer" }).click();
+    await expect
+      .poll(() => page.getByRole("button", { name: "Corrige la réponse" }).count())
+      .toBe(0);
+
+    await page.getByRole("button", { name: "Retirer le projet projet" }).click();
+    await page
+      .getByRole("alertdialog", { name: "Retirer ce projet ?" })
+      .getByRole("button", { name: "Retirer" })
+      .click();
+    await page.getByText("Aucun projet pour l'instant.").waitFor();
+    // The folder itself is left alone.
+    expect(existsSync(path.join(project, "src/app.ts"))).toBe(true);
+    await page.close();
+  });
 });

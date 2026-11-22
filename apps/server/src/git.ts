@@ -1,5 +1,12 @@
 import { execFile, execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ReviewFile } from "@moonagentic/protocol";
@@ -72,16 +79,86 @@ export function branchName(title: string, id: string): string {
   return `moon/${slug ? `${slug}-` : ""}${id.slice(0, 6)}`;
 }
 
-/** Creates a worktree on a new branch from the repository's current commit. */
-export async function addWorktree(
+/**
+ * Where a thread's branch starts: the repository's current commit and branch, and where the
+ * project folder sits in the repository when it is not its root.
+ */
+export async function worktreeStart(
+  projectDir: string,
+): Promise<{ base: string; baseBranch?: string; subdir?: string }> {
+  const base = (await git(projectDir, ["rev-parse", "HEAD"])).trim();
+  const head = (await git(projectDir, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+  const subdir = (await git(projectDir, ["rev-parse", "--show-prefix"])).trim().replace(/\/$/, "");
+  return {
+    base,
+    ...(head && head !== "HEAD" ? { baseBranch: head } : {}),
+    ...(subdir ? { subdir } : {}),
+  };
+}
+
+export const branchExists = (dir: string, branch: string): Promise<boolean> =>
+  git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).then(
+    () => true,
+    () => false,
+  );
+
+/** True when `dir` is the top of a git work tree, rather than a folder inside another one. */
+async function isWorktreeRoot(dir: string): Promise<boolean> {
+  try {
+    const top = (await git(dir, ["rev-parse", "--show-toplevel"])).trim();
+    return path.relative(realpathSync(top), realpathSync(dir)) === "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Makes sure the thread's worktree is there, on its branch. Safe to run again after a stop
+ * at any point: a half-made folder is made again, and a branch that exists is reused with
+ * its commits rather than started over from `base`.
+ */
+export async function ensureWorktree(
   repoDir: string,
   worktree: string,
   branch: string,
-): Promise<{ base: string; baseBranch?: string }> {
-  const base = (await git(repoDir, ["rev-parse", "HEAD"])).trim();
-  const head = (await git(repoDir, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
-  await git(repoDir, ["worktree", "add", "-b", branch, worktree, base]);
-  return { base, ...(head && head !== "HEAD" ? { baseBranch: head } : {}) };
+  base: string,
+): Promise<void> {
+  if (existsSync(worktree) && (await isWorktreeRoot(worktree))) return;
+  // What git remembers of a folder that is gone, or was never finished, is dropped first.
+  await git(repoDir, ["worktree", "prune"]);
+  if (existsSync(worktree)) {
+    await git(repoDir, ["worktree", "remove", "--force", worktree]).catch(() => undefined);
+    rmSync(worktree, { recursive: true, force: true });
+  }
+  if (await branchExists(repoDir, branch)) {
+    await git(repoDir, ["worktree", "add", worktree, branch]);
+  } else {
+    await git(repoDir, ["worktree", "add", "-b", branch, worktree, base]);
+  }
+}
+
+/**
+ * The commit a branch made before MoonAgentic remembered it started from, for a thread whose
+ * worktree was made but not recorded: where it leaves the repository's current branch.
+ */
+export async function forkPoint(repoDir: string, branch: string): Promise<string> {
+  return (await git(repoDir, ["merge-base", branch, "HEAD"])).trim();
+}
+
+/** Removes the worktree's folder; its branch and commits stay in the repository. */
+export async function removeWorktree(repoDir: string, worktree: string): Promise<void> {
+  if (existsSync(worktree)) {
+    await git(repoDir, ["worktree", "remove", "--force", worktree]).catch(() => undefined);
+  }
+  await git(repoDir, ["worktree", "prune"]).catch(() => undefined);
+}
+
+/** Deletes every ref under `prefix`, such as a thread's checkpoints. */
+export async function dropRefs(dir: string, prefix: string): Promise<void> {
+  const refs = (await git(dir, ["for-each-ref", "--format=%(refname)", prefix]))
+    .split("\n")
+    .filter(Boolean);
+  for (const ref of refs) await git(dir, ["update-ref", "-d", ref]);
 }
 
 /** Runs `work` with a throwaway copy of the folder's index, so its staging area is left alone. */

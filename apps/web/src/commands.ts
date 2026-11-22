@@ -4,7 +4,16 @@ import type { AgentCommand, AgentInfo, AgentSetting, ProjectCommand } from "@moo
 
 /** Things MoonAgentic does itself rather than send to the agent. */
 export type AppAction =
-  "plan" | "agent" | "models" | "pin" | "export" | "search" | "requests" | "connections";
+  | "plan"
+  | "agent"
+  | "models"
+  | "pin"
+  | "export"
+  | "search"
+  | "requests"
+  | "connections"
+  | "archive"
+  | "delete";
 
 /**
  * Where a command comes from, in priority order when two share a name: MoonAgentic's own
@@ -86,6 +95,8 @@ export function composerCommands(options: {
   if (inThread) {
     add("epingler", "Épingler ou désépingler cette discussion", "pin");
     add("exporter", "Exporter cette discussion en Markdown", "export");
+    add("archiver", "Archiver cette discussion et ranger sa copie de travail", "archive");
+    add("supprimer", "Supprimer cette discussion (sa branche reste)", "delete");
   }
   add("chercher", "Chercher dans les fils et les messages (Ctrl K)", "search");
   add("demandes", "Voir ce que les agents attendent de toi", "requests");

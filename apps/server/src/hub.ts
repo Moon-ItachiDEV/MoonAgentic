@@ -21,10 +21,16 @@ import type {
   Snapshot,
   Thread,
   ToolContent,
+  Workspace,
 } from "@moonagentic/protocol";
 import type { Agents, CustomAgent } from "./agents.ts";
 import {
-  addWorktree,
+  branchExists,
+  dropRefs,
+  ensureWorktree,
+  forkPoint,
+  removeWorktree,
+  worktreeStart,
   branchName,
   dropCheckpoints,
   isGitRepo,
@@ -87,6 +93,15 @@ const settingValues = (settings: AgentSetting[]) =>
 /** Keeps a message's checkpoint from git's garbage collection, out of sight of branches. */
 const checkpointRef = (threadId: string, itemId: string) =>
   `refs/moonagentic/${threadId}/${itemId.replace(/^user:/, "")}`;
+/** Keeps the files of an archived thread, uncommitted ones included, until it comes back. */
+const archiveRef = (threadId: string) => `refs/moonagentic/${threadId}/archive`;
+
+/** The folder the agent works in: the worktree, or the project's folder inside it. */
+const workFolder = (workspace: Workspace) =>
+  workspace.subdir ? path.join(workspace.path, workspace.subdir) : workspace.path;
+
+/** A step back under way, kept until it is done so a stop in the middle is finished later. */
+type PendingRestore = { itemId: string; tree: string };
 
 /** Owns threads and their agent sessions, and keeps every connected client in sync. */
 export class Hub {
@@ -131,7 +146,11 @@ export class Hub {
     this.homeDir = options.homeDir ?? os.homedir();
     agents.setCustom(this.customAgents());
     store.recoverAfterRestart();
+    this.recovered = this.finishRestores();
   }
+
+  /** Resolves once the steps back that a stop interrupted are finished. */
+  readonly recovered: Promise<void>;
 
   connect(client: Client): () => void {
     this.clients.add(client);
@@ -193,6 +212,15 @@ export class Hub {
         return;
       case "thread.setSetting":
         await this.setSetting(message.threadId, message.settingId, message.value);
+        return;
+      case "thread.setArchived":
+        await this.setArchived(message.threadId, message.archived);
+        return;
+      case "thread.delete":
+        await this.deleteThread(message.threadId);
+        return;
+      case "project.remove":
+        await this.removeProject(message.projectId);
         return;
       case "thread.setPinned":
         this.requireThread(message.threadId);
@@ -347,6 +375,7 @@ export class Hub {
 
   send(threadId: string, text: string): void {
     const thread = this.requireThread(threadId);
+    if (thread.archived) throw new Error("Ce fil est archivé : désarchive-le pour continuer.");
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
     const busy = this.busy.get(threadId);
     if (busy) throw new Error(busy);
@@ -488,37 +517,141 @@ export class Hub {
     await this.exclusive(threadId, "Attends la fin du retour en arrière.", async () => {
       // The agent stops first, so nothing it started holds a file about to change (Windows).
       await this.forgetSession(threadId);
-      await restoreCheckpoint(workspace.path, tree);
-      const removed = this.store.removeItemsFrom(threadId, itemId);
-      // Going back before a hand-off goes back to the agent of that time, on its defaults.
-      const handoff = removed.find((i) => i.kind === "handoff");
-      this.updateThread(threadId, {
-        status: "idle",
-        usage: undefined,
-        error: null,
-        ...(handoff
-          ? {
-              agentId: handoff.from,
-              model: undefined,
-              settings: undefined,
-              canCompact: undefined,
-              commands: undefined,
-            }
-          : {}),
-      });
-      this.sendToViewers(threadId, {
-        type: "items",
-        threadId,
-        items: this.store.listItems(threadId),
-      });
-      // A ref left behind only keeps an old tree alive, so failing here is harmless.
-      await dropCheckpoints(
-        workspace.path,
-        removed.flatMap((i) =>
-          i.kind === "user" && i.checkpoint ? [checkpointRef(threadId, i.id)] : [],
-        ),
-      ).catch(() => undefined);
+      // Files and messages go back together: written down first, a step back that a stop
+      // cuts in half is finished when the server starts again.
+      this.setPendingRestore(threadId, { itemId, tree });
+      await this.finishRestore(threadId, workspace, { itemId, tree });
     });
+  }
+
+  private pendingRestores(): Record<string, PendingRestore> {
+    return this.store.getSetting<Record<string, PendingRestore>>("pendingRestores", {});
+  }
+
+  private setPendingRestore(threadId: string, restore: PendingRestore | undefined): void {
+    const { [threadId]: _done, ...others } = this.pendingRestores();
+    this.store.setSetting("pendingRestores", restore ? { ...others, [threadId]: restore } : others);
+  }
+
+  /** Finishes the steps back that were under way when the server stopped. */
+  private async finishRestores(): Promise<void> {
+    for (const [threadId, restore] of Object.entries(this.pendingRestores())) {
+      const workspace = this.store.getThread(threadId)?.workspace;
+      if (!workspace) {
+        this.setPendingRestore(threadId, undefined);
+        continue;
+      }
+      await this.exclusive(threadId, "Attends la fin du retour en arrière.", () =>
+        this.finishRestore(threadId, workspace, restore),
+      ).catch(() => undefined);
+    }
+  }
+
+  private async finishRestore(
+    threadId: string,
+    workspace: Workspace,
+    { itemId, tree }: PendingRestore,
+  ): Promise<void> {
+    await restoreCheckpoint(workspace.path, tree);
+    const removed = this.store.removeItemsFrom(threadId, itemId);
+    // Going back before a hand-off goes back to the agent of that time, on its defaults.
+    const handoff = removed.find((i) => i.kind === "handoff");
+    this.updateThread(threadId, {
+      status: "idle",
+      usage: undefined,
+      error: null,
+      ...(handoff
+        ? {
+            agentId: handoff.from,
+            model: undefined,
+            settings: undefined,
+            canCompact: undefined,
+            commands: undefined,
+          }
+        : {}),
+    });
+    this.sendToViewers(threadId, {
+      type: "items",
+      threadId,
+      items: this.store.listItems(threadId),
+    });
+    // A ref left behind only keeps an old tree alive, so failing here is harmless.
+    await dropCheckpoints(
+      workspace.path,
+      removed.flatMap((i) =>
+        i.kind === "user" && i.checkpoint ? [checkpointRef(threadId, i.id)] : [],
+      ),
+    ).catch(() => undefined);
+    this.setPendingRestore(threadId, undefined);
+  }
+
+  /**
+   * Puts a thread away: its agent stops and its worktree goes, after its files, uncommitted
+   * ones included, are kept in git. Bringing it back puts the worktree and the files back.
+   */
+  async setArchived(threadId: string, archived: boolean): Promise<void> {
+    const thread = this.requireThread(threadId);
+    if (!!thread.archived === archived) return;
+    const project = this.store.getProject(thread.projectId);
+    await this.exclusive(threadId, "Attends la fin de l'archivage.", async () => {
+      if (!archived) {
+        this.updateThread(threadId, { archived: false });
+        if (thread.workspace?.base && project) await this.prepareWorkspace(threadId, project);
+        return;
+      }
+      await this.forgetSession(threadId);
+      const workspace = thread.workspace;
+      if (workspace?.base && project && this.isOurWorktree(workspace.path)) {
+        if (existsSync(workspace.path)) {
+          // Written down before the folder goes: a stop in between loses nothing.
+          const archivedTree = await saveCheckpoint(workspace.path, archiveRef(threadId));
+          this.updateThread(threadId, { workspace: { ...workspace, archivedTree } });
+          await removeWorktree(project.path, workspace.path);
+        }
+      }
+      this.updateThread(threadId, { archived: true, status: "idle" });
+    });
+  }
+
+  /**
+   * Deletes the thread, its timeline and its worktree. Its branch stays in the repository,
+   * with the commits on it, so no committed work is lost.
+   */
+  async deleteThread(threadId: string): Promise<void> {
+    const thread = this.requireThread(threadId);
+    if (this.turns.has(threadId)) throw new Error("Arrête d'abord l'agent de ce fil.");
+    await this.exclusive(threadId, "Attends la fin de la suppression.", async () => {
+      await this.forgetSession(threadId);
+      this.settlePermissions(threadId);
+      const project = this.store.getProject(thread.projectId);
+      const workspace = thread.workspace;
+      if (workspace && project) {
+        if (this.isOurWorktree(workspace.path)) await removeWorktree(project.path, workspace.path);
+        await dropRefs(project.path, `refs/moonagentic/${threadId}/`).catch(() => undefined);
+      }
+      this.setPendingRestore(threadId, undefined);
+      this.store.deleteThread(threadId);
+      this.broadcast({ type: "threadRemoved", threadId });
+    });
+  }
+
+  /** Removes the project and its threads from MoonAgentic; its folder is left as it is. */
+  async removeProject(projectId: string): Promise<void> {
+    if (!this.store.getProject(projectId)) throw new Error("Projet introuvable.");
+    const threads = this.store.listThreads().filter((t) => t.projectId === projectId);
+    if (threads.some((t) => this.turns.has(t.id) || this.busy.has(t.id))) {
+      throw new Error("Un fil de ce projet travaille encore : arrête-le d'abord.");
+    }
+    for (const thread of threads) await this.deleteThread(thread.id);
+    this.store.deleteProject(projectId);
+    this.gitProjects.delete(projectId);
+    this.broadcast({ type: "projectRemoved", projectId });
+  }
+
+  /** Only folders MoonAgentic made for a thread are ever removed. */
+  private isOurWorktree(dir: string): boolean {
+    const inside = path.relative(this.worktreesDir, dir);
+    return !!inside && !inside.startsWith("..") && !path.isAbsolute(inside);
   }
 
   /** Hands the thread to another agent between turns; it gets the conversation so far. */
@@ -846,7 +979,7 @@ export class Hub {
     if (thread.projectId !== projectId) throw new Error("Ce fil n'est pas dans ce projet.");
     // Until its worktree exists, a thread's files are the project's.
     const workspace = thread.workspace;
-    return workspace?.base && existsSync(workspace.path) ? workspace.path : project.path;
+    return workspace?.base && existsSync(workspace.path) ? workFolder(workspace) : project.path;
   }
 
   private rememberCommands(agentId: string, commands: AgentCommand[]): void {
@@ -891,16 +1024,28 @@ export class Hub {
 
   /** Makes the thread's worktree on first use; returns the folder the agent works in. */
   private async prepareWorkspace(threadId: string, project: Project): Promise<string> {
-    const workspace = this.store.getThread(threadId)?.workspace;
+    let workspace = this.store.getThread(threadId)?.workspace;
     if (!workspace) return project.path;
-    if (!existsSync(workspace.path)) {
-      if (workspace.base) {
-        throw new Error(`La copie de travail de ce fil a disparu : ${workspace.path}`);
+    if (!workspace.base) {
+      // Where the branch starts is written down before git makes anything, so a stop in
+      // between is finished next time. A branch made before that rule keeps its own start.
+      const start = await worktreeStart(project.path);
+      if (await branchExists(project.path, workspace.branch)) {
+        start.base = await forkPoint(project.path, workspace.branch);
       }
-      const made = await addWorktree(project.path, workspace.path, workspace.branch);
-      this.updateThread(threadId, { workspace: { ...workspace, ...made } });
+      workspace = { ...workspace, ...start };
+      this.updateThread(threadId, { workspace });
     }
-    return workspace.path;
+    // Made, or made again when its folder went missing, from the branch and its commits.
+    await ensureWorktree(project.path, workspace.path, workspace.branch, workspace.base!);
+    if (workspace.archivedTree) {
+      // Back from the archive: the files it had, uncommitted ones included.
+      await restoreCheckpoint(workspace.path, workspace.archivedTree);
+      const { archivedTree: _restored, ...rest } = workspace;
+      this.updateThread(threadId, { workspace: rest });
+      await dropCheckpoints(workspace.path, [archiveRef(threadId)]).catch(() => undefined);
+    }
+    return workFolder(workspace);
   }
 
   private withGit(project: Project): Project {

@@ -78,6 +78,9 @@ Les agents de code modernes (**Claude Code**, **Codex**, **Antigravity**, **Curs
 - **Choix des fichiers à envoyer** : chaque fichier a sa case dans « À revoir ». Les fichiers qui ressemblent à des secrets (`.env`, clés, `.npmrc`…) partent décochés. Seuls les fichiers cochés sont commités, rien d’autre de ce que l’agent aurait mis en staging. La revue ne stocke rien dans git et s’arrête à 1 000 fichiers.
 - **Commit, push & pull request** : commite avec ton message, pousse la branche et ouvre la PR via ton propre `gh` CLI (s’il est installé et connecté), avec repli automatique vers la page GitHub _compare_.
 - **Checkpoints « Revenir ici »** : avant chaque tour sur une branche isolée, MoonAgentic capture l’état des fichiers dans un arbre git (`refs/moonagentic/<fil>/<message>`), sans polluer l’historique de commits. Revenir à un message restaure les fichiers (en rétablissant d’abord les règles `.gitignore` pour préserver `.env`, `node_modules`…), efface la suite du fil, rétablit l’agent de l’époque si un relais avait eu lieu, et replace le texte du message dans le composer.
+- **Archiver, supprimer** : archiver un fil range sa copie de travail après avoir gardé ses fichiers (non commités compris) dans git ; le désarchiver les remet. Supprimer un fil efface ses messages et sa copie de travail, mais sa branche et ses commits restent dans le dépôt. Retirer un projet ne touche jamais à son dossier.
+- **Projet dans un sous-dossier** : un projet ouvert sur `apps/web` d’un dépôt fait travailler l’agent dans `apps/web` de sa copie de travail.
+- **Reprise après un arrêt** : une copie de travail à moitié créée, disparue ou jamais enregistrée est refaite depuis sa branche, et un retour en arrière interrompu est terminé au redémarrage.
 
 ### Serveurs MCP centralisés
 
@@ -214,7 +217,8 @@ MoonAgentic est construit par jalons successifs :
 - [x] **Jalon 4 — Pilotage du fil** : mode et raisonnement de l’agent, jauge de contexte et `/compact`, checkpoints _« Revenir ici »_, changement d’agent en cours de fil avec relais d’historique.
 - [x] **Jalon 5 — Commandes et composer** : commandes `/` (MoonAgentic, projet, agent), mentions `@` de fichiers, skills `$`, fils épinglés, recherche Ctrl K, export Markdown, choix des fichiers à l’envoi, premier test de bout en bout dans un vrai navigateur.
 - [x] **Jalon 6a — Connexions** : état de chaque agent (version, connexion requise), agents ACP ajoutés par l’utilisateur, pile « À traiter » de toutes les demandes d’accord, coût par fil, relais depuis un agent devenu indisponible.
-- [ ] **Suite** : archivage des fils avec nettoyage des worktrees, synchronisation/rebase des branches, et emballage en **application desktop Windows (Electron)** une fois le cœur stabilisé.
+- [x] **Jalon 6b — Archives et base** : archivage et suppression des fils et des projets avec nettoyage des worktrees, schéma SQLite versionné avec migrations et sauvegarde automatique avant chaque migration, projets dans un sous-dossier d’un dépôt, reprise après un arrêt en plein travail.
+- [ ] **Suite** : synchronisation/rebase des branches, et emballage en **application desktop Windows (Electron)** une fois le cœur stabilisé.
 
 ---
 
