@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ServerMessage } from "@moonagentic/protocol";
@@ -116,7 +116,7 @@ describe("thread workspaces", () => {
     writeFileSync(path.join(workspace.path, "a.txt"), "a\n");
     const first = hub.ship(threadId, "Ajoute a", false);
     expect(() => hub.send(threadId, "Deux")).toThrow("envoi de la branche");
-    await expect(hub.ship(threadId, "x", false)).rejects.toThrow("déjà en cours");
+    await expect(hub.ship(threadId, "x", false)).rejects.toThrow("envoi de la branche");
     await first;
 
     git(workspace.path, "checkout", "-q", "-b", "autre");
@@ -132,6 +132,69 @@ describe("thread workspaces", () => {
       files: [],
       error: expect.any(String),
     });
+  });
+
+  it("goes back to the files before a message, and the agent starts over from what is left", async () => {
+    const { hub, store, projectId } = repository();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: true,
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    const dir = store.getThread(threadId)!.workspace!.path;
+    writeFileSync(path.join(dir, "README.md"), "# Demo\npremier tour\n");
+    writeFileSync(path.join(dir, ".gitignore"), "cache/\n");
+    mkdirSync(path.join(dir, "cache"));
+    writeFileSync(path.join(dir, "cache", "garde.txt"), "ignoré\n");
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+    const second = store.listItems(threadId).filter((i) => i.kind === "user")[1]!;
+    expect(second).toMatchObject({
+      text: "Deux",
+      checkpoint: expect.stringMatching(/^[0-9a-f]{40}$/),
+    });
+
+    // What the second turn did, which going back must undo.
+    writeFileSync(path.join(dir, "README.md"), "# Demo\nsecond tour\n");
+    mkdirSync(path.join(dir, "src", "neuf"), { recursive: true });
+    writeFileSync(path.join(dir, "src", "neuf", "a.ts"), "export {};\n");
+    // Without its rule, the ignored file would pass for one the turn made.
+    rmSync(path.join(dir, ".gitignore"));
+    await hub.restore(threadId, second.id);
+
+    expect(readFileSync(path.join(dir, "README.md"), "utf8")).toBe("# Demo\npremier tour\n");
+    expect(existsSync(path.join(dir, ".gitignore"))).toBe(true);
+    expect(existsSync(path.join(dir, "src"))).toBe(false);
+    expect(readFileSync(path.join(dir, "cache", "garde.txt"), "utf8")).toBe("ignoré\n");
+    expect(
+      store
+        .listItems(threadId)
+        .filter((i) => i.kind === "user")
+        .map((i) => i.text),
+    ).toEqual(["Un"]);
+    expect(store.getSessionId(threadId)).toBeNull();
+    expect(git(dir, "for-each-ref", "--format=%(refname)", "refs/moonagentic")).not.toContain(
+      second.id.replace("user:", ""),
+    );
+
+    hub.send(threadId, "Trois");
+    await hub.whenIdle(threadId);
+    expect(store.listItems(threadId).findLast((i) => i.kind === "agent")).toMatchObject({
+      text: expect.stringContaining("J'ai reçu l'historique, qui commence par « Un »."),
+    });
+    // A message without its own branch has nothing to go back to.
+    const direct = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "x",
+    });
+    await hub.whenIdle(direct);
+    const first = store.listItems(direct)[0]!;
+    await expect(hub.restore(direct, first.id)).rejects.toThrow("pas de point de retour");
   });
 
   it("works in the project folder when asked, or when the folder is not in git", async () => {

@@ -104,6 +104,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "error":
       return message.requestId ? state : { ...state, notice: message.message };
     case "created":
+    case "done":
     case "shipped":
       return state;
   }
@@ -192,6 +193,7 @@ export class Connection {
       if (message.type === "created") this.pending.get(message.requestId)?.resolve(message.id);
       if (message.type === "shipped")
         this.pending.get(message.requestId)?.resolve(message.url ?? "");
+      if (message.type === "done") this.pending.get(message.requestId)?.resolve("");
       if (message.type === "error" && message.requestId) {
         this.pending.get(message.requestId)?.reject(new Error(message.message));
       }

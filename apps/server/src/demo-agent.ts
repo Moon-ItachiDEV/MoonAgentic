@@ -142,7 +142,10 @@ const app = acp
   .onRequest("session/prompt", async ({ params, client }) => {
     const { sessionId } = params;
     cancelled.delete(sessionId);
-    const ask = params.prompt.map((b) => (b.type === "text" ? b.text : "")).join(" ");
+    const texts = params.prompt.flatMap((b) => (b.type === "text" ? [b.text] : []));
+    // The last block is the user's message; one before it carries the earlier conversation.
+    const ask = texts.at(-1) ?? "";
+    const firstAsk = texts.length > 1 ? texts[0]?.match(/^Utilisateur : (.*)$/m)?.[1] : undefined;
     const update = async (u: acp.SessionUpdate) => {
       if (pause) await delay(pause);
       await client.notify("session/update", { sessionId, update: u });
@@ -191,6 +194,7 @@ const app = acp
     });
     await say(
       `Tu m'as demandé : « ${ask} » (modèle ${models.get(sessionId) ?? "rapide"}). ` +
+        (firstAsk ? `J'ai reçu l'historique, qui commence par « ${firstAsk} ». ` : "") +
         (mcpNames.get(sessionId)?.length
           ? `Serveurs MCP reçus : ${mcpNames.get(sessionId)?.join(", ")}. `
           : ""),

@@ -66,17 +66,25 @@ export async function addWorktree(
   return { base, ...(head && head !== "HEAD" ? { baseBranch: head } : {}) };
 }
 
-/**
- * Everything that changed since `base`, committed or not, new files included. Runs on a
- * throwaway copy of the index so the folder's own staging area is left alone.
- */
-export async function reviewChanges(dir: string, base: string): Promise<ReviewFile[]> {
+/** Runs `work` with a throwaway copy of the folder's index, so its staging area is left alone. */
+async function withScratchIndex<T>(
+  dir: string,
+  work: (env: NodeJS.ProcessEnv) => Promise<T>,
+): Promise<T> {
   const scratch = mkdtempSync(path.join(os.tmpdir(), "moonagentic-index-"));
   try {
     const index = path.join(scratch, "index");
     const real = path.resolve(dir, (await git(dir, ["rev-parse", "--git-path", "index"])).trim());
     if (existsSync(real)) copyFileSync(real, index);
-    const env = { GIT_INDEX_FILE: index };
+    return await work({ GIT_INDEX_FILE: index });
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+/** Everything that changed since `base`, committed or not, new files included. */
+export function reviewChanges(dir: string, base: string): Promise<ReviewFile[]> {
+  return withScratchIndex(dir, async (env) => {
     await git(dir, ["add", "-A"], env);
     const numstat = await git(dir, ["diff", "--cached", "--numstat", "-z", "-M", base], env);
     // An external diff tool from the user's config would replace the unified diff.
@@ -86,9 +94,45 @@ export async function reviewChanges(dir: string, base: string): Promise<ReviewFi
       env,
     );
     return parseDiff(numstat, patch);
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
+  });
+}
+
+/**
+ * Saves the folder's files, ignored ones aside, as a git tree kept alive by `ref`, which
+ * no branch or commit shows. Returns the tree's hash.
+ */
+export function saveCheckpoint(dir: string, ref: string): Promise<string> {
+  return withScratchIndex(dir, async (env) => {
+    await git(dir, ["add", "-A"], env);
+    const tree = (await git(dir, ["write-tree"], env)).trim();
+    await git(dir, ["update-ref", ref, tree]);
+    return tree;
+  });
+}
+
+/**
+ * Puts the folder's files back as a checkpoint saved them: changed files are rewritten and
+ * files made since are removed. Ignored files, the branch and its commits stay as they are.
+ */
+export async function restoreCheckpoint(dir: string, tree: string): Promise<void> {
+  // The ignore rules go back first, so a file they ignored then is not taken for a new one.
+  const rules = (await git(dir, ["ls-tree", "-r", "-z", "--name-only", tree]))
+    .split("\0")
+    .filter((f) => f === ".gitignore" || f.endsWith("/.gitignore"));
+  if (rules.length) {
+    await withScratchIndex(dir, async (env) => {
+      await git(dir, ["read-tree", tree], env);
+      await git(dir, ["checkout-index", "-f", "--", ...rules], env);
+    });
   }
+  await withScratchIndex(dir, async (env) => {
+    await git(dir, ["add", "-A"], env);
+    await git(dir, ["read-tree", "--reset", "-u", tree], env);
+  });
+}
+
+export async function dropCheckpoints(dir: string, refs: string[]): Promise<void> {
+  for (const ref of refs) await git(dir, ["update-ref", "-d", ref]);
 }
 
 /** Pairs `git diff --numstat -z` counts with each file's section of the patch. */

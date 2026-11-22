@@ -1,8 +1,9 @@
 import type { AgentInfo, Item, Thread, ToolContent } from "@moonagentic/protocol";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { fillComposer } from "../composer-fill.ts";
 import { connection } from "../connection.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
-import { IconAlert, IconCheck, IconChevron, IconX } from "./icons.tsx";
+import { IconAlert, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 export function ThreadView({
@@ -17,6 +18,14 @@ export function ThreadView({
   const view = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const agent = agents.find((a) => a.id === thread.agentId);
+  // Who wrote each item: the thread's agent, or the one it was handed over from.
+  const authors: string[] = [];
+  let author = thread.agentId;
+  for (let i = (items?.length ?? 0) - 1; i >= 0; i--) {
+    const item = items?.[i];
+    if (item?.kind === "handoff") author = item.from;
+    authors[i] = author;
+  }
 
   // Subscribes this client to the thread's timeline on the server.
   useEffect(() => {
@@ -45,7 +54,8 @@ export function ThreadView({
             key={item.id}
             item={item}
             thread={thread}
-            agent={agent}
+            agents={agents}
+            agent={agents.find((a) => a.id === authors[i])}
             showBy={startsAgentBlock(items, i)}
           />
         ))}
@@ -71,23 +81,34 @@ const startsAgentBlock = (items: Item[], index: number) =>
   !items
     .slice(0, index)
     .reverse()
-    .find((i) => i.kind === "agent" || i.kind === "user")
+    .find((i) => i.kind === "agent" || i.kind === "user" || i.kind === "handoff")
     ?.kind.startsWith("agent");
 
 function FeedItem({
   item,
   thread,
+  agents,
   agent,
   showBy,
 }: {
   item: Item;
   thread: Thread;
+  agents: AgentInfo[];
   agent: AgentInfo | undefined;
   showBy: boolean;
 }) {
   switch (item.kind) {
     case "user":
-      return <div className="u">{item.text}</div>;
+      return <UserMessage item={item} thread={thread} />;
+    case "handoff": {
+      const name = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
+      return (
+        <div className="handoff">
+          <AgentBadge agent={agents.find((a) => a.id === item.to)} small />
+          {name(item.from)} passe le relais à {name(item.to)}
+        </div>
+      );
+    }
     case "agent":
       return (
         <div className="a">
@@ -140,6 +161,64 @@ function FeedItem({
     case "permission":
       return <PermissionCard item={item} threadId={thread.id} />;
   }
+}
+
+/** The user's message, with a way back to the files as they were just before it. */
+function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; thread: Thread }) {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const idle = thread.status === "idle" || thread.status === "error";
+  const canRestore = !!item.checkpoint && !!thread.workspace && idle;
+
+  const restore = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await connection.request({
+        type: "thread.restore",
+        requestId: crypto.randomUUID(),
+        threadId: thread.id,
+        itemId: item.id,
+      });
+      fillComposer(thread.id, item.text);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="u-wrap">
+      <div className="u">{item.text}</div>
+      {canRestore &&
+        (confirming ? (
+          <div className="u-confirm" role="group" aria-label="Revenir à ce message">
+            <span>Les fichiers reviennent à avant ce message, et la suite du fil est effacée.</span>
+            <button className="btn sm quiet" disabled={busy} onClick={() => setConfirming(false)}>
+              Annuler
+            </button>
+            <button className="btn sm danger" disabled={busy} onClick={() => void restore()}>
+              Revenir ici
+            </button>
+          </div>
+        ) : (
+          <button
+            className="u-act"
+            title="Remettre les fichiers comme avant ce message et reprendre d'ici"
+            onClick={() => setConfirming(true)}
+          >
+            <IconUndo />
+            Revenir ici
+          </button>
+        ))}
+      {error && (
+        <p className="u-err" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
 }
 
 const TOOL_KIND: Record<string, string> = {

@@ -1,5 +1,6 @@
 import type { AgentInfo, Favorites, PermissionMode, Project, Thread } from "@moonagentic/protocol";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { onFillComposer } from "../composer-fill.ts";
 import { connection } from "../connection.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
@@ -37,10 +38,11 @@ export function Composer(props: {
   const agent = agents.find((a) => a.id === agentId);
   const mode = thread?.permissionMode ?? newMode;
   const pickedModel = agent && (modelPicks[agent.id] ?? readPref(`model.${agent.id}`));
-  const model =
-    thread?.model ??
-    (agent?.models?.some((m) => m.id === pickedModel) ? pickedModel : agent?.defaultModel) ??
-    undefined;
+  // A thread handed to another agent has no model until that agent starts: its default.
+  const model = thread
+    ? (thread.model ?? agent?.defaultModel)
+    : ((agent?.models?.some((m) => m.id === pickedModel) ? pickedModel : agent?.defaultModel) ??
+      undefined);
   const modelName = agent?.models?.find((m) => m.id === model)?.name ?? model;
   const settings = Object.fromEntries(
     (agent?.settings ?? []).map((s) => {
@@ -81,6 +83,16 @@ export function Composer(props: {
       document.removeEventListener("keydown", escape);
     };
   }, [pickerOpen]);
+  useEffect(
+    () =>
+      onFillComposer((threadId, value) => {
+        if (threadId !== thread?.id) return;
+        setText(value);
+        input.current?.focus();
+      }),
+    [thread?.id],
+  );
+
   const canSend = text.trim().length > 0 && !busy && !running && !!agent?.available && !!project;
 
   useLayoutEffect(() => {
@@ -252,7 +264,7 @@ export function Composer(props: {
           model={model}
           favorites={props.favorites}
           projectId={project?.id}
-          showAgents={!thread}
+          agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
           settings={settings}
           onPickSetting={(settingId, value) => {
             if (thread)
@@ -264,6 +276,11 @@ export function Composer(props: {
             }
           }}
           onPickAgent={(id) => {
+            if (thread) {
+              if (id !== thread.agentId)
+                connection.send({ type: "thread.switchAgent", threadId: thread.id, agentId: id });
+              return;
+            }
             setPickedAgentId(id);
             writePref("agent", id);
           }}

@@ -19,7 +19,18 @@ import type {
   ToolContent,
 } from "@moonagentic/protocol";
 import type { Agents } from "./agents.ts";
-import { addWorktree, branchName, isGitRepo, reviewChanges, ship, type ShipResult } from "./git.ts";
+import {
+  addWorktree,
+  branchName,
+  dropCheckpoints,
+  isGitRepo,
+  restoreCheckpoint,
+  reviewChanges,
+  saveCheckpoint,
+  ship,
+  type ShipResult,
+} from "./git.ts";
+import { historyBefore } from "./history.ts";
 import { mcpInfo, type McpServerRecord } from "./mcp.ts";
 import { AgentSession, describe, type ModelOption } from "./session.ts";
 import type { Store } from "./store.ts";
@@ -51,6 +62,10 @@ const DISCOVERY_TIMEOUT_MS = 30_000;
 const settingValues = (settings: AgentSetting[]) =>
   settings.length ? Object.fromEntries(settings.map((s) => [s.id, s.current])) : undefined;
 
+/** Keeps a message's checkpoint from git's garbage collection, out of sight of branches. */
+const checkpointRef = (threadId: string, itemId: string) =>
+  `refs/moonagentic/${threadId}/${itemId.replace(/^user:/, "")}`;
+
 /** Owns threads and their agent sessions, and keeps every connected client in sync. */
 export class Hub {
   private readonly store: Store;
@@ -70,8 +85,11 @@ export class Hub {
 
   /** Where threads with their own branch get their worktree. */
   private readonly worktreesDir: string;
-  /** Threads whose branch is being committed and pushed, when no turn may start. */
-  private readonly shipping = new Set<string>();
+  /**
+   * Threads busy with their branch or their agent (a push, a step back, a hand-off), with
+   * what to answer a message or another such step meanwhile.
+   */
+  private readonly busy = new Map<string, string>();
   /** Whether each project's folder is in a git repository, checked once. */
   private readonly gitProjects = new Map<string, boolean>();
 
@@ -125,6 +143,13 @@ export class Hub {
         return;
       case "thread.cancel":
         await this.cancel(message.threadId);
+        return;
+      case "thread.restore":
+        await this.restore(message.threadId, message.itemId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "thread.switchAgent":
+        await this.switchAgent(message.threadId, message.agentId);
         return;
       case "thread.setPermissionMode":
         this.setPermissionMode(message.threadId, message.permissionMode);
@@ -244,11 +269,13 @@ export class Hub {
   send(threadId: string, text: string): void {
     const thread = this.requireThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
-    if (this.shipping.has(threadId)) throw new Error("Attends la fin de l'envoi de la branche.");
-    this.putItem(threadId, { id: `user:${randomUUID()}`, kind: "user", text, at: Date.now() });
+    const busy = this.busy.get(threadId);
+    if (busy) throw new Error(busy);
+    const itemId = `user:${randomUUID()}`;
+    this.putItem(threadId, { id: itemId, kind: "user", text, at: Date.now() });
     this.updateThread(threadId, { status: "running", error: null });
     this.turnIds.set(threadId, randomUUID());
-    const turn = this.runTurn(thread, text).finally(() => {
+    const turn = this.runTurn(thread, text, itemId).finally(() => {
       this.turns.delete(threadId);
       this.turnIds.delete(threadId);
     });
@@ -323,10 +350,7 @@ export class Hub {
     const workspace = thread.workspace;
     if (!workspace?.base)
       throw new Error("Ce fil travaille dans le dossier du projet, sans branche à lui.");
-    if (this.turns.has(threadId)) throw new Error("Attends la fin de la réponse de l'agent.");
-    if (this.shipping.has(threadId)) throw new Error("Cette branche est déjà en cours d'envoi.");
-    this.shipping.add(threadId);
-    try {
+    return this.exclusive(threadId, "Attends la fin de l'envoi de la branche.", async () => {
       const result = await ship(workspace.path, {
         branch: workspace.branch,
         message,
@@ -341,9 +365,83 @@ export class Hub {
         });
       }
       return result;
+    });
+  }
+
+  /**
+   * Puts the thread's files back as they were just before this message, and removes the
+   * message and everything after it. The agent then starts over from what is left.
+   */
+  async restore(threadId: string, itemId: string): Promise<void> {
+    const workspace = this.requireThread(threadId).workspace;
+    const item = this.store.getItem(threadId, itemId);
+    const tree = item?.kind === "user" ? item.checkpoint : undefined;
+    if (!workspace || !tree) throw new Error("Ce message n'a pas de point de retour.");
+    await this.exclusive(threadId, "Attends la fin du retour en arrière.", async () => {
+      await restoreCheckpoint(workspace.path, tree);
+      await this.forgetSession(threadId);
+      const removed = this.store.removeItemsFrom(threadId, itemId);
+      await dropCheckpoints(
+        workspace.path,
+        removed.flatMap((i) =>
+          i.kind === "user" && i.checkpoint ? [checkpointRef(threadId, i.id)] : [],
+        ),
+      );
+      this.updateThread(threadId, { status: "idle", usage: undefined, error: null });
+      this.sendToViewers(threadId, {
+        type: "items",
+        threadId,
+        items: this.store.listItems(threadId),
+      });
+    });
+  }
+
+  /** Hands the thread to another agent between turns; it gets the conversation so far. */
+  async switchAgent(threadId: string, agentId: string): Promise<void> {
+    const thread = this.requireThread(threadId);
+    if (thread.agentId === agentId) return;
+    this.agents.launch(agentId);
+    await this.exclusive(threadId, "Attends la fin du changement d'agent.", async () => {
+      await this.forgetSession(threadId);
+      // The new agent offers its own models and settings, so its defaults apply.
+      this.updateThread(threadId, {
+        agentId,
+        model: undefined,
+        settings: undefined,
+        usage: undefined,
+        canCompact: undefined,
+        status: "idle",
+        error: null,
+      });
+      this.putItem(threadId, {
+        id: `handoff:${randomUUID()}`,
+        kind: "handoff",
+        from: thread.agentId,
+        to: agentId,
+        at: Date.now(),
+      });
+    });
+  }
+
+  /** Runs a step that no turn and no other such step may overlap. */
+  private async exclusive<T>(threadId: string, reason: string, work: () => Promise<T>): Promise<T> {
+    if (this.turns.has(threadId)) throw new Error("Attends la fin de la réponse de l'agent.");
+    const busy = this.busy.get(threadId);
+    if (busy) throw new Error(busy);
+    this.busy.set(threadId, reason);
+    try {
+      return await work();
     } finally {
-      this.shipping.delete(threadId);
+      this.busy.delete(threadId);
     }
+  }
+
+  /** Stops the thread's agent and forgets its session, so the next turn starts a new one. */
+  private async forgetSession(threadId: string): Promise<void> {
+    const session = this.sessions.get(threadId);
+    this.sessions.delete(threadId);
+    await session?.then((s) => s.close()).catch(() => undefined);
+    this.store.setSessionId(threadId, null);
   }
 
   /** Registers an MCP server for every agent session started from now on. */
@@ -443,10 +541,18 @@ export class Hub {
     await Promise.all(this.turns.values());
   }
 
-  private async runTurn(thread: Thread, text: string): Promise<void> {
+  private async runTurn(thread: Thread, text: string, itemId: string): Promise<void> {
     try {
+      const continuing = this.sessions.has(thread.id);
       const session = await this.session(thread);
-      const stopReason = await session.prompt(text);
+      await this.checkpoint(thread.id, itemId);
+      // A new session knows nothing of the thread: after a hand-off, a step back, or when
+      // the agent could not resume its earlier session.
+      const history =
+        !continuing && session.fresh
+          ? historyBefore(this.store.listItems(thread.id), itemId, this.agentName)
+          : undefined;
+      const stopReason = await session.prompt(text, history);
       const error =
         stopReason === "refusal"
           ? "L'agent a refusé de continuer."
@@ -477,6 +583,19 @@ export class Hub {
       () => this.sessions.delete(thread.id),
     );
     return started;
+  }
+
+  /** Saves the thread's files before a turn, so the user can come back to this message. */
+  private async checkpoint(threadId: string, itemId: string): Promise<void> {
+    const workspace = this.store.getThread(threadId)?.workspace;
+    if (!workspace?.base) return;
+    try {
+      const tree = await saveCheckpoint(workspace.path, checkpointRef(threadId, itemId));
+      const item = this.store.getItem(threadId, itemId);
+      if (item?.kind === "user") this.putItem(threadId, { ...item, checkpoint: tree });
+    } catch {
+      // The turn goes on; this message just offers no way back.
+    }
   }
 
   /** Makes the thread's worktree on first use; returns the folder the agent works in. */
@@ -564,6 +683,9 @@ export class Hub {
     const values = settingValues(session.settings);
     if (values) this.updateThread(threadId, { settings: values });
   }
+
+  private readonly agentName = (agentId: string) =>
+    this.agents.list().find((a) => a.id === agentId)?.name ?? agentId;
 
   private agentList(): AgentInfo[] {
     return this.agents.list().map((agent) => {

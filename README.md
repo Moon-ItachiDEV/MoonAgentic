@@ -6,7 +6,7 @@ Le projet repart de zéro avec son propre code. Les agents sont branchés via le
 
 ## État
 
-En construction. Jalon 1 : sidebar et composer, conversation en direct avec Claude Code et Antigravity (messages, outils, permissions), historique sauvegardé. Jalon 2 : Codex et Cursor, choix du modèle de chaque agent (avant et pendant un fil) et modèles favoris. Ensuite : serveurs MCP, branche à part par fil avec revue et envoi, mode et raisonnement de l'agent, jauge de contexte.
+En construction. Jalon 1 : sidebar et composer, conversation en direct avec Claude Code et Antigravity (messages, outils, permissions), historique sauvegardé. Jalon 2 : Codex et Cursor, choix du modèle de chaque agent (avant et pendant un fil) et modèles favoris. Ensuite : serveurs MCP, branche à part par fil avec revue et envoi, mode et raisonnement de l'agent, jauge de contexte, retour à un message et changement d'agent en cours de fil.
 
 ## Lancer MoonAgentic
 
@@ -30,7 +30,11 @@ Branche à part : dans un projet git, chaque fil peut travailler sur sa propre b
 
 Mode, raisonnement et contexte : quand l'agent les propose, son mode (plan, agent…) et son niveau de raisonnement se choisissent dans le menu de l'agent, avant ou pendant un fil. Une jauge à côté du bouton d'envoi montre la place prise dans le contexte de l'agent, avec « Compacter la conversation » si l'agent sait le faire.
 
-`node apps/server/src/bin.ts --demo` ajoute un agent de démo gratuit pour essayer l'interface.
+Revenir en arrière : sur un fil avec sa branche à part, MoonAgentic garde l'état des fichiers avant chaque message. « Revenir ici », sous un message, remet les fichiers comme avant lui, efface la suite du fil et te rend le message à modifier. L'agent repart alors de l'historique qui reste, puisqu'il ne peut pas oublier une partie de sa propre conversation.
+
+Changer d'agent : dans un fil, le menu de l'agent permet de passer la main à un autre agent entre deux réponses. Le nouvel agent reçoit l'historique du fil avec ton message suivant.
+
+`node apps/server/src/bin.ts --demo` ajoute deux agents de démo gratuits pour essayer l'interface.
 
 ## Développer
 
