@@ -1040,6 +1040,7 @@ describe("agents left alone", () => {
     // The session stays known, so the agent can resume it.
     expect(store.getSessionId(threadId)).not.toBeNull();
 
+    // Sent while the agent may still be stopping: it waits rather than being refused.
     hub.send(threadId, "Deux");
     await hub.whenIdle(threadId);
     expect(store.getThread(threadId)).toMatchObject({ status: "idle" });

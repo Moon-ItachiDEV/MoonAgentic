@@ -83,7 +83,6 @@ const START_TIMEOUT_MS = 120_000;
 const IDLE_MS = 10 * 60_000;
 /** Agents kept running at once; past it, the one left alone longest is stopped first. */
 const MAX_LIVE_AGENTS = 8;
-const PAUSING = "Attends : l'agent de ce fil se met en pause.";
 
 export interface HubOptions {
   /** Where threads with their own branch get their worktree. */
@@ -149,6 +148,8 @@ export class Hub {
   private readonly idleTimers = new Map<string, NodeJS.Timeout>();
   /** When each running agent last finished a turn, to stop the one left alone longest. */
   private readonly lastUsed = new Map<string, number>();
+  /** Agents being stopped for a pause: the thread's next agent starts once they are gone. */
+  private readonly pausing = new Map<string, Promise<void>>();
   private readonly idleMs: number;
   private readonly maxLiveAgents: number;
 
@@ -780,7 +781,7 @@ export class Hub {
     this.lastUsed.set(threadId, Date.now());
     const timer = setTimeout(() => {
       this.idleTimers.delete(threadId);
-      void this.pause(threadId);
+      this.pause(threadId);
     }, this.idleMs);
     timer.unref();
     this.idleTimers.set(threadId, timer);
@@ -790,19 +791,26 @@ export class Hub {
    * Stops the thread's agent but keeps its session: the next message resumes it, or gives a
    * new one the conversation so far.
    */
-  private async pause(threadId: string): Promise<void> {
-    if (!this.canPause(threadId)) {
+  private pause(threadId: string): void {
+    const session = this.sessions.get(threadId);
+    if (!session || !this.canPause(threadId)) {
       // Busy right now: tried again once it has been left alone as long again.
-      if (this.sessions.has(threadId) && !this.turns.has(threadId)) this.leftIdle(threadId);
+      if (session && !this.turns.has(threadId)) this.leftIdle(threadId);
       return;
     }
-    await this.exclusive(threadId, PAUSING, async () => {
-      const session = this.sessions.get(threadId);
-      this.sessions.delete(threadId);
-      this.lastUsed.delete(threadId);
-      this.clearIdle(threadId);
-      await session?.then((s) => s.close()).catch(() => undefined);
-    }).catch(() => undefined);
+    // A message sent meanwhile is not refused: its agent starts once this one is gone.
+    this.sessions.delete(threadId);
+    this.lastUsed.delete(threadId);
+    this.clearIdle(threadId);
+    const closing: Promise<void> = session
+      .then((s) => s.close())
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.pausing.get(threadId) === closing) this.pausing.delete(threadId);
+        this.steps.delete(closing);
+      });
+    this.pausing.set(threadId, closing);
+    this.steps.add(closing);
   }
 
   /** Before an agent starts, stops the ones left alone longest while too many run. */
@@ -815,7 +823,7 @@ export class Hub {
     for (const [id] of idle) {
       if (live < this.maxLiveAgents) break;
       // The agent leaves the count at once; its process stops in the background.
-      void this.pause(id);
+      this.pause(id);
       live -= 1;
     }
   }
@@ -1010,15 +1018,21 @@ export class Hub {
     this.makeRoom(thread.id);
     const stop = new AbortController();
     this.starting.set(thread.id, stop);
-    const started = this.prepareWorkspace(thread.id, project)
-      .then((cwd) => this.startSession(thread, cwd, stop.signal))
+    // Only the session it started may take itself out: one paused earlier may exit late.
+    const owns = () => this.sessions.get(thread.id) === started;
+    const paused = this.pausing.get(thread.id) ?? Promise.resolve();
+    const started: Promise<AgentSession> = paused
+      .then(() => this.prepareWorkspace(thread.id, project))
+      .then((cwd) => this.startSession(thread, cwd, stop.signal, owns))
       .finally(() => {
         if (this.starting.get(thread.id) === stop) this.starting.delete(thread.id);
       });
     this.sessions.set(thread.id, started);
     started.then(
       (s) => this.store.setSessionId(thread.id, s.sessionId),
-      () => this.sessions.delete(thread.id),
+      () => {
+        if (owns()) this.sessions.delete(thread.id);
+      },
     );
     return started;
   }
@@ -1075,6 +1089,8 @@ export class Hub {
     thread: Thread,
     cwd: string,
     stop: AbortSignal,
+    /** Whether this start is still the thread's current agent. */
+    owns: () => boolean,
   ): Promise<AgentSession> {
     // Until the thread's own model and settings are applied, the agent's are not news.
     let ready = false;
@@ -1088,6 +1104,7 @@ export class Hub {
         onUpdate: (update) => this.applyUpdate(thread.id, update),
         requestPermission: (request, signal) => this.requestPermission(thread.id, request, signal),
         onExit: (reason) => {
+          if (!owns()) return;
           this.sessions.delete(thread.id);
           this.settlePermissions(thread.id);
           if (reason && this.turns.has(thread.id)) {
