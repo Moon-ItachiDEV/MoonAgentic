@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Item, ServerMessage } from "@moonagentic/protocol";
@@ -35,6 +35,7 @@ function setup() {
   const store = new Store(path.join(dir, "state.sqlite"));
   const hub = new Hub(store, new Agents({ demo: true }), {
     worktreesDir: path.join(dir, ".worktrees"),
+    homeDir: path.join(dir, ".home"),
   });
   const client = new TestClient();
   hub.connect(client);
@@ -48,7 +49,7 @@ function setup() {
 }
 
 /** Makes demo agents started from now on offer their models in another way. */
-function demoModels(style: "legacy" | "none" | "hang" | "fail" | "load") {
+function demoModels(style: "legacy" | "none" | "hang" | "fail" | "load" | "resume-fail") {
   process.env.MOONAGENTIC_DEMO_MODELS = style;
   cleanups.push(() => {
     delete process.env.MOONAGENTIC_DEMO_MODELS;
@@ -675,5 +676,192 @@ describe("Store.recoverAfterRestart", () => {
     expect(store.getThread("t")?.status).toBe("idle");
     expect(store.getItem("t", "perm")).toMatchObject({ outcome: "cancelled" });
     store.close();
+  });
+});
+
+/** Writes files under `dir`, making their folders. */
+function write(dir: string, files: Record<string, string>) {
+  for (const [rel, content] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+    writeFileSync(path.join(dir, rel), content);
+  }
+}
+
+describe("Composer: files, skills, commands, pins and search", () => {
+  it("sends the files a message mentions and the skills it calls along with it", async () => {
+    const { dir, hub, store, projectId } = setup();
+    write(dir, {
+      "src/app.ts": "export const answer = 41;\n",
+      ".claude/skills/revue/SKILL.md": "---\nname: revue\ndescription: Relit\n---\nRelis.\n",
+    });
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Lis @src/app.ts avec $revue, et @../hors.txt",
+    });
+    await hub.whenIdle(threadId);
+    expect(lastTurnSaid(store.listItems(threadId))).toContain(
+      "Pièces jointes : app.ts (texte), SKILL.md (texte).",
+    );
+  });
+
+  it("only links them for an agent that takes no embedded content", async () => {
+    process.env.MOONAGENTIC_DEMO_EMBED = "0";
+    cleanups.push(() => {
+      delete process.env.MOONAGENTIC_DEMO_EMBED;
+    });
+    const { dir, hub, store, projectId } = setup();
+    write(dir, { "src/app.ts": "x" });
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Lis @src/app.ts",
+    });
+    await hub.whenIdle(threadId);
+    expect(lastTurnSaid(store.listItems(threadId))).toContain(
+      "Pièces jointes : src/app.ts (lien).",
+    );
+  });
+
+  it("keeps the agent's commands with the thread and with the agent", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)).toMatchObject({
+      canCompact: true,
+      commands: [
+        { name: "compact" },
+        { name: "init" },
+        { name: "explique", hint: "fichier à expliquer" },
+      ],
+    });
+    const demo = hub.snapshot().agents.find((a) => a.id === "demo");
+    expect(demo?.commands?.map((c) => c.name)).toEqual(["compact", "init", "explique"]);
+    // A hand-off forgets them until the next agent lists its own.
+    await hub.switchAgent(threadId, "demo-2");
+    expect(store.getThread(threadId)?.commands).toBeUndefined();
+  });
+
+  it("learns an agent's commands while listing its models", async () => {
+    const { hub, projectId } = setup();
+    await hub.discover("demo-2", projectId);
+    const agent = hub.snapshot().agents.find((a) => a.id === "demo-2");
+    expect(agent?.commands?.length).toBe(3);
+  });
+
+  it("searches project files, lists skills and commands, and finds messages", async () => {
+    const { dir, hub, client, projectId } = setup();
+    write(dir, {
+      "src/app.ts": "",
+      "src/other.ts": "",
+      ".agents/skills/tests/SKILL.md": "# Écrit des tests\n",
+      ".moonagentic/commands/deploy.md": "Déploie $ARGUMENTS",
+    });
+    await hub.handle(client, {
+      type: "files.search",
+      requestId: "f1",
+      projectId,
+      query: "app",
+    });
+    expect(client.messages.at(-1)).toEqual({
+      type: "files",
+      requestId: "f1",
+      files: ["src/app.ts"],
+    });
+
+    await hub.handle(client, { type: "composer.catalog", requestId: "c1", projectId });
+    expect(client.messages.at(-1)).toMatchObject({
+      type: "catalog",
+      skills: [{ name: "tests", description: "Écrit des tests", scope: "project" }],
+      commands: [{ name: "deploy", template: "Déploie $ARGUMENTS" }],
+    });
+    const catalog = client.messages.at(-1);
+    // The server's own paths stay on the server.
+    expect(JSON.stringify(catalog)).not.toContain(dir);
+
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Où est la fonction 100% fiable ?",
+    });
+    await hub.whenIdle(threadId);
+    await hub.handle(client, { type: "search", requestId: "s1", query: "100%" });
+    // The demo agent repeats the question, so its answer matches too, newest first.
+    expect(client.messages.at(-1)).toMatchObject({
+      type: "searched",
+      hits: [
+        { threadId, kind: "agent" },
+        { threadId, kind: "user", snippet: "Où est la fonction 100% fiable ?" },
+      ],
+    });
+    // `%` and `_` are searched as themselves.
+    await hub.handle(client, { type: "search", requestId: "s2", query: "1_0" });
+    expect(client.messages.at(-1)).toMatchObject({ type: "searched", hits: [] });
+  });
+
+  it("pins a thread for every device", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    const before = store.getThread(threadId)!.updatedAt;
+    await hub.handle(client, { type: "thread.setPinned", threadId, pinned: true });
+    expect(store.getThread(threadId)).toMatchObject({ pinned: true, updatedAt: before });
+    expect(client.messages.at(-1)).toMatchObject({ type: "thread", thread: { pinned: true } });
+    await hub.handle(client, { type: "thread.setPinned", threadId, pinned: false });
+    expect(store.getThread(threadId)?.pinned).toBeUndefined();
+  });
+
+  it("holds a message sent while the model is being switched", async () => {
+    const { hub, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    const switching = hub.setModel(threadId, "rapide");
+    expect(() => hub.send(threadId, "Deux")).toThrow("changement de modèle");
+    await switching;
+    const setting = hub.setSetting(threadId, "mode", "plan");
+    expect(() => hub.send(threadId, "Deux")).toThrow("changement de réglage");
+    await setting;
+  });
+
+  it("reloads a session the agent failed to resume", async () => {
+    demoModels("resume-fail");
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    const sessionId = store.getSessionId(threadId);
+    await hub.close();
+
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(os.tmpdir(), "unused-worktrees"),
+    });
+    cleanups.unshift(() => restarted.close());
+    restarted.send(threadId, "Deux");
+    await restarted.whenIdle(threadId);
+    expect(store.getSessionId(threadId)).toBe(sessionId);
+    // The reload replayed where the context stood, so the session went on.
+    expect(store.getThread(threadId)?.usage?.used).toBe(99_000 + 24_000);
   });
 });

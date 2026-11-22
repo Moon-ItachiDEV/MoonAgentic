@@ -10,13 +10,28 @@ const STATUS: Record<ReviewFile["status"], string> = {
   renamed: "renommé",
 };
 
+/** Files that often hold secrets start unticked, so they never leave by accident. */
+export function looksSecret(file: string): boolean {
+  const name = file.slice(file.lastIndexOf("/") + 1).toLowerCase();
+  return (
+    /^\.env($|\.)/.test(name) ||
+    /\.(pem|key|p12|pfx|keystore|jks)$/.test(name) ||
+    /^id_(rsa|dsa|ecdsa|ed25519)/.test(name) ||
+    /^(credentials|secrets?)(\.|$)/.test(name) ||
+    name === ".npmrc" ||
+    name === ".netrc"
+  );
+}
+
 function FileDiff({ file }: { file: ReviewFile }) {
   // Long diffs are drawn only once opened, so a big change set keeps the panel light.
   const [open, setOpen] = useState(false);
   return (
     <details className="rv-file" onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
-        <span className="rv-path">{file.path}</span>
+        <span className="rv-path" title={file.from ? `${file.from} → ${file.path}` : file.path}>
+          {file.path}
+        </span>
         <span className="rv-st">{STATUS[file.status]}</span>
         {file.added === null ? (
           <span className="rv-n">binaire</span>
@@ -69,6 +84,10 @@ export function ReviewPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pushed, setPushed] = useState(false);
+  /** Ticks the user changed, by path; the others follow `looksSecret`. */
+  const [ticks, setTicks] = useState<Record<string, boolean>>({});
+  const ticked = (f: ReviewFile) => ticks[f.path] ?? !looksSecret(f.path);
+  const picked = files?.filter(ticked) ?? [];
 
   // The server holds the files; ask on opening, once the branch exists, and whenever a
   // turn starts or ends.
@@ -92,6 +111,8 @@ export function ReviewPanel({
         threadId: thread.id,
         message: message.trim(),
         pr,
+        // A rename goes with the path it had, so the old file leaves with the new one.
+        files: picked.flatMap((f) => (f.from ? [f.path, f.from] : [f.path])),
       });
       setPushed(true);
       connection.send({ type: "workspace.review", threadId: thread.id });
@@ -129,12 +150,32 @@ export function ReviewPanel({
             <p>
               {files.length} {files.length > 1 ? "fichiers" : "fichier"} ·{" "}
               <span className="n-add">+{added}</span> <span className="n-del">−{removed}</span>
+              {picked.length < files.length && <> · {picked.length} à envoyer</>}
             </p>
             <div className="rv-files">
               {files.map((f) => (
-                <FileDiff key={f.path} file={f} />
+                <div key={f.path} className="rv-row">
+                  <input
+                    type="checkbox"
+                    checked={ticked(f)}
+                    aria-label={`Envoyer ${f.path}`}
+                    onChange={(e) => setTicks((t) => ({ ...t, [f.path]: e.target.checked }))}
+                  />
+                  <FileDiff file={f} />
+                  {looksSecret(f.path) && (
+                    <span className="rv-secret">
+                      Peut contenir un secret : coche-le seulement si tu en es sûr.
+                    </span>
+                  )}
+                </div>
               ))}
             </div>
+            {!!review?.omitted && (
+              <p>
+                {review.omitted} autres fichiers ne sont pas listés, trop nombreux : ils restent sur
+                ta machine.
+              </p>
+            )}
             <label className="field">
               Message de commit
               <textarea rows={2} value={message} onChange={(e) => setMessage(e.target.value)} />
@@ -159,14 +200,14 @@ export function ReviewPanel({
             <>
               <button
                 className="btn"
-                disabled={busy || running || !message.trim()}
+                disabled={busy || running || !message.trim() || !picked.length}
                 onClick={() => void shipWith(false)}
               >
                 Commit et push
               </button>
               <button
                 className="btn pri"
-                disabled={busy || running || !message.trim()}
+                disabled={busy || running || !message.trim() || !picked.length}
                 onClick={() => void shipWith(true)}
               >
                 Commit, push et PR

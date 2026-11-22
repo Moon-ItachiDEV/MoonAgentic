@@ -1,6 +1,6 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
-import { IconCompose, IconFolder, IconPlug } from "./icons.tsx";
+import { IconCompose, IconFolder, IconPin, IconPlug } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
 
 function ThreadStatus({ thread }: { thread: Thread }) {
@@ -19,12 +19,36 @@ export function Sidebar(props: {
   onOpenMcp: () => void;
   onPickProject: (id: string) => void;
   onOpenThread: (id: string) => void;
+  onTogglePin: (id: string, pinned: boolean) => void;
 }) {
   const { state } = props;
   const available = state.agents.filter((a) => a.available).length;
   const countByProject = new Map<string, number>();
   for (const t of state.threads)
     countByProject.set(t.projectId, (countByProject.get(t.projectId) ?? 0) + 1);
+
+  const pinned = state.threads.filter((t) => t.pinned);
+  const recent = state.threads.filter((t) => !t.pinned);
+  const row = (t: Thread) => (
+    <div key={t.id} className={`thr-row${t.pinned ? " pinned" : ""}`}>
+      <button
+        className={`thr${t.id === props.activeThreadId ? " on" : ""}`}
+        onClick={() => props.onOpenThread(t.id)}
+      >
+        <span className="t">{t.title}</span>
+        <ThreadStatus thread={t} />
+      </button>
+      <button
+        className="pin"
+        aria-pressed={!!t.pinned}
+        aria-label={t.pinned ? `Désépingler ${t.title}` : `Épingler ${t.title}`}
+        title={t.pinned ? "Désépingler" : "Épingler"}
+        onClick={() => props.onTogglePin(t.id, !t.pinned)}
+      >
+        <IconPin filled={!!t.pinned} />
+      </button>
+    </div>
+  );
 
   return (
     <aside className="side">
@@ -63,17 +87,10 @@ export function Sidebar(props: {
             <span className="aux">{countByProject.get(p.id) ?? ""}</span>
           </button>
         ))}
-        {state.threads.length > 0 && <div className="sec-h">Récents</div>}
-        {state.threads.map((t) => (
-          <button
-            key={t.id}
-            className={`thr${t.id === props.activeThreadId ? " on" : ""}`}
-            onClick={() => props.onOpenThread(t.id)}
-          >
-            <span className="t">{t.title}</span>
-            <ThreadStatus thread={t} />
-          </button>
-        ))}
+        {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
+        {pinned.map(row)}
+        {recent.length > 0 && <div className="sec-h">Récents</div>}
+        {recent.map(row)}
       </div>
       <div className="side-foot">
         {state.status === "open" ? (

@@ -1,7 +1,9 @@
 import type { AgentInfo, Item, Thread, ToolContent } from "@moonagentic/protocol";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { messageTokens } from "../commands.ts";
 import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
+import { onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -33,6 +35,23 @@ export function ThreadView({
     pinned.current = true;
   }, [thread.id]);
 
+  // A message picked in the quick search is shown once the timeline is here.
+  const [focusTick, setFocusTick] = useState(0);
+  useEffect(() => onFocusRequest(() => setFocusTick((n) => n + 1)), []);
+  useLayoutEffect(() => {
+    if (!items) return;
+    const itemId = takeFocus(thread.id);
+    const el =
+      itemId && view.current?.querySelector<HTMLElement>(`[data-item="${CSS.escape(itemId)}"]`);
+    if (!el) return;
+    pinned.current = false;
+    el.scrollIntoView({ block: "center" });
+    el.classList.remove("flash");
+    // Restarts the highlight when the same message is picked twice.
+    void el.offsetWidth;
+    el.classList.add("flash");
+  }, [items, thread.id, focusTick]);
+
   // Keep following new output while the reader is at the bottom.
   useLayoutEffect(() => {
     const el = view.current;
@@ -50,14 +69,15 @@ export function ThreadView({
     >
       <div className="feed">
         {items?.map((item, i) => (
-          <FeedItem
-            key={item.id}
-            item={item}
-            thread={thread}
-            agents={agents}
-            agent={agents.find((a) => a.id === authors[i])}
-            showBy={startsAgentBlock(items, i)}
-          />
+          <div key={item.id} className="item" data-item={item.id}>
+            <FeedItem
+              item={item}
+              thread={thread}
+              agents={agents}
+              agent={agents.find((a) => a.id === authors[i])}
+              showBy={startsAgentBlock(items, i)}
+            />
+          </div>
         ))}
         {thread.status === "running" && (
           <div className="working">
@@ -192,7 +212,17 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
 
   return (
     <div className="u-wrap">
-      <div className="u">{item.text}</div>
+      <div className="u">
+        {messageTokens(item.text).map((part, i) =>
+          part.kind ? (
+            <span key={i} className={`tok ${part.kind}`}>
+              {part.text}
+            </span>
+          ) : (
+            part.text
+          ),
+        )}
+      </div>
       {canRestore &&
         (confirming ? (
           <div className="u-confirm" role="group" aria-label="Revenir à ce message">

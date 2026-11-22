@@ -3,6 +3,7 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentSetting } from "@moonagentic/protocol";
 import type { AgentLaunch } from "./agents.ts";
+import type { PromptLink } from "./files.ts";
 import { acpMcpServers, type McpServerRecord } from "./mcp.ts";
 import { killTree, spawnPlan } from "./spawn.ts";
 
@@ -150,22 +151,30 @@ export class AgentSession {
   readonly sessionId: string;
   /** True when the agent opened a new session rather than continuing an earlier one. */
   readonly fresh: boolean;
+  /** The folder the agent works in. */
+  readonly cwd: string;
+  /** What a message may carry besides text, as the agent told when it started. */
+  readonly promptCapabilities: acp.PromptCapabilities;
   private readonly connection: acp.ClientConnection;
   private readonly kill: () => Promise<void>;
   private readonly state: SessionState;
 
-  private constructor(
-    sessionId: string,
-    connection: acp.ClientConnection,
-    kill: () => Promise<void>,
-    state: SessionState,
-    fresh: boolean,
-  ) {
-    this.sessionId = sessionId;
-    this.fresh = fresh;
-    this.connection = connection;
-    this.kill = kill;
-    this.state = state;
+  private constructor(options: {
+    sessionId: string;
+    connection: acp.ClientConnection;
+    kill: () => Promise<void>;
+    state: SessionState;
+    fresh: boolean;
+    cwd: string;
+    promptCapabilities: acp.PromptCapabilities;
+  }) {
+    this.sessionId = options.sessionId;
+    this.fresh = options.fresh;
+    this.cwd = options.cwd;
+    this.promptCapabilities = options.promptCapabilities;
+    this.connection = options.connection;
+    this.kill = options.kill;
+    this.state = options.state;
   }
 
   get model(): ModelOption | undefined {
@@ -341,6 +350,13 @@ export class AgentSession {
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
         clientInfo: { name: "MoonAgentic", version: "0.1.0" },
       });
+      // The agent answers with the protocol version it speaks; any other is not understood here.
+      if (init.protocolVersion !== acp.PROTOCOL_VERSION) {
+        throw new Error(
+          `Cet agent parle la version ${String(init.protocolVersion)} du protocole ACP, ` +
+            `MoonAgentic la version ${acp.PROTOCOL_VERSION}. Mets à jour l'agent ou MoonAgentic.`,
+        );
+      }
       if (launch.authMethodId && init.authMethods?.some((m) => m.id === launch.authMethodId)) {
         await connection.agent.request("authenticate", { methodId: launch.authMethodId });
       }
@@ -355,7 +371,9 @@ export class AgentSession {
             absorb(state, r);
           })
           .catch(() => undefined);
-      } else if (previous && caps?.loadSession) {
+      }
+      // An agent that could not resume the session may still be able to reload it.
+      if (!sessionId && previous && caps?.loadSession) {
         replaying = true;
         sessionId = previous;
         await connection.agent
@@ -372,7 +390,15 @@ export class AgentSession {
       }
       for (const params of early.splice(0)) dispatch(params);
       started = true;
-      return new AgentSession(sessionId, connection, kill, state, fresh);
+      return new AgentSession({
+        sessionId,
+        connection,
+        kill,
+        state,
+        fresh,
+        cwd,
+        promptCapabilities: caps?.promptCapabilities ?? {},
+      });
     };
 
     try {
@@ -389,14 +415,19 @@ export class AgentSession {
     }
   }
 
-  /** Sends the user's message, after the earlier conversation when the agent lacks it. */
-  async prompt(text: string, history?: string): Promise<acp.StopReason> {
+  /**
+   * Sends the user's message, after the earlier conversation when the agent lacks it, and
+   * followed by the files and skills it points at.
+   */
+  async prompt(text: string, history?: string, links: PromptLink[] = []): Promise<acp.StopReason> {
+    const prompt: acp.ContentBlock[] = [
+      ...(history ? [{ type: "text" as const, text: history }] : []),
+      { type: "text", text },
+      ...links,
+    ];
     const response = await this.connection.agent.request("session/prompt", {
       sessionId: this.sessionId,
-      prompt: [
-        ...(history ? [{ type: "text" as const, text: history }] : []),
-        { type: "text", text },
-      ],
+      prompt,
     });
     return response.stopReason;
   }

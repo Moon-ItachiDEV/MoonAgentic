@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type {
+  AgentCommand,
   AgentInfo,
   AgentSetting,
   ClientMessage,
@@ -30,6 +31,15 @@ import {
   ship,
   type ShipResult,
 } from "./git.ts";
+import {
+  calledSkills,
+  findProjectCommands,
+  findSkills,
+  listFiles,
+  mentionedFiles,
+  promptLinks,
+  searchFiles,
+} from "./files.ts";
 import { historyBefore } from "./history.ts";
 import { mcpInfo, type McpServerRecord } from "./mcp.ts";
 import { AgentSession, describe, type ModelOption } from "./session.ts";
@@ -60,6 +70,13 @@ const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolCon
 const DISCOVERY_TIMEOUT_MS = 30_000;
 /** How long an agent may take to open its session before the turn gives up. */
 const START_TIMEOUT_MS = 120_000;
+
+const agentCommands = (update: acp.AvailableCommandsUpdate): AgentCommand[] =>
+  update.availableCommands.slice(0, 200).map((c) => ({
+    name: c.name.replace(/^\//, ""),
+    description: c.description,
+    ...(c.input && "hint" in c.input && c.input.hint ? { hint: c.input.hint } : {}),
+  }));
 
 const settingValues = (settings: AgentSetting[]) =>
   settings.length ? Object.fromEntries(settings.map((s) => [s.id, s.current])) : undefined;
@@ -101,10 +118,14 @@ export class Hub {
   /** Whether each project's folder is in a git repository, checked once. */
   private readonly gitProjects = new Map<string, boolean>();
 
-  constructor(store: Store, agents: Agents, options: { worktreesDir: string }) {
+  /** The user's home folder, where agents keep their personal skills. */
+  private readonly homeDir: string;
+
+  constructor(store: Store, agents: Agents, options: { worktreesDir: string; homeDir?: string }) {
     this.store = store;
     this.agents = agents;
     this.worktreesDir = options.worktreesDir;
+    this.homeDir = options.homeDir ?? os.homedir();
     store.recoverAfterRestart();
   }
 
@@ -168,6 +189,33 @@ export class Hub {
       case "thread.setSetting":
         await this.setSetting(message.threadId, message.settingId, message.value);
         return;
+      case "thread.setPinned":
+        this.requireThread(message.threadId);
+        this.updateThread(message.threadId, { pinned: message.pinned });
+        return;
+      case "files.search": {
+        const dir = this.folderOf(message.projectId, message.threadId);
+        const files = searchFiles(await listFiles(dir), message.query);
+        client.send({ type: "files", requestId: message.requestId, files });
+        return;
+      }
+      case "composer.catalog": {
+        const dir = this.folderOf(message.projectId, message.threadId);
+        client.send({
+          type: "catalog",
+          requestId: message.requestId,
+          skills: findSkills(dir, this.homeDir).map(({ file: _file, ...skill }) => skill),
+          commands: findProjectCommands(dir),
+        });
+        return;
+      }
+      case "search":
+        client.send({
+          type: "searched",
+          requestId: message.requestId,
+          hits: this.store.searchItems(message.query),
+        });
+        return;
       case "favorites.toggle":
         this.toggleFavorite(message.agentId, message.model, message.starred);
         return;
@@ -190,7 +238,12 @@ export class Hub {
         // The panel waits for this reply, so a failure is sent to it rather than thrown.
         client.send(
           await this.review(message.threadId).then(
-            (files) => ({ type: "review", threadId: message.threadId, files }),
+            ({ files, omitted }) => ({
+              type: "review",
+              threadId: message.threadId,
+              files,
+              ...(omitted ? { omitted } : {}),
+            }),
             (error: unknown) => ({
               type: "review",
               threadId: message.threadId,
@@ -201,7 +254,12 @@ export class Hub {
         );
         return;
       case "workspace.ship": {
-        const result = await this.ship(message.threadId, message.message, message.pr);
+        const result = await this.ship(
+          message.threadId,
+          message.message,
+          message.pr,
+          message.files,
+        );
         client.send({
           type: "shipped",
           requestId: message.requestId,
@@ -313,18 +371,21 @@ export class Hub {
     // Many agents mishandle a settings change in the middle of a prompt.
     if (this.turns.has(threadId))
       throw new Error("Attends la fin de la réponse pour changer de modèle.");
-    const session = await this.sessions.get(threadId)?.catch(() => undefined);
-    const choices = session?.model?.choices ?? this.store.getAgentModels(thread.agentId)?.models;
-    if (!choices?.some((c) => c.id === model)) throw new Error("Modèle inconnu.");
-    if (session?.model) {
-      await session.setModel(model);
-      // A new model can bring other effort levels, for the picker too.
-      this.learnCatalog(thread.agentId, session.model, session.settings, false);
-    }
-    const settings = session && settingValues(session.settings);
-    this.updateThread(threadId, {
-      model: session?.model?.current ?? model,
-      ...(settings ? { settings } : {}),
+    // A message sent meanwhile waits: the agent never gets a prompt in the middle of it.
+    await this.exclusive(threadId, "Attends la fin du changement de modèle.", async () => {
+      const session = await this.sessions.get(threadId)?.catch(() => undefined);
+      const choices = session?.model?.choices ?? this.store.getAgentModels(thread.agentId)?.models;
+      if (!choices?.some((c) => c.id === model)) throw new Error("Modèle inconnu.");
+      if (session?.model) {
+        await session.setModel(model);
+        // A new model can bring other effort levels, for the picker too.
+        this.learnCatalog(thread.agentId, session.model, session.settings, false);
+      }
+      const settings = session && settingValues(session.settings);
+      this.updateThread(threadId, {
+        model: session?.model?.current ?? model,
+        ...(settings ? { settings } : {}),
+      });
     });
   }
 
@@ -333,20 +394,22 @@ export class Hub {
     const thread = this.requireThread(threadId);
     if (this.turns.has(threadId))
       throw new Error("Attends la fin de la réponse pour changer ce réglage.");
-    const session = await this.sessions.get(threadId)?.catch(() => undefined);
-    const offered = session?.settings ?? this.store.getAgentModels(thread.agentId)?.settings;
-    const setting = offered?.find((s) => s.id === settingId);
-    if (!setting?.choices.some((c) => c.id === value)) throw new Error("Réglage inconnu.");
-    if (session) {
-      await session.setSetting(settingId, value);
-      this.learnCatalog(thread.agentId, session.model, session.settings, false);
-    }
-    // One change can move others, so a running agent's own values win.
-    const settings = (session && settingValues(session.settings)) ?? {
-      ...this.requireThread(threadId).settings,
-      [settingId]: value,
-    };
-    this.updateThread(threadId, { settings });
+    await this.exclusive(threadId, "Attends la fin du changement de réglage.", async () => {
+      const session = await this.sessions.get(threadId)?.catch(() => undefined);
+      const offered = session?.settings ?? this.store.getAgentModels(thread.agentId)?.settings;
+      const setting = offered?.find((s) => s.id === settingId);
+      if (!setting?.choices.some((c) => c.id === value)) throw new Error("Réglage inconnu.");
+      if (session) {
+        await session.setSetting(settingId, value);
+        this.learnCatalog(thread.agentId, session.model, session.settings, false);
+      }
+      // One change can move others, so a running agent's own values win.
+      const settings = (session && settingValues(session.settings)) ?? {
+        ...this.requireThread(threadId).settings,
+        [settingId]: value,
+      };
+      this.updateThread(threadId, { settings });
+    });
   }
 
   toggleFavorite(agentId: string, model: string, starred: boolean): void {
@@ -361,14 +424,22 @@ export class Hub {
   }
 
   /** The thread's changes since its branch started, for review before shipping. */
-  async review(threadId: string): Promise<ReviewFile[]> {
+  async review(threadId: string): Promise<{ files: ReviewFile[]; omitted?: number }> {
     const workspace = this.requireThread(threadId).workspace;
-    if (!workspace?.base) return [];
+    if (!workspace?.base) return { files: [] };
     return reviewChanges(workspace.path, workspace.base);
   }
 
-  /** Commits the thread's changes, pushes its branch and opens a pull request if asked. */
-  async ship(threadId: string, message: string, pr: boolean): Promise<ShipResult> {
+  /**
+   * Commits the thread's changes (only `files` when given), pushes its branch and opens a
+   * pull request if asked.
+   */
+  async ship(
+    threadId: string,
+    message: string,
+    pr: boolean,
+    files?: string[],
+  ): Promise<ShipResult> {
     const thread = this.requireThread(threadId);
     const workspace = thread.workspace;
     if (!workspace?.base)
@@ -379,6 +450,7 @@ export class Hub {
         message,
         pr,
         title: thread.title,
+        ...(files ? { files } : {}),
         ...(workspace.baseBranch ? { baseBranch: workspace.baseBranch } : {}),
       });
       // A link to open a pull request never replaces one that is already open.
@@ -412,7 +484,13 @@ export class Hub {
         usage: undefined,
         error: null,
         ...(handoff
-          ? { agentId: handoff.from, model: undefined, settings: undefined, canCompact: undefined }
+          ? {
+              agentId: handoff.from,
+              model: undefined,
+              settings: undefined,
+              canCompact: undefined,
+              commands: undefined,
+            }
           : {}),
       });
       this.sendToViewers(threadId, {
@@ -444,6 +522,7 @@ export class Hub {
         settings: undefined,
         usage: undefined,
         canCompact: undefined,
+        commands: undefined,
         status: "idle",
         error: null,
       });
@@ -534,7 +613,12 @@ export class Hub {
       previousSessionId: null,
       signal: AbortSignal.any([stop.signal, AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)]),
       handlers: {
-        onUpdate: () => undefined,
+        // Its commands too, so a new thread can offer them before its agent starts.
+        onUpdate: (update) => {
+          if (update.sessionUpdate === "available_commands_update") {
+            this.rememberCommands(agentId, agentCommands(update));
+          }
+        },
         requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
         onExit: () => undefined,
       },
@@ -613,13 +697,15 @@ export class Hub {
         !continuing && session.fresh
           ? historyBefore(this.store.listItems(thread.id), itemId, this.agentName)
           : undefined;
-      const stopReason = await session.prompt(text, history);
+      const stopReason = await session.prompt(text, history, this.linksFor(session, text));
       const error =
         stopReason === "refusal"
           ? "L'agent a refusé de continuer."
           : stopReason === "max_tokens"
             ? "L'agent a atteint sa limite de réponse."
-            : null;
+            : stopReason === "max_turn_requests"
+              ? "L'agent a atteint son nombre maximal d'étapes pour ce tour. Envoie « continue » pour qu'il reprenne."
+              : null;
       this.updateThread(thread.id, error ? { status: "error", error } : { status: "idle" });
     } catch (error) {
       this.settlePermissions(thread.id);
@@ -633,6 +719,38 @@ export class Hub {
         this.updateThread(thread.id, { status: "error", error: describe(error) });
       }
     }
+  }
+
+  /** The files a message mentions with `@` and the skills it calls with `$`, for the agent. */
+  private linksFor(session: AgentSession, text: string) {
+    const files = mentionedFiles(text, session.cwd).map((f) => ({ abs: f.abs, name: f.rel }));
+    const skills = text.includes("$")
+      ? calledSkills(text, findSkills(session.cwd, this.homeDir)).map((s) => ({
+          abs: s.file,
+          name: `$${s.name}`,
+          description: s.description,
+        }))
+      : [];
+    return promptLinks([...files, ...skills], !!session.promptCapabilities.embeddedContext);
+  }
+
+  /** The folder a thread works in, or its project's folder for a thread to come. */
+  private folderOf(projectId: string, threadId?: string): string {
+    const project = this.store.getProject(projectId);
+    if (!project) throw new Error("Projet introuvable.");
+    if (!threadId) return project.path;
+    const thread = this.requireThread(threadId);
+    if (thread.projectId !== projectId) throw new Error("Ce fil n'est pas dans ce projet.");
+    // Until its worktree exists, a thread's files are the project's.
+    const workspace = thread.workspace;
+    return workspace?.base && existsSync(workspace.path) ? workspace.path : project.path;
+  }
+
+  private rememberCommands(agentId: string, commands: AgentCommand[]): void {
+    const known = this.store.getSetting<Record<string, AgentCommand[]>>("agentCommands", {});
+    if (JSON.stringify(known[agentId] ?? []) === JSON.stringify(commands)) return;
+    this.store.setSetting("agentCommands", { ...known, [agentId]: commands });
+    this.broadcast({ type: "agents", agents: this.agentList() });
   }
 
   private session(thread: Thread): Promise<AgentSession> {
@@ -770,7 +888,10 @@ export class Hub {
     this.agents.list().find((a) => a.id === agentId)?.name ?? agentId;
 
   private agentList(): AgentInfo[] {
-    return this.agents.list().map((agent) => {
+    const commands = this.store.getSetting<Record<string, AgentCommand[]>>("agentCommands", {});
+    return this.agents.list().map((base) => {
+      const listed = Object.hasOwn(commands, base.id) ? commands[base.id] : undefined;
+      const agent = listed?.length ? { ...base, commands: listed } : base;
       const known = this.store.getAgentModels(agent.id);
       const modelsError = this.discoveryErrors.get(agent.id);
       if (!known) return modelsError ? { ...agent, modelsError } : agent;
@@ -849,10 +970,17 @@ export class Hub {
         return;
       }
       case "available_commands_update": {
-        const canCompact = update.availableCommands.some((c) => c.name === "compact");
-        if (canCompact !== !!this.store.getThread(threadId)?.canCompact) {
-          this.updateThread(threadId, { canCompact });
+        const commands = agentCommands(update);
+        const canCompact = commands.some((c) => c.name === "compact");
+        const thread = this.store.getThread(threadId);
+        if (!thread) return;
+        if (
+          canCompact !== !!thread.canCompact ||
+          JSON.stringify(commands) !== JSON.stringify(thread.commands ?? [])
+        ) {
+          this.updateThread(threadId, { canCompact, commands });
         }
+        this.rememberCommands(thread.agentId, commands);
         return;
       }
       case "plan":

@@ -29,6 +29,43 @@ export interface AgentInfo {
   modelsError?: string;
   /** Other settings the agent offers, such as its mode (plan, agent…) or reasoning effort. */
   settings?: AgentSetting[];
+  /** The `/` commands the agent listed the last time one of its sessions started. */
+  commands?: AgentCommand[];
+}
+
+/** A `/` command the agent offers, sent to it as the start of a message. */
+export interface AgentCommand {
+  name: string;
+  description: string;
+  /** What to type after the command, when it takes some input. */
+  hint?: string;
+}
+
+/** A skill: a method written in a `SKILL.md` that the agent loads when it is called with `$`. */
+export interface Skill {
+  name: string;
+  description: string;
+  /** Where it was found: in the project, or in the user's own folder. */
+  scope: "project" | "user";
+  /** Its `SKILL.md`, relative to the project for a project skill, from the home folder otherwise. */
+  path: string;
+}
+
+/** A `/` command written for the project, in `.moonagentic/commands/<name>.md`. */
+export interface ProjectCommand {
+  name: string;
+  description: string;
+  /** The message it stands for; `$ARGUMENTS` takes what follows the command. */
+  template: string;
+}
+
+/** A message that matched a quick search. */
+export interface SearchHit {
+  threadId: string;
+  itemId: string;
+  kind: "user" | "agent";
+  /** The text around the match. */
+  snippet: string;
 }
 
 /** A setting an agent offers for its sessions, other than the model. */
@@ -87,6 +124,8 @@ export interface Workspace {
 /** One changed file in a thread's workspace, compared with where its branch started. */
 export interface ReviewFile {
   path: string;
+  /** The path before a rename. */
+  from?: string;
   status: "added" | "modified" | "deleted" | "renamed";
   /** Line counts; null for a binary file. */
   added: number | null;
@@ -115,6 +154,10 @@ export interface Thread {
   usage?: ContextUsage;
   /** True when the agent offers a /compact command to shrink its context. */
   canCompact?: boolean;
+  /** The `/` commands this thread's agent offers, as it last listed them. */
+  commands?: AgentCommand[];
+  /** Kept at the top of the sidebar. */
+  pinned?: boolean;
   /** Set when the thread works on its own branch rather than in the project folder. */
   workspace?: Workspace;
   /** Set when the last turn ended with an error. */
@@ -197,7 +240,19 @@ export type ServerMessage =
   | { type: "item"; threadId: string; item: Item }
   /** Streaming text appended to an existing agent or thought item. */
   | { type: "append"; threadId: string; itemId: string; text: string }
-  | { type: "review"; threadId: string; files: ReviewFile[]; error?: string }
+  | {
+      type: "review";
+      threadId: string;
+      files: ReviewFile[];
+      error?: string;
+      /** Files left out of the list because there are too many to show. */
+      omitted?: number;
+    }
+  /** Project files matching what follows an `@`, best first. */
+  | { type: "files"; requestId: string; files: string[] }
+  /** What `$` and `/` can offer in a thread's folder, beyond the agent's own commands. */
+  | { type: "catalog"; requestId: string; skills: Skill[]; commands: ProjectCommand[] }
+  | { type: "searched"; requestId: string; hits: SearchHit[] }
   | {
       type: "shipped";
       requestId: string;
@@ -271,6 +326,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
     threadId: id,
     message: z.string().trim().min(1).max(10_000),
     pr: z.boolean(),
+    /** The files to commit, as the review lists them; every change when left out. */
+    files: z.array(z.string().min(1).max(4096)).min(1).max(5000).optional(),
   }),
   z.object({ type: z.literal("thread.open"), threadId: id }),
   z.object({ type: z.literal("thread.send"), threadId: id, text }),
@@ -286,6 +343,28 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("thread.setModel"), threadId: id, model: id }),
   z.object({ type: z.literal("thread.setSetting"), threadId: id, settingId: id, value: id }),
+  z.object({ type: z.literal("thread.setPinned"), threadId: id, pinned: z.boolean() }),
+  /** Looks for project files to mention with `@`, in the thread's folder when given. */
+  z.object({
+    type: z.literal("files.search"),
+    requestId: id,
+    projectId: id,
+    threadId: id.optional(),
+    query: z.string().max(500),
+  }),
+  /** Lists the skills and project commands of the thread's folder, or the project's. */
+  z.object({
+    type: z.literal("composer.catalog"),
+    requestId: id,
+    projectId: id,
+    threadId: id.optional(),
+  }),
+  /** Finds messages containing the text, in every thread. */
+  z.object({
+    type: z.literal("search"),
+    requestId: id,
+    query: z.string().trim().min(2).max(200),
+  }),
   /** Stars or unstars one model, so two devices editing favorites never overwrite each other. */
   z.object({
     type: z.literal("favorites.toggle"),

@@ -93,3 +93,31 @@ export const IconUndo = ({ size = 13 }: P) => (
     <path d="M4 9h11a5 5 0 0 1 0 10h-3" />
   </svg>
 );
+export const IconPin = ({ size = 13, filled = false }: P & { filled?: boolean }) => (
+  <svg {...base(size)} fill={filled ? "currentColor" : "none"}>
+    <path d="M9 4h6l-1 6 3 3v2H7v-2l3-3Z" />
+    <path d="M12 15v5" />
+  </svg>
+);
+export const IconSearch = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <circle cx="11" cy="11" r="6.5" />
+    <path d="m20 20-4.2-4.2" />
+  </svg>
+);
+export const IconFile = ({ size = 15 }: P) => (
+  <svg {...base(size)}>
+    <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+    <path d="M14 3v5h5" />
+  </svg>
+);
+export const IconTerminal = ({ size = 15 }: P) => (
+  <svg {...base(size)}>
+    <path d="m5 8 4 4-4 4M12 17h7" />
+  </svg>
+);
+export const IconChat = ({ size = 15 }: P) => (
+  <svg {...base(size)}>
+    <path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.1A8 8 0 1 1 20 12Z" />
+  </svg>
+);

@@ -1,5 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Item, ServerMessage } from "@moonagentic/protocol";
@@ -83,7 +93,7 @@ describe("thread workspaces", () => {
     // What an agent would do in its worktree, while the project folder stays untouched.
     writeFileSync(path.join(workspace!.path, "README.md"), "# Demo\nune autre ligne\n");
     writeFileSync(path.join(workspace!.path, "nouveau.txt"), "a\nb\n");
-    expect(await hub.review(threadId)).toMatchObject([
+    expect((await hub.review(threadId)).files).toMatchObject([
       { path: "README.md", status: "modified", added: 1, removed: 1 },
       {
         path: "nouveau.txt",
@@ -94,6 +104,9 @@ describe("thread workspaces", () => {
       },
     ]);
     expect(git(repo, "status", "--porcelain")).toBe("");
+    // Reviewing a new file stores nothing in git: only a commit does.
+    const blob = git(workspace!.path, "hash-object", "nouveau.txt");
+    expect(() => git(workspace!.path, "cat-file", "-e", blob)).toThrow();
 
     const shipped = await hub.ship(threadId, "Corrige le README", true);
     expect(shipped.commit).toMatch(/^[0-9a-f]{40}$/);
@@ -268,6 +281,71 @@ describe("thread workspaces", () => {
   });
 });
 
+describe("choosing what to ship", () => {
+  it("commits only the files picked in the review, renames and deletions included", async () => {
+    const { remote, store, hub, projectId } = repository();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: true,
+      text: "Range les fichiers",
+    });
+    await hub.whenIdle(threadId);
+    const dir = store.getThread(threadId)!.workspace!.path;
+    writeFileSync(path.join(dir, "a.txt"), "a\n");
+    writeFileSync(path.join(dir, ".env"), "SECRET=1\n");
+    writeFileSync(path.join(dir, "brouillon.txt"), "x\n");
+    git(dir, "add", "brouillon.txt");
+    renameSync(path.join(dir, "README.md"), path.join(dir, "LISEZMOI.md"));
+
+    const { files } = await hub.review(threadId);
+    const renamed = files.find((f) => f.status === "renamed");
+    expect(renamed).toMatchObject({ path: "LISEZMOI.md", from: "README.md" });
+    await hub.ship(threadId, "Range", false, ["a.txt", "LISEZMOI.md", "README.md"]);
+
+    const branch = store.getThread(threadId)!.workspace!.branch;
+    const shipped = git(remote, "ls-tree", "-r", "--name-only", branch).split("\n");
+    expect(shipped.sort()).toEqual(["LISEZMOI.md", "a.txt"]);
+    // What was left out stays in the folder, as it was.
+    expect(git(dir, "status", "--porcelain").split("\n").sort()).toEqual([
+      "?? .env",
+      "A  brouillon.txt",
+    ]);
+    await expect(hub.ship(threadId, "x", false, ["inconnu.txt"])).rejects.toThrow(
+      "Aucun des fichiers",
+    );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "keeps a file replaced by a symbolic link in step with the files after it",
+    async () => {
+      const { store, hub, projectId, repo } = repository();
+      writeFileSync(path.join(repo, "z.txt"), "z\n");
+      git(repo, "add", "-A");
+      git(repo, "commit", "-q", "-m", "z");
+      const threadId = hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        isolated: true,
+        text: "Lien",
+      });
+      await hub.whenIdle(threadId);
+      const dir = store.getThread(threadId)!.workspace!.path;
+      unlinkSync(path.join(dir, "README.md"));
+      symlinkSync("z.txt", path.join(dir, "README.md"));
+      writeFileSync(path.join(dir, "z.txt"), "z\nzz\n");
+      const { files } = await hub.review(threadId);
+      expect(files.map((f) => [f.path, f.status])).toEqual([
+        ["README.md", "modified"],
+        ["z.txt", "modified"],
+      ]);
+      expect(files[1]?.patch).toContain("+zz");
+    },
+  );
+});
+
 describe("git helpers", () => {
   it("reads GitHub remotes in their https and ssh forms only", () => {
     for (const url of [
@@ -305,7 +383,14 @@ describe("git helpers", () => {
       "",
     ].join("\n");
     expect(parseDiff(numstat, patch)).toEqual([
-      { path: "new.txt", status: "renamed", added: 1, removed: 1, patch: "@@ -1 +1 @@\n-a\n+b" },
+      {
+        path: "new.txt",
+        from: "old.txt",
+        status: "renamed",
+        added: 1,
+        removed: 1,
+        patch: "@@ -1 +1 @@\n-a\n+b",
+      },
       { path: "img.png", status: "added", added: null, removed: null, patch: "" },
     ]);
   });

@@ -79,8 +79,11 @@ const app = acp
     return {
       protocolVersion: acp.PROTOCOL_VERSION,
       agentCapabilities: {
-        loadSession: modelStyle === "load",
+        loadSession: modelStyle === "load" || modelStyle === "resume-fail",
+        // Stands for an agent that says it resumes sessions but fails to, and can reload them.
+        ...(modelStyle === "resume-fail" ? { sessionCapabilities: { resume: {} } } : {}),
         mcpCapabilities: { http: false, sse: false },
+        promptCapabilities: { embeddedContext: process.env.MOONAGENTIC_DEMO_EMBED !== "0" },
       },
       agentInfo: { name: "moonagentic-demo", version: "0.1.0" },
     };
@@ -97,7 +100,15 @@ const app = acp
         sessionId,
         update: {
           sessionUpdate: "available_commands_update",
-          availableCommands: [{ name: "compact", description: "Résume la conversation" }],
+          availableCommands: [
+            { name: "compact", description: "Résume la conversation" },
+            { name: "init", description: "Écrit le fichier d'instructions du dépôt (démo)" },
+            {
+              name: "explique",
+              description: "Explique un fichier (démo)",
+              input: { hint: "fichier à expliquer" },
+            },
+          ],
         },
       });
     });
@@ -114,6 +125,9 @@ const app = acp
       return {};
     },
   )
+  .onRequest("session/resume", () => {
+    throw new Error("Session introuvable.");
+  })
   // Like a real agent reloading a saved session: it replays the model the session last ran.
   .onRequest("session/load", async ({ params, client }) => {
     const { sessionId } = params;
@@ -151,6 +165,14 @@ const app = acp
     const { sessionId } = params;
     cancelled.delete(sessionId);
     const texts = params.prompt.flatMap((b) => (b.type === "text" ? [b.text] : []));
+    // Files and skills the message points at come after its text, as links or as content.
+    const attached = params.prompt.flatMap((b) =>
+      b.type === "resource_link"
+        ? [`${b.name} (lien)`]
+        : b.type === "resource" && "text" in b.resource
+          ? [`${decodeURIComponent(b.resource.uri.split("/").pop() ?? "")} (texte)`]
+          : [],
+    );
     // The last block is the user's message; one before it carries the earlier conversation.
     const ask = texts.at(-1) ?? "";
     const firstAsk = texts.length > 1 ? texts[0]?.match(/^Utilisateur : (.*)$/m)?.[1] : undefined;
@@ -203,6 +225,7 @@ const app = acp
     await say(
       `Tu m'as demandé : « ${ask} » (modèle ${models.get(sessionId) ?? "rapide"}). ` +
         (firstAsk ? `J'ai reçu l'historique, qui commence par « ${firstAsk} ». ` : "") +
+        (attached.length ? `Pièces jointes : ${attached.join(", ")}. ` : "") +
         (mcpNames.get(sessionId)?.length
           ? `Serveurs MCP reçus : ${mcpNames.get(sessionId)?.join(", ")}. `
           : ""),

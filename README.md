@@ -55,10 +55,20 @@ Les agents de code modernes (**Claude Code**, **Codex**, **Antigravity**, **Curs
   - **Accès complet** — approbation automatique des demandes d’autorisation.
 - **Jauge de contexte & compactage** : un anneau à côté du bouton d’envoi suit l’occupation de la fenêtre de contexte (`usage_update`, seuils visuels à 70 % et 90 %) et propose **Compacter la conversation** (`/compact`) dès que l’agent l’annonce.
 
+### Composer : `/` commandes, `@` fichiers, `$` skills, épingles et Ctrl K
+
+- **`/` commandes** : tape `/` en début de message pour voir toutes les commandes, avec qui les propose. Celles de MoonAgentic agissent sur l’app (`/plan`, `/agent`, `/modeles`, `/epingler`, `/exporter`, `/chercher`), celles du projet viennent de `.moonagentic/commands/<nom>.md` (le texte du fichier, `$ARGUMENTS` prenant ce qui suit la commande), celles de l’agent sont celles qu’il annonce par ACP (`/compact`, `/init`…), et `/review`, `/test`, `/init` sont des messages tout prêts.
+- **Règle de priorité visible** : quand deux commandes portent le même nom, l’ordre est MoonAgentic (actions), puis le projet, puis l’agent, puis les messages tout prêts. La ligne gagnante indique « remplace celle de … ».
+- **`@` fichiers** : cherche dans les fichiers du dossier du fil (worktree compris, fichiers ignorés exclus) et les joint au message. L’agent reçoit le contenu des petits fichiers texte s’il accepte le contexte intégré (`embeddedContext`), un lien `file://` sinon. Aucun chemin ne peut sortir du dossier, liens symboliques compris.
+- **`$` skills** : appelle un skill (`SKILL.md`) trouvé dans `.claude/skills`, `.agents/skills` ou `.codex/skills`, du projet ou de ton dossier personnel. Son fichier est joint au message, donc ça marche avec tous les agents.
+- **Fils épinglés** : épingle un fil depuis la barre latérale, `/epingler` ou Ctrl K ; il reste en haut, sur tous tes appareils.
+- **Recherche rapide (Ctrl K / ⌘ K)** : fils, projets, actions et texte des messages de tous les fils. Choisir un message ouvre son fil et le montre.
+
 ### Espace git par fil (worktrees, revue, PR & checkpoints)
 
 - **Branche à part par défaut** : dans un projet git, chaque fil reçoit son propre worktree (`~/.moonagentic/worktrees/<id>`, branche `moon/<titre>-<id>`) sans jamais toucher ni salir le dossier principal du projet.
 - **Panneau « À revoir »** : affiche tout ce que la branche modifie depuis son point de départ (commité ou non, fichiers créés, renommés, supprimés ou binaires) à partir d’un index git jetable (`GIT_INDEX_FILE`) qui laisse la zone de staging intacte.
+- **Choix des fichiers à envoyer** : chaque fichier a sa case dans « À revoir ». Les fichiers qui ressemblent à des secrets (`.env`, clés, `.npmrc`…) partent décochés. Seuls les fichiers cochés sont commités, rien d’autre de ce que l’agent aurait mis en staging. La revue ne stocke rien dans git et s’arrête à 1 000 fichiers.
 - **Commit, push & pull request** : commite avec ton message, pousse la branche et ouvre la PR via ton propre `gh` CLI (s’il est installé et connecté), avec repli automatique vers la page GitHub _compare_.
 - **Checkpoints « Revenir ici »** : avant chaque tour sur une branche isolée, MoonAgentic capture l’état des fichiers dans un arbre git (`refs/moonagentic/<fil>/<message>`), sans polluer l’historique de commits. Revenir à un message restaure les fichiers (en rétablissant d’abord les règles `.gitignore` pour préserver `.env`, `node_modules`…), efface la suite du fil, rétablit l’agent de l’époque si un relais avait eu lieu, et replace le texte du message dans le composer.
 
@@ -195,6 +205,7 @@ MoonAgentic est construit par jalons successifs :
 - [x] **Jalon 2 — Multi-agents & modèles** : Codex et Cursor, découverte dynamique des modèles, changement entre deux réponses et favoris synchronisés.
 - [x] **Jalon 3 — MCP & espace git par fil** : serveurs MCP centralisés (secrets locaux), worktrees par fil, panneau _« À revoir »_, commit, push, PR (`gh` / GitHub _compare_), CI Windows.
 - [x] **Jalon 4 — Pilotage du fil** : mode et raisonnement de l’agent, jauge de contexte et `/compact`, checkpoints _« Revenir ici »_, changement d’agent en cours de fil avec relais d’historique.
+- [x] **Jalon 5 — Commandes et composer** : commandes `/` (MoonAgentic, projet, agent), mentions `@` de fichiers, skills `$`, fils épinglés, recherche Ctrl K, export Markdown, choix des fichiers à l’envoi, premier test de bout en bout dans un vrai navigateur.
 - [ ] **Suite** : archivage des fils avec nettoyage des worktrees, synchronisation/rebase des branches, et emballage en **application desktop Windows (Electron)** une fois le cœur stabilisé.
 
 ---
@@ -208,7 +219,10 @@ pnpm lint       # Oxlint + vérification Prettier
 pnpm typecheck  # vérification TypeScript sur tout le monorepo
 pnpm format     # formatage automatique Prettier
 pnpm build      # build de production de l'interface web
+pnpm e2e        # parcours de bout en bout dans Chromium (après pnpm build ; Playwright)
 ```
+
+Avant le premier `pnpm e2e`, installe Chromium pour Playwright : `pnpm exec playwright install chromium`.
 
 En développement, Vite n’écoute lui aussi que sur ta machine. Pour l’ouvrir depuis un autre appareil, sur un réseau de confiance : `MOONAGENTIC_DEV_HOST=0.0.0.0 pnpm dev`.
 
