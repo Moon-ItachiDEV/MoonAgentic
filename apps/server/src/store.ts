@@ -46,6 +46,7 @@ type ThreadExtra = Pick<
   | "canCompact"
   | "commands"
   | "pinned"
+  | "unread"
   | "archived"
   | "pr"
   | "summary"
@@ -66,6 +67,7 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.canCompact ? { canCompact: true } : {}),
     ...(thread.commands?.length ? { commands: thread.commands } : {}),
     ...(thread.pinned ? { pinned: true } : {}),
+    ...(thread.unread ? { unread: true } : {}),
     ...(thread.archived ? { archived: true } : {}),
     ...(thread.pr ? { pr: thread.pr } : {}),
     ...(thread.summary ? { summary: thread.summary } : {}),
@@ -389,6 +391,7 @@ export class Store {
         | "canCompact"
         | "commands"
         | "pinned"
+        | "unread"
         | "archived"
         | "team"
         | "summary"
