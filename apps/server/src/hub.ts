@@ -394,7 +394,7 @@ export class Hub {
       .then(
         (session) => {
           this.learnCatalog(agentId, session.model, session.settings, session.fresh);
-          session.close();
+          void session.close();
         },
         (error: unknown) => {
           if (stop.signal.aborted) return;
