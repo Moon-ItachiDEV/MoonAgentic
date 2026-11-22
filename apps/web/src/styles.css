@@ -1140,6 +1140,10 @@ svg {
 .presence {
   display: contents;
 }
+/* A closing popup and its scrim let clicks through to the page at once. */
+.presence.closing * {
+  pointer-events: none;
+}
 .menu,
 .gauge-pop,
 .dialog {
@@ -1173,6 +1177,10 @@ svg {
 .presence.closing .menu.thread-menu {
   transform: translateY(-6px) scale(0.97);
 }
+/* The thread menu drops down from its button, so it opens downwards too. */
+.menu.thread-menu {
+  animation-name: pop-down;
+}
 .presence.closing .scrim,
 .presence.closing .menu-scrim {
   opacity: 0;
@@ -1182,6 +1190,12 @@ svg {
   from {
     opacity: 0;
     transform: translateY(6px) scale(0.97);
+  }
+}
+@keyframes pop-down {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
   }
 }
 @keyframes fade {
