@@ -8,6 +8,32 @@ Le projet repart de zéro avec son propre code. Les agents sont branchés via le
 
 En construction. Jalon 1 : sidebar et composer, conversation en direct avec Claude Code et Antigravity (messages, outils, permissions), historique sauvegardé.
 
+## Lancer MoonAgentic
+
+Il faut Node 22.18 ou plus récent et pnpm.
+
+```sh
+pnpm install
+pnpm build   # construit l'interface web
+pnpm start   # démarre le serveur, puis ouvre le lien affiché (il contient ton jeton)
+```
+
+Le serveur écoute sur `127.0.0.1:4747` et garde ses données dans `~/.moonagentic`. Pour l'ouvrir depuis ton téléphone sur le même réseau : `node apps/server/src/bin.ts --host 0.0.0.0`, puis ouvre le lien avec l'adresse de ton ordinateur.
+
+Agents reconnus : Claude Code (inclus), Antigravity (`agy`) et Hermes (`hermes`) s'ils sont installés. `node apps/server/src/bin.ts --demo` ajoute un agent de démo gratuit pour essayer l'interface.
+
+## Développer
+
+```sh
+pnpm dev        # serveur + interface avec rechargement, lien sur le port 5173
+pnpm test       # tests
+pnpm lint && pnpm typecheck
+```
+
+- `packages/protocol` : les messages échangés entre l'interface et le serveur.
+- `apps/server` : le serveur Node (agents ACP, SQLite, WebSocket).
+- `apps/web` : l'interface React.
+
 ## Licence
 
 MIT, voir [LICENSE](LICENSE).

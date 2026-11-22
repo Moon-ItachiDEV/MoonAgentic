@@ -1,0 +1,25 @@
+{
+  "name": "moonagentic",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @moonagentic/server --filter @moonagentic/web dev",
+    "build": "pnpm --filter @moonagentic/web build",
+    "start": "pnpm --filter @moonagentic/server start",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "oxlint . && prettier --check .",
+    "format": "prettier --write .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "oxlint": "^1.94.0",
+    "prettier": "^3.10.1",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}
