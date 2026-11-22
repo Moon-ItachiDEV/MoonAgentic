@@ -12,6 +12,7 @@ import type {
   PendingRequest,
   PermissionMode,
   Project,
+  PullRequestInfo,
   ReviewFile,
   ServerMessage,
   Snapshot,
@@ -33,6 +34,7 @@ import {
   unfinishedMerge,
   ensureWorktree,
   forkPoint,
+  githubRemote,
   removeWorktree,
   worktreeStart,
   branchName,
@@ -57,6 +59,7 @@ import {
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { historyBefore } from "./history.ts";
 import { Planner } from "./planner.ts";
+import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
 import { Teams, teamStatus } from "./team.ts";
 import { mcpInfo } from "./mcp.ts";
@@ -103,6 +106,8 @@ export interface HubOptions {
   homeDir?: string;
   idleMs?: number;
   maxLiveAgents?: number;
+  /** Where pull requests are read and merged; the user's own `gh` unless given. */
+  pullRequests?: () => PullRequests | undefined;
 }
 
 const settingValues = (settings: AgentSetting[]) =>
@@ -175,6 +180,7 @@ export class Hub {
 
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
+  private readonly pullRequests: () => PullRequests | undefined;
 
   constructor(store: Store, agents: Agents, options: HubOptions) {
     this.store = store;
@@ -183,6 +189,7 @@ export class Hub {
     this.idleMs = options.idleMs ?? IDLE_MS;
     this.maxLiveAgents = Math.max(1, options.maxLiveAgents ?? MAX_LIVE_AGENTS);
     this.homeDir = options.homeDir ?? os.homedir();
+    this.pullRequests = options.pullRequests ?? localPullRequests;
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
     this.planner = new Planner(store, (m) => this.broadcast(m));
     this.scheduler = new Scheduler(store, (m) => this.broadcast(m), {
@@ -294,6 +301,28 @@ export class Hub {
       case "github.status":
         client.send({ type: "github", requestId: message.requestId, status: await githubStatus() });
         return;
+      case "workspace.pr":
+      case "workspace.mergePr":
+      case "github.pr": {
+        // Whoever asked waits for this reply, so a failure is sent to it rather than thrown.
+        const asked =
+          message.type === "workspace.pr"
+            ? this.pullRequest(message.threadId)
+            : message.type === "workspace.mergePr"
+              ? this.mergePullRequest(message.threadId, message.number, message.head)
+              : this.pullRequestAt(message.url);
+        client.send(
+          await asked.then(
+            (pr) => ({ type: "pullRequest", requestId: message.requestId, ...(pr ? { pr } : {}) }),
+            (error: unknown) => ({
+              type: "pullRequest",
+              requestId: message.requestId,
+              error: describe(error),
+            }),
+          ),
+        );
+        return;
+      }
       case "github.repos":
         client.send({
           type: "githubRepos",
@@ -763,6 +792,63 @@ export class Hub {
       }
       return result;
     });
+  }
+
+  /** Where a thread's branch is pushed, and what can ask GitHub about it; nothing without both. */
+  private async branchOnGithub(
+    threadId: string,
+  ): Promise<{ github: PullRequests; repo: string; branch: string } | undefined> {
+    const thread = this.requireThread(threadId);
+    const workspace = thread.workspace;
+    if (!workspace?.base) return undefined;
+    // An archived thread has no folder of its own left: its project has the same remotes.
+    const dir = existsSync(workspace.path)
+      ? workspace.path
+      : this.store.getProject(thread.projectId)?.path;
+    const repo = dir ? await githubRemote(dir) : undefined;
+    const github = repo ? this.pullRequests() : undefined;
+    return repo && github ? { github, repo, branch: workspace.branch } : undefined;
+  }
+
+  /** The pull request of the thread's branch as GitHub describes it now, whoever opened it. */
+  async pullRequest(threadId: string): Promise<PullRequestInfo | undefined> {
+    const on = await this.branchOnGithub(threadId);
+    return on?.github.find(on.repo, on.branch);
+  }
+
+  /**
+   * Merges the pull request of the thread's branch, when it is still the one the user saw:
+   * same number, same last commit. Returns it as it is afterwards.
+   */
+  async mergePullRequest(
+    threadId: string,
+    number: number,
+    head: string,
+  ): Promise<PullRequestInfo | undefined> {
+    const on = await this.branchOnGithub(threadId);
+    if (!on) throw new Error("GitHub CLI (gh) est requis pour merger depuis MoonAgentic.");
+    const pr = await on.github.find(on.repo, on.branch);
+    if (!pr || pr.number !== number)
+      throw new Error("Cette pull request n'est plus celle de la branche du fil.");
+    if (pr.state !== "open") {
+      throw new Error(
+        pr.state === "draft"
+          ? "Cette pull request est un brouillon : marque-la prête sur GitHub d'abord."
+          : "Cette pull request n'est plus ouverte.",
+      );
+    }
+    if (pr.head !== head)
+      throw new Error("La branche a reçu de nouveaux commits : relis l'état avant de merger.");
+    if (pr.conflicts) throw new Error("Cette pull request a des conflits avec sa branche de base.");
+    await on.github.merge(on.repo, number, head);
+    return on.github.find(on.repo, String(number));
+  }
+
+  /** The pull request at this github.com address, for a link that shows its state. */
+  async pullRequestAt(url: string): Promise<PullRequestInfo | undefined> {
+    const at = parsePullRequestUrl(url);
+    if (!at) throw new Error("Ce n'est pas l'adresse d'une pull request GitHub.");
+    return this.pullRequests()?.find(at.repo, String(at.number));
   }
 
   /**

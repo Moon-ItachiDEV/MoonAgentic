@@ -60,7 +60,10 @@ function proxiesTo(target: unknown, port: number): boolean {
       : `http://${target}`;
   try {
     const url = new URL(address);
-    return url.protocol === "http:" && LOOPBACK.has(url.hostname) && Number(url.port) === port;
+    // An address leaves out the port when it is the protocol's own: 80 for plain HTTP.
+    return (
+      url.protocol === "http:" && LOOPBACK.has(url.hostname) && Number(url.port || 80) === port
+    );
   } catch {
     return false;
   }

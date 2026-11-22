@@ -458,6 +458,17 @@ export function containsBranch(dir: string, branch: string): Promise<boolean> {
   );
 }
 
+/** `owner/name` of the GitHub repository this folder pushes to, when it has one. */
+export async function githubRemote(dir: string): Promise<string | undefined> {
+  try {
+    const remotes = (await git(dir, ["remote"])).split("\n").filter(Boolean);
+    const remote = remotes.includes("origin") ? "origin" : remotes[0];
+    return remote ? githubRepo(await git(dir, ["remote", "get-url", remote])) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface ShipResult {
   commit?: string;
   /** The pull request, or the page to open one when it could not be created here. */

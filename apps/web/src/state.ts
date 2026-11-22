@@ -136,6 +136,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "searched":
     case "github":
     case "githubRepos":
+    case "pullRequest":
       return state;
   }
 }

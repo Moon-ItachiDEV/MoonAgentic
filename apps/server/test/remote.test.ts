@@ -47,6 +47,13 @@ describe("what Tailscale says", () => {
     }
   });
 
+  it("finds it on port 80 too, which an address leaves out", () => {
+    for (const proxy of ["http://127.0.0.1:80", "http://127.0.0.1", "80"]) {
+      expect(parseTailscaleServe(serve(proxy), 80)).toHaveLength(1);
+    }
+    expect(parseTailscaleServe(serve("http://127.0.0.1"), 4747)).toEqual([]);
+  });
+
   it("leaves out what is published for another port, another machine or another path", () => {
     expect(parseTailscaleServe(serve("http://127.0.0.1:3000"), 4747)).toEqual([]);
     expect(parseTailscaleServe(serve("http://192.168.1.9:4747"), 4747)).toEqual([]);

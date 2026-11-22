@@ -457,6 +457,9 @@ export interface Schedule {
   createdAt: number;
 }
 
+export type { PullRequestCheck, PullRequestInfo } from "./pull-request.ts";
+import type { PullRequestInfo } from "./pull-request.ts";
+
 /** What MoonAgentic sees of GitHub through the user's own `git` and `gh`; it keeps no token. */
 export interface GithubStatus {
   /** `git` is installed. */
@@ -540,6 +543,11 @@ export type ServerMessage =
     }
   | { type: "github"; requestId: string; status: GithubStatus }
   | { type: "githubRepos"; requestId: string; repos: GithubRepo[] }
+  /**
+   * A pull request as it is now. Without `pr`: there is none, or nothing here can ask
+   * GitHub (no `gh`, no GitHub remote); `error` says why when asking failed.
+   */
+  | { type: "pullRequest"; requestId: string; pr?: PullRequestInfo; error?: string }
   /** Reply to a create request, so the client can navigate to what it made. */
   | { type: "created"; requestId: string; id: string }
   /** Reply to a request that makes nothing new, once it succeeded. */
@@ -767,6 +775,25 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("github.status"), requestId: id }),
   /** Lists the repositories the signed-in `gh` account can reach, last pushed first. */
   z.object({ type: z.literal("github.repos"), requestId: id }),
+  /** Asks GitHub for the pull request of a thread's branch, with its checks. */
+  z.object({ type: z.literal("workspace.pr"), requestId: id, threadId: id }),
+  /**
+   * Merges the pull request of a thread's branch, if its last commit is still `head`: what
+   * the user saw is what gets merged.
+   */
+  z.object({
+    type: z.literal("workspace.mergePr"),
+    requestId: id,
+    threadId: id,
+    number: z.number().int().positive(),
+    head: z.string().regex(/^[0-9a-f]{40,64}$/),
+  }),
+  /** Asks GitHub for the state of the pull request at this address, to draw its link. */
+  z.object({
+    type: z.literal("github.pr"),
+    requestId: id,
+    url: z.string().max(500),
+  }),
   /**
    * Clones a GitHub repository into a new folder, `parent/name`, and makes it a project.
    * `repo` is `owner/name` or its address on github.com.

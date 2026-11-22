@@ -1,0 +1,306 @@
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import type { PullRequestInfo, ServerMessage } from "@moonagentic/protocol";
+import { afterEach, describe, expect, it } from "vitest";
+import { Agents } from "../src/agents.ts";
+import { type Client, Hub } from "../src/hub.ts";
+import {
+  type GhRun,
+  ghPullRequests,
+  parsePullRequest,
+  parsePullRequestUrl,
+  type PullRequests,
+} from "../src/pull-request.ts";
+import { Store } from "../src/store.ts";
+
+const HEAD = "a".repeat(40);
+
+const view = (over: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    number: 42,
+    url: "https://github.com/moon/demo/pull/42",
+    title: "Ajoute le suivi",
+    state: "OPEN",
+    isDraft: false,
+    mergeable: "MERGEABLE",
+    mergeStateStatus: "CLEAN",
+    headRefOid: HEAD,
+    baseRefName: "main",
+    statusCheckRollup: [],
+    ...over,
+  });
+
+const run = (name: string, status: string, conclusion: string, startedAt = "") => ({
+  __typename: "CheckRun",
+  name,
+  workflowName: "CI",
+  status,
+  conclusion,
+  startedAt,
+  detailsUrl: `https://github.com/moon/demo/actions/runs/1/job/${name.length}`,
+});
+
+describe("reading a pull request from gh", () => {
+  it("reads its state, its branch and whether it conflicts", () => {
+    expect(parsePullRequest(view(), "moon/demo")).toEqual({
+      repo: "moon/demo",
+      number: 42,
+      url: "https://github.com/moon/demo/pull/42",
+      title: "Ajoute le suivi",
+      state: "open",
+      head: HEAD,
+      base: "main",
+      conflicts: false,
+      blocked: false,
+      checks: [],
+    });
+    const of = (over: Record<string, unknown>) => parsePullRequest(view(over), "moon/demo");
+    expect(of({ isDraft: true })?.state).toBe("draft");
+    expect(of({ state: "MERGED", isDraft: true })?.state).toBe("merged");
+    expect(of({ state: "CLOSED" })?.state).toBe("closed");
+    expect(of({ mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" })?.conflicts).toBe(true);
+    expect(of({ mergeable: "UNKNOWN" })?.conflicts).toBeNull();
+    expect(of({ mergeStateStatus: "BLOCKED" })?.blocked).toBe(true);
+    expect(parsePullRequest("pas du JSON", "moon/demo")).toBeUndefined();
+    expect(parsePullRequest("{}", "moon/demo")).toBeUndefined();
+  });
+
+  it("reads each check, a check run again counting as its last run", () => {
+    const pr = parsePullRequest(
+      view({
+        statusCheckRollup: [
+          run("Lint", "COMPLETED", "SUCCESS"),
+          run("Tests", "COMPLETED", "FAILURE", "2026-11-22T10:00:00Z"),
+          run("Tests", "IN_PROGRESS", "", "2026-11-22T11:00:00Z"),
+          run("Windows", "COMPLETED", "CANCELLED"),
+          run("Docs", "COMPLETED", "SKIPPED"),
+          { __typename: "StatusContext", context: "deploy", state: "PENDING", targetUrl: "" },
+          { __typename: "StatusContext", context: "license", state: "ERROR" },
+          { __typename: "CheckRun" },
+        ],
+      }),
+      "moon/demo",
+    );
+    expect(pr?.checks.map((c) => [c.name, c.state])).toEqual([
+      ["Lint", "passed"],
+      ["Tests", "pending"],
+      ["Windows", "failed"],
+      ["Docs", "skipped"],
+      ["deploy", "pending"],
+      ["license", "failed"],
+    ]);
+    expect(pr?.checks[0]?.url).toBe("https://github.com/moon/demo/actions/runs/1/job/4");
+    expect(pr?.checks[4]).not.toHaveProperty("url");
+  });
+
+  it("takes only the address of a pull request on github.com", () => {
+    expect(parsePullRequestUrl("https://github.com/Moon-ItachiDEV/MoonAgentic/pull/43")).toEqual({
+      repo: "Moon-ItachiDEV/MoonAgentic",
+      number: 43,
+    });
+    expect(parsePullRequestUrl("https://github.com/moon/demo/pull/7/files#diff")).toEqual({
+      repo: "moon/demo",
+      number: 7,
+    });
+    for (const bad of [
+      "https://github.com/moon/demo/issues/7",
+      "https://github.com/moon/demo/pull/abc",
+      "https://evil.example/github.com/moon/demo/pull/7",
+      "https://github.com.evil.example/moon/demo/pull/7",
+      "http://github.com/moon/demo/pull/7",
+      "https://github.com/--repo/x/pull/7",
+    ]) {
+      expect(parsePullRequestUrl(bad)).toBeUndefined();
+    }
+  });
+});
+
+describe("pull requests through gh", () => {
+  it("has none when gh finds none, and passes on any other failure", async () => {
+    const none = ghPullRequests(async () => {
+      throw new Error('no pull requests found for branch "moon/x"\nusage…');
+    });
+    expect(await none.find("moon/demo", "moon/x")).toBeUndefined();
+    const signedOut = ghPullRequests(async () => {
+      throw new Error("To get started with GitHub CLI, please run:  gh auth login\nplus");
+    });
+    await expect(signedOut.find("moon/demo", "moon/x")).rejects.toThrow(/^To get started.*login$/);
+  });
+
+  it("merges the commit that was seen, the way the repository allows", async () => {
+    const calls: string[][] = [];
+    const allowing = (allowed: Record<string, boolean>): GhRun => {
+      return async (args) => {
+        calls.push(args);
+        return args[0] === "repo" ? JSON.stringify(allowed) : "";
+      };
+    };
+    await ghPullRequests(allowing({ mergeCommitAllowed: true })).merge("moon/demo", 42, HEAD);
+    expect(calls.at(-1)).toEqual([
+      "pr",
+      "merge",
+      "42",
+      "--repo",
+      "moon/demo",
+      "--merge",
+      "--match-head-commit",
+      HEAD,
+    ]);
+    await ghPullRequests(allowing({ mergeCommitAllowed: false, squashMergeAllowed: true })).merge(
+      "moon/demo",
+      42,
+      HEAD,
+    );
+    expect(calls.at(-1)).toContain("--squash");
+    await ghPullRequests(allowing({ mergeCommitAllowed: false, squashMergeAllowed: false })).merge(
+      "moon/demo",
+      42,
+      HEAD,
+    );
+    expect(calls.at(-1)).toContain("--rebase");
+    // The branch is never deleted from here: the thread still works on it.
+    expect(calls.flat()).not.toContain("--delete-branch");
+  });
+});
+
+const cleanups: (() => void | Promise<void>)[] = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
+});
+
+const git = (cwd: string, ...args: string[]) =>
+  execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
+    .toString()
+    .trim();
+
+/** A thread with its own branch in a repository whose remote is on GitHub, and a stand-in GitHub. */
+async function threadOnGithub(remoteUrl = "https://github.com/moon/demo.git") {
+  const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-pr-"));
+  const repo = path.join(root, "repo");
+  mkdirSync(repo);
+  git(repo, "init", "-q", "-b", "main");
+  git(repo, "config", "user.email", "test@example.com");
+  git(repo, "config", "user.name", "Test");
+  git(repo, "config", "commit.gpgsign", "false");
+  writeFileSync(path.join(repo, "README.md"), "# Demo\n");
+  git(repo, "add", "-A");
+  git(repo, "commit", "-q", "-m", "init");
+  git(repo, "remote", "add", "origin", remoteUrl);
+
+  const github = {
+    pr: undefined as PullRequestInfo | undefined,
+    asked: [] as string[],
+    merged: [] as string[],
+  };
+  const pullRequests: PullRequests = {
+    find: async (repoName, ref) => {
+      github.asked.push(`${repoName} ${ref}`);
+      return github.pr;
+    },
+    merge: async (repoName, number, head) => {
+      github.merged.push(`${repoName} #${number} ${head}`);
+      if (github.pr) github.pr = { ...github.pr, state: "merged" };
+    },
+  };
+  const store = new Store(path.join(root, "state.sqlite"));
+  const hub = new Hub(store, new Agents({ demo: true }), {
+    worktreesDir: path.join(root, "worktrees"),
+    pullRequests: () => pullRequests,
+  });
+  cleanups.push(async () => {
+    await hub.close();
+    store.close();
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+  const threadId = hub.createThread({
+    projectId: hub.createProject("demo", repo),
+    agentId: "demo",
+    permissionMode: "full",
+    isolated: true,
+    text: "Ajoute le suivi",
+  });
+  await hub.whenIdle(threadId);
+  const branch = store.getThread(threadId)!.workspace!.branch;
+  const messages: ServerMessage[] = [];
+  const client: Client = { send: (m) => messages.push(m) };
+  const reply = () => messages.findLast((m) => m.type === "pullRequest");
+  return { hub, store, github, threadId, branch, client, reply };
+}
+
+const OPEN = parsePullRequest(view(), "moon/demo")!;
+
+describe("the pull request of a thread's branch", () => {
+  it("is asked from GitHub by the thread's branch", async () => {
+    const { hub, github, threadId, branch, client, reply } = await threadOnGithub();
+    await hub.handle(client, { type: "workspace.pr", requestId: "r1", threadId });
+    expect(github.asked).toEqual([`moon/demo ${branch}`]);
+    expect(reply()).toEqual({ type: "pullRequest", requestId: "r1" });
+
+    github.pr = OPEN;
+    await hub.handle(client, { type: "workspace.pr", requestId: "r2", threadId });
+    expect(reply()).toEqual({ type: "pullRequest", requestId: "r2", pr: OPEN });
+  });
+
+  it("asks nothing when the remote is not on GitHub", async () => {
+    const { hub, github, threadId } = await threadOnGithub("https://gitlab.com/moon/demo.git");
+    github.pr = OPEN;
+    expect(await hub.pullRequest(threadId)).toBeUndefined();
+    expect(github.asked).toEqual([]);
+  });
+
+  it("merges it only as the user saw it", async () => {
+    const { hub, github, threadId, client, reply } = await threadOnGithub();
+    github.pr = OPEN;
+    await expect(hub.mergePullRequest(threadId, 41, HEAD)).rejects.toThrow("n'est plus celle");
+    await expect(hub.mergePullRequest(threadId, 42, "b".repeat(40))).rejects.toThrow(
+      "nouveaux commits",
+    );
+    github.pr = { ...OPEN, conflicts: true };
+    await expect(hub.mergePullRequest(threadId, 42, HEAD)).rejects.toThrow("conflits");
+    github.pr = { ...OPEN, state: "draft" };
+    await expect(hub.mergePullRequest(threadId, 42, HEAD)).rejects.toThrow("brouillon");
+    expect(github.merged).toEqual([]);
+
+    // A refusal reaches whoever asked as an answer, not as a broken request.
+    await hub.handle(client, {
+      type: "workspace.mergePr",
+      requestId: "m0",
+      threadId,
+      number: 42,
+      head: HEAD,
+    });
+    expect(reply()).toMatchObject({ requestId: "m0", error: expect.stringContaining("brouillon") });
+
+    github.pr = OPEN;
+    await hub.handle(client, {
+      type: "workspace.mergePr",
+      requestId: "m1",
+      threadId,
+      number: 42,
+      head: HEAD,
+    });
+    expect(github.merged).toEqual([`moon/demo #42 ${HEAD}`]);
+    expect(reply()).toEqual({
+      type: "pullRequest",
+      requestId: "m1",
+      pr: { ...OPEN, state: "merged" },
+    });
+    await expect(hub.mergePullRequest(threadId, 42, HEAD)).rejects.toThrow("plus ouverte");
+  });
+
+  it("tells the state of a pull request from its address, for a link", async () => {
+    const { hub, github, client, reply } = await threadOnGithub();
+    github.pr = OPEN;
+    await hub.handle(client, {
+      type: "github.pr",
+      requestId: "u1",
+      url: "https://github.com/other/repo/pull/7",
+    });
+    expect(github.asked).toEqual(["other/repo 7"]);
+    expect(reply()).toMatchObject({ requestId: "u1", pr: { state: "open" } });
+    await hub.handle(client, { type: "github.pr", requestId: "u2", url: "https://example.com/" });
+    expect(reply()).toMatchObject({ requestId: "u2", error: expect.stringContaining("adresse") });
+  });
+});
