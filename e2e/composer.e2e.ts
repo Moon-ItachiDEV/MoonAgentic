@@ -481,6 +481,7 @@ describe("composer", () => {
     expect(await dialog.getByLabel("Tâche").inputValue()).toBe(
       "Résume les changements de la semaine",
     );
+    await dialog.getByLabel("Agent", { exact: true }).selectOption({ label: "Agent de démo" });
     await dialog.getByLabel("Quand").fill("2020-01-15T09:00");
     await dialog.getByRole("button", { name: "Planifier", exact: true }).click();
     await dialog.getByText("Ce moment est déjà passé").waitFor();
@@ -498,12 +499,15 @@ describe("composer", () => {
     // One for this very minute: the server starts it by itself, in a thread of its own.
     await page.getByRole("button", { name: "Planifier une tâche" }).click();
     await dialog.getByLabel("Tâche").fill("Dis bonjour");
+    await dialog.getByLabel("Agent", { exact: true }).selectOption({ label: "Agent de démo" });
     await dialog.getByLabel("Quand").fill(field(new Date()));
     await dialog.getByRole("button", { name: "Planifier", exact: true }).click();
-    await row("Dis bonjour").getByText(/^Lancée aujourd'hui à/).waitFor();
+    await row("Dis bonjour")
+      .getByText(/^Lancée aujourd'hui à/)
+      .waitFor();
     await shot(page, "c19-planifiees");
     await row("Dis bonjour").getByRole("button", { name: "Ouvrir le fil" }).click();
-    await page.locator(".msg.user", { hasText: "Dis bonjour" }).waitFor();
+    await page.locator(".view").getByText("Dis bonjour").first().waitFor();
     await page.goBack();
 
     // Paused, it no longer has a next time; changed, it keeps what was not touched.
@@ -519,9 +523,11 @@ describe("composer", () => {
 
     // Started by hand, its time does not move.
     await row("Résumé quotidien").getByRole("button", { name: "Lancer maintenant" }).click();
-    await page.locator(".msg.user", { hasText: "Résume les changements" }).waitFor();
+    await page.locator(".view").getByText("Résume les changements de la semaine").first().waitFor();
     await page.goBack();
-    await row("Résumé quotidien").getByText(/Dernier lancement aujourd'hui/).waitFor();
+    await row("Résumé quotidien")
+      .getByText(/Dernier lancement aujourd'hui/)
+      .waitFor();
     await row("Résumé quotidien").getByText("Prochain lancement demain à 09:00").waitFor();
 
     // On a phone the list fits the screen.

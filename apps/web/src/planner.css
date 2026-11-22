@@ -524,11 +524,8 @@
 .pl-sch-ctl {
   flex: none;
   display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
   align-items: center;
   gap: 6px;
-  max-width: 330px;
 }
 .pl-sch-ctl .btn {
   height: 30px;
@@ -537,9 +534,6 @@
 }
 .pl-sch-ctl .set-sw {
   margin-right: 4px;
-}
-.pl-sch-ctl .btn.danger {
-  color: var(--err);
 }
 .pl-sch-none {
   margin: auto;
@@ -787,8 +781,7 @@
     gap: 10px;
   }
   .pl-sch-ctl {
-    justify-content: flex-start;
-    max-width: none;
+    flex-wrap: wrap;
   }
   .pl-tl-who small {
     display: none;

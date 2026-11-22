@@ -177,6 +177,7 @@ export function ScheduleDialog({
               <label className="field">
                 Agent
                 <select
+                  aria-label="Agent"
                   value={agentId}
                   onChange={(e) => {
                     setAgentId(e.target.value);

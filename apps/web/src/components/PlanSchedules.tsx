@@ -83,21 +83,24 @@ export function PlanSchedules({
               {s.lastError && <p className="pl-sch-err">{s.lastError}</p>}
             </div>
             <div className="pl-sch-ctl">
-              <button
-                role="switch"
-                aria-checked={s.enabled}
-                aria-label={`Activer ${s.title}`}
-                title={s.enabled ? "Mettre en pause" : "Réactiver"}
-                className={`set-sw${s.enabled ? " on" : ""}`}
-                onClick={() =>
-                  void call({
-                    type: "schedule.update",
-                    requestId: newId(),
-                    id: s.id,
-                    enabled: !s.enabled,
-                  })
-                }
-              />
+              {/* A one-time task that has run is planned again from « Modifier ». */}
+              {state.tone !== "done" && (
+                <button
+                  role="switch"
+                  aria-checked={s.enabled}
+                  aria-label={`Activer ${s.title}`}
+                  title={s.enabled ? "Mettre en pause" : "Réactiver"}
+                  className={`set-sw${s.enabled ? " on" : ""}`}
+                  onClick={() =>
+                    void call({
+                      type: "schedule.update",
+                      requestId: newId(),
+                      id: s.id,
+                      enabled: !s.enabled,
+                    })
+                  }
+                />
+              )}
               {last && (
                 <button className="btn quiet" onClick={() => onOpenThread(last.id)}>
                   Ouvrir le fil

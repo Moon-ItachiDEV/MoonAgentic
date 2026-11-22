@@ -1,4 +1,4 @@
-import type { Item, PlanTask, Thread } from "@moonagentic/protocol";
+import type { Item, PlanTask, Schedule, Thread } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import { initialState, reduce } from "./state.ts";
 
