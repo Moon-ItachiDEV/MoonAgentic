@@ -1,11 +1,15 @@
 import { execFile, execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ReviewFile } from "@moonagentic/protocol";
 import { findOnPath } from "./agents.ts";
 
 const MAX_PATCH_LINES = 2000;
+/** The review lists at most this many files; the rest are only counted. */
+export const MAX_REVIEW_FILES = 1000;
+/** Past this many diff lines in all, the next files are listed without their diff. */
+const MAX_REVIEW_LINES = 20_000;
 
 /** No one can answer a password prompt from here, so git and gh fail instead of waiting. */
 const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GH_PROMPT_DISABLED: "1" };
@@ -96,18 +100,51 @@ async function withScratchIndex<T>(
   }
 }
 
-/** Everything that changed since `base`, committed or not, new files included. */
-export function reviewChanges(dir: string, base: string): Promise<ReviewFile[]> {
+/** Runs `work` with a file listing `paths`, which git reads with `--pathspec-from-file`. */
+async function withPathspecFile<T>(paths: string[], work: (file: string) => Promise<T>) {
+  const scratch = mkdtempSync(path.join(os.tmpdir(), "moonagentic-paths-"));
+  try {
+    const file = path.join(scratch, "paths");
+    writeFileSync(file, paths.join("\0"));
+    return await work(file);
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+const pathspecArgs = (file: string) => [`--pathspec-from-file=${file}`, "--pathspec-file-nul"];
+
+/**
+ * Everything that changed since `base`, committed or not, new files included. New files
+ * are only announced to a scratch index, so opening the review stores nothing in git.
+ */
+export function reviewChanges(
+  dir: string,
+  base: string,
+): Promise<{ files: ReviewFile[]; omitted?: number }> {
   return withScratchIndex(dir, async (env) => {
-    await git(dir, ["add", "-A"], env);
-    const numstat = await git(dir, ["diff", "--cached", "--numstat", "-z", "-M", base], env);
+    const untracked = (await git(dir, ["ls-files", "-z", "--others", "--exclude-standard"], env))
+      .split("\0")
+      .filter(Boolean);
+    if (untracked.length) {
+      await withPathspecFile(untracked, (file) =>
+        git(dir, ["--literal-pathspecs", "add", "--intent-to-add", ...pathspecArgs(file)], env),
+      );
+    }
+    const numstat = await git(dir, ["diff", "--numstat", "-z", "-M", base], env);
     // An external diff tool from the user's config would replace the unified diff.
-    const patch = await git(
-      dir,
-      ["diff", "--cached", "--no-color", "--no-ext-diff", "-M", base],
-      env,
-    );
-    return parseDiff(numstat, patch);
+    const patch = await git(dir, ["diff", "--no-color", "--no-ext-diff", "-M", base], env);
+    const files = parseDiff(numstat, patch);
+    let lines = 0;
+    const shown = files.slice(0, MAX_REVIEW_FILES).map((file) => {
+      if (lines >= MAX_REVIEW_LINES && file.patch) {
+        return { ...file, patch: "", truncated: true };
+      }
+      lines += file.patch ? file.patch.split("\n").length : 0;
+      return file;
+    });
+    const omitted = files.length - shown.length;
+    return omitted > 0 ? { files: shown, omitted } : { files: shown };
   });
 }
 
@@ -165,35 +202,63 @@ export async function dropCheckpoints(dir: string, refs: string[]): Promise<void
 
 /** Pairs `git diff --numstat -z` counts with each file's section of the patch. */
 export function parseDiff(numstat: string, patch: string): ReviewFile[] {
-  const counts: { path: string; added: number | null; removed: number | null }[] = [];
+  const counts: {
+    path: string;
+    from?: string;
+    added: number | null;
+    removed: number | null;
+  }[] = [];
   const fields = numstat.split("\0");
   for (let i = 0; i < fields.length - 1;) {
     const [added = "-", removed = "-", file = ""] = (fields[i] ?? "").split("\t");
     i += 1;
     // A rename lists an empty path followed by the old and the new path.
+    const from = file ? undefined : (fields[i] ?? "");
     const name = file || (fields[(i += 2) - 1] ?? "");
     counts.push({
       path: name,
+      ...(from ? { from } : {}),
       added: added === "-" ? null : Number(added),
       removed: removed === "-" ? null : Number(removed),
     });
   }
-  const sections = patch.split(/^(?=diff --git )/m).filter((s) => s.startsWith("diff --git "));
+  // A file whose type changed (a file replaced by a symbolic link, say) comes as two
+  // sections under the same header, a deletion then a creation, but one count.
+  const sections: string[][] = [];
+  for (const section of patch.split(/^(?=diff --git )/m)) {
+    if (!section.startsWith("diff --git ")) continue;
+    const header = section.slice(0, section.indexOf("\n"));
+    const last = sections.at(-1);
+    const first = last?.[0];
+    if (last?.length === 1 && first?.startsWith(`${header}\n`) && isDeletion(first)) {
+      last.push(section);
+    } else {
+      sections.push([section]);
+    }
+  }
   return counts.map((count, i) => {
-    const section = sections[i] ?? "";
-    const status: ReviewFile["status"] = /^new file mode/m.test(section)
-      ? "added"
-      : /^deleted file mode/m.test(section)
-        ? "deleted"
-        : /^rename from /m.test(section)
-          ? "renamed"
-          : "modified";
-    const lines = section.split("\n");
-    const start = lines.findIndex((l) => l.startsWith("@@"));
-    const body = start === -1 ? [] : lines.slice(start);
-    if (body.at(-1) === "") body.pop();
+    const parts = sections[i] ?? [];
+    const section = parts[0] ?? "";
+    const status: ReviewFile["status"] =
+      parts.length > 1
+        ? "modified"
+        : /^new file mode/m.test(section)
+          ? "added"
+          : /^deleted file mode/m.test(section)
+            ? "deleted"
+            : /^rename from /m.test(section)
+              ? "renamed"
+              : "modified";
+    // Each part's hunks, without the header lines before them.
+    const body = parts.flatMap((part) => {
+      const lines = part.split("\n");
+      if (lines.at(-1) === "") lines.pop();
+      const start = lines.findIndex((l) => l.startsWith("@@"));
+      return start === -1 ? [] : lines.slice(start);
+    });
     return {
       path: count.path,
+      ...(count.from ? { from: count.from } : {}),
       status,
       added: count.added,
       removed: count.removed,
@@ -202,6 +267,12 @@ export function parseDiff(numstat: string, patch: string): ReviewFile[] {
     };
   });
 }
+
+/** True for a diff section whose header block says the file was deleted. */
+const isDeletion = (section: string) => {
+  const hunk = section.indexOf("\n@@");
+  return /^deleted file mode/m.test(hunk === -1 ? section : section.slice(0, hunk));
+};
 
 /** owner/name of a GitHub remote, from its https or ssh URL. */
 export function githubRepo(remoteUrl: string): string | undefined {
@@ -221,10 +292,20 @@ export interface ShipResult {
   prOpened: boolean;
 }
 
-/** Commits what changed, pushes the branch, and opens a pull request when asked. */
+/**
+ * Commits what changed (only `files` when given, as the review names them), pushes the
+ * branch, and opens a pull request when asked.
+ */
 export async function ship(
   dir: string,
-  options: { branch: string; baseBranch?: string; message: string; pr: boolean; title: string },
+  options: {
+    branch: string;
+    baseBranch?: string;
+    message: string;
+    pr: boolean;
+    title: string;
+    files?: string[];
+  },
 ): Promise<ShipResult> {
   const current = (await git(dir, ["branch", "--show-current"])).trim();
   if (current !== options.branch) {
@@ -235,7 +316,9 @@ export async function ship(
     );
   }
   let commit: string | undefined;
-  if ((await git(dir, ["status", "--porcelain"])).trim()) {
+  if (options.files) {
+    commit = await commitOnly(dir, options.files, options.message);
+  } else if ((await git(dir, ["status", "--porcelain"])).trim()) {
     await git(dir, ["add", "-A"]);
     await git(dir, ["commit", "-q", "-m", options.message]);
     commit = (await git(dir, ["rev-parse", "HEAD"])).trim();
@@ -257,6 +340,51 @@ export async function ship(
   }
   const compare = `https://github.com/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(options.branch)}?expand=1`;
   return { ...result, url: compare };
+}
+
+/**
+ * Commits only these files, as they are in the folder, and nothing else that was staged.
+ * Returns the new commit, or undefined when none of them has changes left to commit.
+ */
+async function commitOnly(
+  dir: string,
+  files: string[],
+  message: string,
+): Promise<string | undefined> {
+  // A path the folder never had would make git fail on the whole list.
+  const known = new Set(
+    (await git(dir, ["ls-files", "-z", "--cached", "--others", "--exclude-standard"]))
+      .split("\0")
+      .filter(Boolean),
+  );
+  const deleted = new Set(
+    (await git(dir, ["ls-files", "-z", "--deleted"])).split("\0").filter(Boolean),
+  );
+  const head = new Set(
+    (await git(dir, ["ls-tree", "-r", "-z", "--name-only", "HEAD"])).split("\0").filter(Boolean),
+  );
+  const paths = [...new Set(files)].filter((f) => known.has(f) || deleted.has(f) || head.has(f));
+  if (!paths.length) throw new Error("Aucun des fichiers choisis n'a de modification.");
+  return withPathspecFile(paths, async (list) => {
+    await git(dir, ["--literal-pathspecs", "add", "-A", ...pathspecArgs(list)]);
+    // Only these paths go in, whatever else the agent had staged.
+    const staged = (
+      await git(dir, ["diff", "--cached", "--name-only", "-z", "--no-renames", "HEAD"])
+    )
+      .split("\0")
+      .filter((f) => paths.includes(f));
+    if (!staged.length) return undefined;
+    await git(dir, [
+      "--literal-pathspecs",
+      "commit",
+      "-q",
+      "-m",
+      message,
+      "--only",
+      ...pathspecArgs(list),
+    ]);
+    return (await git(dir, ["rev-parse", "HEAD"])).trim();
+  });
 }
 
 /** Opens the pull request with the user's own `gh` sign-in, or finds the one already open. */

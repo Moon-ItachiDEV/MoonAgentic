@@ -45,7 +45,9 @@ const server = createHttpServer({
 const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 const port = Number(values.port);
 server.listen(port, values.host, () => {
-  const uiPort = values.dev ? 5173 : port;
+  // Port 0 lets the system pick a free one: the address printed is the one it picked.
+  const address = server.address();
+  const uiPort = values.dev ? 5173 : typeof address === "object" && address ? address.port : port;
   const host = values.host === "0.0.0.0" ? "localhost" : values.host;
   console.log(`MoonAgentic est prêt : http://${host}:${uiPort}/?token=${token}`);
   if (!LOOPBACK.has(values.host)) {

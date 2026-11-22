@@ -1,15 +1,27 @@
 import type { Thread } from "@moonagentic/protocol";
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Composer } from "./components/Composer.tsx";
 import { Home } from "./components/Home.tsx";
-import { IconBranch, IconMenu, IconCompose } from "./components/icons.tsx";
+import {
+  IconBranch,
+  IconMenu,
+  IconCompose,
+  IconFile,
+  IconFolder,
+  IconPin,
+  IconPlug,
+  IconSearch,
+} from "./components/icons.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
+import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { connection } from "./connection.ts";
+import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
+import { focusItem } from "./focus.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { navigate, useRoute } from "./router.ts";
 
@@ -21,6 +33,19 @@ export function App() {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pickedProjectId, setPickedProjectId] = useState(() => readPref("project"));
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Ctrl K (⌘ K on a Mac) opens the quick search from anywhere, even while typing.
+  useEffect(() => {
+    const open = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setSearchOpen((o) => !o);
+      }
+    };
+    document.addEventListener("keydown", open);
+    return () => document.removeEventListener("keydown", open);
+  }, []);
 
   if (state.status === "unauthorized") return <Unauthorized />;
 
@@ -39,6 +64,36 @@ export function App() {
     setReviewOpen(false);
     navigate(next);
   };
+  const togglePin = (id: string, pinned: boolean) =>
+    connection.send({ type: "thread.setPinned", threadId: id, pinned });
+  const exportThread = () => {
+    const items = thread && state.items[thread.id];
+    if (!thread || !items) return;
+    downloadMarkdown(exportFileName(thread.title), threadMarkdown(thread, items, state.agents));
+  };
+  const quickActions: QuickAction[] = [
+    {
+      label: "Nouvelle discussion",
+      icon: <IconCompose size={15} />,
+      run: () => go({ name: "home" }),
+    },
+    {
+      label: "Nouveau projet",
+      icon: <IconFolder size={15} />,
+      run: () => setCreatingProject(true),
+    },
+    { label: "Serveurs MCP", icon: <IconPlug size={15} />, run: () => setMcpOpen(true) },
+    ...(thread
+      ? [
+          {
+            label: thread.pinned ? "Désépingler cette discussion" : "Épingler cette discussion",
+            icon: <IconPin />,
+            run: () => togglePin(thread.id, !thread.pinned),
+          },
+          { label: "Exporter cette discussion en Markdown", icon: <IconFile />, run: exportThread },
+        ]
+      : []),
+  ];
 
   return (
     <div className={`app${drawer ? " drawer" : ""}${route.name === "home" ? " home-route" : ""}`}>
@@ -60,6 +115,7 @@ export function App() {
           go({ name: "home" });
         }}
         onOpenThread={(id) => go({ name: "thread", threadId: id })}
+        onTogglePin={togglePin}
       />
       <div className="side-scrim" onClick={() => setDrawer(false)} />
       <main className="center">
@@ -68,6 +124,14 @@ export function App() {
             <IconMenu />
           </button>
           <div className="ttl">{thread?.title ?? ""}</div>
+          <button
+            className="ib"
+            aria-label="Rechercher"
+            title="Rechercher (Ctrl K)"
+            onClick={() => setSearchOpen(true)}
+          >
+            <IconSearch />
+          </button>
           {thread?.workspace && (
             <button
               className="review-btn"
@@ -113,6 +177,8 @@ export function App() {
             project={project}
             onNewProject={() => setCreatingProject(true)}
             onCreated={(id) => navigate({ name: "thread", threadId: id })}
+            onExport={exportThread}
+            onSearch={() => setSearchOpen(true)}
           />
         </div>
       </main>
@@ -135,6 +201,21 @@ export function App() {
         />
       )}
       {mcpOpen && <McpDialog servers={state.mcpServers} onClose={() => setMcpOpen(false)} />}
+      {searchOpen && (
+        <QuickSearch
+          state={state}
+          actions={quickActions}
+          onClose={() => setSearchOpen(false)}
+          onOpenThread={(id, itemId) => {
+            if (itemId) focusItem(id, itemId);
+            go({ name: "thread", threadId: id });
+          }}
+          onPickProject={(id) => {
+            pickProject(id);
+            go({ name: "home" });
+          }}
+        />
+      )}
       {state.notice && (
         <div className="toast" role="status">
           {state.notice}

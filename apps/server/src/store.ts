@@ -5,6 +5,7 @@ import type {
   ModelChoice,
   PermissionMode,
   Project,
+  SearchHit,
   Thread,
   ThreadStatus,
   Workspace,
@@ -28,20 +29,22 @@ interface ThreadRow {
   error: string | null;
   model: string | null;
   workspace: string | null;
-  /** JSON of the thread's optional agent state: settings, usage, canCompact. */
+  /** JSON of the thread's optional state: settings, usage, canCompact, commands, pinned. */
   extra: string | null;
   acp_session_id: string | null;
   created_at: number;
   updated_at: number;
 }
 
-type ThreadExtra = Pick<Thread, "settings" | "usage" | "canCompact">;
+type ThreadExtra = Pick<Thread, "settings" | "usage" | "canCompact" | "commands" | "pinned">;
 
 const extraOf = (thread: ThreadExtra): string | null => {
   const extra: ThreadExtra = {
     ...(thread.settings ? { settings: thread.settings } : {}),
     ...(thread.usage ? { usage: thread.usage } : {}),
     ...(thread.canCompact ? { canCompact: true } : {}),
+    ...(thread.commands?.length ? { commands: thread.commands } : {}),
+    ...(thread.pinned ? { pinned: true } : {}),
   };
   return Object.keys(extra).length ? JSON.stringify(extra) : null;
 };
@@ -61,12 +64,36 @@ const toThread = (row: ThreadRow): Thread => ({
   updatedAt: row.updated_at,
 });
 
+/** Text kept before and after a match: little before, so the match shows on one line. */
+const SNIPPET_BEFORE = 30;
+const SNIPPET_AFTER = 90;
+
+/** The text around the first match, on one line. */
+/** Text without case or accents, so « etat » finds « État ». */
+export const fold = (text: string): string =>
+  text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+
+export function snippet(text: string, query: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  const folded = fold(flat);
+  // Folding keeps each letter in place, except in rare scripts: then the start will do.
+  const found = folded.length === flat.length ? folded.indexOf(fold(query)) : -1;
+  const at = found === -1 ? flat.toLowerCase().indexOf(query.toLowerCase()) : found;
+  if (at === -1) return flat.slice(0, SNIPPET_BEFORE + SNIPPET_AFTER);
+  const start = Math.max(0, at - SNIPPET_BEFORE);
+  const end = Math.min(flat.length, at + query.length + SNIPPET_AFTER);
+  return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`;
+}
+
 /** Durable state: projects, threads and each thread's timeline items. */
 export class Store {
   readonly db: DatabaseSync;
 
   constructor(file: string) {
     this.db = new DatabaseSync(file);
+    this.db.function("moon_fold", { deterministic: true }, (text) =>
+      typeof text === "string" ? fold(text) : null,
+    );
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
@@ -227,6 +254,8 @@ export class Store {
         | "settings"
         | "usage"
         | "canCompact"
+        | "commands"
+        | "pinned"
       >
     > & {
       error?: string | null;
@@ -298,6 +327,33 @@ export class Store {
          ON CONFLICT (thread_id, id) DO UPDATE SET data = excluded.data`,
       )
       .run(threadId, item.id, threadId, JSON.stringify(item));
+  }
+
+  /** Messages from the user or an agent that contain `query`, newest first. */
+  searchItems(query: string, limit = 30): SearchHit[] {
+    const pattern = `%${fold(query).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const rows = this.db
+      .prepare(
+        `SELECT items.thread_id, items.id, items.data FROM items
+         JOIN threads ON threads.id = items.thread_id
+         WHERE json_extract(items.data, '$.kind') IN ('user', 'agent')
+           AND moon_fold(json_extract(items.data, '$.text')) LIKE ? ESCAPE '\\'
+         ORDER BY threads.updated_at DESC, items.seq DESC
+         LIMIT ?`,
+      )
+      .all(pattern, limit) as { thread_id: string; id: string; data: string }[];
+    return rows.flatMap((row): SearchHit[] => {
+      const item = JSON.parse(row.data) as Item;
+      if (item.kind !== "user" && item.kind !== "agent") return [];
+      return [
+        {
+          threadId: row.thread_id,
+          itemId: row.id,
+          kind: item.kind,
+          snippet: snippet(item.text, query),
+        },
+      ];
+    });
   }
 
   /** Removes the item and every item after it; returns what was removed. */

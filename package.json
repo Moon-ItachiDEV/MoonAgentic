@@ -13,11 +13,13 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "oxlint . && prettier --check .",
     "format": "prettier --write .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "e2e": "vitest run --config vitest.e2e.config.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "oxlint": "^1.94.0",
+    "playwright": "1.63.0",
     "prettier": "^3.10.1",
     "typescript": "^7.0.2",
     "vitest": "^5.1.1"
