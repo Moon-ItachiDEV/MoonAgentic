@@ -2,10 +2,11 @@ import type { Thread } from "@moonagentic/protocol";
 import { useState, useSyncExternalStore } from "react";
 import { Composer } from "./components/Composer.tsx";
 import { Home } from "./components/Home.tsx";
-import { IconMenu, IconCompose } from "./components/icons.tsx";
+import { IconBranch, IconMenu, IconCompose } from "./components/icons.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
+import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { connection } from "./connection.ts";
@@ -18,6 +19,7 @@ export function App() {
   const [drawer, setDrawer] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [reviewOpen, setReviewOpen] = useState(false);
   const [pickedProjectId, setPickedProjectId] = useState(() => readPref("project"));
 
   if (state.status === "unauthorized") return <Unauthorized />;
@@ -34,6 +36,7 @@ export function App() {
   };
   const go = (next: Parameters<typeof navigate>[0]) => {
     setDrawer(false);
+    setReviewOpen(false);
     navigate(next);
   };
 
@@ -65,6 +68,17 @@ export function App() {
             <IconMenu />
           </button>
           <div className="ttl">{thread?.title ?? ""}</div>
+          {thread?.workspace && (
+            <button
+              className="review-btn"
+              aria-label="À revoir"
+              title="À revoir"
+              onClick={() => setReviewOpen(true)}
+            >
+              <IconBranch />
+              <span className="lbl">À revoir</span>
+            </button>
+          )}
           {route.name === "thread" ? (
             <button
               className="ib mobile-only"
@@ -110,6 +124,14 @@ export function App() {
             pickProject(id);
             go({ name: "home" });
           }}
+        />
+      )}
+      {reviewOpen && thread?.workspace && (
+        <ReviewPanel
+          key={thread.id}
+          thread={thread}
+          review={state.reviews[thread.id]}
+          onClose={() => setReviewOpen(false)}
         />
       )}
       {mcpOpen && <McpDialog servers={state.mcpServers} onClose={() => setMcpOpen(false)} />}

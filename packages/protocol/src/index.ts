@@ -44,6 +44,33 @@ export interface Project {
   name: string;
   path: string;
   createdAt: number;
+  /** True when the folder is in a git repository, so threads can get their own branch. */
+  git?: boolean;
+}
+
+/** A thread's own branch, checked out in a separate folder (a git worktree). */
+export interface Workspace {
+  branch: string;
+  path: string;
+  /** The commit the branch started from, once the worktree exists. */
+  base?: string;
+  /** The branch it started from, which a pull request targets. */
+  baseBranch?: string;
+  /** The pull request, or the page to open one, after the last push. */
+  prUrl?: string;
+  prOpened?: boolean;
+}
+
+/** One changed file in a thread's workspace, compared with where its branch started. */
+export interface ReviewFile {
+  path: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  /** Line counts; null for a binary file. */
+  added: number | null;
+  removed: number | null;
+  /** The unified diff hunks, from the first `@@` line. */
+  patch: string;
+  truncated?: boolean;
 }
 
 export type ThreadStatus = "idle" | "running" | "waiting" | "error";
@@ -59,6 +86,8 @@ export interface Thread {
   permissionMode: PermissionMode;
   /** The model the agent runs, once known. */
   model?: string;
+  /** Set when the thread works on its own branch rather than in the project folder. */
+  workspace?: Workspace;
   /** Set when the last turn ended with an error. */
   error?: string;
   createdAt: number;
@@ -130,6 +159,15 @@ export type ServerMessage =
   | { type: "item"; threadId: string; item: Item }
   /** Streaming text appended to an existing agent or thought item. */
   | { type: "append"; threadId: string; itemId: string; text: string }
+  | { type: "review"; threadId: string; files: ReviewFile[]; error?: string }
+  | {
+      type: "shipped";
+      requestId: string;
+      threadId: string;
+      commit?: string;
+      url?: string;
+      prOpened: boolean;
+    }
   /** Reply to a create request, so the client can navigate to what it made. */
   | { type: "created"; requestId: string; id: string }
   | { type: "error"; requestId?: string; message: string };
@@ -178,7 +216,17 @@ export const ClientMessage = z.discriminatedUnion("type", [
     agentId: id,
     permissionMode: z.enum(["supervised", "full"]),
     model: id.optional(),
+    /** Gives the thread its own branch and worktree, when the project is a git repository. */
+    isolated: z.boolean().optional(),
     text,
+  }),
+  z.object({ type: z.literal("workspace.review"), threadId: id }),
+  z.object({
+    type: z.literal("workspace.ship"),
+    requestId: id,
+    threadId: id,
+    message: z.string().trim().min(1).max(10_000),
+    pr: z.boolean(),
   }),
   z.object({ type: z.literal("thread.open"), threadId: id }),
   z.object({ type: z.literal("thread.send"), threadId: id, text }),

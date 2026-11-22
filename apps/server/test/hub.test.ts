@@ -32,7 +32,9 @@ afterEach(async () => {
 function setup() {
   const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-test-"));
   const store = new Store(path.join(dir, "state.sqlite"));
-  const hub = new Hub(store, new Agents({ demo: true }));
+  const hub = new Hub(store, new Agents({ demo: true }), {
+    worktreesDir: path.join(dir, ".worktrees"),
+  });
   const client = new TestClient();
   hub.connect(client);
   const projectId = hub.createProject("demo", dir);
@@ -239,7 +241,9 @@ describe("Hub with the demo agent", () => {
     await hub.close();
 
     // A restarted server: the agent reloads its saved session, which replays "rapide".
-    const restarted = new Hub(store, new Agents({ demo: true }));
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(os.tmpdir(), "unused-worktrees"),
+    });
     cleanups.unshift(() => restarted.close());
     await restarted.setModel(threadId, "precis");
     restarted.send(threadId, "Deux");

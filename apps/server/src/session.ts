@@ -68,6 +68,7 @@ function absorb(state: SessionState, response: unknown): void {
 }
 
 const STDERR_TAIL = 4000;
+const KILL_GRACE_MS = 3000;
 /** ACP's "Authentication required" error code. */
 const AUTH_REQUIRED = -32000;
 
@@ -77,13 +78,13 @@ export class AgentSession {
   /** True when the agent opened a new session rather than continuing an earlier one. */
   readonly fresh: boolean;
   private readonly connection: acp.ClientConnection;
-  private readonly kill: () => void;
+  private readonly kill: () => Promise<void>;
   private readonly state: SessionState;
 
   private constructor(
     sessionId: string,
     connection: acp.ClientConnection,
-    kill: () => void,
+    kill: () => Promise<void>,
     state: SessionState,
     fresh: boolean,
   ) {
@@ -185,16 +186,26 @@ export class AgentSession {
     );
     let exited = false;
     let stopping = false;
-    child.once("exit", (code) => {
-      exited = true;
-      connection.close();
-      const failed = code !== 0 && !stopping;
-      handlers.onExit(failed ? stderr.trim() || `L'agent s'est arrêté (code ${code}).` : undefined);
+    const exit = new Promise<void>((resolve) => {
+      child.once("exit", (code) => {
+        exited = true;
+        connection.close();
+        const failed = code !== 0 && !stopping;
+        handlers.onExit(
+          failed ? stderr.trim() || `L'agent s'est arrêté (code ${code}).` : undefined,
+        );
+        resolve();
+      });
     });
+    /** Stops the agent and resolves once its process is gone, forcing it after a grace period. */
     const kill = () => {
       stopping = true;
       connection.close();
-      if (!exited) child.kill("SIGTERM");
+      if (!exited) {
+        child.kill("SIGTERM");
+        setTimeout(() => exited || child.kill("SIGKILL"), KILL_GRACE_MS).unref();
+      }
+      return exit;
     };
 
     const aborted = new Promise<never>((_, reject) => {
@@ -245,7 +256,7 @@ export class AgentSession {
     try {
       return await Promise.race([handshake(), aborted]);
     } catch (error) {
-      kill();
+      void kill();
       if ((error as { code?: unknown } | null)?.code === AUTH_REQUIRED && launch.login) {
         throw new Error(`Connecte-toi d'abord avec ton compte : ${launch.login}.`, {
           cause: error,
@@ -267,8 +278,9 @@ export class AgentSession {
     return this.connection.agent.notify("session/cancel", { sessionId: this.sessionId });
   }
 
-  close(): void {
-    this.kill();
+  /** Stops the agent; resolves once its process has exited and released its folder. */
+  close(): Promise<void> {
+    return this.kill();
   }
 }
 
