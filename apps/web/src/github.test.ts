@@ -109,5 +109,11 @@ describe("canClone", () => {
     expect(canClone("moon/app", "  ", "")).toBe(false);
     expect(canClone("moon/..", "/home/moon", "")).toBe(false);
     expect(canClone("moon/..", "/home/moon", "   ")).toBe(false);
+    expect(canClone("moon/..", "/home/moon", "app")).toBe(false);
+    expect(canClone("moon", "/home/moon", "app")).toBe(false);
+    expect(canClone("https://gitlab.com/a/b", "/home/moon", "app")).toBe(false);
+    expect(canClone("file:///etc/passwd", "/home/moon", "app")).toBe(false);
+    expect(canClone("moon/app", "/home/moon", "../escape")).toBe(false);
+    expect(canClone("moon/app", "/home/moon", "..")).toBe(false);
   });
 });
