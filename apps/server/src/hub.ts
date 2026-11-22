@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
-import { threadGroup, threadPullRequest } from "@moonagentic/protocol";
+import { DEFAULT_PARALLEL, threadGroup, threadPullRequest } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   AgentSetting,
@@ -140,6 +140,13 @@ const withOrigin = (brief: string, asked: string | undefined) =>
         .join("\n")}`
     : brief;
 
+/** The level a coordinator starts on, as agents name it. */
+const LOW_EFFORT = /^(low|bas)$/i;
+
+/** Told to a thread's agent before a coordinator's message, so it knows who speaks. */
+const FROM_COORDINATOR =
+  "Le message qui suit vient du coordinateur du projet : un agent qui répartit les demandes de l'utilisateur, pas l'utilisateur lui-même. Seule la partie « Message d'origine de l'utilisateur », quand elle est là, est de sa main.";
+
 /** The coordinator's tools that change something: only while it answers the user. */
 const WRITES = new Set(["open_thread", "start_team", "message_thread", "resolve_thread"]);
 /** A permission asked for one of MoonAgentic's own tools, as agents name the tools of an MCP server. */
@@ -155,7 +162,7 @@ export const coordinatorPrompt = (project: string) =>
 
 Ce que tu fais :
 - Une question rapide ou un point d'avancement : tu réponds toi-même, en quelques phrases. Pour l'avancement, lis l'état réel avec list_threads, puis read_thread si on te demande le détail d'un fil. N'invente jamais un état.
-- Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne complète, car l'agent du fil ne voit pas cette conversation.
+- Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne complète, car l'agent du fil ne voit pas cette conversation. Donne toujours kind : les réglages de l'utilisateur en déduisent l'agent. Si l'outil répond que le fil est en file, dis-le : il démarrera seul.
 - Une tâche trop grosse pour un seul fil, avec plusieurs morceaux indépendants, ou quand l'utilisateur demande une équipe : start_team.
 - Un sujet qui a déjà son fil : tu le relances avec message_thread plutôt que d'en ouvrir un second. Si son agent travaille, ton message attend la fin de son tour ; mode steer seulement pour une correction urgente, car il coupe le travail en cours.
 - resolve_thread seulement quand l'utilisateur dit que le sujet est clos.
@@ -446,14 +453,18 @@ export class Hub {
           items: this.items(message.threadId),
         });
         return;
-      case "thread.send":
+      case "thread.send": {
+        // Written to by hand, a thread waiting in line starts now, its brief first.
+        const held = this.store.getThread(message.threadId)?.held;
+        if (held) this.updateThread(message.threadId, { held: null });
         this.send(
           message.threadId,
-          message.text,
+          held ? `${held}\n\n${message.text}` : message.text,
           this.leadContext(message.threadId) ??
             this.coordinatorContext(message.threadId, message.text),
         );
         return;
+      }
       case "coordinator.open": {
         const id = this.openCoordinator(message.projectId, message.agentId, message.model);
         client.openThreadId = id;
@@ -513,6 +524,12 @@ export class Hub {
         this.setCoordinatorSettings({ ...settings, routes });
         return;
       }
+      case "coordinator.setParallel":
+        this.setCoordinatorSettings({
+          ...this.coordinatorSettings(),
+          parallel: message.parallel,
+        });
+        return;
       case "team.start": {
         const id = this.startTeam(message);
         // Kept as the team a coordinator starts when it is asked for one.
@@ -707,6 +724,8 @@ export class Hub {
     /** The coordinator that opened it. */
     openedBy?: string | undefined;
     taskKey?: string | undefined;
+    /** Kept in line: the text is given later, once its coordinator has a place free. */
+    held?: boolean | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
@@ -732,6 +751,7 @@ export class Hub {
       ...(workspace ? { workspace } : {}),
       ...(input.openedBy ? { openedBy: input.openedBy } : {}),
       ...(input.taskKey ? { taskKey: input.taskKey } : {}),
+      ...(input.held && input.text ? { held: input.text } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.role ? { role: input.role } : {}),
       ...(input.worksIn ? { worksIn: input.worksIn } : {}),
@@ -742,7 +762,10 @@ export class Hub {
     this.store.addThread(thread);
     this.broadcast({ type: "thread", thread });
     // A team's merge thread starts with no message: its branch is filled first.
-    if (input.text) this.send(thread.id, input.text, undefined, input.byTeam);
+    if (input.text && !input.held) {
+      if (input.openedBy) this.sendFromCoordinator(thread.id, input.text, input.byTeam);
+      else this.send(thread.id, input.text, undefined, input.byTeam);
+    }
     return thread.id;
   }
 
@@ -875,6 +898,53 @@ export class Hub {
     return token;
   }
 
+  /** A coordinator's words to a thread: marked as its own, and said to be an agent's. */
+  private sendFromCoordinator(threadId: string, text: string, byTeam?: boolean): void {
+    const lead = this.leadContext(threadId);
+    this.send(
+      threadId,
+      text,
+      lead ? `${FROM_COORDINATOR}\n\n${lead}` : FROM_COORDINATOR,
+      byTeam,
+      "coordinator",
+    );
+  }
+
+  /** Threads a coordinator opened that are at work now: a turn under way, or a team running. */
+  private atWork(coordinatorId: string): number {
+    return this.store
+      .listThreads()
+      .filter(
+        (t) =>
+          t.openedBy === coordinatorId &&
+          !t.archived &&
+          (this.turns.has(t.id) ||
+            (t.team && ["planning", "coding", "merging"].includes(t.team.phase))),
+      ).length;
+  }
+
+  private parallel(): number {
+    return this.coordinatorSettings().parallel ?? DEFAULT_PARALLEL;
+  }
+
+  /** Starts the threads waiting in line behind a coordinator, oldest first, while it has places free. */
+  private drainLine(coordinatorId: string): void {
+    const waiting = this.store
+      .listThreads()
+      .filter((t) => t.openedBy === coordinatorId && t.held && !t.archived)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    for (const next of waiting) {
+      if (this.atWork(coordinatorId) >= this.parallel()) return;
+      const brief = next.held!;
+      try {
+        this.updateThread(next.id, { held: null });
+        this.sendFromCoordinator(next.id, brief);
+      } catch (error) {
+        this.updateThread(next.id, { status: "error", error: describe(error) });
+      }
+    }
+  }
+
   /** Gives a thread whose turn just ended what a coordinator left for it meanwhile. */
   private sendQueued(threadId: string): void {
     const waiting = this.queued.get(threadId);
@@ -885,7 +955,7 @@ export class Hub {
       return;
     }
     try {
-      this.send(threadId, waiting.join("\n\n"), this.leadContext(threadId));
+      this.sendFromCoordinator(threadId, waiting.join("\n\n"));
       this.queued.delete(threadId);
     } catch {
       // Still busy, with a team or a step back: kept for the end of the next turn.
@@ -901,9 +971,11 @@ export class Hub {
     return {
       id: t.id,
       title: t.title,
-      state: { waiting: "en attente", running: "en cours", idle: "inactif", resolved: "résolu" }[
-        threadGroup(t, members)
-      ],
+      state: t.held
+        ? "en file"
+        : { waiting: "en attente", running: "en cours", idle: "inactif", resolved: "résolu" }[
+            threadGroup(t, members)
+          ],
       agent: t.agentId,
       ...(t.model ? { model: t.model } : {}),
       ...(asking ? { waits_on: "une réponse de l'utilisateur" } : {}),
@@ -983,7 +1055,7 @@ export class Hub {
             (i.kind === "user" && !i.byTeam) || i.kind === "agent"
               ? [
                   {
-                    from: i.kind === "user" ? "utilisateur" : "agent",
+                    from: i.kind === "agent" ? "agent" : i.from ? "coordinateur" : "utilisateur",
                     text: i.text.length > READ_CLIP ? `${i.text.slice(0, READ_CLIP)}…` : i.text,
                   },
                 ]
@@ -1046,6 +1118,8 @@ export class Hub {
           text: withOrigin(brief, this.lastAsked.get(coordinator.id)),
           openedBy: coordinator.id,
           taskKey,
+          // Past what it may run at once, the thread waits in line, in plain sight.
+          held: this.atWork(coordinator.id) >= this.parallel(),
         });
         this.openedThisTurn.set(coordinator.id, opened + 1);
         this.putItem(coordinator.id, {
@@ -1055,7 +1129,13 @@ export class Hub {
           title: this.requireThread(id).title,
           at: Date.now(),
         });
-        return { opened: this.threadForCoordinator(this.requireThread(id)) };
+        const made = this.requireThread(id);
+        return {
+          opened: this.threadForCoordinator(made),
+          ...(made.held
+            ? { in_line: `Il démarre dès qu'un des ${this.parallel()} fils en cours se termine.` }
+            : {}),
+        };
       }
       case "start_team": {
         const taskKey = need("task_key", 80).toLowerCase();
@@ -1099,7 +1179,7 @@ export class Hub {
           throw new Error(`« mode » doit être l'un de : ${MESSAGE_MODES.join(", ")}.`);
         if (thread.archived) throw new Error("Ce fil est résolu : l'utilisateur doit le rouvrir.");
         if (!this.turns.has(thread.id)) {
-          this.send(thread.id, text, this.leadContext(thread.id));
+          this.sendFromCoordinator(thread.id, text);
           return { sent_to: thread.title };
         }
         if (mode === "queue") {
@@ -1110,7 +1190,7 @@ export class Hub {
         if (thread.team) throw new Error("Une équipe ne se coupe pas : utilise le mode queue.");
         await this.cancel(thread.id);
         await this.whenIdle(thread.id);
-        this.send(thread.id, text, this.leadContext(thread.id));
+        this.sendFromCoordinator(thread.id, text);
         return { sent_to: thread.title, interrupted: true };
       }
       case "resolve_thread": {
@@ -1146,7 +1226,13 @@ export class Hub {
    * Sends the user's message to the thread's agent; `context` goes before it, unseen.
    * `byTeam` marks a message the team's engine wrote, which the app keeps out of sight.
    */
-  send(threadId: string, text: string, context?: string, byTeam?: boolean): void {
+  send(
+    threadId: string,
+    text: string,
+    context?: string,
+    byTeam?: boolean,
+    from?: "coordinator",
+  ): void {
     const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
     const busy = this.busy.get(threadId);
@@ -1159,6 +1245,7 @@ export class Hub {
       kind: "user",
       text,
       ...(byTeam ? { byTeam: true as const } : {}),
+      ...(from ? { from } : {}),
       at: Date.now(),
     });
     this.updateThread(threadId, { status: "running", error: null });
@@ -1187,6 +1274,9 @@ export class Hub {
       }
       // A turn the user stopped starts nothing by itself: what waits goes after the next one.
       if (!this.closed && !cancelled) this.sendQueued(threadId);
+      // A place is free: the next thread in line behind the same coordinator starts.
+      const openedBy = this.closed ? undefined : this.store.getThread(threadId)?.openedBy;
+      if (openedBy) this.drainLine(openedBy);
     });
     this.turns.set(threadId, turn);
   }
@@ -2204,9 +2294,17 @@ export class Hub {
 
   /** Gives a starting agent the mode and effort the thread asked for. */
   private async applySettings(threadId: string, session: AgentSession): Promise<void> {
-    const wanted = this.store.getThread(threadId)?.settings ?? {};
+    const thread = this.store.getThread(threadId);
+    const wanted = thread?.settings ?? {};
     for (const setting of session.settings) {
-      const value = Object.hasOwn(wanted, setting.id) ? wanted[setting.id] : undefined;
+      const chosen = Object.hasOwn(wanted, setting.id) ? wanted[setting.id] : undefined;
+      // A coordinator routes and answers briefly: it starts on the agent's low effort, and
+      // keeps whatever the user sets afterwards.
+      const value =
+        chosen ??
+        (thread?.kind === "coordinator" && setting.kind === "effort"
+          ? setting.choices.find((c) => LOW_EFFORT.test(c.id))?.id
+          : undefined);
       if (value && value !== setting.current && setting.choices.some((c) => c.id === value)) {
         await session.setSetting(setting.id, value);
       }

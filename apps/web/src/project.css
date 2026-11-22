@@ -405,3 +405,11 @@
     margin-left: 24px;
   }
 }
+
+/* A message a coordinator wrote in a thread: said so, above it. */
+.u-from {
+  align-self: flex-end;
+  margin: 0 4px 2px;
+  font-size: 11.5px;
+  color: var(--muted);
+}

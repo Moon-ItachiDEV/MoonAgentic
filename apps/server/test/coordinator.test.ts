@@ -106,6 +106,8 @@ describe("a project's coordinator", () => {
     // The thread got the brief, and the coordinator's conversation links to it.
     expect(store.listItems(opened.id)[0]).toMatchObject({
       kind: "user",
+      // Marked as the coordinator's words, not the user's.
+      from: "coordinator",
       text: "Corrige : Export Safari\n\n---\nMessage d'origine de l'utilisateur, transmis tel quel par MoonAgentic :\n\n> /ouvre Export Safari",
     });
     // Asked again for the same subject, it gets that thread back rather than a second one.
@@ -114,6 +116,8 @@ describe("a project's coordinator", () => {
     expect(store.listItems(coordinatorId)).toContainEqual(
       expect.objectContaining({ kind: "opened", threadId: opened.id, title: "Export Safari" }),
     );
+    // It runs on the agent's low effort, where a thread starts on the agent's own.
+    expect(store.getThread(coordinatorId)!.settings).toMatchObject({ effort: "bas" });
     // It sees the project's threads, itself left out.
     expect(await say("/fils")).toBe("Ce projet a 1 fil.");
   });
@@ -376,5 +380,43 @@ describe("a project's coordinator", () => {
     for (const t of store.listThreads().filter((t) => t.role === "lead")) {
       await hub.handle(client, { type: "team.stop", threadId: t.id });
     }
+  });
+
+  it("keeps the threads past what it may run at once in line, and starts them as places free", async () => {
+    const { hub, store, tokens, post, say, hold } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await hub.handle(client, { type: "coordinator.setParallel", parallel: 1 });
+    await say("/fils");
+    await hold();
+    const open = async (key: string) =>
+      (
+        (await (
+          await post(tokens[0]!, {
+            tool: "open_thread",
+            args: { task_key: key, title: key, brief: `Fais ${key}` },
+          })
+        ).json()) as { result: { opened: { id: string; state: string }; in_line?: string } }
+      ).result;
+    // Opened in the coordinator's mode, the first one waits for a permission: at work.
+    const first = await open("un");
+    expect(first.in_line).toBeUndefined();
+    const second = await open("deux");
+    expect(second.in_line).toBeTruthy();
+    expect(second.opened.state).toBe("en file");
+    // In line: it exists, with its brief kept, and nothing was sent to its agent.
+    expect(store.getThread(second.opened.id)!.held).toContain("Fais deux");
+    expect(store.listItems(second.opened.id)).toHaveLength(0);
+
+    // The first one ends: the second starts by itself, with its brief.
+    await expect.poll(() => store.getThread(first.opened.id)!.status).toBe("waiting");
+    await hub.cancel(first.opened.id);
+    await hub.whenIdle(first.opened.id);
+    await expect.poll(() => store.getThread(second.opened.id)!.held).toBeUndefined();
+    await expect
+      .poll(() => store.listItems(second.opened.id)[0])
+      .toMatchObject({ kind: "user", text: expect.stringContaining("Fais deux") });
+    await expect.poll(() => store.getThread(second.opened.id)!.status).toBe("waiting");
+    await hub.cancel(second.opened.id);
+    await hub.whenIdle(second.opened.id);
   });
 });

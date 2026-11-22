@@ -1,6 +1,8 @@
 import {
   type AgentInfo,
   type CoordinatorSettings,
+  DEFAULT_PARALLEL,
+  MAX_PARALLEL,
   type Favorites,
   type McpServerInfo,
   type Project,
@@ -438,6 +440,29 @@ export function SettingsPage(props: {
             })}
           </div>
           <div className="set-card">
+            <Row
+              title="Fils en même temps"
+              text="Au-delà, les fils qu'un coordinateur ouvre attendent en file et démarrent dès qu'une place se libère."
+            >
+              <label className="set-select">
+                <select
+                  aria-label="Fils en même temps"
+                  value={props.coordinator.parallel ?? DEFAULT_PARALLEL}
+                  onChange={(e) =>
+                    connection.send({
+                      type: "coordinator.setParallel",
+                      parallel: Number(e.target.value),
+                    })
+                  }
+                >
+                  {Array.from({ length: MAX_PARALLEL }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </Row>
             <Row
               title="Équipe lancée par un coordinateur"
               text={
