@@ -9,6 +9,7 @@ import {
   IconCode,
   IconShield,
   IconMenu,
+  IconSidebar,
   IconCompose,
   IconFile,
   IconArchive,
@@ -51,6 +52,12 @@ export function App() {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
   const route = useRoute();
   const [drawer, setDrawer] = useState(false);
+  // On a computer, the side bar can be folded away, as in the mockup.
+  const [sideOff, setSideOff] = useState(() => readPref("sideOff") === "true");
+  const foldSide = (off: boolean) => {
+    setSideOff(off);
+    writePref("sideOff", String(off));
+  };
   /** Bumped to open the planner again on the view just chosen. */
   const [plannerShown, setPlannerShown] = useState(0);
   const [creatingProject, setCreatingProject] = useState(false);
@@ -195,7 +202,7 @@ export function App() {
 
   return (
     <div
-      className={`app${drawer ? " drawer" : ""}${route.name === "home" ? " home-route" : ""}${reviewing ? " reviewing" : ""}`}
+      className={`app${drawer ? " drawer" : ""}${sideOff ? " side-off" : ""}${route.name === "home" ? " home-route" : ""}${reviewing ? " reviewing" : ""}`}
     >
       {route.name === "settings" ? (
         // Until the settings arrive, an empty side bar keeps the layout in place.
@@ -259,6 +266,7 @@ export function App() {
             setDrawer(false);
             setSearchOpen(true);
           }}
+          onCollapse={() => foldSide(true)}
         />
       )}
       <div className="side-scrim" onClick={() => setDrawer(false)} />
@@ -267,6 +275,16 @@ export function App() {
           <button className="ib mobile-only" aria-label="Menu" onClick={() => setDrawer(true)}>
             <IconMenu />
           </button>
+          {sideOff && route.name !== "settings" && (
+            <button
+              className="ib open-side"
+              aria-label="Afficher la barre latérale"
+              title="Afficher la barre latérale"
+              onClick={() => foldSide(false)}
+            >
+              <IconSidebar />
+            </button>
+          )}
           <div className="ttl">
             {route.name === "settings" ? "Réglages" : (thread?.title ?? "")}
           </div>
