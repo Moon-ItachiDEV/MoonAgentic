@@ -1,5 +1,5 @@
 import type { Schedule, Thread } from "@moonagentic/protocol";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useState, useSyncExternalStore } from "react";
 import { Composer } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
@@ -21,12 +21,10 @@ import {
 } from "./components/icons.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
-import { Planner } from "./components/Planner.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
-import { SettingsNav, SettingsPage } from "./components/Settings.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
@@ -37,6 +35,17 @@ import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
 import { focusItem } from "./focus.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { navigate, useRoute } from "./router.ts";
+
+// The planner and the settings are loaded on demand, so they stay out of the main chunk.
+const Planner = lazy(() =>
+  import("./components/Planner.tsx").then((m) => ({ default: m.Planner })),
+);
+const SettingsNav = lazy(() =>
+  import("./components/Settings.tsx").then((m) => ({ default: m.SettingsNav })),
+);
+const SettingsPage = lazy(() =>
+  import("./components/Settings.tsx").then((m) => ({ default: m.SettingsPage })),
+);
 
 export function App() {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
@@ -182,11 +191,14 @@ export function App() {
       className={`app${drawer ? " drawer" : ""}${route.name === "home" ? " home-route" : ""}${reviewing ? " reviewing" : ""}`}
     >
       {route.name === "settings" ? (
-        <SettingsNav
-          section={route.section}
-          onPick={(section) => go({ name: "settings", section })}
-          onBack={() => go({ name: "home" })}
-        />
+        // Until the settings arrive, an empty side bar keeps the layout in place.
+        <Suspense fallback={<aside className="side set-side" aria-label="Réglages" />}>
+          <SettingsNav
+            section={route.section}
+            onPick={(section) => go({ name: "settings", section })}
+            onBack={() => go({ name: "home" })}
+          />
+        </Suspense>
       ) : (
         <Sidebar
           state={state}
@@ -275,17 +287,19 @@ export function App() {
           )}
         </header>
         {route.name === "settings" ? (
-          <SettingsPage
-            section={route.section}
-            agents={state.agents}
-            favorites={state.favorites}
-            projects={state.projects}
-            projectId={project?.id}
-            mcpServers={state.mcpServers}
-            onPickProject={pickProject}
-            onOpenConnections={() => setConnectionsOpen(true)}
-            onOpenMcp={() => setMcpOpen(true)}
-          />
+          <Suspense fallback={<div className="view" />}>
+            <SettingsPage
+              section={route.section}
+              agents={state.agents}
+              favorites={state.favorites}
+              projects={state.projects}
+              projectId={project?.id}
+              mcpServers={state.mcpServers}
+              onPickProject={pickProject}
+              onOpenConnections={() => setConnectionsOpen(true)}
+              onOpenMcp={() => setMcpOpen(true)}
+            />
+          </Suspense>
         ) : route.name === "thread" ? (
           thread ? (
             <ThreadView
@@ -303,19 +317,21 @@ export function App() {
             </div>
           )
         ) : route.name === "planner" ? (
-          <Planner
-            key={project?.id}
-            project={project}
-            plan={state.plan}
-            schedules={state.schedules}
-            onSchedule={(schedule) =>
-              setScheduling(schedule ? { text: "", schedule } : { text: "" })
-            }
-            threads={state.threads}
-            agents={state.agents}
-            onOpenThread={(id) => go({ name: "thread", threadId: id })}
-            onNewProject={() => setCreatingProject(true)}
-          />
+          <Suspense fallback={<div className="view" />}>
+            <Planner
+              key={project?.id}
+              project={project}
+              plan={state.plan}
+              schedules={state.schedules}
+              onSchedule={(schedule) =>
+                setScheduling(schedule ? { text: "", schedule } : { text: "" })
+              }
+              threads={state.threads}
+              agents={state.agents}
+              onOpenThread={(id) => go({ name: "thread", threadId: id })}
+              onNewProject={() => setCreatingProject(true)}
+            />
+          </Suspense>
         ) : (
           <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
         )}
