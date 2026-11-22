@@ -78,13 +78,15 @@ Le mini-PC garde tes agents en marche ; ton PC principal et ton téléphone s'y 
    Si `tailscale` n'est pas reconnu, utilise `& "C:\Program Files\Tailscale\tailscale.exe" serve --bg 4747`. La première fois, Tailscale peut te demander d'activer HTTPS pour ton réseau : suis le lien qu'il affiche.
 
 4. **Ouvre Réglages → Accès distant** sur le mini-PC : l'adresse `https://<mini-pc>.<ton-réseau>.ts.net` y apparaît avec son QR code. Scanne-le avec ton téléphone, copie le lien sur ton PC principal, puis ajoute la page à l'écran d'accueil.
-5. **Pour qu'il tourne sans toi** : dans Windows, _Paramètres → Système → Alimentation_, mets la mise en veille sur « Jamais ». Pour relancer MoonAgentic à chaque ouverture de session, crée une tâche planifiée (remplace le chemin par celui de ton clone) :
+5. **Pour qu'il tourne sans toi** : dans Windows, _Paramètres → Système → Alimentation_, mets la mise en veille sur « Jamais ». Pour relancer MoonAgentic à chaque ouverture de session, fais `Win + R`, tape `shell:startup`, et crée dans ce dossier un fichier `MoonAgentic.cmd` (remplace le chemin par celui de ton clone) :
 
-   ```powershell
-   schtasks /Create /TN MoonAgentic /SC ONLOGON /TR "cmd /c cd /d C:\chemin\vers\MoonAgentic && pnpm start"
+   ```bat
+   @echo off
+   cd /d "C:\chemin\vers\MoonAgentic"
+   pnpm start
    ```
 
-   Tailscale, lui, redémarre tout seul avec Windows et se souvient de `serve --bg`.
+   Pas besoin de droits administrateur. Évite une tâche planifiée `schtasks` : Windows arrête par défaut une tâche qui tourne depuis plus de 3 jours. Tailscale, lui, redémarre tout seul avec Windows et se souvient de `serve --bg`.
 
 N'utilise pas `tailscale funnel` : il ouvrirait MoonAgentic à tout Internet. Réglages → Accès distant te prévient si c'est le cas.
 
