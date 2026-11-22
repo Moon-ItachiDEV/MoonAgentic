@@ -10,6 +10,12 @@ export interface AgentLaunch {
   args: string[];
   /** ACP auth method to call before opening a session, for agents that expect it. */
   authMethodId?: string;
+  /**
+   * Calls that method only once the agent refuses to open a session without it, for agents
+   * that list every method whatever the user set up: calling one unasked would replace
+   * their choice, an API key for instance.
+   */
+  authWhenAsked?: boolean;
   /** How the user signs in with the agent's own tool, shown when the agent asks for it. */
   login?: string;
   /** What starts it, as shown in Connexions, when the command alone says little. */
@@ -56,13 +62,24 @@ const require = createRequire(import.meta.url);
 function nativeAcp(
   base: Omit<AgentDefinition, "resolve">,
   clis: string[],
-  setup: { hint: string; login: string; authMethodId?: string },
+  setup: {
+    hint: string;
+    login: string;
+    authMethodId?: string;
+    authWhenAsked?: boolean;
+    /** Where its installer puts it, for when that folder is not on the PATH yet. */
+    places?: () => string[];
+  },
 ): AgentDefinition {
-  const { hint, ...launch } = setup;
+  const { hint, places, ...launch } = setup;
   return {
     ...base,
     resolve: () => {
-      const command = clis.map((cli) => findOnPath(cli)).find(Boolean);
+      const command =
+        clis.map((cli) => findOnPath(cli)).find(Boolean) ??
+        places?.()
+          .map((place) => findCommand(place))
+          .find(Boolean);
       return command ? { command, args: ["acp"], ...launch } : { hint };
     },
   };
@@ -123,6 +140,13 @@ const customDefinition = (agent: CustomAgent): AgentDefinition => ({
   },
 });
 
+/** Where Google's installer puts `agy`: it warns that the folder is not on the PATH yet. */
+export function agyPlaces(env = process.env, home = os.homedir()): string[] {
+  return process.platform === "win32"
+    ? [path.join(env.LOCALAPPDATA || path.join(home, "AppData", "Local"), "agy", "bin", "agy")]
+    : [path.join(home, ".local", "bin", "agy")];
+}
+
 const definitions: AgentDefinition[] = [
   {
     id: "claude",
@@ -148,6 +172,10 @@ const definitions: AgentDefinition[] = [
     {
       hint: "Installe Antigravity CLI (commande agy), puis lance « agy » une fois pour te connecter.",
       login: "lance « agy »",
+      // agy lists its four methods whatever the user set up, API key and Vertex included.
+      authMethodId: "oauth-personal",
+      authWhenAsked: true,
+      places: agyPlaces,
     },
   ),
   nativeAcp({ id: "cursor", name: "Cursor", short: "Cu" }, ["cursor-agent", "agent"], {

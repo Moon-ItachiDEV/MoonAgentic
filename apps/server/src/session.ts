@@ -151,6 +151,64 @@ export const needsSignIn = (error: unknown): boolean =>
   (error as { cause?: { code?: unknown } } | null)?.cause?.code === AUTH_REQUIRED ||
   (error as { code?: unknown } | null)?.code === AUTH_REQUIRED;
 
+/**
+ * What an agent prints on its standard output, among its messages, when the user must sign
+ * in with the agent's own tool first. Antigravity writes "Open the following link to
+ * authenticate the ACP server: https://…".
+ */
+const SIGN_IN_LINE = /open the following link to authenticate|\bauthenticate\b.*https?:\/\//i;
+const OTHER_LINE_MAX = 2000;
+
+/**
+ * Lets an agent's messages through, one JSON object per line, and hands every other line to
+ * `onOther` instead: plain text there would be answered with a protocol error and leave the
+ * start waiting for nothing. Messages pass untouched, without being held back.
+ */
+export function jsonLines(onOther: (line: string) => void): TransformStream<Uint8Array> {
+  let inside: "message" | "other" | undefined;
+  let kept: Uint8Array[] = [];
+  let size = 0;
+  const flush = () => {
+    const line = Buffer.concat(kept).toString("utf8").trim();
+    kept = [];
+    size = 0;
+    if (line) onOther(line);
+  };
+  return new TransformStream({
+    transform(chunk, controller) {
+      let i = 0;
+      while (i < chunk.length) {
+        if (!inside) {
+          const byte = chunk[i];
+          // Spaces and empty lines between two messages.
+          if (byte === 0x20 || byte === 0x09 || byte === 0x0d || byte === 0x0a) {
+            i += 1;
+            continue;
+          }
+          inside = byte === 0x7b ? "message" : "other";
+        }
+        const newline = chunk.indexOf(0x0a, i);
+        const end = newline === -1 ? chunk.length : newline + 1;
+        const piece = chunk.subarray(i, end);
+        if (inside === "message") {
+          controller.enqueue(piece);
+        } else if (size < OTHER_LINE_MAX) {
+          kept.push(piece.subarray(0, OTHER_LINE_MAX - size));
+          size += piece.length;
+        }
+        if (newline !== -1) {
+          if (inside === "other") flush();
+          inside = undefined;
+        }
+        i = end;
+      }
+    },
+    flush() {
+      if (inside === "other") flush();
+    },
+  });
+}
+
 /** One agent process and its ACP session, owned by one thread. */
 export class AgentSession {
   readonly sessionId: string;
@@ -256,11 +314,44 @@ export class AgentSession {
     });
     // Writes racing the agent's exit fail with EPIPE; the exit handler reports the real cause.
     child.stdin.on("error", () => undefined);
+    let askSignIn = () => undefined as void;
+    const signInAsked = new Promise<never>((_, reject) => {
+      askSignIn = () =>
+        reject(
+          Object.assign(new Error("L'agent demande d'abord une connexion avec son propre outil."), {
+            code: AUTH_REQUIRED,
+          }),
+        );
+    });
+    signInAsked.catch(() => undefined);
     let stderr = "";
+    let signInSeen = false;
+    /** A line of plain text from the agent, on either output: kept for its error report. */
+    const textLine = (line: string) => {
+      // The sign-in link is neither kept nor shown, wherever the agent writes it and even
+      // on a line of its own after the sentence: the user signs in with the agent's own tool.
+      if (signInSeen) return;
+      if (SIGN_IN_LINE.test(line)) {
+        signInSeen = true;
+        askSignIn();
+      } else {
+        stderr = `${stderr}${line}\n`.slice(-STDERR_TAIL);
+      }
+    };
+    // Whole lines only, so a link cut in two by a read is never kept by halves.
+    let stderrRest = "";
+    const flushStderr = () => {
+      if (stderrRest.trim()) textLine(stderrRest);
+      stderrRest = "";
+    };
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      stderr = (stderr + chunk).slice(-STDERR_TAIL);
+      const lines = (stderrRest + chunk).split("\n");
+      // The start of a very long line is what tells a sign-in line from another.
+      stderrRest = (lines.pop() ?? "").slice(0, OTHER_LINE_MAX);
+      for (const line of lines) textLine(line);
     });
+    child.stderr.on("end", flushStderr);
     const spawned = new Promise<void>((resolve, reject) => {
       child.once("spawn", resolve);
       child.once("error", reject);
@@ -304,17 +395,18 @@ export class AgentSession {
       );
 
     await spawned;
+    const messages = (Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>).pipeThrough(
+      jsonLines(textLine),
+    );
     const connection = app.connect(
-      acp.ndJsonStream(
-        Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,
-        Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>,
-      ),
+      acp.ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, messages),
     );
     let exited = false;
     let stopping = false;
     const exit = new Promise<void>((resolve) => {
       child.once("exit", (code) => {
         exited = true;
+        flushStderr();
         connection.close();
         const failed = code !== 0 && !stopping;
         handlers.onExit(
@@ -366,41 +458,72 @@ export class AgentSession {
             `MoonAgentic la version ${acp.PROTOCOL_VERSION}. Mets à jour l'agent ou MoonAgentic.`,
         );
       }
-      if (launch.authMethodId && init.authMethods?.some((m) => m.id === launch.authMethodId)) {
-        await connection.agent.request("authenticate", { methodId: launch.authMethodId });
+      const authMethodId = init.authMethods?.some((m) => m.id === launch.authMethodId)
+        ? launch.authMethodId
+        : undefined;
+      if (authMethodId && !launch.authWhenAsked) {
+        await connection.agent.request("authenticate", { methodId: authMethodId });
       }
       const caps = init.agentCapabilities;
       const mcpServers = acpMcpServers(options.mcpServers ?? [], caps?.mcpCapabilities);
       const previous = options.previousSessionId;
-      if (previous && caps?.sessionCapabilities?.resume) {
-        await connection.agent
-          .request("session/resume", { sessionId: previous, cwd, mcpServers })
-          .then((r) => {
-            sessionId = previous;
-            absorb(state, r);
-          })
-          .catch(() => undefined);
-      }
-      // An agent that could not resume the session may still be able to reload it.
-      if (!sessionId && previous && caps?.loadSession) {
-        replaying = true;
-        sessionId = previous;
-        await connection.agent
-          .request("session/load", { sessionId: previous, cwd, mcpServers })
-          .then((r) => absorb(state, r))
-          .catch(() => (sessionId = null));
-        replaying = false;
-      }
-      const fresh = !sessionId;
-      if (!sessionId) {
-        const created = await connection.agent.request("session/new", { cwd, mcpServers });
-        sessionId = created.sessionId;
-        absorb(state, created);
-      }
+      const askedToSignIn = (error: unknown) =>
+        (error as { code?: unknown } | null)?.code === AUTH_REQUIRED;
+      /** Continues the earlier session when the agent can, opens a new one otherwise. */
+      const open = async () => {
+        // A refusal for lack of sign-in is not "this session is gone": it is passed on.
+        const unlessSignIn = (error: unknown) => {
+          if (askedToSignIn(error)) throw error;
+        };
+        if (previous && caps?.sessionCapabilities?.resume) {
+          await connection.agent
+            .request("session/resume", { sessionId: previous, cwd, mcpServers })
+            .then((r) => {
+              sessionId = previous;
+              absorb(state, r);
+            })
+            .catch(unlessSignIn);
+        }
+        // An agent that could not resume the session may still be able to reload it.
+        if (!sessionId && previous && caps?.loadSession) {
+          replaying = true;
+          sessionId = previous;
+          try {
+            absorb(
+              state,
+              await connection.agent.request("session/load", {
+                sessionId: previous,
+                cwd,
+                mcpServers,
+              }),
+            );
+          } catch (error) {
+            sessionId = null;
+            unlessSignIn(error);
+          } finally {
+            replaying = false;
+          }
+        }
+        if (!sessionId) {
+          const created = await connection.agent.request("session/new", { cwd, mcpServers });
+          sessionId = created.sessionId;
+          absorb(state, created);
+          return true;
+        }
+        return false;
+      };
+      const fresh = await open().catch(async (error: unknown) => {
+        if (!askedToSignIn(error) || !authMethodId || !launch.authWhenAsked) throw error;
+        await connection.agent.request("authenticate", { methodId: authMethodId });
+        return open();
+      });
+      // Set by `open`, which the compiler does not follow.
+      const opened = sessionId as string | null;
+      if (!opened) throw new Error("L'agent n'a pas ouvert de session.");
       for (const params of early.splice(0)) dispatch(params);
       started = true;
       return new AgentSession({
-        sessionId,
+        sessionId: opened,
         connection,
         kill,
         state,
@@ -414,7 +537,7 @@ export class AgentSession {
     };
 
     try {
-      return await Promise.race([handshake(), aborted]);
+      return await Promise.race([handshake(), aborted, signInAsked]);
     } catch (error) {
       // Its process is gone before the failure is reported, so nothing is left running.
       await kill();

@@ -184,15 +184,30 @@ export interface SkillRecord extends Skill {
   file: string;
 }
 
-/** Where agents keep skills, inside a project or a home folder. */
-const SKILL_ROOTS = [".claude/skills", ".agents/skills", ".codex/skills"];
+/** Where agents keep skills inside a project; Antigravity's are the last two. */
+const PROJECT_SKILL_ROOTS = [
+  ".claude/skills",
+  ".agents/skills",
+  ".codex/skills",
+  ".gemini/skills",
+  ".agent/skills",
+];
+/** Where they keep the user's own, in the home folder; Antigravity's are the last three. */
+const USER_SKILL_ROOTS = [
+  ".claude/skills",
+  ".agents/skills",
+  ".codex/skills",
+  ".gemini/skills",
+  ".gemini/config/skills",
+  ".gemini/antigravity-cli/skills",
+];
 const MAX_SKILL_FILE = 256 * 1024;
 
 /** Skills found in the project and in the user's home folder; the project's win on a name. */
 export function findSkills(dir: string, home: string): SkillRecord[] {
   const byName = new Map<string, SkillRecord>();
   const scan = (base: string, scope: Skill["scope"]) => {
-    for (const root of SKILL_ROOTS) {
+    for (const root of scope === "project" ? PROJECT_SKILL_ROOTS : USER_SKILL_ROOTS) {
       let entries;
       try {
         entries = readdirSync(path.join(base, root), { withFileTypes: true });
