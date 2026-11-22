@@ -1,5 +1,5 @@
 // First end-to-end check: the built app, the real server, the demo agent, a real browser.
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +16,8 @@ let browser: Browser;
 let url: string;
 let dir: string;
 let project: string;
+/** A git repository, for the team: each coder works on its own branch. */
+let repo: string;
 
 function write(base: string, files: Record<string, string>) {
   for (const [rel, content] of Object.entries(files)) {
@@ -37,6 +39,23 @@ beforeAll(async () => {
     ".moonagentic/commands/deploy.md":
       "---\ndescription: Déploie la branche\n---\nDéploie $ARGUMENTS.\n",
   });
+  repo = path.join(dir, "equipe");
+  write(repo, { "src/app.ts": "export const answer = 41;\n", "README.md": "# Équipe\n" });
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "pipe" });
+  git("init", "-q", "-b", "main");
+  git("-c", "user.email=e2e@example.com", "-c", "user.name=E2E", "add", "-A");
+  git(
+    "-c",
+    "user.email=e2e@example.com",
+    "-c",
+    "user.name=E2E",
+    "-c",
+    "commit.gpgsign=false",
+    "commit",
+    "-q",
+    "-m",
+    "init",
+  );
   const home = path.join(dir, "home");
   mkdirSync(home);
   server = spawn(
@@ -242,6 +261,41 @@ describe("composer", () => {
     await page.getByText("Aucun projet pour l'instant.").waitFor();
     // The folder itself is left alone.
     expect(existsSync(path.join(project, "src/app.ts"))).toBe(true);
+    await page.close();
+  });
+
+  it("gives a task to a team: the lead splits it, coders do the pieces on their own branches", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
+    await page.getByLabel("Dossier").fill(repo);
+    await page.getByRole("button", { name: "Créer" }).click();
+    await expect.poll(() => composer(page).isEnabled()).toBe(true);
+
+    await composer(page).fill("/equipe Corrige answer et documente-la");
+    await composer(page).press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Confier à une équipe" });
+    await expect
+      .poll(() => dialog.getByLabel("Tâche").inputValue())
+      .toBe("Corrige answer et documente-la");
+    // The demo agent for every role, not a real one that may be installed on this machine.
+    await dialog.getByLabel("Chef", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Codeurs", { exact: true }).selectOption({ label: "Agent de démo" });
+    await shot(page, "c10-equipe-lancer");
+    await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
+
+    const card = page.getByRole("region", { name: "Équipe" });
+    await card.getByText("Terminé : chaque sous-tâche").waitFor({ timeout: 30_000 });
+    expect(await card.getByRole("listitem").allTextContents()).toEqual([
+      "Corriger answerterminée",
+      "Documenter answerterminée",
+    ]);
+    // The coders' threads sit under the lead's in the sidebar.
+    expect(await page.locator(".thr-row.child").count()).toBe(2);
+    await shot(page, "c11-equipe");
+
+    await card.getByRole("button", { name: "Documenter answer" }).click();
+    await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).waitFor();
     await page.close();
   });
 });

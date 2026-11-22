@@ -112,12 +112,39 @@ async function isWorktreeRoot(dir: string): Promise<boolean> {
   }
 }
 
+/** The worktree change running on each repository, so the next one waits for it. */
+const worktreeQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * Runs worktree changes on one repository one at a time: coders starting together would
+ * otherwise have git prune and add worktrees at once, under the same `.git/worktrees`.
+ */
+function oneAtATime<T>(repoDir: string, work: () => Promise<T>): Promise<T> {
+  const key = path.resolve(repoDir);
+  const run = (worktreeQueues.get(key) ?? Promise.resolve()).then(work, work);
+  const tail = run.catch(() => undefined);
+  worktreeQueues.set(key, tail);
+  void tail.then(() => {
+    if (worktreeQueues.get(key) === tail) worktreeQueues.delete(key);
+  });
+  return run;
+}
+
 /**
  * Makes sure the thread's worktree is there, on its branch. Safe to run again after a stop
  * at any point: a half-made folder is made again, and a branch that exists is reused with
  * its commits rather than started over from `base`.
  */
 export async function ensureWorktree(
+  repoDir: string,
+  worktree: string,
+  branch: string,
+  base: string,
+): Promise<void> {
+  return oneAtATime(repoDir, () => makeWorktree(repoDir, worktree, branch, base));
+}
+
+async function makeWorktree(
   repoDir: string,
   worktree: string,
   branch: string,
@@ -146,7 +173,11 @@ export async function forkPoint(repoDir: string, branch: string): Promise<string
 }
 
 /** Removes the worktree's folder; its branch and commits stay in the repository. */
-export async function removeWorktree(repoDir: string, worktree: string): Promise<void> {
+export function removeWorktree(repoDir: string, worktree: string): Promise<void> {
+  return oneAtATime(repoDir, () => dropWorktree(repoDir, worktree));
+}
+
+async function dropWorktree(repoDir: string, worktree: string): Promise<void> {
   if (existsSync(worktree)) {
     await git(repoDir, ["worktree", "remove", "--force", worktree]).catch(() => undefined);
   }

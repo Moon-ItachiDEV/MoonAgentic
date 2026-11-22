@@ -39,7 +39,15 @@ interface ThreadRow {
 
 type ThreadExtra = Pick<
   Thread,
-  "settings" | "usage" | "canCompact" | "commands" | "pinned" | "archived"
+  | "settings"
+  | "usage"
+  | "canCompact"
+  | "commands"
+  | "pinned"
+  | "archived"
+  | "parentId"
+  | "role"
+  | "team"
 >;
 
 const extraOf = (thread: ThreadExtra): string | null => {
@@ -50,6 +58,9 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.commands?.length ? { commands: thread.commands } : {}),
     ...(thread.pinned ? { pinned: true } : {}),
     ...(thread.archived ? { archived: true } : {}),
+    ...(thread.parentId ? { parentId: thread.parentId } : {}),
+    ...(thread.role ? { role: thread.role } : {}),
+    ...(thread.team ? { team: thread.team } : {}),
   };
   return Object.keys(extra).length ? JSON.stringify(extra) : null;
 };
@@ -334,6 +345,7 @@ export class Store {
         | "commands"
         | "pinned"
         | "archived"
+        | "team"
       >
     > & {
       error?: string | null;

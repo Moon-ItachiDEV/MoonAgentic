@@ -17,8 +17,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import {
   branchName,
+  ensureWorktree,
   githubRepo,
   parseDiff,
+  removeWorktree,
   restoreCheckpoint,
   saveCheckpoint,
 } from "../src/git.ts";
@@ -347,6 +349,23 @@ describe("choosing what to ship", () => {
 });
 
 describe("git helpers", () => {
+  it("makes and removes worktrees of one repository one at a time, all of them kept", async () => {
+    const { root, repo } = repository();
+    const base = git(repo, "rev-parse", "HEAD");
+    const dirs = [0, 1, 2, 3].map((i) => path.join(root, "worktrees", `w${i}`));
+    await Promise.all(dirs.map((dir, i) => ensureWorktree(repo, dir, `piece-${i}`, base)));
+    for (const dir of dirs) expect(existsSync(path.join(dir, "README.md"))).toBe(true);
+    expect(git(repo, "worktree", "list").split("\n")).toHaveLength(5);
+    // A removal running beside new worktrees takes none of them with it.
+    const more = [4, 5].map((i) => path.join(root, "worktrees", `w${i}`));
+    await Promise.all([
+      removeWorktree(repo, dirs[0]!),
+      ...more.map((dir, i) => ensureWorktree(repo, dir, `piece-${i + 4}`, base)),
+    ]);
+    expect(existsSync(dirs[0]!)).toBe(false);
+    expect(git(repo, "worktree", "list").split("\n")).toHaveLength(6);
+  });
+
   it("reads GitHub remotes in their https and ssh forms only", () => {
     for (const url of [
       "https://github.com/moon/app.git",
@@ -618,5 +637,109 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     await removing;
     expect(store.getThread(threadId)).toBeUndefined();
     expect(store.getThread(other)).toBeUndefined();
+  });
+});
+
+describe("teams", () => {
+  const team = (
+    hub: Hub,
+    projectId: string,
+    task: string,
+    permissionMode: "full" | "supervised" = "full",
+  ) =>
+    hub.startTeam({
+      projectId,
+      task,
+      lead: { agentId: "demo" },
+      coder: { agentId: "demo" },
+      coders: 2,
+      permissionMode,
+    });
+
+  it("has the lead split the task, then coders do the pieces at once, each on its own branch", async () => {
+    const { hub, store, projectId } = repository();
+    const seen: ServerMessage[] = [];
+    hub.connect({ send: (m) => seen.push(m) });
+    const leadId = team(hub, projectId, "Corrige answer et documente-la");
+    expect(store.getThread(leadId)).toMatchObject({
+      role: "lead",
+      title: expect.stringContaining("Équipe"),
+    });
+    // The lead's thread is never seen without its team.
+    const first = seen.find((m) => m.type === "thread" && m.thread.id === leadId);
+    expect(first?.type === "thread" && first.thread.team?.phase).toBe("planning");
+
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    const { tasks } = store.getThread(leadId)!.team!;
+    expect(tasks.map((t) => [t.title, t.status])).toEqual([
+      ["Corriger answer", "done"],
+      ["Documenter answer", "done"],
+    ]);
+    const coders = tasks.map((t) => store.getThread(t.threadId!)!);
+    for (const coder of coders) {
+      expect(coder).toMatchObject({ role: "coder", parentId: leadId, status: "idle" });
+      expect(coder.workspace?.base).toBeDefined();
+    }
+    expect(new Set(coders.map((c) => c.workspace!.branch)).size).toBe(2);
+    // The coder got its own piece of work, not the whole plan.
+    const asked = store.listItems(coders[1]!.id).find((i) => i.kind === "user");
+    expect(asked?.kind === "user" && asked.text).toContain("Ajoute une ligne sur answer");
+  });
+
+  it("asks the lead again for a plan it cannot read, then gives up", async () => {
+    const { hub, store, projectId } = repository();
+    const leadId = team(hub, projectId, "Fais-le sans plan");
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 })
+      .toBe("failed");
+    expect(store.getThread(leadId)?.team).toMatchObject({ planTries: 3, tasks: [] });
+    expect(store.listItems(leadId).filter((i) => i.kind === "user")).toHaveLength(3);
+  });
+
+  it("stops the team with every coder at work, and refuses to put it away meanwhile", async () => {
+    const { hub, store, projectId } = repository();
+    // Supervised coders wait on their first permission request.
+    const leadId = team(hub, projectId, "Corrige answer", "supervised");
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.tasks.filter((t) => t.threadId).length, {
+        timeout: 30_000,
+      })
+      .toBe(2);
+    await expect(hub.deleteThread(leadId)).rejects.toThrow("équipe");
+    await expect(hub.setArchived(leadId, true)).rejects.toThrow("équipe");
+    // Nor does the project go, not even in part.
+    const before = store.listThreads().length;
+    await expect(hub.removeProject(projectId)).rejects.toThrow("travaille encore");
+    expect(store.listThreads()).toHaveLength(before);
+
+    await hub.teams.stop(leadId);
+    const stopped = store.getThread(leadId)!.team!;
+    expect(stopped.phase).toBe("stopped");
+    for (const t of stopped.tasks) {
+      await hub.whenIdle(t.threadId!);
+      expect(store.getThread(t.threadId!)?.status).toBe("idle");
+    }
+    expect(store.getThread(leadId)!.team!.tasks.map((t) => t.status)).toEqual([
+      "stopped",
+      "stopped",
+    ]);
+    await hub.deleteThread(leadId);
+  });
+
+  it("marks a team cut short by a stop of the server, keeping what was done", async () => {
+    const { hub, store, root, projectId } = repository();
+    const leadId = team(hub, projectId, "Corrige answer", "supervised");
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 })
+      .toBe("coding");
+    await hub.close();
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+    });
+    cleanups.unshift(() => restarted.close());
+    expect(store.getThread(leadId)?.team).toMatchObject({
+      phase: "stopped",
+      error: expect.stringContaining("arrêt"),
+    });
   });
 });

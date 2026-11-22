@@ -41,10 +41,26 @@ export function Sidebar(props: {
   const [showArchived, setShowArchived] = useState(false);
   const live = state.threads.filter((t) => !t.archived);
   const archived = state.threads.filter((t) => t.archived);
-  const pinned = live.filter((t) => t.pinned);
-  const recent = live.filter((t) => !t.pinned);
-  const row = (t: Thread) => (
-    <div key={t.id} className={`thr-row${t.pinned ? " pinned" : ""}`}>
+  // A coder's thread sits under its lead's, wherever the lead is listed.
+  const listed = new Set(live.map((t) => t.id));
+  const childrenOf = new Map<string, Thread[]>();
+  for (const t of live) {
+    if (t.parentId && listed.has(t.parentId)) {
+      childrenOf.set(t.parentId, [...(childrenOf.get(t.parentId) ?? []), t]);
+    }
+  }
+  const top = live.filter((t) => !(t.parentId && listed.has(t.parentId)));
+  const pinned = top.filter((t) => t.pinned);
+  const recent = top.filter((t) => !t.pinned);
+  // Coders in the order the lead handed out their pieces.
+  const tree = (t: Thread) => [
+    row(t),
+    ...(childrenOf.get(t.id) ?? [])
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((c) => row(c, true)),
+  ];
+  const row = (t: Thread, child = false) => (
+    <div key={t.id} className={`thr-row${t.pinned ? " pinned" : ""}${child ? " child" : ""}`}>
       <button
         className={`thr${t.id === props.activeThreadId ? " on" : ""}`}
         onClick={() => props.onOpenThread(t.id)}
@@ -116,9 +132,9 @@ export function Sidebar(props: {
           </div>
         ))}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
-        {pinned.map(row)}
+        {pinned.flatMap(tree)}
         {recent.length > 0 && <div className="sec-h">Récents</div>}
-        {recent.map(row)}
+        {recent.flatMap(tree)}
         {archived.length > 0 && (
           <button
             className="sec-h arch-toggle"
@@ -129,7 +145,7 @@ export function Sidebar(props: {
             Archivés ({archived.length})
           </button>
         )}
-        {showArchived && archived.map(row)}
+        {showArchived && archived.map((t) => row(t))}
       </div>
       <div className="side-foot">
         {state.status === "open" ? (

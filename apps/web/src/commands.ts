@@ -13,7 +13,8 @@ export type AppAction =
   | "requests"
   | "connections"
   | "archive"
-  | "delete";
+  | "delete"
+  | "team";
 
 /**
  * Where a command comes from, in priority order when two share a name: MoonAgentic's own
@@ -92,6 +93,11 @@ export function composerCommands(options: {
     add("agent", "Revenir au mode habituel de l'agent", "agent");
   }
   add("modeles", "Choisir l'agent, le modèle et ses réglages", "models");
+  add(
+    "equipe",
+    "Confier la tâche à une équipe : un chef découpe, des codeurs en parallèle",
+    "team",
+  );
   if (inThread) {
     add("epingler", "Épingler ou désépingler cette discussion", "pin");
     add("exporter", "Exporter cette discussion en Markdown", "export");
