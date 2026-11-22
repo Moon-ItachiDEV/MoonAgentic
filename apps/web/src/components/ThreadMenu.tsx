@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { IconMore } from "./icons.tsx";
+import { Presence } from "./Presence.tsx";
 
 export interface MenuAction {
   label: string;
@@ -37,7 +38,7 @@ export function ThreadMenu({ actions }: { actions: MenuAction[] }) {
       >
         <IconMore />
       </button>
-      {open && (
+      <Presence show={open}>
         <div className="menu thread-menu" role="menu">
           {actions.map((a) => (
             <button
@@ -53,7 +54,7 @@ export function ThreadMenu({ actions }: { actions: MenuAction[] }) {
             </button>
           ))}
         </div>
-      )}
+      </Presence>
     </div>
   );
 }
