@@ -182,3 +182,26 @@ describe("an agent that lists its sign-in methods whatever the user set up", () 
     ]);
   });
 });
+
+describe("an agent started with an overlapped stdin (Hermes)", () => {
+  it("still talks to MoonAgentic", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-overlapped-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const session = await AgentSession.start({
+      launch: {
+        command: process.execPath,
+        args: [path.join(import.meta.dirname, "../src/demo-agent.ts")],
+        overlappedStdin: true,
+      },
+      cwd: dir,
+      previousSessionId: null,
+      handlers: {
+        onUpdate: () => undefined,
+        requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+        onExit: () => undefined,
+      },
+    });
+    expect(session.sessionId).toBeTruthy();
+    await session.close();
+  });
+});

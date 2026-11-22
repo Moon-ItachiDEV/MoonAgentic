@@ -1,9 +1,25 @@
-import type { PermissionMode, Team, TeamMember, TeamTask, Thread } from "@moonagentic/protocol";
+import type {
+  PermissionMode,
+  TeamEvent,
+  TeamLanePhase,
+  ReviewFile,
+  Team,
+  TeamMember,
+  TeamRole,
+  TeamTask,
+  Thread,
+} from "@moonagentic/protocol";
 
 /** Pieces of work a lead may hand out, so a plan never floods the machine with agents. */
 const MAX_TASKS = 8;
 /** Times the lead is asked again for a plan that could not be read. */
 const MAX_PLAN_TRIES = 2;
+/** Corrections a coder gets before the lead rewrites its brief. */
+export const MAX_TRIES = 3;
+/** Characters of a piece's changes shown to its reviewer; it opens the files for more. */
+const DIFF_LIMIT = 60_000;
+/** Characters of remarks kept on a piece. */
+const NOTE_LIMIT = 8_000;
 
 /** What the team needs from the hub: threads, their turns and what their agent said. */
 export interface TeamHost {
@@ -18,7 +34,9 @@ export interface TeamHost {
     text: string;
     title: string;
     parentId?: string;
-    role: "lead" | "coder";
+    role: TeamRole;
+    /** The thread whose folder it works in. */
+    worksIn?: string;
     /** Given at creation, so the thread is never seen without its team. */
     team?: Team;
   }): string;
@@ -27,6 +45,17 @@ export interface TeamHost {
   setTeam(threadId: string, team: Team): void;
   /** Everything the agent said in the thread's last turn. */
   lastReply(threadId: string): string;
+  /** What changed on the thread's branch since it started. */
+  changes(threadId: string): Promise<{ files: ReviewFile[]; omitted?: number }>;
+  /**
+   * Commits what the `from` thread left, then merges its branch onto the `into` thread's.
+   * Returns the files left in conflict, the merge then still under way; empty when merged.
+   */
+  mergeInto(intoId: string, fromId: string, message: string): Promise<string[]>;
+  /** The files still in conflict while a merge is under way in the thread's folder. */
+  unfinishedMerge(threadId: string): Promise<string[] | undefined>;
+  /** Whether the `from` thread's branch is part of the `into` thread's. */
+  contains(intoId: string, fromId: string): Promise<boolean>;
 }
 
 export interface TeamInput {
@@ -34,6 +63,9 @@ export interface TeamInput {
   task: string;
   lead: TeamMember;
   coder: TeamMember;
+  reviewer?: TeamMember | undefined;
+  tester?: TeamMember | undefined;
+  merger?: TeamMember | undefined;
   coders: number;
   permissionMode: PermissionMode;
 }
@@ -60,6 +92,81 @@ ${piece.brief}
 
 Travaille seulement sur cette sous-tâche, dans ce dossier. Quand tu as fini, résume ce que tu as changé.`;
 
+const VERDICT_RULE =
+  "Termine ta réponse par la ligne « VERDICT : OK » si c'est bon, ou « VERDICT : À CORRIGER » après la liste de ce qu'il faut corriger.";
+
+const pieceText = (team: Team, task: TeamTask) =>
+  `La tâche de l'équipe : ${team.task}
+
+La sous-tâche : ${task.title}
+
+${task.brief}`;
+
+const reviewPrompt = (team: Team, task: TeamTask, diff: string) =>
+  `Tu relis le travail d'un codeur de l'équipe. ${pieceText(team, task)}
+
+Ses changements, depuis le départ de sa branche :
+
+\`\`\`\`diff
+${diff || "(aucun changement)"}
+\`\`\`\`
+
+Tu es dans le dossier du codeur : ouvre les fichiers si besoin, mais ne modifie rien. Vérifie que la sous-tâche est faite, sans bug ni oubli. ${VERDICT_RULE}`;
+
+const testPrompt = (team: Team, task: TeamTask) =>
+  `Tu testes le travail d'un codeur de l'équipe. ${pieceText(team, task)}
+
+Tu es dans le dossier du codeur, sur sa branche. Lance les tests du projet et ajoute ceux qui manquent pour cette sous-tâche. Ne change pas le code lui-même : si un test échoue à cause du code, dis ce qui échoue. ${VERDICT_RULE}`;
+
+const fixPrompt = (tries: number, notes: string) =>
+  `Ta sous-tâche n'est pas encore bonne (correction ${tries} sur ${MAX_TRIES}).
+
+${notes}
+
+Corrige, puis résume ce que tu as changé.`;
+
+const leadHelpPrompt = (task: TeamTask) =>
+  `La sous-tâche « ${task.title} » bloque après ${MAX_TRIES} corrections.
+
+Sa consigne :
+
+${task.brief}
+
+Les dernières remarques :
+
+${task.note ?? "(aucune)"}
+
+Regarde le projet et ce qui bloque, sans rien modifier, puis écris une nouvelle consigne plus précise pour le codeur. Termine ta réponse par ce bloc, et rien après :
+
+\`\`\`json
+{"brief": "nouvelle consigne complète"}
+\`\`\``;
+
+const briefPrompt = (brief: string) =>
+  `Le chef a revu ta consigne. Reprends ta sous-tâche avec celle-ci :
+
+${brief}
+
+Quand tu as fini, résume ce que tu as changé.`;
+
+const conflictPrompt = (task: TeamTask, files: string[]) =>
+  `Tu fusionnes le travail d'une équipe sur cette branche. La fusion de la sous-tâche « ${task.title} » a des conflits dans :
+
+${files.map((f) => `- ${f}`).join("\n")}
+
+Règle chaque conflit en gardant les deux changements quand c'est possible, puis termine la fusion avec \`git add\` et \`git commit --no-edit\`. Ne change rien d'autre.`;
+
+const mergeCheckPrompt = (team: Team) =>
+  `Toutes les sous-tâches de l'équipe sont fusionnées sur cette branche. La tâche de l'équipe : ${team.task}
+
+Lance les tests du projet et corrige ce qui casse là où les sous-tâches se rejoignent, puis fais un commit de tes corrections. ${VERDICT_RULE}`;
+
+const RESUME_PROMPT =
+  "Reprends ta sous-tâche là où elle en est et termine-la. Quand tu as fini, résume ce que tu as changé.";
+
+const VERDICT_AGAIN =
+  "Je n'ai pas trouvé ton verdict. Termine par la ligne « VERDICT : OK » ou « VERDICT : À CORRIGER ».";
+
 /** The JSON object that starts at `start`, up to its matching brace, strings skipped. */
 function objectAt(text: string, start: number): string | undefined {
   let depth = 0;
@@ -76,47 +183,177 @@ function objectAt(text: string, start: number): string | undefined {
   return undefined;
 }
 
-/** Reads the lead's plan from the last JSON block of its reply, or undefined. */
-export function readPlan(reply: string): { title: string; brief: string }[] | undefined {
+/**
+ * The JSON objects with `key` in a reply, last first: from ```json blocks, then bare ones,
+ * for an agent that left the fence out, however laid out and whatever it wrote after.
+ */
+function jsonObjects(reply: string, key: string): Record<string, unknown>[] {
   const blocks = [...reply.matchAll(/```(?:json)?[ \t]*\r?\n([\s\S]*?)```/gi)].map(
     (m) => m[1] ?? "",
   );
-  // A bare object works too, for an agent that left the fence out, however it is laid out
-  // and whatever it wrote after it.
-  const bare = [...reply.matchAll(/\{\s*"tasks"\s*:/g)]
+  const bare = [...reply.matchAll(new RegExp(`\\{\\s*"${key}"\\s*:`, "g"))]
     .map((m) => objectAt(reply, m.index))
     .filter((raw): raw is string => raw !== undefined);
-  for (const raw of [...blocks.reverse(), ...bare.reverse()]) {
+  return [...blocks.reverse(), ...bare.reverse()].flatMap((raw) => {
     try {
-      const parsed = JSON.parse(raw.trim()) as { tasks?: unknown };
-      if (!Array.isArray(parsed.tasks)) continue;
-      const tasks = parsed.tasks.flatMap((t: unknown) => {
-        if (typeof t !== "object" || t === null) return [];
-        const { title, brief } = t as { title?: unknown; brief?: unknown };
-        if (typeof title !== "string" || typeof brief !== "string") return [];
-        if (!title.trim() || !brief.trim()) return [];
-        return [{ title: title.trim().slice(0, 120), brief: brief.trim().slice(0, 20_000) }];
-      });
-      if (tasks.length) return tasks.slice(0, MAX_TASKS);
+      const parsed: unknown = JSON.parse(raw.trim());
+      return typeof parsed === "object" && parsed !== null && key in parsed
+        ? [parsed as Record<string, unknown>]
+        : [];
     } catch {
-      // Not this block.
+      return [];
     }
+  });
+}
+
+/** Reads the lead's plan from the last JSON block of its reply, or undefined. */
+export function readPlan(reply: string): { title: string; brief: string }[] | undefined {
+  for (const parsed of jsonObjects(reply, "tasks")) {
+    if (!Array.isArray(parsed.tasks)) continue;
+    const tasks = parsed.tasks.flatMap((t: unknown) => {
+      if (typeof t !== "object" || t === null) return [];
+      const { title, brief } = t as { title?: unknown; brief?: unknown };
+      if (typeof title !== "string" || typeof brief !== "string") return [];
+      if (!title.trim() || !brief.trim()) return [];
+      return [{ title: title.trim().slice(0, 120), brief: brief.trim().slice(0, 20_000) }];
+    });
+    if (tasks.length) return tasks.slice(0, MAX_TASKS);
   }
   return undefined;
 }
 
-const active = (team: Team | undefined) => team?.phase === "planning" || team?.phase === "coding";
+/** Reads the brief the lead rewrote, or undefined. */
+export function readBrief(reply: string): string | undefined {
+  for (const { brief } of jsonObjects(reply, "brief")) {
+    if (typeof brief === "string" && brief.trim()) return brief.trim().slice(0, 20_000);
+  }
+  return undefined;
+}
+
+/** The reviewer's or tester's last verdict: `ok`, `fix`, or undefined when it gave none. */
+export function readVerdict(reply: string): "ok" | "fix" | undefined {
+  const last = [...reply.matchAll(/VERDICT\s*:?[\s*_`]*(OK\b|[ÀA]\s+CORRIGER)/giu)].at(-1);
+  if (!last) return undefined;
+  return /^ok$/i.test(last[1] ?? "") ? "ok" : "fix";
+}
+
+/** The changes as one unified diff, cut down to what a reviewer can read at once. */
+export function diffText(changes: { files: ReviewFile[]; omitted?: number }): string {
+  let text = "";
+  for (const file of changes.files) {
+    const name = file.from ? `${file.from} → ${file.path}` : file.path;
+    const head = `--- ${name} (${file.status}, +${file.added ?? "?"} -${file.removed ?? "?"})\n`;
+    const body = file.patch ? file.patch.replace(/\n?$/, "\n") : "";
+    if (file.truncated || text.length + head.length + body.length > DIFF_LIMIT) {
+      text += `${head}(diff coupé : ouvre le fichier)\n`;
+      continue;
+    }
+    text += head + body;
+  }
+  if (changes.omitted) text += `(${changes.omitted} autres fichiers changés, non montrés)\n`;
+  return text.trimEnd();
+}
+
+const active = (team: Team | undefined) =>
+  team?.phase === "planning" || team?.phase === "coding" || team?.phase === "merging";
+/** Pieces merged onto one branch once they are all done; a single one ships on its own. */
+const mergeable = (team: Team) =>
+  team.tasks.length > 1 && team.tasks.every((t) => t.status === "done");
+/** A piece someone is working on, which takes one of the team's places. */
+const working = (t: TeamTask) =>
+  t.status === "running" ||
+  t.status === "reviewing" ||
+  t.status === "testing" ||
+  t.status === "lead";
+const open = (t: TeamTask) => t.status === "waiting" || working(t);
+const cut = (text: string) => (text.length > NOTE_LIMIT ? `${text.slice(0, NOTE_LIMIT)}…` : text);
+const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/** The thread a piece's agent works in at this point, if any. */
+const runningThread = (t: TeamTask) =>
+  t.status === "running"
+    ? t.threadId
+    : t.status === "reviewing"
+      ? t.reviewThreadId
+      : t.status === "testing"
+        ? t.testThreadId
+        : undefined;
+
+/** The team with every piece at work cut short, what was done kept: a stop or a restart. */
+const cutShort = (team: Team): Team => {
+  const { leadTask: _lead, mergeStep: _step, ...rest } = team;
+  return { ...rest, tasks: team.tasks.map((t) => (open(t) ? { ...t, status: "stopped" } : t)) };
+};
+
+/** Events kept per team, the oldest dropped first. */
+const TIMELINE_LIMIT = 600;
+export const LEAD_LANE = -1;
+export const MERGE_LANE = -2;
+
+/** What each lane of the team is doing now. */
+function lanes(team: Team): Map<number, TeamLanePhase> {
+  const now = new Map<number, TeamLanePhase>();
+  now.set(
+    LEAD_LANE,
+    team.phase === "planning"
+      ? "planning"
+      : team.leadTask !== undefined
+        ? "lead"
+        : team.tasks.length === 0 && (team.phase === "failed" || team.phase === "stopped")
+          ? team.phase
+          : "idle",
+  );
+  team.tasks.forEach((t, i) => now.set(i, t.status));
+  if (team.phase === "merging") {
+    now.set(
+      MERGE_LANE,
+      team.mergeStep === -1 ? "checking" : team.mergeStep !== undefined ? "solving" : "merging",
+    );
+  } else if (team.mergeThreadId) {
+    now.set(
+      MERGE_LANE,
+      team.phase === "done" ? "done" : team.phase === "blocked" ? "blocked" : "stopped",
+    );
+  }
+  return now;
+}
+
+/** The team with a timeline event for each lane whose phase changed since the last one. */
+export function recordTimeline(team: Team, at: number): Team {
+  const timeline: TeamEvent[] = [...(team.timeline ?? [])];
+  const last = new Map<number, TeamLanePhase>();
+  for (const event of timeline) last.set(event.lane, event.phase);
+  for (const [lane, phase] of lanes(team)) {
+    if (last.get(lane) !== phase) timeline.push({ at, lane, phase });
+  }
+  return { ...team, timeline: timeline.slice(-TIMELINE_LIMIT) };
+}
+
+const withTask = (team: Team, index: number, task: TeamTask): Team => ({
+  ...team,
+  tasks: team.tasks.with(index, task),
+});
 
 /**
  * Runs teams: the lead's thread plans, then each piece of the plan gets a coder's thread on
- * its own branch, a few at a time. Everything is kept on the lead's thread, so the sidebar,
- * other devices and a restart all see the same state.
+ * its own branch, a few at a time. A reviewer then reads the piece and a tester runs its
+ * tests; what they find goes back to the coder, three times at most, then to the lead, who
+ * rewrites the brief once, then to the user. Everything is kept on the lead's thread, so the
+ * sidebar, other devices and a restart all see the same state.
  */
 export class Teams {
   private readonly host: TeamHost;
+  private closed = false;
+  /** Checks being started, which read the changes first. */
+  private readonly starting = new Set<Promise<void>>();
 
   constructor(host: TeamHost) {
     this.host = host;
+  }
+
+  /** Keeps the team, and in its timeline what changed. */
+  private save(leadId: string, team: Team): void {
+    this.host.setTeam(leadId, recordTimeline(team, Date.now()));
   }
 
   /** Starts the team; returns the lead's thread. */
@@ -125,12 +362,16 @@ export class Teams {
       phase: "planning",
       task: input.task,
       coder: input.coder,
+      ...(input.reviewer ? { reviewer: input.reviewer } : {}),
+      ...(input.tester ? { tester: input.tester } : {}),
+      ...(input.merger ? { merger: input.merger } : {}),
       coders: input.coders,
       permissionMode: input.permissionMode,
       tasks: [],
+      timeline: [{ at: Date.now(), lane: LEAD_LANE, phase: "planning" }],
     };
     // Planning only reads: the lead asks before touching anything.
-    const leadId = this.host.createThread({
+    return this.host.createThread({
       projectId: input.projectId,
       agentId: input.lead.agentId,
       model: input.lead.model,
@@ -141,12 +382,28 @@ export class Teams {
       role: "lead",
       team,
     });
-    return leadId;
   }
 
-  /** Whether the thread leads a team still at work, which then cannot be put away. */
+  /**
+   * Whether the thread leads a team still at work, or is one of its threads: it then cannot
+   * be put away, as its reviewer or tester may be working in its folder.
+   */
   isActive(threadId: string): boolean {
-    return active(this.host.thread(threadId)?.team);
+    const thread = this.host.thread(threadId);
+    if (!thread) return false;
+    return (
+      active(thread.team) || (!!thread.parentId && active(this.host.thread(thread.parentId)?.team))
+    );
+  }
+
+  /** Resolves once the checks being started have started. */
+  async settled(): Promise<void> {
+    while (this.starting.size) await Promise.all(this.starting);
+  }
+
+  /** Nothing new starts from here on: the server is stopping. */
+  close(): void {
+    this.closed = true;
   }
 
   async stop(leadId: string): Promise<void> {
@@ -154,53 +411,139 @@ export class Teams {
     const team = lead?.team;
     if (!lead || !team) throw new Error("Ce fil ne mène pas d'équipe.");
     if (!active(team)) return;
-    const running = team.tasks.filter((t) => t.status === "running" && t.threadId);
-    this.host.setTeam(leadId, {
-      ...team,
-      phase: "stopped",
-      tasks: team.tasks.map((t) =>
-        t.status === "running" || t.status === "waiting" ? { ...t, status: "stopped" } : t,
-      ),
-    });
-    await Promise.all([
-      this.host.cancel(leadId),
-      ...running.map((t) => this.host.cancel(t.threadId!)),
-    ]);
+    const running = team.tasks.flatMap((t) => runningThread(t) ?? []);
+    if (team.mergeStep !== undefined && team.mergeThreadId) running.push(team.mergeThreadId);
+    this.save(leadId, { ...cutShort(team), phase: "stopped" });
+    await Promise.all([this.host.cancel(leadId), ...running.map((id) => this.host.cancel(id))]);
   }
 
   /** A team cut short by a stop of the server is marked so, with what was done kept. */
   recover(): void {
     for (const thread of this.host.threads()) {
       if (!thread.team || !active(thread.team)) continue;
-      this.host.setTeam(thread.id, {
-        ...thread.team,
+      this.save(thread.id, {
+        ...cutShort(thread.team),
         phase: "stopped",
         error: "Interrompue par l'arrêt de MoonAgentic.",
-        tasks: thread.team.tasks.map((t) =>
-          t.status === "running" || t.status === "waiting" ? { ...t, status: "stopped" } : t,
-        ),
       });
     }
+  }
+
+  /**
+   * Starts a piece again once the user has looked at it: its coder picks it up where it is,
+   * then it is checked as usual, its tries counted from zero.
+   */
+  async retry(leadId: string, index: number | undefined): Promise<void> {
+    const lead = this.host.thread(leadId);
+    const team = lead?.team;
+    if (!lead || !team) throw new Error("Ce fil ne mène pas d'équipe.");
+    if (index === undefined) return this.retryMerge(lead, team);
+    const task = team.tasks[index];
+    if (!task) throw new Error("Cette sous-tâche n'existe pas.");
+    if (task.status !== "blocked" && task.status !== "failed" && task.status !== "stopped") {
+      throw new Error("Cette sous-tâche est déjà en cours ou terminée.");
+    }
+    if (team.phase === "planning") throw new Error("Le chef prépare encore le plan.");
+    const { note: _note, reasked: _reasked, ...rest } = task;
+    let fresh: TeamTask = { ...rest, tries: 0, leadHelped: false, status: "waiting" };
+    if (task.threadId && !this.host.thread(task.threadId)) {
+      // Its coder's thread was deleted: the piece starts over with a new coder, and new
+      // reviewer and tester, whose folder would have been the old coder's.
+      const { threadId: _c, reviewThreadId: _r, testThreadId: _t, ...gone } = fresh;
+      fresh = gone;
+    }
+    if (fresh.threadId) {
+      // Throws while the user is still talking to the coder, and then nothing changes.
+      this.host.send(fresh.threadId, RESUME_PROMPT);
+      fresh.status = "running";
+    }
+    const { error: _error, ...kept } = team;
+    this.settle(lead, withTask({ ...kept, phase: "coding" }, index, fresh));
   }
 
   /** Moves the team on when one of its threads ends a turn. */
   turnEnded(threadId: string, cancelled: boolean): void {
     const thread = this.host.thread(threadId);
     if (!thread) return;
-    if (thread.role === "lead" && thread.team?.phase === "planning") {
-      this.planned(thread, thread.team, cancelled);
-    } else if (thread.role === "coder" && thread.parentId) {
-      this.coded(thread, cancelled);
+    if (thread.role === "lead" && thread.team) {
+      if (thread.team.phase === "planning") this.planned(thread, thread.team, cancelled);
+      else if (thread.team.phase === "coding") this.leadAnswered(thread, thread.team, cancelled);
+      return;
+    }
+    if (!thread.parentId || !thread.role) return;
+    const lead = this.host.thread(thread.parentId);
+    const team = lead?.team;
+    if (lead && team?.phase === "merging" && thread.role === "merger") {
+      this.mergerAnswered(lead, team, thread, cancelled);
+      return;
+    }
+    if (!lead || !team || team.phase !== "coding") return;
+    const role = thread.role;
+    const index = team.tasks.findIndex(
+      (t) =>
+        (role === "coder" && t.threadId === threadId && t.status === "running") ||
+        (role === "reviewer" && t.reviewThreadId === threadId && t.status === "reviewing") ||
+        (role === "tester" && t.testThreadId === threadId && t.status === "testing"),
+    );
+    const task = team.tasks[index];
+    if (!task) return;
+    const put = (next: TeamTask) => withTask(team, index, next);
+    const failure = `s'est arrêté sur une erreur : ${thread.error ?? "erreur inconnue"}`;
+    if (cancelled) {
+      this.settle(lead, put({ ...task, status: "stopped" }));
+    } else if (role === "coder") {
+      this.settle(
+        lead,
+        thread.status === "error"
+          ? this.problem(team, index, `Le codeur ${failure}`)
+          : this.next(lead.id, team, index, "coder"),
+      );
+    } else {
+      const who = role === "reviewer" ? "Le relecteur" : "Le testeur";
+      this.settle(lead, this.verdict(lead.id, team, index, thread, who, failure));
+    }
+  }
+
+  /** What the reviewer's or tester's answer makes of the piece. */
+  private verdict(
+    leadId: string,
+    team: Team,
+    index: number,
+    thread: Thread,
+    who: string,
+    failure: string,
+  ): Team {
+    const task = team.tasks[index]!;
+    const put = (next: TeamTask) => withTask(team, index, next);
+    if (thread.status === "error")
+      return put({ ...task, status: "blocked", note: `${who} ${failure}` });
+    const reply = this.host.lastReply(thread.id);
+    const { reasked: _reasked, ...checked } = task;
+    switch (readVerdict(reply)) {
+      case "ok":
+        return this.next(leadId, put(checked), index, thread.role!);
+      case "fix":
+        return this.problem(put(checked), index, `${who} demande des corrections :\n\n${reply}`);
+      default:
+        if (task.reasked) {
+          return put({ ...task, status: "blocked", note: `${who} n'a pas donné de verdict.` });
+        }
+        try {
+          this.host.send(thread.id, VERDICT_AGAIN);
+          return put({ ...task, reasked: true });
+        } catch (error) {
+          return put({ ...task, status: "blocked", note: message(error) });
+        }
     }
   }
 
   private planned(lead: Thread, team: Team, cancelled: boolean): void {
     if (cancelled) {
-      this.host.setTeam(lead.id, { ...team, phase: "stopped" });
+      this.save(lead.id, { ...team, phase: "stopped" });
       return;
     }
     if (lead.status === "error") {
-      this.host.setTeam(lead.id, {
+      this.save(lead.id, {
         ...team,
         phase: "failed",
         error: `Le chef n'a pas pu faire le plan : ${lead.error ?? "erreur inconnue"}`,
@@ -211,7 +554,7 @@ export class Teams {
     if (!plan) {
       const tries = (team.planTries ?? 0) + 1;
       if (tries > MAX_PLAN_TRIES) {
-        this.host.setTeam(lead.id, {
+        this.save(lead.id, {
           ...team,
           phase: "failed",
           planTries: tries,
@@ -219,7 +562,7 @@ export class Teams {
         });
         return;
       }
-      this.host.setTeam(lead.id, { ...team, planTries: tries });
+      this.save(lead.id, { ...team, planTries: tries });
       this.host.send(
         lead.id,
         'Je n\'ai pas trouvé ton plan. Réponds seulement avec le bloc json demandé : {"tasks": [{"title": "…", "brief": "…"}]}',
@@ -227,25 +570,157 @@ export class Teams {
       return;
     }
     const tasks: TeamTask[] = plan.map((p) => ({ ...p, status: "waiting" }));
-    this.launch(lead, { ...team, phase: "coding", tasks });
+    this.settle(lead, { ...team, phase: "coding", tasks });
   }
 
-  private coded(coder: Thread, cancelled: boolean): void {
-    const lead = this.host.thread(coder.parentId!);
-    const team = lead?.team;
-    if (!lead || !team || team.phase !== "coding") return;
-    const tasks = team.tasks.map((t): TeamTask => {
-      if (t.threadId !== coder.id || t.status !== "running") return t;
-      if (cancelled) return { ...t, status: "stopped" };
-      return { ...t, status: coder.status === "error" ? "failed" : "done" };
+  /** The lead's turn while the team codes: the brief it rewrote, or a turn of the user's. */
+  private leadAnswered(lead: Thread, team: Team, cancelled: boolean): void {
+    const index = team.leadTask;
+    const { leadTask: _done, ...free } = team;
+    const task = index === undefined ? undefined : team.tasks[index];
+    if (index === undefined || task?.status !== "lead") {
+      // The user talked to the lead: it is free again for a piece waiting on it.
+      this.settle(lead, free);
+      return;
+    }
+    const put = (next: TeamTask) => withTask(free, index, next);
+    if (cancelled) {
+      this.settle(lead, put({ ...task, status: "stopped" }));
+      return;
+    }
+    const brief = lead.status === "error" ? undefined : readBrief(this.host.lastReply(lead.id));
+    if (!brief) {
+      const note =
+        lead.status === "error"
+          ? `Le chef s'est arrêté sur une erreur : ${lead.error ?? "erreur inconnue"}`
+          : "Le chef n'a pas donné de nouvelle consigne.";
+      this.settle(lead, put({ ...task, status: "blocked", note }));
+      return;
+    }
+    const helped: TeamTask = { ...task, brief, leadHelped: true };
+    try {
+      this.host.send(task.threadId!, briefPrompt(brief));
+      this.settle(lead, put({ ...helped, status: "running" }));
+    } catch (error) {
+      this.settle(lead, put({ ...helped, status: "blocked", note: message(error) }));
+    }
+  }
+
+  /** What follows a step of a piece that went well: the review, the tests, or done. */
+  private next(leadId: string, team: Team, index: number, after: TeamRole): Team {
+    const task = team.tasks[index]!;
+    if (after === "coder" && team.reviewer) {
+      this.check(leadId, index, "reviewer");
+      return withTask(team, index, { ...task, status: "reviewing" });
+    }
+    if (after !== "tester" && team.tester) {
+      this.check(leadId, index, "tester");
+      return withTask(team, index, { ...task, status: "testing" });
+    }
+    const { note: _note, ...done } = task;
+    return withTask(team, index, { ...done, status: "done" });
+  }
+
+  /** Something to fix: back to the coder, then to the lead once, then to the user. */
+  private problem(team: Team, index: number, notes: string): Team {
+    const task = team.tasks[index]!;
+    const put = (next: TeamTask) => withTask(team, index, next);
+    const note = cut(notes);
+    const tries = (task.tries ?? 0) + 1;
+    if (tries <= MAX_TRIES) {
+      try {
+        this.host.send(task.threadId!, fixPrompt(tries, note));
+        return put({ ...task, status: "running", tries, note });
+      } catch (error) {
+        return put({ ...task, status: "blocked", note: `${note}\n\n${message(error)}` });
+      }
+    }
+    return put({ ...task, status: task.leadHelped ? "blocked" : "lead", note });
+  }
+
+  /**
+   * Has the reviewer or the tester look at the piece, in its coder's folder. Their thread
+   * is made on the first check and reused for the next ones, so they remember the last.
+   */
+  private check(leadId: string, index: number, role: "reviewer" | "tester"): void {
+    const status = role === "reviewer" ? "reviewing" : "testing";
+    const now = () => {
+      const lead = this.host.thread(leadId);
+      const task = lead?.team?.tasks[index];
+      // The team may have moved on meanwhile: a stop, or the server stopping.
+      return !this.closed && lead?.team?.phase === "coding" && task?.status === status
+        ? { lead, team: lead.team, task }
+        : undefined;
+    };
+    const work = (async () => {
+      // After the caller has saved the piece's new status.
+      await Promise.resolve();
+      const before = now();
+      if (!before?.task.threadId) return;
+      const diff =
+        role === "reviewer" ? diffText(await this.host.changes(before.task.threadId)) : "";
+      const current = now();
+      if (!current) return;
+      const { lead, team, task } = current;
+      const member = role === "reviewer" ? team.reviewer : team.tester;
+      if (!member) throw new Error("ce rôle n'a pas d'agent.");
+      const text = role === "reviewer" ? reviewPrompt(team, task, diff) : testPrompt(team, task);
+      const existing = role === "reviewer" ? task.reviewThreadId : task.testThreadId;
+      // A thread the user deleted is made again.
+      if (existing && this.host.thread(existing)) {
+        this.host.send(existing, text);
+        return;
+      }
+      const threadId = this.host.createThread({
+        projectId: lead.projectId,
+        agentId: member.agentId,
+        model: member.model,
+        // The reviewer only reads; the tester writes tests, with the coders' access.
+        permissionMode: role === "reviewer" ? "supervised" : team.permissionMode,
+        isolated: false,
+        text,
+        title: `${role === "reviewer" ? "Relecture" : "Tests"} : ${task.title}`,
+        parentId: lead.id,
+        role,
+        worksIn: task.threadId!,
+      });
+      const after = this.host.thread(leadId)?.team;
+      const latest = after?.tasks[index];
+      if (after && latest) {
+        this.save(
+          leadId,
+          withTask(
+            after,
+            index,
+            role === "reviewer"
+              ? { ...latest, reviewThreadId: threadId }
+              : { ...latest, testThreadId: threadId },
+          ),
+        );
+      }
+    })().catch((error: unknown) => {
+      const current = now();
+      if (!current) return;
+      const what = role === "reviewer" ? "La relecture" : "Les tests";
+      this.settle(
+        current.lead,
+        withTask(current.team, index, {
+          ...current.task,
+          status: "blocked",
+          note: `${what} n'ont pas pu commencer : ${message(error)}`,
+        }),
+      );
     });
-    this.launch(lead, { ...team, tasks });
+    this.track(work);
   }
 
-  /** Starts coders on waiting pieces while fewer than allowed work; ends the team when all are done. */
-  private launch(lead: Thread, team: Team): void {
+  /**
+   * Starts coders on waiting pieces while places are free, hands the lead the next piece
+   * that waits on it, and ends the team once nothing is left to do.
+   */
+  private settle(lead: Thread, team: Team): void {
     let tasks = team.tasks;
-    let running = tasks.filter((t) => t.status === "running").length;
+    let running = tasks.filter(working).length;
     for (const [i, piece] of tasks.entries()) {
       if (running >= team.coders) break;
       if (piece.status !== "waiting") continue;
@@ -263,29 +738,241 @@ export class Teams {
           role: "coder",
         });
       } catch (error) {
-        tasks = tasks.with(i, { ...piece, status: "failed" });
-        team = { ...team, error: error instanceof Error ? error.message : String(error) };
+        tasks = tasks.with(i, { ...piece, status: "failed", note: message(error) });
+        team = { ...team, error: message(error) };
         continue;
       }
       tasks = tasks.with(i, { ...piece, status: "running", threadId });
       running += 1;
     }
-    const open = tasks.some((t) => t.status === "running" || t.status === "waiting");
+    // The lead rewrites one brief at a time; the others wait their turn.
+    let leadTask = team.leadTask;
+    if (leadTask === undefined) {
+      const waiting = tasks.findIndex((t) => t.status === "lead");
+      const task = tasks[waiting];
+      if (task) {
+        try {
+          this.host.send(lead.id, leadHelpPrompt(task));
+          leadTask = waiting;
+        } catch (error) {
+          // The user is talking to the lead: it gets the piece when that turn ends. Anything
+          // else would leave it waiting forever, so it goes to the user.
+          const status = this.host.thread(lead.id)?.status;
+          if (status !== "running" && status !== "waiting") {
+            tasks = tasks.with(waiting, {
+              ...task,
+              status: "blocked",
+              note: `Le chef n'a pas pu revoir la consigne : ${message(error)}\n\n${task.note ?? ""}`.trim(),
+            });
+          }
+        }
+      }
+    }
+    const { leadTask: _old, ...rest } = team;
     const failed = tasks.filter((t) => t.status === "failed").length;
-    const stopped = tasks.some((t) => t.status === "stopped");
-    this.host.setTeam(lead.id, {
-      ...team,
+    this.save(lead.id, {
+      ...rest,
       tasks,
-      ...(open
+      ...(leadTask === undefined ? {} : { leadTask }),
+      ...(tasks.some(open)
         ? {}
-        : failed
-          ? {
-              phase: "failed",
-              error:
-                team.error ??
-                `${failed} sous-tâche${failed > 1 ? "s ont" : " a"} échoué : ouvre ${failed > 1 ? "leurs fils" : "son fil"} pour voir pourquoi.`,
-            }
-          : { phase: stopped ? "stopped" : "done" }),
+        : tasks.some((t) => t.status === "blocked")
+          ? { phase: "blocked" }
+          : failed
+            ? {
+                phase: "failed",
+                error:
+                  team.error ??
+                  `${failed} sous-tâche${failed > 1 ? "s ont" : " a"} échoué : ouvre ${failed > 1 ? "leurs fils" : "son fil"} pour voir pourquoi.`,
+              }
+            : tasks.some((t) => t.status === "stopped")
+              ? { phase: "stopped" }
+              : mergeable({ ...team, tasks })
+                ? { phase: "merging" }
+                : { phase: "done" }),
     });
+    if (this.host.thread(lead.id)?.team?.phase === "merging") this.merge(lead.id);
+  }
+
+  /** Runs `work` in the background, kept until done so a server stopping waits for it. */
+  private track(work: Promise<void>): void {
+    const tracked: Promise<void> = work.finally(() => this.starting.delete(tracked));
+    this.starting.add(tracked);
+  }
+
+  /**
+   * Merges each done piece's branch onto one branch, in a thread of its own the user can
+   * review and ship. A conflict goes to the merger, or to the user without one; once all
+   * are merged, the merger checks that the pieces work together.
+   */
+  private merge(leadId: string): void {
+    // The team as it is now, while it still merges.
+    const now = () => {
+      const lead = this.host.thread(leadId);
+      return !this.closed && lead?.team?.phase === "merging"
+        ? { lead, team: lead.team }
+        : undefined;
+    };
+    const work = async () => {
+      // After the caller has saved the team's new phase.
+      await Promise.resolve();
+      let state = now();
+      if (!state) return;
+      let into = state.team.mergeThreadId;
+      if (!into || !this.host.thread(into)) {
+        const member = state.team.merger ?? state.team.coder;
+        into = this.host.createThread({
+          projectId: state.lead.projectId,
+          agentId: member.agentId,
+          model: member.model,
+          permissionMode: state.team.permissionMode,
+          isolated: true,
+          text: "",
+          title: `Fusion : ${state.team.task}`,
+          parentId: leadId,
+          role: "merger",
+        });
+        // A new branch has none of the pieces, even those merged on one since deleted.
+        this.save(leadId, {
+          ...state.team,
+          mergeThreadId: into,
+          tasks: state.team.tasks.map(({ merged: _merged, ...t }) => t),
+        });
+      }
+      for (;;) {
+        state = now();
+        if (!state) return;
+        const index = state.team.tasks.findIndex((t) => !t.merged);
+        const task = state.team.tasks[index];
+        if (!task) break;
+        const conflicts = await this.host.mergeInto(into, task.threadId!, task.title);
+        state = now();
+        if (!state) return;
+        const { team } = state;
+        if (!conflicts.length) {
+          this.save(leadId, withTask(team, index, { ...team.tasks[index]!, merged: true }));
+          continue;
+        }
+        if (team.merger) {
+          this.host.send(into, conflictPrompt(task, conflicts));
+          this.save(leadId, { ...team, mergeStep: index });
+        } else {
+          this.save(leadId, {
+            ...team,
+            phase: "blocked",
+            error: `Conflit en fusionnant « ${task.title} » (${conflicts.join(", ")}) : règle-le dans le fil de fusion et fais le commit, puis relance la fusion.`,
+          });
+        }
+        return;
+      }
+      if (state.team.merger) {
+        this.host.send(into, mergeCheckPrompt(state.team));
+        this.save(leadId, { ...state.team, mergeStep: -1 });
+        return;
+      }
+      const { error: _error, ...done } = state.team;
+      this.save(leadId, { ...done, phase: "done" });
+    };
+    this.track(
+      work().catch((error: unknown) => {
+        const state = now();
+        if (!state) return;
+        const { mergeStep: _step, ...rest } = state.team;
+        this.save(leadId, {
+          ...rest,
+          phase: "blocked",
+          error: `La fusion s'est arrêtée : ${message(error)}`,
+        });
+      }),
+    );
+  }
+
+  /** The merger's turn: a conflict it settled, or its check of the pieces together. */
+  private mergerAnswered(lead: Thread, team: Team, merger: Thread, cancelled: boolean): void {
+    const step = team.mergeStep;
+    // A turn of the user's in the merge thread moves nothing.
+    if (step === undefined || team.mergeThreadId !== merger.id) return;
+    const { mergeStep: _step, mergeReasked: _reasked, ...rest } = team;
+    if (cancelled) {
+      this.save(lead.id, { ...rest, phase: "stopped" });
+      return;
+    }
+    const block = (error: string) =>
+      this.save(lead.id, { ...rest, phase: "blocked", error: cut(error) });
+    if (merger.status === "error") {
+      block(`Le fusionneur s'est arrêté sur une erreur : ${merger.error ?? "erreur inconnue"}`);
+      return;
+    }
+    if (step === -1) {
+      const reply = this.host.lastReply(merger.id);
+      const verdict = readVerdict(reply);
+      if (verdict === "ok") this.save(lead.id, { ...rest, phase: "done" });
+      else if (verdict === undefined && !team.mergeReasked) {
+        // Asked once again, as the reviewer and the tester are.
+        try {
+          this.host.send(merger.id, VERDICT_AGAIN);
+          this.save(lead.id, { ...team, mergeReasked: true });
+        } catch (error) {
+          block(message(error));
+        }
+      } else if (verdict === undefined) block("Le fusionneur n'a pas donné de verdict.");
+      else block(`Le fusionneur signale un problème : ouvre le fil de fusion.\n\n${reply}`);
+      return;
+    }
+    // Still merging, without a step: a stop meanwhile is not undone.
+    this.save(lead.id, rest);
+    const piece = team.tasks[step];
+    this.track(
+      (async () => {
+        const left = await this.host.unfinishedMerge(merger.id);
+        // A merge given up (`git merge --abort`) leaves no merge under way either: the
+        // piece counts only once its branch is really part of the merge's.
+        const merged =
+          !left && !!piece?.threadId && (await this.host.contains(merger.id, piece.threadId));
+        return { left, merged };
+      })().then(
+        ({ left, merged }) => {
+          const now = this.host.thread(lead.id)?.team;
+          if (this.closed || now?.phase !== "merging") return;
+          const task = now.tasks[step];
+          if (!merged || !task) {
+            this.save(lead.id, {
+              ...now,
+              phase: "blocked",
+              error: left
+                ? `Le fusionneur n'a pas fini de fusionner « ${task?.title ?? "?"} » : règle la fusion dans son fil, puis relance-la.`
+                : `La branche de « ${task?.title ?? "?"} » n'a pas été fusionnée (fusion abandonnée ?) : relance la fusion.`,
+            });
+            return;
+          }
+          this.save(lead.id, withTask(now, step, { ...task, merged: true }));
+          this.merge(lead.id);
+        },
+        (error: unknown) => block(`La fusion s'est arrêtée : ${message(error)}`),
+      ),
+    );
+  }
+
+  /** Starts the merge again once the user has settled what stopped it. */
+  private async retryMerge(lead: Thread, team: Team): Promise<void> {
+    if (!mergeable(team)) {
+      throw new Error("Il n'y a rien à fusionner : chaque sous-tâche doit d'abord être terminée.");
+    }
+    if (active(team) || team.phase === "done")
+      throw new Error("La fusion est déjà en cours ou faite.");
+    const into = team.mergeThreadId;
+    const left = into && this.host.thread(into) ? await this.host.unfinishedMerge(into) : undefined;
+    if (left?.length) {
+      throw new Error(
+        `Il reste des conflits dans ${left.join(", ")} : règle-les dans le fil de fusion.`,
+      );
+    }
+    if (left)
+      throw new Error("La fusion en cours attend son commit : fais-le dans le fil de fusion.");
+    const fresh = this.host.thread(lead.id)?.team;
+    if (!fresh || active(fresh)) return;
+    const { error: _error, mergeStep: _step, ...rest } = fresh;
+    this.save(lead.id, { ...rest, phase: "merging" });
+    this.merge(lead.id);
   }
 }

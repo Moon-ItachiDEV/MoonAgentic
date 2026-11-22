@@ -43,19 +43,12 @@ beforeAll(async () => {
   write(repo, { "src/app.ts": "export const answer = 41;\n", "README.md": "# Équipe\n" });
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "pipe" });
   git("init", "-q", "-b", "main");
-  git("-c", "user.email=e2e@example.com", "-c", "user.name=E2E", "add", "-A");
-  git(
-    "-c",
-    "user.email=e2e@example.com",
-    "-c",
-    "user.name=E2E",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "-q",
-    "-m",
-    "init",
-  );
+  // The team commits each piece and merges them, as the user would.
+  git("config", "user.email", "e2e@example.com");
+  git("config", "user.name", "E2E");
+  git("config", "commit.gpgsign", "false");
+  git("add", "-A");
+  git("commit", "-q", "-m", "init");
   const home = path.join(dir, "home");
   mkdirSync(home);
   server = spawn(
@@ -288,21 +281,69 @@ describe("composer", () => {
     // The demo agent for every role, not a real one that may be installed on this machine.
     await dialog.getByLabel("Chef", { exact: true }).selectOption({ label: "Agent de démo" });
     await dialog.getByLabel("Codeurs", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Relecteur", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Agent de démo" });
     await shot(page, "c10-equipe-lancer");
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
 
-    const card = page.getByRole("region", { name: "Équipe" });
-    await card.getByText("Terminé : chaque sous-tâche").waitFor({ timeout: 30_000 });
+    const card = page.getByRole("region", { name: "Équipe", exact: true });
+    await card.getByText("Terminé : tout est réuni sur une branche").waitFor({ timeout: 30_000 });
     expect(await card.getByRole("listitem").allTextContents()).toEqual([
-      "Corriger answerterminée",
-      "Documenter answerterminée",
+      "Corriger answerfusionnéeRelectureTests",
+      "Documenter answerfusionnéeRelectureTests",
     ]);
-    // The coders' threads sit under the lead's in the sidebar.
-    expect(await page.locator(".thr-row.child").count()).toBe(2);
+    // The coders' and the merge's threads sit under the lead's in the sidebar; the
+    // reviewers' and testers' are reached from the card.
+    expect(await page.locator(".thr-row.child").count()).toBe(3);
+    // The timeline, drawn from what the team really did: a lane for the lead, each piece
+    // and the merge, ended.
+    const strip = page.getByRole("region", { name: "Frise de l'équipe" });
+    expect(
+      await strip
+        .getByRole("button", { name: /^(Chef|Corriger answer|Documenter answer|Fusion) :/ })
+        .count(),
+    ).toBe(4);
+    await strip.getByText(/^Terminée · /).waitFor();
     await shot(page, "c11-equipe");
+    await card.getByRole("button", { name: "Ouvrir la fusion" }).click();
+    await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).click();
 
     await card.getByRole("button", { name: "Documenter answer" }).click();
     await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).waitFor();
+
+    // A piece the reviewer keeps refusing goes back three times, then to the lead, then to the user.
+    await composer(page).fill("/equipe Corrige answer, à toujours refuser");
+    await composer(page).press("Enter");
+    await dialog.getByLabel("Chef", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Codeurs", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Relecteur", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Personne" });
+    await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Personne" });
+    await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
+    await card.getByText("2 sous-tâches t'attendent").waitFor({ timeout: 60_000 });
+    await card.getByText("Il manque une vérification").first().waitFor();
+    await shot(page, "c12-equipe-bloquee");
+    await card.getByRole("button", { name: "Relancer « Corriger answer »" }).click();
+    await card.getByText("L'équipe travaille").or(card.getByText("t'attend")).first().waitFor();
+
+    // Live: supervised coders wait on the user, and the timeline says so as it happens.
+    await composer(page).fill("/equipe Corrige answer");
+    await composer(page).press("Enter");
+    await dialog.getByLabel("Chef", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Codeurs", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Relecteur", { exact: true }).selectOption({ label: "Personne" });
+    await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Personne" });
+    await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Personne" });
+    await dialog
+      .getByLabel("Accès des codeurs")
+      .selectOption({ label: "Ils me demandent avant d'agir" });
+    await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
+    await strip.getByText("2 attendent ton accord").waitFor({ timeout: 30_000 });
+    expect(await strip.getByRole("button", { name: /: attend ton accord$/ }).count()).toBe(2);
+    await shot(page, "c13-frise-en-direct");
+    await card.getByRole("button", { name: "Arrêter l'équipe" }).click();
+    await strip.getByText(/^Arrêtée · /).waitFor();
     await page.close();
   });
 });

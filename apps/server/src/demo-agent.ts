@@ -1,6 +1,9 @@
 // A small, free ACP agent for development and tests. It streams text, runs a fake tool,
 // asks permission before a fake edit, and shares a plan, like a real coding agent would.
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import * as acp from "@agentclientprotocol/sdk";
@@ -14,6 +17,9 @@ const modes = new Map<string, string>();
 const efforts = new Map<string, string>();
 const used = new Map<string, number>();
 const mcpNames = new Map<string, string[]>();
+/** The folder each session works in. */
+const cwds = new Map<string, string>();
+
 const CONTEXT_SIZE = 200_000;
 
 const modeChoices = [
@@ -92,6 +98,7 @@ const app = acp
     // Stands for an agent whose user has not signed in with its own tool yet.
     if (modelStyle === "auth") throw acp.RequestError.authRequired();
     const sessionId = randomUUID();
+    cwds.set(sessionId, params.cwd);
     mcpNames.set(
       sessionId,
       params.mcpServers.map((m) => m.name),
@@ -133,6 +140,7 @@ const app = acp
   // Like a real agent reloading a saved session: it replays the model the session last ran.
   .onRequest("session/load", async ({ params, client }) => {
     const { sessionId } = params;
+    cwds.set(sessionId, params.cwd);
     mcpNames.set(
       sessionId,
       params.mcpServers.map((m) => m.name),
@@ -232,17 +240,56 @@ const app = acp
       await say("Toujours pas de plan.", "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
+    // A team's reviewer and tester answer with the verdict MoonAgentic reads.
+    const answer = async (text: string) => {
+      await say(text, "agent_message_chunk");
+      return { stopReason: "end_turn" as const };
+    };
+    if (ask.startsWith("Tu relis le travail d'un codeur")) {
+      if (ask.includes("toujours refuser")) {
+        return answer("Il manque une vérification de answer.\n\nVERDICT : À CORRIGER");
+      }
+      if (ask.includes("sans verdict")) return answer("Ça me paraît correct.");
+      return answer("Le travail est fait, sans oubli.\n\nVERDICT : OK");
+    }
+    if (ask.startsWith("Je n'ai pas trouvé ton verdict")) return answer("**VERDICT : OK**");
+    // A team's merger cannot settle a conflict, but checks the pieces together.
+    // It gives up on a conflict as an agent might: it aborts the merge.
+    if (ask.startsWith("Tu fusionnes le travail d'une équipe")) {
+      const cwd = cwds.get(sessionId);
+      if (cwd) execFileSync("git", ["merge", "--abort"], { cwd, stdio: "ignore" });
+      return answer("Je ne sais pas régler ce conflit : j'ai annulé la fusion.");
+    }
+    if (ask.startsWith("Toutes les sous-tâches de l'équipe sont fusionnées")) {
+      return answer("Les tests passent avec toutes les sous-tâches.\n\nVERDICT : OK");
+    }
+    if (ask.startsWith("Tu testes le travail d'un codeur")) {
+      return answer("J'ai lancé les tests : tout passe.\n\nVERDICT : OK");
+    }
+    // As a lead whose piece is stuck, it rewrites the brief.
+    if (ask.startsWith("La sous-tâche « ") && ask.includes("bloque après")) {
+      return answer(
+        'Nouvelle consigne :\n\n```json\n{"brief": "Passe answer à 42, et rien d\'autre."}\n```',
+      );
+    }
     // As a team lead, it splits the work into two pieces, the way MoonAgentic asks.
     if (ask.includes("tu es le chef d'une équipe") || ask.includes("Tu es le chef d'une équipe")) {
       if (ask.includes("sans plan")) {
         await say("Je préfère ne pas faire de plan.", "agent_message_chunk");
         return { stopReason: "end_turn" };
       }
+      // Two pieces writing the same file, for a team whose branches conflict.
+      const clash = ask.includes("en conflit");
       const plan = {
-        tasks: [
-          { title: "Corriger answer", brief: "Passe answer à 42 dans src/app.ts." },
-          { title: "Documenter answer", brief: "Ajoute une ligne sur answer dans le README." },
-        ],
+        tasks: clash
+          ? [
+              { title: "Écrire A", brief: "Écris « A » dans conflit.txt." },
+              { title: "Écrire B", brief: "Écris « B » dans conflit.txt." },
+            ]
+          : [
+              { title: "Corriger answer", brief: "Passe answer à 42 dans src/app.ts." },
+              { title: "Documenter answer", brief: "Ajoute une ligne sur answer dans le README." },
+            ],
       };
       await say(
         "Voici le plan.\n\n```json\n" + JSON.stringify(plan) + "\n```",
@@ -316,6 +363,15 @@ const app = acp
       return { stopReason: "cancelled" };
     }
     const allowed = permission.outcome.optionId === "allow";
+    // As a team's coder, it does its piece for real, so the team has branches to merge.
+    const piece = ask.match(/^Ta sous-tâche : (.+)$/m)?.[1];
+    const cwd = cwds.get(sessionId);
+    if (allowed && piece && cwd) {
+      const wanted = ask.match(/^Écris « (.+?) » dans ([\w.-]+?)\.?$/m);
+      const file = wanted?.[2] ?? `equipe/${piece.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`;
+      mkdirSync(path.dirname(path.join(cwd, file)), { recursive: true });
+      writeFileSync(path.join(cwd, file), `${wanted?.[1] ?? `# ${piece}`}\n`);
+    }
     await update({
       sessionUpdate: "tool_call_update",
       toolCallId: "edit-1",

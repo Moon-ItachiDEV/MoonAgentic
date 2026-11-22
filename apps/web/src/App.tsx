@@ -167,8 +167,13 @@ export function App() {
       : []),
   ];
 
+  const reviewing = reviewOpen && !!thread?.workspace && !thread.archived;
+  const reviewCount = thread ? state.reviews[thread.id]?.files?.length : undefined;
+
   return (
-    <div className={`app${drawer ? " drawer" : ""}${route.name === "home" ? " home-route" : ""}`}>
+    <div
+      className={`app${drawer ? " drawer" : ""}${route.name === "home" ? " home-route" : ""}${reviewing ? " reviewing" : ""}`}
+    >
       {route.name === "settings" ? (
         <SettingsNav
           section={route.section}
@@ -225,13 +230,15 @@ export function App() {
           </button>
           {thread?.workspace && !thread.archived && (
             <button
-              className="review-btn"
+              className={`review-btn${reviewing ? " on" : ""}`}
               aria-label="À revoir"
+              aria-pressed={reviewing}
               title="À revoir"
-              onClick={() => setReviewOpen(true)}
+              onClick={() => setReviewOpen(!reviewing)}
             >
               <IconBranch />
               <span className="lbl">À revoir</span>
+              {!!reviewCount && <span className="cnt">{reviewCount}</span>}
             </button>
           )}
           {thread && <ThreadMenu actions={threadActions} />}
@@ -310,6 +317,14 @@ export function App() {
           </div>
         )}
       </main>
+      {reviewOpen && thread?.workspace && !thread.archived && (
+        <ReviewPanel
+          key={thread.id}
+          thread={thread}
+          review={state.reviews[thread.id]}
+          onClose={() => setReviewOpen(false)}
+        />
+      )}
       {teamTask !== null && project && (
         <TeamDialog
           project={project}
@@ -330,14 +345,6 @@ export function App() {
             pickProject(id);
             go({ name: "home" });
           }}
-        />
-      )}
-      {reviewOpen && thread?.workspace && !thread.archived && (
-        <ReviewPanel
-          key={thread.id}
-          thread={thread}
-          review={state.reviews[thread.id]}
-          onClose={() => setReviewOpen(false)}
         />
       )}
       {connectionsOpen && (

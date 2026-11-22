@@ -106,10 +106,20 @@ export const branchExists = (dir: string, branch: string): Promise<boolean> =>
 async function isWorktreeRoot(dir: string): Promise<boolean> {
   try {
     const top = (await git(dir, ["rev-parse", "--show-toplevel"])).trim();
-    return path.relative(realpathSync(top), realpathSync(dir)) === "";
+    return samePath(top, dir);
   } catch {
     return false;
   }
+}
+
+/**
+ * Whether two paths name the same folder. Windows may give a folder by its short 8.3 name
+ * (`C:\Users\RUNNER~1\…`, as the temp folder often is) where git gives the long one: only
+ * the system's own `realpath` turns one into the other, and Windows paths ignore case.
+ */
+function samePath(a: string, b: string): boolean {
+  const [x, y] = [realpathSync.native(a), realpathSync.native(b)];
+  return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
 /** The worktree change running on each repository, so the next one waits for it. */
@@ -401,6 +411,50 @@ export function githubRepo(remoteUrl: string): string | undefined {
       /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/,
     );
   return match?.[1];
+}
+
+/** Commits everything that changed in the folder; false when nothing had. */
+export async function commitAll(dir: string, message: string): Promise<boolean> {
+  if (!(await git(dir, ["status", "--porcelain"])).trim()) return false;
+  await git(dir, ["add", "-A"]);
+  await git(dir, ["commit", "-q", "-m", message]);
+  return true;
+}
+
+/** The files a merge left in conflict, while one is under way; undefined when none is. */
+export async function unfinishedMerge(dir: string): Promise<string[] | undefined> {
+  const merging = await git(dir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).then(
+    () => true,
+    () => false,
+  );
+  if (!merging) return undefined;
+  return (await git(dir, ["diff", "--name-only", "-z", "--diff-filter=U"]))
+    .split("\0")
+    .filter(Boolean);
+}
+
+/**
+ * Merges `branch` into the folder's branch, always as a merge commit so each piece stays
+ * visible. Returns the files left in conflict, the merge then still under way; empty when
+ * it merged.
+ */
+export async function mergeBranch(dir: string, branch: string, message: string): Promise<string[]> {
+  try {
+    await git(dir, ["merge", "--no-ff", "--no-edit", "-m", message, branch]);
+    return [];
+  } catch (error) {
+    const conflicts = await unfinishedMerge(dir);
+    if (!conflicts?.length) throw error;
+    return conflicts;
+  }
+}
+
+/** Whether `branch` is already part of the folder's branch: merged, not just attempted. */
+export function containsBranch(dir: string, branch: string): Promise<boolean> {
+  return git(dir, ["merge-base", "--is-ancestor", branch, "HEAD"]).then(
+    () => true,
+    () => false,
+  );
 }
 
 export interface ShipResult {
