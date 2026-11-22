@@ -60,6 +60,11 @@ export const IconChevron = ({ size = 12 }: P) => (
     <path d="m9 6 6 6-6 6" />
   </svg>
 );
+export const IconBack = ({ size = 14 }: P) => (
+  <svg {...base(size)} strokeWidth={2}>
+    <path d="m15 6-6 6 6 6" />
+  </svg>
+);
 export const IconAlert = ({ size = 15 }: P) => (
   <svg {...base(size)}>
     <path d="M12 9v4M12 17h.01" />

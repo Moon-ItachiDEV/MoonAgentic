@@ -1,0 +1,309 @@
+/* Model sheet above the composer, as drawn in the mockup: favorites on a wheel,
+   « Tous » for every model, « Options » for the agent and its mode, effort on a track. */
+.menu.mpick {
+  display: block;
+  width: 330px;
+  padding: 6px;
+}
+.mp-body {
+  display: grid;
+  gap: 1px;
+}
+.mp-body.in-fwd > * {
+  animation: mp-in-fwd 0.22s var(--ease) both;
+}
+.mp-body.in-back > * {
+  animation: mp-in-back 0.22s var(--ease) both;
+}
+@keyframes mp-in-fwd {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+}
+@keyframes mp-in-back {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+}
+.mp-h {
+  display: grid;
+  grid-template-columns: 30px 1fr auto;
+  align-items: center;
+  padding: 2px 2px 6px;
+  min-height: 36px;
+}
+.mp-h b {
+  text-align: center;
+  font-weight: 500;
+  font-size: 13px;
+  color: var(--muted);
+}
+.mpick .mp-h .ib {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 8px;
+}
+.mpick .mp-more {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--card);
+  font-size: 13px;
+  color: var(--fg);
+}
+.mpick .mp-more:hover {
+  background: var(--hover);
+}
+.mp-desc {
+  margin: 6px 12px 2px;
+  min-height: 20px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.mp-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 12px 4px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+/* The wheel: three lines, the middle one is the pick. */
+.wheel-wrap {
+  position: relative;
+  margin: 2px 0;
+}
+.wheel-wrap::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--card);
+  pointer-events: none;
+}
+.wheel {
+  position: relative;
+  height: 132px;
+  overflow-y: auto;
+  scroll-snap-type: y mandatory;
+  overscroll-behavior: contain;
+  padding: 44px 0;
+  scrollbar-width: none;
+  outline: none;
+  -webkit-mask-image: linear-gradient(transparent, #000 35%, #000 65%, transparent);
+  mask-image: linear-gradient(transparent, #000 35%, #000 65%, transparent);
+}
+.wheel::-webkit-scrollbar {
+  display: none;
+}
+.wheel:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  border-radius: 12px;
+}
+.mpick .wh {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 0;
+  scroll-snap-align: center;
+  scroll-snap-stop: always;
+  font-size: 15px;
+  color: var(--muted);
+  transform-origin: 50% 50%;
+  transition: color 0.2s;
+  will-change: transform, opacity;
+}
+.mpick .wh:hover:not(:disabled) {
+  background: none;
+}
+.mpick .wh.on {
+  color: var(--fg);
+  font-weight: 500;
+}
+.wh .nm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 70px;
+}
+.mpick .effbtn {
+  position: absolute;
+  right: 8px;
+  top: 51px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.effbtn span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--line2);
+}
+.effbtn span.fill {
+  background: var(--muted);
+}
+.effbtn span.cur {
+  width: 2px;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--fg);
+}
+
+/* Every model, agent by agent. */
+.al-h {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 12px 10px 4px;
+  font-size: 12px;
+  color: var(--faint);
+}
+.al.dis .al-h {
+  opacity: 0.6;
+}
+.al-r {
+  display: flex;
+  align-items: center;
+  border-radius: 10px;
+}
+.al-r:hover,
+.al-r.on {
+  background: var(--hover);
+}
+.mpick .al-m {
+  flex: 1;
+  min-width: 0;
+  justify-content: space-between;
+  min-height: 38px;
+  padding: 6px 6px 6px 12px;
+  font-size: 14px;
+}
+.mpick .al-m:hover:not(:disabled) {
+  background: none;
+}
+.mpick .al-s {
+  width: 36px;
+  height: 38px;
+  padding: 0;
+  justify-content: center;
+  flex: none;
+  color: var(--line2);
+}
+.mpick .al-s:hover:not(:disabled) {
+  background: none;
+  color: var(--muted);
+}
+.mpick .al-s.on,
+.mpick .al-s.on:hover:not(:disabled) {
+  color: var(--warn);
+}
+.mpick .al-s:active {
+  transform: scale(0.85);
+}
+.mpick .al-ask {
+  margin: 2px 10px 4px;
+}
+
+/* Effort on a track, one stop per level. */
+.effv {
+  text-align: center;
+  padding: 10px 6px 4px;
+}
+.effv .lvl {
+  font-size: 20px;
+  font-weight: 500;
+  margin-bottom: 14px;
+}
+.track {
+  position: relative;
+  height: 44px;
+  border-radius: 22px;
+  background: var(--card);
+  display: grid;
+  touch-action: none;
+  cursor: pointer;
+  outline: none;
+}
+.track:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+.track .fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 22px;
+  background: var(--fg);
+  transition: width 0.25s var(--ease);
+}
+.track.drag .fill {
+  transition: width 0.08s linear;
+}
+.tk {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+.tk span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--line2);
+  transition:
+    width 0.25s var(--ease),
+    height 0.25s var(--ease),
+    background 0.2s;
+}
+.tk.in span {
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+.tk.cur span {
+  width: 8px;
+  height: 8px;
+  background: var(--bg);
+}
+.tkl {
+  display: grid;
+  margin-top: 6px;
+}
+.mpick .tkl button {
+  justify-content: center;
+  padding: 4px 2px;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.mpick .tkl button.on {
+  color: var(--fg);
+}
+.mpick .tkl button:hover:not(:disabled) {
+  background: none;
+  color: var(--fg);
+}
+.effv .mp-desc {
+  margin: 14px 8px 4px;
+}
+
+@media (max-width: 860px) {
+  .menu.mpick {
+    width: auto;
+    border-radius: 22px;
+    padding: 6px 10px calc(10px + env(safe-area-inset-bottom));
+  }
+}

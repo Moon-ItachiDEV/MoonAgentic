@@ -92,6 +92,14 @@ const shot = async (page: Page, name: string) => {
 };
 
 const composer = (page: Page) => page.getByRole("combobox", { name: "Message" });
+/** Picks an agent from the model sheet: « Tous », then « Options ». */
+async function pickAgent(page: Page, name: RegExp) {
+  await page.locator(".agentchip").click();
+  await page.getByRole("button", { name: "Tous", exact: true }).click();
+  await page.getByRole("button", { name: "Options", exact: true }).click();
+  await page.getByRole("menuitemradio", { name }).click();
+}
+
 const options = (page: Page) => page.locator("#composer-suggest [role=option]");
 
 describe("composer", () => {
@@ -105,8 +113,7 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Créer" }).click();
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
     // The demo agent, not a real one that may be installed on this machine.
-    await page.locator(".agentchip").click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
+    await pickAgent(page, /Agent de démo/);
     await page.keyboard.press("Escape");
     await expect.poll(() => page.locator(".agentchip").textContent()).toContain("Agent de démo");
 
@@ -191,8 +198,7 @@ describe("composer", () => {
     await dialog.getByRole("button", { name: "Fermer" }).click();
 
     // A supervised turn waits for the user, who answers from À traiter.
-    await page.locator(".agentchip").click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
+    await pickAgent(page, /Agent de démo/);
     await page.keyboard.press("Escape");
     await composer(page).fill("Corrige la réponse");
     await composer(page).press("Enter");
