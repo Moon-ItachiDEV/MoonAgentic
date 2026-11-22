@@ -34,6 +34,7 @@ function headline(team: Team): string {
       return `${left} ${plural(left, "sous-tâche t'attend", "sous-tâches t'attendent")} : ${plural(left, "ouvre son fil, puis relance-la", "ouvre leurs fils, puis relance-les")}.`;
     }
     case "done":
+      if (team.shipped?.opened) return "Terminé : la PR est ouverte, prête à relire.";
       return team.mergeThreadId
         ? "Terminé : tout est réuni sur une branche, prête à relire et à envoyer."
         : "Terminé : chaque sous-tâche est prête sur sa branche.";
@@ -87,6 +88,23 @@ function leadState(team: Team): string {
   if (team.tasks.some((t) => t.status === "lead")) return "revoit une consigne";
   const n = team.tasks.length;
   return n ? `${n} ${plural(n, "sous-tâche", "sous-tâches")}` : "pas de plan";
+}
+
+/** The branch that holds a finished team's work: the merge's, or its only piece's. */
+const shipTarget = (team: Team) =>
+  team.mergeThreadId ?? (team.tasks.length === 1 ? team.tasks[0]?.threadId : undefined);
+
+/**
+ * Where the team's pull request is. The team opens it by itself once done, unless asked
+ * not to; a team from before, or one asked not to, offers to open it.
+ */
+function shipState(team: Team): { dot: string; text: string } {
+  if (team.shipping) return { dot: "running", text: "en cours" };
+  if (team.shipped?.opened) return { dot: "done", text: "ouverte" };
+  if (team.shipped) return { dot: "done", text: "branche envoyée" };
+  if (team.shipError) return { dot: "blocked", text: "à toi de voir" };
+  if (team.phase === "done") return { dot: "waiting", text: "pas encore ouverte" };
+  return { dot: "waiting", text: team.autoShip === false ? "quand tu veux" : "à la fin" };
 }
 
 /** What the merge is at; before it starts, it waits on the coders. */
@@ -144,6 +162,22 @@ export function TeamCard({
     team.error && (team.phase === "blocked" || team.phase === "failed" || team.phase === "stopped")
       ? team.error
       : undefined;
+  const ship = shipState(team);
+  // Once done, the step stays only if there is a branch to send.
+  const showShip = team.phase !== "done" || !!shipTarget(team);
+  const canShip =
+    team.phase === "done" && !team.shipping && !team.shipped?.opened && !!shipTarget(team);
+  const note = team.shipError ?? team.shipped?.note;
+  const [shipping, setShipping] = useState(false);
+  const shipAgain = () => {
+    setShipping(true);
+    connection
+      .request({ type: "team.ship", requestId: newId(), threadId: thread.id })
+      .catch((error: unknown) =>
+        connection.notify(error instanceof Error ? error.message : String(error)),
+      )
+      .finally(() => setShipping(false));
+  };
   // -1 stands for the merge. The button waits for the server's answer, not for a guess.
   const retry = (index: number) => {
     setRetrying((r) => [...r, index]);
@@ -281,6 +315,41 @@ export function TeamCard({
                       onClick={() => retry(-1)}
                     >
                       Relancer la fusion
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </li>
+        )}
+        {showShip && (
+          <li className={`team-task step ${ship.dot}`} aria-label="Pull request">
+            <span className="dot" aria-hidden />
+            <span className="team-what">
+              <span>Ouvrir la PR</span>
+              <span className="team-who">
+                {team.autoShip === false ? "Toi" : "L'équipe"}, avec ton compte GitHub
+              </span>
+            </span>
+            <small>{ship.text}</small>
+            {(team.shipped?.url || note || canShip) && (
+              <div className="team-more">
+                {note && (
+                  <div className="team-note">
+                    <Clamp>
+                      <Markdown text={note} />
+                    </Clamp>
+                  </div>
+                )}
+                <div className="team-links">
+                  {team.shipped?.url && (
+                    <a className="lnk sm" href={team.shipped.url} target="_blank" rel="noreferrer">
+                      {team.shipped.opened ? "Voir la PR" : "Créer la PR sur GitHub"}
+                    </a>
+                  )}
+                  {canShip && (
+                    <button className="btn sm" disabled={shipping} onClick={shipAgain}>
+                      {team.shipError || team.shipped ? "Réessayer" : "Ouvrir la PR"}
                     </button>
                   )}
                 </div>

@@ -260,6 +260,17 @@ export interface Team {
   merger?: TeamMember;
   /** The thread whose branch gets every piece, once they are all done. */
   mergeThreadId?: string;
+  /**
+   * Once done, the team pushes its branch and opens its pull request by itself: `url` is
+   * the pull request, or the page to open one when the user's `gh` could not.
+   */
+  shipped?: { url?: string; opened: boolean; note?: string };
+  /** Why the branch could not be pushed or its pull request opened. */
+  shipError?: string;
+  /** The branch is being pushed and the pull request opened, right now. */
+  shipping?: true;
+  /** Set to false at the start when the user opens the pull request themselves. */
+  autoShip?: boolean;
   /** What the merger is at: the piece whose conflicts it settles, or -1 for the last check. */
   mergeStep?: number;
   /** True once the merger was asked again for the verdict its last check left out. */
@@ -627,6 +638,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
     merger: z.object({ agentId: id, model: id.optional() }).optional(),
     coders: z.number().int().min(1).max(4),
     permissionMode: z.enum(["supervised", "full"]),
+    /** Opens the pull request by itself once done; true when left out. */
+    autoShip: z.boolean().optional(),
   }),
   /** Stops the team, its lead and every coder at work. */
   z.object({ type: z.literal("team.stop"), threadId: id }),
@@ -634,6 +647,12 @@ export const ClientMessage = z.discriminatedUnion("type", [
    * Starts a piece that is blocked, failed or stopped again, its tries counted from zero;
    * without a piece, the merge that stopped.
    */
+  /** Pushes the finished team's branch and opens its pull request, once more. */
+  z.object({
+    type: z.literal("team.ship"),
+    requestId: id,
+    threadId: id,
+  }),
   z.object({
     type: z.literal("team.retry"),
     requestId: id,

@@ -99,6 +99,7 @@ export function TeamDialog({
   const noGit = !project.git;
   const [coders, setCoders] = useState(2);
   const [mode, setMode] = useState<PermissionMode>("full");
+  const [autoShip, setAutoShip] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -137,6 +138,7 @@ export function TeamDialog({
         ...(merger ? { merger } : {}),
         coders,
         permissionMode: mode,
+        autoShip,
       });
       onStarted(id);
     } catch (e) {
@@ -242,6 +244,17 @@ export function TeamDialog({
             </select>
           </label>
         </div>
+        <label className="field team-ship">
+          <input
+            type="checkbox"
+            checked={autoShip}
+            onChange={(e) => setAutoShip(e.target.checked)}
+          />
+          <span>
+            Ouvrir la PR à la fin
+            <small>L'équipe pousse sa branche et ouvre la PR avec ton compte GitHub.</small>
+          </span>
+        </label>
         {noGit && (
           <p className="error">
             « {project.name} » n'est pas un dépôt git : chaque codeur a besoin de sa propre branche.
