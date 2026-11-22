@@ -2261,9 +2261,11 @@ kbd {
   border-radius: 8px;
   padding: 0 6px;
   margin: 0 -6px;
+}
+.tl-l[role="button"] {
   cursor: pointer;
 }
-.tl-l:hover {
+.tl-l[role="button"]:hover {
   background: var(--hover);
 }
 .tl-who {
