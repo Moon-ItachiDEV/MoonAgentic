@@ -2050,6 +2050,44 @@ kbd {
 .team-task.done .dot {
   background: var(--ok);
 }
+.team-task.reviewing .dot,
+.team-task.testing .dot,
+.team-task.lead .dot {
+  background: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+.team-task.blocked .dot {
+  background: var(--warn, #c98a1b);
+}
+.team-more {
+  grid-column: 2 / -1;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+.team-note {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.team-links {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.team-task .lnk.sm {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.team-links .btn.sm {
+  margin-left: auto;
+}
 .team-task.failed .dot {
   background: var(--err);
 }

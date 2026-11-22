@@ -20,11 +20,14 @@ function MemberPicker({
   agents,
   member,
   onChange,
+  optional,
 }: {
   label: string;
   agents: AgentInfo[];
   member: TeamMember | undefined;
-  onChange: (member: TeamMember) => void;
+  onChange: (member: TeamMember | undefined) => void;
+  /** Offers « Personne », for a role the team can do without. */
+  optional?: boolean;
 }) {
   const agent = agents.find((a) => a.id === member?.agentId);
   return (
@@ -36,13 +39,15 @@ function MemberPicker({
           value={member?.agentId ?? ""}
           onChange={(e) => {
             const next = agents.find((a) => a.id === e.target.value);
-            if (next)
+            if (!next) onChange(undefined);
+            else
               onChange({
                 agentId: next.id,
                 ...(next.defaultModel ? { model: next.defaultModel } : {}),
               });
           }}
         >
+          {optional && <option value="">Personne</option>}
           {agents
             .filter((a) => a.available)
             .map((a) => (
@@ -90,8 +95,17 @@ export function TeamDialog({
   // Until the user picks, the choice follows the agents as their models arrive.
   const [leadChoice, setLead] = useState<TeamMember>();
   const [coderChoice, setCoder] = useState<TeamMember>();
+  // `null` once the user said nobody: the team does without that check.
+  const [reviewerChoice, setReviewer] = useState<TeamMember | null>();
+  const [testerChoice, setTester] = useState<TeamMember | null>();
   const lead = leadChoice ?? pickMember(agents, /fable/i);
   const coder = coderChoice ?? pickMember(agents, /opus/i);
+  const reviewer =
+    reviewerChoice === undefined
+      ? pickMember(agents, /neon|gemini/i)
+      : (reviewerChoice ?? undefined);
+  const tester =
+    testerChoice === undefined ? pickMember(agents, /sonnet/i) : (testerChoice ?? undefined);
   const noGit = !project.git;
   const [coders, setCoders] = useState(2);
   const [mode, setMode] = useState<PermissionMode>("full");
@@ -128,6 +142,8 @@ export function TeamDialog({
         task: task.trim(),
         lead,
         coder,
+        ...(reviewer ? { reviewer } : {}),
+        ...(tester ? { tester } : {}),
         coders,
         permissionMode: mode,
       });
@@ -150,7 +166,8 @@ export function TeamDialog({
         <h2 id="team-title">Confier à une équipe</h2>
         <p>
           Le chef lit « {project.name} » sans rien modifier et découpe la tâche. Chaque codeur fait
-          sa part en même temps, sur sa propre branche.
+          sa part en même temps, sur sa propre branche. Le relecteur et le testeur la vérifient : ce
+          qu'ils trouvent repart au codeur trois fois au plus, puis au chef, puis à toi.
         </p>
         <label className="field">
           Tâche
@@ -165,6 +182,20 @@ export function TeamDialog({
         </label>
         <MemberPicker label="Chef" agents={agents} member={lead} onChange={setLead} />
         <MemberPicker label="Codeurs" agents={agents} member={coder} onChange={setCoder} />
+        <MemberPicker
+          label="Relecteur"
+          agents={agents}
+          member={reviewer}
+          onChange={(m) => setReviewer(m ?? null)}
+          optional
+        />
+        <MemberPicker
+          label="Testeur"
+          agents={agents}
+          member={tester}
+          onChange={(m) => setTester(m ?? null)}
+          optional
+        />
         <div className="team-row">
           <div className="field">
             Codeurs en même temps

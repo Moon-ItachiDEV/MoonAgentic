@@ -47,6 +47,7 @@ type ThreadExtra = Pick<
   | "archived"
   | "parentId"
   | "role"
+  | "worksIn"
   | "team"
 >;
 
@@ -60,6 +61,7 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.archived ? { archived: true } : {}),
     ...(thread.parentId ? { parentId: thread.parentId } : {}),
     ...(thread.role ? { role: thread.role } : {}),
+    ...(thread.worksIn ? { worksIn: thread.worksIn } : {}),
     ...(thread.team ? { team: thread.team } : {}),
   };
   return Object.keys(extra).length ? JSON.stringify(extra) : null;
