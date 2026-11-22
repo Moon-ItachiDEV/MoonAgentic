@@ -1,16 +1,24 @@
 import type { ContextUsage } from "@moonagentic/protocol";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const tokens = (n: number) =>
   n >= 1_000_000
     ? `${(n / 1_000_000).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} M`
-    : `${Math.round(n / 1000).toLocaleString("fr-FR")} k`;
+    : n >= 1000
+      ? `${Math.round(n / 1000).toLocaleString("fr-FR")} k`
+      : n.toLocaleString("fr-FR");
 
 const RADIUS = 7;
 const CIRCLE = 2 * Math.PI * RADIUS;
 
-/** How full the agent's context is, with room for actions such as compacting. */
-export function ContextGauge({ usage, children }: { usage: ContextUsage; children?: ReactNode }) {
+/** How full the agent's context is, with an action such as compacting it. */
+export function ContextGauge({
+  usage,
+  action,
+}: {
+  usage: ContextUsage;
+  action?: { label: string; disabled: boolean; run: () => void } | undefined;
+}) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const share = Math.min(1, usage.used / usage.size);
@@ -57,7 +65,18 @@ export function ContextGauge({ usage, children }: { usage: ContextUsage; childre
           <span>
             {tokens(usage.used)} sur {tokens(usage.size)} jetons
           </span>
-          {children && <div onClick={() => setOpen(false)}>{children}</div>}
+          {action && (
+            <button
+              className="btn sm"
+              disabled={action.disabled}
+              onClick={() => {
+                action.run();
+                setOpen(false);
+              }}
+            >
+              {action.label}
+            </button>
+          )}
         </div>
       )}
     </div>

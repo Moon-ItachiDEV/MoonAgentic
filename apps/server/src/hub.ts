@@ -302,8 +302,11 @@ export class Hub {
     const session = await this.sessions.get(threadId)?.catch(() => undefined);
     const choices = session?.model?.choices ?? this.store.getAgentModels(thread.agentId)?.models;
     if (!choices?.some((c) => c.id === model)) throw new Error("Modèle inconnu.");
-    if (session?.model) await session.setModel(model);
-    // A new model can bring other effort levels.
+    if (session?.model) {
+      await session.setModel(model);
+      // A new model can bring other effort levels, for the picker too.
+      this.learnCatalog(thread.agentId, session.model, session.settings, false);
+    }
     const settings = session && settingValues(session.settings);
     this.updateThread(threadId, {
       model: session?.model?.current ?? model,
@@ -317,13 +320,19 @@ export class Hub {
     if (this.turns.has(threadId))
       throw new Error("Attends la fin de la réponse pour changer ce réglage.");
     const session = await this.sessions.get(threadId)?.catch(() => undefined);
-    const settings = session?.settings ?? this.store.getAgentModels(thread.agentId)?.settings;
-    const setting = settings?.find((s) => s.id === settingId);
+    const offered = session?.settings ?? this.store.getAgentModels(thread.agentId)?.settings;
+    const setting = offered?.find((s) => s.id === settingId);
     if (!setting?.choices.some((c) => c.id === value)) throw new Error("Réglage inconnu.");
-    if (session) await session.setSetting(settingId, value);
-    const current = session?.settings.find((s) => s.id === settingId)?.current ?? value;
-    const latest = this.requireThread(threadId).settings;
-    this.updateThread(threadId, { settings: { ...latest, [settingId]: current } });
+    if (session) {
+      await session.setSetting(settingId, value);
+      this.learnCatalog(thread.agentId, session.model, session.settings, false);
+    }
+    // One change can move others, so a running agent's own values win.
+    const settings = (session && settingValues(session.settings)) ?? {
+      ...this.requireThread(threadId).settings,
+      [settingId]: value,
+    };
+    this.updateThread(threadId, { settings });
   }
 
   toggleFavorite(agentId: string, model: string, starred: boolean): void {
@@ -667,6 +676,7 @@ export class Hub {
     }
     // After the model, which can change the effort levels on offer.
     await this.applySettings(thread.id, session);
+    this.learnCatalog(thread.agentId, session.model, session.settings, false);
     ready = true;
     return session;
   }
@@ -697,7 +707,8 @@ export class Hub {
         ...agent,
         models: known.models,
         ...(defaultModel ? { defaultModel } : {}),
-        ...(known.settings?.length ? { settings: known.settings } : {}),
+        // An empty list says the agent has none; a missing one, from an older cache, is unknown.
+        ...(known.settings ? { settings: known.settings } : {}),
       };
     });
   }
@@ -728,10 +739,14 @@ export class Hub {
     const next = {
       models: model ? model.choices : keep ? before.models : [],
       current: model ? (keep ? before.current : model.current) : keep ? before.current : "",
-      settings: settings.map((s) => ({
-        ...s,
-        current: (keep && before.settings?.find((b) => b.id === s.id)?.current) || s.current,
-      })),
+      // A continued session that leaves its settings out does not take them away.
+      settings:
+        keep && !settings.length
+          ? (before.settings ?? [])
+          : settings.map((s) => ({
+              ...s,
+              current: (keep && before.settings?.find((b) => b.id === s.id)?.current) || s.current,
+            })),
     };
     if (JSON.stringify(before) === JSON.stringify(next)) return;
     this.store.setAgentModels(agentId, next);

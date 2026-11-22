@@ -51,6 +51,8 @@ const configOptions = (sessionId: string): acp.SessionConfigOption[] => [
       { value: "bas", name: "Bas" },
       { value: "moyen", name: "Moyen" },
       { value: "haut", name: "Haut" },
+      // Like real agents, a bigger model offers more effort levels.
+      ...(models.get(sessionId) === "precis" ? [{ value: "max", name: "Max" }] : []),
     ],
   },
 ];
@@ -122,6 +124,12 @@ const app = acp
     await client.notify("session/update", {
       sessionId,
       update: { sessionUpdate: "config_option_update", configOptions: configOptions(sessionId) },
+    });
+    // Then where its reloaded context stands, as current state rather than history.
+    used.set(sessionId, 99_000);
+    await client.notify("session/update", {
+      sessionId,
+      update: { sessionUpdate: "usage_update", used: 99_000, size: CONTEXT_SIZE },
     });
     return { configOptions: configOptions(sessionId) };
   })

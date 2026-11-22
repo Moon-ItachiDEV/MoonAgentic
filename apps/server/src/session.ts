@@ -47,7 +47,11 @@ const SETTING_KINDS = { mode: "mode", thought_level: "effort" } as const;
 /** Reads the agent's mode and reasoning effort selectors, if it has them. */
 export function settingOptions(options: acp.SessionConfigOption[]): AgentSetting[] {
   return options.flatMap((o): AgentSetting[] => {
-    const kind = o.category && SETTING_KINDS[o.category as keyof typeof SETTING_KINDS];
+    // Older adapters may leave the category out and only name the option.
+    const key = o.category ?? o.id;
+    const kind = Object.hasOwn(SETTING_KINDS, key)
+      ? SETTING_KINDS[key as keyof typeof SETTING_KINDS]
+      : undefined;
     if (!kind || o.type !== "select") return [];
     const flat = o.options.flatMap((c) => ("group" in c ? c.options : [c]));
     return [
@@ -255,7 +259,12 @@ export class AgentSession {
       } else if (update.sessionUpdate === "current_mode_update") {
         if (state.modes) state.modes = { ...state.modes, currentModeId: update.currentModeId };
       } else {
-        if (!replaying) handlers.onUpdate(update);
+        // A replay repeats old messages, which the timeline already holds, but its commands
+        // and context use are the session's current state.
+        const current =
+          update.sessionUpdate === "available_commands_update" ||
+          update.sessionUpdate === "usage_update";
+        if (!replaying || current) handlers.onUpdate(update);
         return;
       }
       if (started) handlers.onConfig?.({ model: modelOf(state), settings: settingsOf(state) });
