@@ -421,6 +421,13 @@ export class Teams {
     this.host.setTeam(leadId, recordTimeline(team, Date.now()));
   }
 
+  /** The access the team's agents get from now on, set from its lead. */
+  setPermissionMode(leadId: string, permissionMode: PermissionMode): void {
+    const team = this.host.thread(leadId)?.team;
+    if (team && team.permissionMode !== permissionMode)
+      this.save(leadId, { ...team, permissionMode });
+  }
+
   /** Starts the team; returns the lead's thread. */
   start(input: TeamInput): string {
     const team: Team = {
@@ -740,8 +747,8 @@ export class Teams {
         projectId: lead.projectId,
         agentId: member.agentId,
         model: member.model,
-        // The reviewer only reads; the tester writes tests, with the coders' access.
-        permissionMode: role === "reviewer" ? "supervised" : team.permissionMode,
+        // The team's access; a reviewer still asks before changing a file (see the hub).
+        permissionMode: team.permissionMode,
         isolated: false,
         text,
         title: `${role === "reviewer" ? "Relecture" : "Tests"} : ${task.title}`,
