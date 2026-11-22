@@ -14,7 +14,22 @@ export function applyTheme(theme: Theme = readTheme()): void {
   else root.dataset.theme = theme;
 }
 
+const listeners = new Set<() => void>();
+
 export function setTheme(theme: Theme): void {
   writePref("theme", theme);
   applyTheme(theme);
+  for (const l of listeners) l();
+}
+
+/** For useSyncExternalStore: every view showing the theme follows each change. */
+export function subscribeTheme(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
+/** Whether the page is dark right now: picked, or the system's choice. */
+export function isDark(theme: Theme = readTheme()): boolean {
+  if (theme !== "system") return theme === "dark";
+  return typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
 }
