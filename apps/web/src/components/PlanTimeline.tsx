@@ -50,12 +50,14 @@ export function PlanTimeline({
   // Opens on today, a third of the way in; a change of zoom comes back to it.
   const scroller = useRef<HTMLDivElement>(null);
   const todayX = x(t.today);
+  // With no card there is nothing to scroll: the first cards to arrive open on today too.
+  const hasCards = cards.length > 0;
   useLayoutEffect(() => {
     const el = scroller.current;
     if (el) el.scrollLeft = Math.max(0, todayX - label - (el.clientWidth - label) / 3);
-    // Only when the scale changes: new cards must not move what the user is looking at.
+    // Only when the scale changes: more cards must not move what the user is looking at.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [px, label]);
+  }, [px, label, hasCards]);
 
   if (cards.length === 0) {
     return <div className="pl-tl-none">Aucune tâche à placer dans le temps.</div>;

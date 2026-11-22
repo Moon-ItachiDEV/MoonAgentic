@@ -119,6 +119,16 @@ export const dueLabel = (due: number) =>
 
 export const DAY = 86_400_000;
 const dayStart = (at: number) => new Date(at).setHours(0, 0, 0, 0);
+/**
+ * Midnight `days` days after the day of `at`, counted on the calendar: a day is 23 or 25
+ * hours long when the clocks change.
+ */
+const addDays = (at: number, days: number) => {
+  const d = new Date(at);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days).getTime();
+};
+/** The timeline never shows more than this many days before or after today. */
+export const TIMELINE_REACH = 366;
 
 /**
  * The days a card covers on the timeline. Real dates come first: from when its work began
@@ -130,15 +140,15 @@ export function cardSpan(
   now: number,
 ): { from: number; to: number; planned: boolean } {
   const from = dayStart(card.startedAt ?? card.start ?? card.createdAt);
-  const due = card.due ? dayStart(card.due) + DAY : undefined;
+  const due = card.due ? addDays(card.due, 1) : undefined;
   const planned = card.status === "todo" || !card.startedAt;
   const end = card.doneAt
     ? card.doneAt
     : planned
-      ? (due ?? from + DAY)
+      ? (due ?? addDays(from, 1))
       : // Work that goes on runs to today, past its due day when it is late.
         Math.max(due ?? 0, now);
-  return { from, to: Math.max(dayStart(end - 1) + DAY, from + DAY), planned };
+  return { from, to: Math.max(addDays(end - 1, 1), addDays(from, 1)), planned };
 }
 
 export interface TimelineBar {
@@ -177,7 +187,8 @@ const TITLE = 170;
 
 /**
  * Lays the cards out by who works on them: a lane per agent, cards no agent has last.
- * The days shown hold every card, with room around today. `px` is the width of a day.
+ * The days shown hold every card, with room around today, up to a year each way: a card
+ * dated further (a year mistyped) is drawn at the edge. `px` is the width of a day.
  */
 export function timeline(
   cards: PlanTask[],
@@ -187,15 +198,28 @@ export function timeline(
   px = 32,
 ): Timeline {
   const today = dayStart(now);
-  const spans = cards.map((card) => ({
-    card,
-    work: cardWork(card, threads, agents),
-    ...cardSpan(card, now),
-  }));
+  const first = addDays(today, -TIMELINE_REACH);
+  const last = addDays(today, TIMELINE_REACH);
+  const spans = cards.map((card) => {
+    const span = cardSpan(card, now);
+    // Kept inside the days shown, a day long at least.
+    const start = Math.min(Math.max(span.from, first), addDays(last, -1));
+    return {
+      card,
+      work: cardWork(card, threads, agents),
+      planned: span.planned,
+      from: start,
+      to: Math.min(Math.max(span.to, addDays(start, 1)), last),
+    };
+  });
   const before = Math.max(14, Math.ceil(300 / px));
   const after = Math.max(28, Math.ceil(1400 / px));
-  const from = Math.min(today - before * DAY, ...spans.map((s) => s.from - 3 * DAY));
-  const to = Math.max(today + after * DAY, ...spans.map((s) => s.to + 7 * DAY));
+  const from = Math.max(
+    first,
+    Math.min(addDays(today, -before), ...spans.map((s) => addDays(s.from, -3))),
+  );
+  const to = Math.min(last, Math.max(addDays(today, after), ...spans.map((s) => addDays(s.to, 7))));
+  // Rounded, as a day of 23 or 25 hours is still one day.
   const index = (at: number) => Math.round((at - from) / DAY);
 
   const byLane = new Map<string, typeof spans>();

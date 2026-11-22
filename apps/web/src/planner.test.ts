@@ -2,6 +2,7 @@ import type { AgentInfo, PlanTask, Team, Thread } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import {
   DAY,
+  TIMELINE_REACH,
   cardSpan,
   cardWork,
   dayToDue,
@@ -119,6 +120,52 @@ describe("timeline", () => {
     expect(days(cardSpan(card({ createdAt: at(20), start: at(24), due: at(26) }), now))).toEqual([
       24, 3,
     ]);
+  });
+
+  it("counts days on the calendar when the clocks change", () => {
+    const zone = process.env.TZ;
+    // Where the zone can be set, Sunday 29 March 2026 is 23 hours long in Paris.
+    process.env.TZ = "Europe/Paris";
+    try {
+      const sunday = new Date(2026, 2, 29, 12).getTime();
+      const span = cardSpan(card({ createdAt: sunday, start: sunday, due: sunday }), sunday);
+      expect([new Date(span.from).getDate(), new Date(span.to).getDate()]).toEqual([29, 30]);
+      expect(new Date(span.to).getHours()).toBe(0);
+      const cards = [card({ id: "a", createdAt: sunday, start: sunday, due: sunday })];
+      expect(timeline(cards, [], agents, sunday).lanes[0]!.bars[0]).toMatchObject({ days: 1 });
+      // The week after, seen from before the change.
+      const friday = new Date(2026, 2, 27, 12).getTime();
+      const monday = new Date(2026, 2, 30, 12).getTime();
+      const next = [card({ id: "b", createdAt: friday, start: monday, due: monday })];
+      const t = timeline(next, [], agents, friday);
+      expect(t.lanes[0]!.bars[0]).toMatchObject({ day: t.today + 3, days: 1 });
+    } finally {
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+    }
+  });
+
+  it("stays within a year of today, whatever year a card was given", () => {
+    const far = [
+      card({
+        id: "a",
+        number: 1,
+        createdAt: at(1),
+        start: at(24),
+        due: new Date(9999, 0, 1).getTime(),
+      }),
+      card({ id: "b", number: 2, createdAt: at(1), start: new Date(2099, 5, 1).getTime() }),
+      card({ id: "c", number: 3, createdAt: new Date(1971, 0, 1).getTime() }),
+    ];
+    const t = timeline(far, [], agents, now);
+    expect(t.days).toBeLessThanOrEqual(2 * TIMELINE_REACH);
+    expect(timelineTicks(t.from, t.days).weeks.length).toBeLessThan(110);
+    const bars = Object.fromEntries(t.lanes[0]!.bars.map((b) => [b.card.id, b]));
+    // Each is drawn inside the days shown, cut at the edge it goes past.
+    expect(bars.a!.day).toBe(t.today + 2);
+    expect(bars.a!.day + bars.a!.days).toBe(t.days);
+    expect(bars.b).toMatchObject({ day: t.days - 1, days: 1 });
+    expect(bars.c).toMatchObject({ day: 0, days: 1 });
   });
 
   it("draws what really happened once the work began", () => {
