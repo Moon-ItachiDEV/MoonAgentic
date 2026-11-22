@@ -1,6 +1,6 @@
 import type { Schedule, Thread } from "@moonagentic/protocol";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Composer } from "./components/Composer.tsx";
+import { Composer, useNarrow } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
@@ -8,6 +8,7 @@ import { Home } from "./components/Home.tsx";
 import {
   IconCode,
   IconShield,
+  IconArrowLeft,
   IconMenu,
   IconSidebar,
   IconCompose,
@@ -27,8 +28,10 @@ import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { ProjectPage } from "./components/ProjectPage.tsx";
+import { HomeCards } from "./components/HomeCards.tsx";
 import { coordinatorOf, listedThreads } from "./project-threads.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
+import { TabBar } from "./components/TabBar.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { TeamDialog } from "./components/TeamDialog.tsx";
@@ -66,6 +69,8 @@ export function App() {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
   const route = useRoute();
   const [drawer, setDrawer] = useState(false);
+  // The phone's home page: live conversations above the composer, tabs below it.
+  const narrow = useNarrow();
   // On a computer, the side bar can be folded away, as in the mockup.
   const [sideOff, setSideOff] = useState(() => readPref("sideOff") === "true");
   const foldSide = (off: boolean) => {
@@ -260,7 +265,7 @@ export function App() {
 
   return (
     <div
-      className={`app${drawer ? " drawer" : ""}${sideOff && route.name !== "settings" ? " side-off" : ""}${route.name === "home" ? " home-route" : ""}${reviewing ? " reviewing" : ""}`}
+      className={`app${drawer ? " drawer" : ""}${sideOff && route.name !== "settings" ? " side-off" : ""}${route.name === "home" ? " home-route" : ""}${route.name === "thread" ? " in-thread" : ""}${reviewing ? " reviewing" : ""}`}
     >
       {route.name === "settings" ? (
         // Until the settings arrive, an empty side bar keeps the layout in place.
@@ -331,9 +336,23 @@ export function App() {
       <div className="side-scrim" onClick={() => setDrawer(false)} />
       <main className="center">
         <header className="top">
-          <button className="ib mobile-only" aria-label="Menu" onClick={() => setDrawer(true)}>
+          <button
+            className="ib mobile-only menu-btn"
+            aria-label="Menu"
+            onClick={() => setDrawer(true)}
+          >
             <IconMenu />
           </button>
+          {route.name === "thread" && (
+            <button
+              className="ib back-home"
+              aria-label="Retour"
+              title="Retour"
+              onClick={() => go({ name: "home" })}
+            >
+              <IconArrowLeft />
+            </button>
+          )}
           {sideOff && route.name !== "settings" && (
             <button
               className="ib open-side"
@@ -535,6 +554,20 @@ export function App() {
           // Under the « Fils » tab the coordinator's conversation is out of sight: so is its composer.
           !(coordinator && !wide && projectTab === "threads") && (
             <div className={`dock${coordinator && wide ? " beside-threads" : ""}`}>
+              {route.name === "home" && (narrow || sideOff) && (
+                <HomeCards
+                  state={state}
+                  agents={state.agents}
+                  onOpen={(t) =>
+                    // A coordinator lives on its project's page, not as a thread of its own.
+                    go(
+                      t.kind === "coordinator"
+                        ? { name: "project", projectId: t.projectId }
+                        : { name: "thread", threadId: t.id },
+                    )
+                  }
+                />
+              )}
               {thread?.archived ? (
                 <div className="archived-bar" role="status">
                   <IconArchive />
@@ -561,6 +594,17 @@ export function App() {
                   onTeam={(task) => setTeamTask(task)}
                   onSchedule={(text) => setScheduling({ text })}
                   onSettings={() => go({ name: "settings", section: "general" })}
+                />
+              )}
+              {route.name === "home" && narrow && (
+                <TabBar
+                  state={state}
+                  onNew={() => go({ name: "home" })}
+                  onProjects={() => setDrawer(true)}
+                  onCode={(id) => {
+                    go({ name: "thread", threadId: id });
+                    setReviewOpen(true);
+                  }}
                 />
               )}
             </div>

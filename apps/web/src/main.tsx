@@ -12,6 +12,7 @@ import "./remote.css";
 import "./pull-request.css";
 import "./composer.css";
 import "./project.css";
+import "./phone.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

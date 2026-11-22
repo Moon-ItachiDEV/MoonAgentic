@@ -48,7 +48,7 @@ import { type Suggestion, Suggestions } from "./Suggestions.tsx";
 const NARROW = "(max-width: 860px)";
 const narrowQuery = typeof matchMedia === "function" ? matchMedia(NARROW) : undefined;
 /** True on a phone-sized screen, where the composer's hints would not fit. */
-function useNarrow(): boolean {
+export function useNarrow(): boolean {
   return useSyncExternalStore(
     (listener) => {
       narrowQuery?.addEventListener("change", listener);
