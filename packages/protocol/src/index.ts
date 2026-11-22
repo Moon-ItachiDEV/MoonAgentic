@@ -228,6 +228,14 @@ export type ToolContent =
   | { type: "text"; text: string }
   | { type: "diff"; path: string; oldText: string | null; newText: string };
 
+/** A question an agent asks with a tool of its own; the answer is the user's next message. */
+export interface ToolQuestion {
+  question: string;
+  options: string[];
+  /** Several options may be picked. */
+  multi?: boolean;
+}
+
 export type Item =
   | {
       id: string;
@@ -246,6 +254,8 @@ export type Item =
       toolKind: string;
       status: ToolStatus;
       content: ToolContent[];
+      /** What the tool asks the user, when it is a question. */
+      questions?: ToolQuestion[];
       at: number;
     }
   | {

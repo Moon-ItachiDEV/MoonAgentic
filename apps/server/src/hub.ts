@@ -48,6 +48,7 @@ import {
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { historyBefore } from "./history.ts";
 import { mcpInfo } from "./mcp.ts";
+import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import type { Store } from "./store.ts";
 
@@ -1290,6 +1291,7 @@ export class Hub {
     const id = `tool:${this.turnIds.get(threadId) ?? "late"}:${update.toolCallId}`;
     const existing = this.store.getItem(threadId, id) as ToolItem | undefined;
     const content = update.content ? toolContent(update.content) : undefined;
+    const questions = toolQuestions(update.rawInput) ?? existing?.questions;
     this.putItem(threadId, {
       id,
       kind: "tool",
@@ -1297,6 +1299,7 @@ export class Hub {
       toolKind: update.kind ?? existing?.toolKind ?? "other",
       status: update.status ?? existing?.status ?? "pending",
       content: content ?? existing?.content ?? [],
+      ...(questions ? { questions } : {}),
       at: existing?.at ?? Date.now(),
     });
   }
