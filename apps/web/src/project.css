@@ -204,7 +204,7 @@
 /* With a coordinator: its conversation, and the project's threads beside it. */
 .pp-split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+  grid-template-columns: minmax(0, 1fr) 380px;
   min-height: 0;
   overflow: hidden;
 }
@@ -327,4 +327,14 @@
 }
 .opened-card[data-group="running"] .oc-state {
   color: var(--accent);
+}
+/* The composer stays under the conversation, not under the threads beside it. */
+.dock.beside-threads {
+  padding-right: 396px;
+}
+/* On a narrow screen: the two tabs, then the one that is shown. */
+.pp-stack {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
 }

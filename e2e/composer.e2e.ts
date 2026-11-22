@@ -569,11 +569,11 @@ describe("composer", () => {
     // MoonAgentic's own tools, here to open a thread on a branch of its own.
     await page.getByLabel("Agent du coordinateur").selectOption({ label: "Agent de démo" });
     await page.getByRole("button", { name: "Activer le coordinateur" }).click();
+    // Its conversation takes the page, the threads beside it.
+    await page.locator(".pp-panel").waitFor();
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
     await composer(page).fill("/ouvre Export Safari");
     await composer(page).press("Enter");
-    await page.waitForTimeout(4000);
-    await shot(page, "dbg");
     const card = page.locator(".opened-card", { hasText: "Fil ouvert : Export Safari" });
     await card.waitFor();
     await page.getByText("J'ai ouvert le fil « Export Safari ».").waitFor();

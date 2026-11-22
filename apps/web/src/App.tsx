@@ -435,7 +435,7 @@ export function App() {
                 );
               }
               return (
-                <>
+                <div className="pp-stack">
                   <div className="pp-tabs" role="tablist" aria-label="Page du projet">
                     <button
                       role="tab"
@@ -453,7 +453,7 @@ export function App() {
                     </button>
                   </div>
                   {projectTab === "chat" ? chat : page(false)}
-                </>
+                </div>
               );
             })()
           ) : (
@@ -485,7 +485,7 @@ export function App() {
           <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
         )}
         {route.name !== "settings" && route.name !== "planner" && (
-          <div className="dock">
+          <div className={`dock${coordinator && wide ? " beside-threads" : ""}`}>
             {thread?.archived ? (
               <div className="archived-bar" role="status">
                 <IconArchive />
