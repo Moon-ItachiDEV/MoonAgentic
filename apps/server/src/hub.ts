@@ -619,9 +619,18 @@ export class Hub {
     if (this.discoveryErrors.delete(agentId)) {
       this.broadcast({ type: "agents", agents: this.agentList() });
     }
+    let launch;
+    try {
+      launch = this.agents.launch(agentId);
+    } catch (error) {
+      // Gone from this machine since the list was sent: said with the agent, like a failure.
+      this.discoveryErrors.set(agentId, describe(error));
+      this.recordCheck(agentId, { ok: false, error }, true);
+      return Promise.resolve();
+    }
     const stop = new AbortController();
     const done = AgentSession.start({
-      launch: this.agents.launch(agentId),
+      launch,
       // Checked from Connexions, before any project: the home folder will do.
       cwd: project?.path ?? this.homeDir,
       previousSessionId: null,
@@ -673,6 +682,7 @@ export class Hub {
     const agents = this.customAgents();
     if (!agents.some((a) => a.id === agentId))
       throw new Error("Cet agent n'a pas été ajouté par toi.");
+    this.discoveries.get(agentId)?.stop.abort();
     this.saveCustomAgents(agents.filter((a) => a.id !== agentId));
   }
 
@@ -1064,12 +1074,16 @@ export class Hub {
         return;
       case "usage_update": {
         if (!(update.size > 0 && update.used >= 0)) return;
-        const cost =
-          update.cost && Number.isFinite(update.cost.amount) && update.cost.currency
-            ? { amount: update.cost.amount, currency: update.cost.currency }
-            : undefined;
-        const usage = { used: update.used, size: update.size, ...(cost ? { cost } : {}) };
         const before = this.store.getThread(threadId)?.usage;
+        // An update without a cost, such as after compacting, keeps the one known.
+        const cost =
+          update.cost &&
+          Number.isFinite(update.cost.amount) &&
+          update.cost.amount >= 0 &&
+          update.cost.currency
+            ? { amount: update.cost.amount, currency: update.cost.currency }
+            : before?.cost;
+        const usage = { used: update.used, size: update.size, ...(cost ? { cost } : {}) };
         if (JSON.stringify(before) === JSON.stringify(usage)) return;
         this.updateThread(threadId, { usage });
         return;

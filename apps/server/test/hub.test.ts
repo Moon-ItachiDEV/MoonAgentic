@@ -980,6 +980,27 @@ describe("Connexions: agents' state, custom agents and pending requests", () => 
       size: 200_000,
       cost: { amount: 0.24, currency: "USD" },
     });
+    // An update that gives only the tokens keeps the cost known.
+    hub.send(threadId, "/compact");
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)?.usage).toEqual({
+      used: 3_000,
+      size: 200_000,
+      cost: { amount: 0.24, currency: "USD" },
+    });
+  });
+
+  it("records a check for an agent gone from this machine instead of failing", async () => {
+    const { hub, client } = setup();
+    const id = hub.addCustomAgent({ name: "Fragile", command: process.execPath, args: [] });
+    // Its command disappears after the list was sent: checking it still ends.
+    const agents = (hub as unknown as { agents: Agents }).agents;
+    agents.setCustom([{ id, name: "Fragile", command: "plus-la-xyz", args: [] }]);
+    await hub.handle(client, { type: "agent.discover", agentId: id });
+    expect(hub.snapshot().agents.find((a) => a.id === id)?.check).toMatchObject({
+      ok: false,
+      error: expect.stringContaining("plus-la-xyz"),
+    });
   });
 
   it("hands a thread over from an agent that is no longer there", async () => {

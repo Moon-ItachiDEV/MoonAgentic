@@ -32,9 +32,7 @@ function AgentRow(props: { agent: AgentInfo; checking: boolean; onCheck: () => v
         {check && !check.ok && check.error && (
           <small className="cx-err">{check.error.split("\n")[0]}</small>
         )}
-        {agent.login && (check?.signInNeeded || !check?.ok) && (
-          <small>Pour te connecter : {agent.login}.</small>
-        )}
+        {agent.login && check && !check.ok && <small>Pour te connecter : {agent.login}.</small>}
         {check && <small>Vérifié le {when(check.at)}</small>}
       </div>
       <div className="cx-acts">
@@ -90,8 +88,11 @@ export function ConnectionsDialog(props: {
   const isChecking = (agent: AgentInfo) =>
     checking[agent.id] !== undefined && checking[agent.id] === (agent.check?.at ?? null);
   const check = (agent: AgentInfo) => {
+    if (!connection.send({ type: "agent.discover", agentId: agent.id })) {
+      connection.notify("Pas de connexion au serveur MoonAgentic.");
+      return;
+    }
     setChecking((c) => ({ ...c, [agent.id]: agent.check?.at ?? null }));
-    connection.send({ type: "agent.discover", agentId: agent.id });
   };
 
   const add = async (event: React.FormEvent) => {

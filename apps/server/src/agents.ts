@@ -1,5 +1,6 @@
 import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentInfo, CustomAgentInput } from "@moonagentic/protocol";
@@ -80,15 +81,23 @@ function nodeAdapter(pkg: string): AgentLaunch {
   return { command: process.execPath, args: [main], label: `${pkg} ${version}`.trim() };
 }
 
-/** Finds a command given by name (on the PATH) or by path. */
-function findCommand(command: string): string | undefined {
-  if (!/[\\/]/.test(command)) return findOnPath(command);
-  try {
-    accessSync(command, constants.X_OK);
-    return statSync(command).isFile() ? command : undefined;
-  } catch {
-    return undefined;
+/**
+ * Finds a command given by name (on the PATH) or by path, `~` standing for the home folder.
+ * On Windows, `.exe`, `.cmd` and `.bat` may be left out, as on the PATH.
+ */
+export function findCommand(command: string, home = os.homedir()): string | undefined {
+  const named = /^~(?=$|[\\/])/.test(command) ? path.join(home, command.slice(1)) : command;
+  if (!/[\\/]/.test(named)) return findOnPath(named);
+  const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+  for (const ext of extensions) {
+    try {
+      accessSync(named + ext, constants.X_OK);
+      if (statSync(named + ext).isFile()) return named + ext;
+    } catch {
+      // not this one
+    }
   }
+  return undefined;
 }
 
 /** Two letters for an agent's badge, from its name. */

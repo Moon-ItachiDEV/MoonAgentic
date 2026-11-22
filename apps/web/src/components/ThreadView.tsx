@@ -139,7 +139,7 @@ function FeedItem({
           {showBy && (
             <div className="by">
               <AgentBadge agent={agent} small />
-              {agent?.name ?? thread.agentId}
+              {agent?.name ?? "Agent retiré"}
             </div>
           )}
           <Markdown text={item.text} />

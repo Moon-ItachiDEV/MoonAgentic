@@ -1,5 +1,5 @@
 import type { PendingRequest, Thread } from "@moonagentic/protocol";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { connection } from "../connection.ts";
 
 const ago = (at: number, now: number) => {
@@ -23,6 +23,8 @@ export function RequestsDialog(props: {
     document.addEventListener("keydown", escape);
     return () => document.removeEventListener("keydown", escape);
   }, [onClose]);
+  // One answer per request, even when a slow phone takes a double tap.
+  const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
   const title = (id: string) => props.threads.find((t) => t.id === id)?.title ?? "Fil";
   const now = Date.now();
 
@@ -52,14 +54,16 @@ export function RequestsDialog(props: {
                     <button
                       key={o.optionId}
                       className={`btn sm${o.kind === "allow_once" ? " pri" : o.kind.startsWith("allow") ? "" : " quiet"}`}
-                      onClick={() =>
-                        connection.send({
+                      disabled={answered.has(r.itemId)}
+                      onClick={() => {
+                        const sent = connection.send({
                           type: "permission.respond",
                           threadId: r.threadId,
                           itemId: r.itemId,
                           optionId: o.optionId,
-                        })
-                      }
+                        });
+                        if (sent) setAnswered((a) => new Set(a).add(r.itemId));
+                      }}
                     >
                       {o.name}
                     </button>
