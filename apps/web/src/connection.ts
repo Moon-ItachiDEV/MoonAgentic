@@ -1,6 +1,7 @@
 import type {
   AgentInfo,
   ClientMessage,
+  Favorites,
   Item,
   Project,
   ServerMessage,
@@ -14,6 +15,7 @@ export interface State {
   /** False until the first snapshot arrives, so the UI does not flash empty lists. */
   ready: boolean;
   agents: AgentInfo[];
+  favorites: Favorites;
   projects: Project[];
   threads: Thread[];
   items: Record<string, Item[]>;
@@ -47,6 +49,10 @@ export function reduce(state: State, message: ServerMessage): State {
   switch (message.type) {
     case "snapshot":
       return { ...state, ready: true, ...message.snapshot };
+    case "agents":
+      return { ...state, agents: message.agents };
+    case "favorites":
+      return { ...state, favorites: message.favorites };
     case "project":
       return { ...state, projects: upsert(state.projects, message.project) };
     case "thread":
@@ -93,6 +99,7 @@ export class Connection {
     status: "connecting",
     ready: false,
     agents: [],
+    favorites: {},
     projects: [],
     threads: [],
     items: {},

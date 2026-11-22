@@ -79,7 +79,7 @@ describe("Hub with the demo agent", () => {
     ]);
     expect(items[4]).toMatchObject({
       kind: "agent",
-      text: "Tu m'as demandé : « Corrige la réponse ». ",
+      text: "Tu m'as demandé : « Corrige la réponse » (modèle precis). ",
     });
     expect(items[5]).toMatchObject({
       kind: "tool",
@@ -174,6 +174,53 @@ describe("Hub with the demo agent", () => {
 
     expect(store.getThread(threadId)?.status).toBe("error");
     expect(store.getThread(threadId)?.error).toContain("Le démo a planté exprès.");
+  });
+
+  it("starts new threads on the agent's preferred model and remembers the models it offers", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+
+    expect(store.getThread(threadId)?.model).toBe("precis");
+    expect(hub.snapshot().agents.find((a) => a.id === "demo")).toMatchObject({
+      defaultModel: "precis",
+      models: [{ id: "rapide" }, { id: "precis" }],
+    });
+  });
+
+  it("uses the model picked at creation, and switches models between turns", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      model: "rapide",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    await hub.setModel(threadId, "precis");
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+
+    const replies = store
+      .listItems(threadId)
+      .filter((i) => i.kind === "agent")
+      .map((i) => ("text" in i ? i.text : ""));
+    expect(replies.some((t) => t.includes("« Un » (modèle rapide)"))).toBe(true);
+    expect(replies.some((t) => t.includes("« Deux » (modèle precis)"))).toBe(true);
+    expect(store.getThread(threadId)?.model).toBe("precis");
+  });
+
+  it("lists an agent's models before any thread uses it", async () => {
+    const { hub, projectId } = setup();
+    expect(hub.snapshot().agents.find((a) => a.id === "demo")?.models).toBeUndefined();
+    await hub.discover("demo", projectId);
+    expect(hub.snapshot().agents.find((a) => a.id === "demo")?.models).toHaveLength(2);
   });
 
   it("rejects a project folder that does not exist", () => {

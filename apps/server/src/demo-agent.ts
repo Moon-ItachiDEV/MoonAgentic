@@ -7,6 +7,21 @@ import * as acp from "@agentclientprotocol/sdk";
 
 const pause = Number(process.env.MOONAGENTIC_DEMO_DELAY_MS ?? 0);
 const cancelled = new Set<string>();
+const models = new Map<string, string>();
+
+const configOptions = (sessionId: string): acp.SessionConfigOption[] => [
+  {
+    id: "model",
+    name: "Modèle",
+    category: "model",
+    type: "select",
+    currentValue: models.get(sessionId) ?? "rapide",
+    options: [
+      { value: "rapide", name: "Démo rapide" },
+      { value: "precis", name: "Démo précis", description: "Prend son temps" },
+    ],
+  },
+];
 
 const app = acp
   .agent({ name: "demo" })
@@ -15,7 +30,15 @@ const app = acp
     agentCapabilities: { loadSession: false },
     agentInfo: { name: "moonagentic-demo", version: "0.1.0" },
   }))
-  .onRequest("session/new", () => ({ sessionId: randomUUID() }))
+  .onRequest("session/new", () => {
+    const sessionId = randomUUID();
+    return { sessionId, configOptions: configOptions(sessionId) };
+  })
+  .onRequest("session/set_config_option", ({ params }) => {
+    if ("value" in params && typeof params.value === "string")
+      models.set(params.sessionId, params.value);
+    return { configOptions: configOptions(params.sessionId) };
+  })
   .onNotification("session/cancel", ({ params }) => {
     cancelled.add(params.sessionId);
   })
@@ -51,7 +74,10 @@ const app = acp
       status: "completed",
       content: [{ type: "content", content: { type: "text", text: "export const answer = 41;" } }],
     });
-    await say(`Tu m'as demandé : « ${ask} ». `, "agent_message_chunk");
+    await say(
+      `Tu m'as demandé : « ${ask} » (modèle ${models.get(sessionId) ?? "rapide"}). `,
+      "agent_message_chunk",
+    );
 
     const edit = {
       toolCallId: "edit-1",
