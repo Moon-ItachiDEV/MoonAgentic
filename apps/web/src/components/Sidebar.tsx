@@ -200,11 +200,12 @@ export function Sidebar(props: {
           <IconClose />
         </button>
       </div>,
-      ...(open
-        ? [
+      open && (
+        <div key={`${p.id}:items`} className="proj-items">
+          {[
             ...(all.length === 0
               ? [
-                  <div key={`${p.id}:empty`} className="empty-note in-proj">
+                  <div key={`${p.id}:empty`} className="empty-note">
                     Aucune discussion.
                   </div>,
                 ]
@@ -214,7 +215,7 @@ export function Sidebar(props: {
               ? [
                   <button
                     key={`${p.id}:more`}
-                    className="more in-proj"
+                    className="more"
                     aria-expanded={more}
                     onClick={() => toggle(`more:${p.id}`)}
                   >
@@ -222,8 +223,9 @@ export function Sidebar(props: {
                   </button>,
                 ]
               : []),
-          ]
-        : []),
+          ]}
+        </div>
+      ),
     ];
   };
 

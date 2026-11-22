@@ -202,9 +202,9 @@
 .thr-row.child .thr {
   padding-left: 42px;
 }
-.side-scroll .more.in-proj,
-.empty-note.in-proj {
-  padding-left: 30px;
+/* A project's conversations, set in under it. */
+.proj-items {
+  padding-left: 14px;
 }
 @media (hover: hover) {
   .thr-row.proj .pin.new {
