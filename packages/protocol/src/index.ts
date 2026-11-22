@@ -307,8 +307,15 @@ export interface Thread {
   commands?: AgentCommand[];
   /** Kept at the top of the sidebar. */
   pinned?: boolean;
-  /** Put away: out of the sidebar's lists, its worktree removed until it comes back. */
+  /**
+   * Resolved (« Résolu »): out of the lists of work under way, its worktree removed until
+   * it is reopened. Its files, uncommitted ones included, are kept in git meanwhile.
+   */
   archived?: boolean;
+  /** Its pull request as GitHub last described it, once one is known. */
+  pr?: ThreadPullRequest;
+  /** The start of what its agent last said, for lists of threads. */
+  summary?: string;
   /** Set when the thread works on its own branch rather than in the project folder. */
   workspace?: Workspace;
   /** The team lead's thread, for a coder's thread. */
@@ -324,6 +331,69 @@ export interface Thread {
   createdAt: number;
   updatedAt: number;
 }
+
+/** What lists of threads need of a thread's pull request. */
+export interface ThreadPullRequest {
+  url: string;
+  number: number;
+  state: PullRequestInfo["state"];
+  /** Its checks as one: `failed` if one failed, else `pending` if one still runs. */
+  checks: "none" | "pending" | "passed" | "failed";
+  conflicts?: true;
+  /** The repository's rules hold the merge back. */
+  blocked?: true;
+}
+
+/** What a list of threads keeps of a pull request. */
+export function threadPullRequest(pr: PullRequestInfo): ThreadPullRequest {
+  const counted = pr.checks.filter((c) => c.state !== "skipped");
+  return {
+    url: pr.url,
+    number: pr.number,
+    state: pr.state,
+    checks: counted.some((c) => c.state === "failed")
+      ? "failed"
+      : counted.some((c) => c.state === "pending")
+        ? "pending"
+        : counted.length
+          ? "passed"
+          : "none",
+    ...(pr.conflicts ? { conflicts: true as const } : {}),
+    ...(pr.blocked ? { blocked: true as const } : {}),
+  };
+}
+
+/** Where a thread stands for its user, in the order a project lists them. */
+export const THREAD_GROUPS = ["waiting", "running", "idle", "resolved"] as const;
+export type ThreadGroup = (typeof THREAD_GROUPS)[number];
+
+/** Phases of a team in which one of its agents works, or is about to. */
+const TEAM_AT_WORK: readonly TeamPhase[] = ["planning", "coding", "merging"];
+
+/**
+ * The group of a thread, worked out from what is really going on: its agent, the team it
+ * leads, its pull request. `waiting` means the next step is the user's: an answer, an
+ * error to look at, a pull request to merge or whose checks failed.
+ */
+export function threadGroup(thread: Thread): ThreadGroup {
+  if (thread.archived) return "resolved";
+  if (thread.status === "waiting" || thread.team?.phase === "blocked") return "waiting";
+  if (thread.status === "running" || (thread.team && TEAM_AT_WORK.includes(thread.team.phase)))
+    return "running";
+  if (thread.status === "error" || thread.team?.phase === "failed") return "waiting";
+  const pr = thread.pr;
+  if (pr?.state === "open" && (pr.checks === "failed" || pr.conflicts || prReady(pr)))
+    return "waiting";
+  return "idle";
+}
+
+/** An open pull request nothing holds back: only the user's merge is missing. */
+export const prReady = (pr: ThreadPullRequest): boolean =>
+  pr.state === "open" &&
+  !pr.conflicts &&
+  !pr.blocked &&
+  pr.checks !== "pending" &&
+  pr.checks !== "failed";
 
 /** The planner's columns, in order. */
 export const PLAN_STATUSES = ["todo", "doing", "report", "test", "live"] as const;
@@ -725,6 +795,12 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread.setArchived"), threadId: id, archived: z.boolean() }),
   z.object({ type: z.literal("thread.delete"), requestId: id, threadId: id }),
   z.object({ type: z.literal("project.remove"), requestId: id, projectId: id }),
+  /** Gives the project another name in MoonAgentic; its folder keeps its own. */
+  z.object({
+    type: z.literal("project.rename"),
+    projectId: id,
+    name: z.string().trim().min(1).max(120),
+  }),
   /** Looks for project files to mention with `@`, in the thread's folder when given. */
   z.object({
     type: z.literal("files.search"),

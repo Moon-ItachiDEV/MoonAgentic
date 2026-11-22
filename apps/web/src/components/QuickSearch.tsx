@@ -86,7 +86,7 @@ export function QuickSearch(props: {
       key: `thread:${t.id}`,
       group: q ? "Fils" : "Fils récents",
       label: t.title,
-      detail: t.archived ? `${projectName(t.projectId)} · Archivé` : projectName(t.projectId),
+      detail: t.archived ? `${projectName(t.projectId)} · Résolu` : projectName(t.projectId),
       icon: t.pinned ? <IconPin filled /> : <IconCompose size={15} />,
       run: () => props.onOpenThread(t.id),
     })),

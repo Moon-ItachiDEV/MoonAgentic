@@ -467,7 +467,7 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     expect(existsSync(dir)).toBe(false);
     // The branch stays, with nothing of the thread lost.
     expect(git(repo, "branch", "--list", branch)).toContain(branch);
-    expect(() => hub.send(threadId, "Deux")).toThrow("archivé");
+    expect(() => hub.send(threadId, "Deux")).toThrow("résolu");
 
     await hub.setArchived(threadId, false);
     expect(store.getThread(threadId)?.archived).toBeUndefined();
@@ -624,12 +624,12 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     const first = store.listItems(threadId).find((i) => i.kind === "user")!;
     await hub.setArchived(threadId, true);
 
-    await expect(hub.review(threadId)).rejects.toThrow("archivé");
-    await expect(hub.ship(threadId, "msg", false)).rejects.toThrow("archivé");
-    await expect(hub.restore(threadId, first.id)).rejects.toThrow("archivé");
-    await expect(hub.setModel(threadId, "x")).rejects.toThrow("archivé");
-    await expect(hub.setSetting(threadId, "mode", "x")).rejects.toThrow("archivé");
-    await expect(hub.switchAgent(threadId, "other")).rejects.toThrow("archivé");
+    await expect(hub.review(threadId)).rejects.toThrow("résolu");
+    await expect(hub.ship(threadId, "msg", false)).rejects.toThrow("résolu");
+    await expect(hub.restore(threadId, first.id)).rejects.toThrow("résolu");
+    await expect(hub.setModel(threadId, "x")).rejects.toThrow("résolu");
+    await expect(hub.setSetting(threadId, "mode", "x")).rejects.toThrow("résolu");
+    await expect(hub.switchAgent(threadId, "other")).rejects.toThrow("résolu");
 
     // The project's folder has moved: the worktree cannot be made again.
     renameSync(repo, `${repo}-ailleurs`);
