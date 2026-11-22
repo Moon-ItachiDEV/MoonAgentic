@@ -327,6 +327,14 @@ function Detail({
   const [description, setDescription] = useState(card.description ?? "");
   const panel = useRef<HTMLElement>(null);
   useEffect(() => panel.current?.focus(), []);
+  // What another device writes shows here too, unless this one is being typed over.
+  const known = useRef({ title: card.title, description: card.description ?? "" });
+  useEffect(() => {
+    const next = { title: card.title, description: card.description ?? "" };
+    setTitle((t) => (t === known.current.title ? next.title : t));
+    setDescription((d) => (d === known.current.description ? next.description : d));
+    known.current = next;
+  }, [card.title, card.description]);
   const update = (
     patch: Omit<Extract<PlanRequest, { type: "plan.update" }>, "type" | "requestId" | "id">,
   ) => call({ type: "plan.update", requestId: newId(), id: card.id, ...patch });
@@ -339,11 +347,17 @@ function Detail({
     const next = description.trim();
     if (next !== (card.description ?? "")) void update({ description: next || null });
   };
+  // Closing saves what is being typed: a click outside comes before the field's blur.
+  const close = () => {
+    saveTitle();
+    saveDescription();
+    onClose();
+  };
   // Team threads are reached through their card; a card links to a thread of its own.
   const linkable = threads.filter((t) => !t.parentId || t.id === card.threadId);
 
   return (
-    <div className="pl-scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="pl-scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <aside
         ref={panel}
         className="pl-detail"
@@ -351,14 +365,14 @@ function Detail({
         aria-modal
         aria-label={`Tâche ${card.number}`}
         tabIndex={-1}
-        onKeyDown={(e) => e.key === "Escape" && onClose()}
+        onKeyDown={(e) => e.key === "Escape" && close()}
       >
         <div className="pl-detail-h">
           <span className="pl-key">#{card.number}</span>
           <span className={`pl-src${card.source === "lead" ? " lead" : ""}`}>
             {card.source === "lead" ? "Planifiée par le chef" : "Ajoutée à la main"}
           </span>
-          <button className="ib" aria-label="Fermer" onClick={onClose}>
+          <button className="ib" aria-label="Fermer" onClick={close}>
             <IconClose />
           </button>
         </div>
@@ -410,7 +424,11 @@ function Detail({
             <input
               type="date"
               value={dueDay(card.due)}
-              onChange={(e) => void update({ due: dayToDue(e.target.value) })}
+              onChange={(e) => {
+                // A day still being typed is not sent; an emptied field clears it.
+                const due = dayToDue(e.target.value);
+                if (due !== null || e.target.value === "") void update({ due });
+              }}
             />
           </label>
           {!card.team && (
@@ -438,7 +456,14 @@ function Detail({
         </div>
         <div className="pl-detail-f">
           {work.threadId && (
-            <button className="btn" onClick={() => onOpenThread(work.threadId!)}>
+            <button
+              className="btn"
+              onClick={() => {
+                saveTitle();
+                saveDescription();
+                onOpenThread(work.threadId!);
+              }}
+            >
               Ouvrir le fil
             </button>
           )}

@@ -126,6 +126,25 @@ describe("planner", () => {
     ]);
   });
 
+  it("does not lay down again a team's card the user deleted", () => {
+    const { plan } = planner();
+    const lead = thread("lead", { role: "lead" });
+    const coding = (a: TeamTask["status"]) =>
+      team("coding", [piece("A", a), piece("B", "running")]);
+    plan.syncTeam({ ...lead, team: coding("running") });
+    plan.remove(plan.list()[0]!.id);
+    plan.syncTeam({ ...lead, team: coding("reviewing") });
+    expect(plan.list().map((c) => [c.number, c.title])).toEqual([[2, "B"]]);
+    // A lead deleted and another of the same id, were it to happen, starts afresh.
+    plan.threadDeleted("lead");
+    plan.syncTeam({ ...lead, team: coding("running") });
+    expect(plan.list().map((c) => [c.number, c.title, !!c.team])).toEqual([
+      [2, "B", false],
+      [3, "A", true],
+      [4, "B", true],
+    ]);
+  });
+
   it("keeps the cards of a deleted thread, no longer linked to it", () => {
     const { plan, store } = planner();
     store.addThread(thread("t"));

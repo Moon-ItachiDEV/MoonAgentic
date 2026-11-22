@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PlanStatus, PlanTask, ServerMessage, TeamTask, Thread } from "@moonagentic/protocol";
 import type { Store } from "./store.ts";
 
+const LAID = "planLaid";
 const FOLLOWS_TEAM = "Cette carte suit le travail de l'équipe : son état change avec lui.";
 
 /** Where a team's piece stands on the board, from what its agents are really doing. */
@@ -121,10 +122,14 @@ export class Planner {
     const team = lead.team;
     if (!team?.tasks.length) return;
     const cards = this.list().filter((c) => c.team?.leadId === lead.id);
+    // A piece gets its card once: one the user deleted since is not laid down again.
+    const laid = this.laid();
+    const already = laid[lead.id] ?? 0;
     team.tasks.forEach((piece, index) => {
       const status = pieceStatus(piece, team.phase === "done");
       const card = cards.find((c) => c.team?.index === index);
       if (!card) {
+        if (index < already) return;
         this.add(
           { projectId: lead.projectId, title: piece.title, description: piece.brief, status },
           { source: "lead", team: { leadId: lead.id, index } },
@@ -133,10 +138,20 @@ export class Planner {
         this.put({ ...card, status, updatedAt: Date.now() });
       }
     });
+    if (team.tasks.length > already) {
+      this.store.setSetting(LAID, { ...laid, [lead.id]: team.tasks.length });
+    }
+  }
+
+  /** How many pieces of each team's plan already got their card, by lead thread. */
+  private laid(): Record<string, number> {
+    return this.store.getSetting<Record<string, number>>(LAID, {});
   }
 
   /** A deleted thread leaves its cards where they were, no longer linked to it. */
   threadDeleted(threadId: string): void {
+    const { [threadId]: wasLead, ...laid } = this.laid();
+    if (wasLead !== undefined) this.store.setSetting(LAID, laid);
     for (const card of this.list()) {
       if (card.threadId === threadId) {
         const { threadId: _thread, ...rest } = card;

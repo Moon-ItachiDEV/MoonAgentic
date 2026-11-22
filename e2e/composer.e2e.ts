@@ -383,6 +383,16 @@ describe("composer", () => {
       .getByLabel("Fil qui s'en occupe")
       .selectOption({ label: "Équipe : Corrige answer et documente-la" });
     await detail.getByText("Agent de démo").waitFor();
+    // A click outside closes the panel, and keeps what was being typed.
+    await detail.getByLabel("Description").fill("Pour la v1");
+    await page.mouse.click(300, 600);
+    await expect.poll(() => detail.count()).toBe(0);
+    await mine.click();
+    await expect.poll(() => detail.getByLabel("Description").inputValue()).toBe("Pour la v1");
+    // A year half typed in the date field is not sent, so nothing complains.
+    await detail.getByLabel("Échéance").fill("0002-01-15");
+    await detail.getByLabel("Échéance").fill("2020-01-15");
+    expect(await page.locator(".toast").count()).toBe(0);
     await detail.getByRole("button", { name: "Fermer" }).click();
     await column("En test").getByText("en retard · 15 janv").waitFor();
     await shot(page, "c14-planner");

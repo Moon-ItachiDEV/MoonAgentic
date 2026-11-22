@@ -300,6 +300,7 @@ export function App() {
           )
         ) : route.name === "planner" ? (
           <Planner
+            key={project?.id}
             project={project}
             plan={state.plan}
             threads={state.threads}
