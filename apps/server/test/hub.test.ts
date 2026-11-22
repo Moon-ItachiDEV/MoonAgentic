@@ -70,6 +70,29 @@ const lastTurnSaid = (items: Item[]) =>
     .join(" ");
 
 describe("Hub with the demo agent", () => {
+  it("keeps the question an agent asks with a tool, and ends the turn on it", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "/question",
+    });
+    await hub.whenIdle(threadId);
+
+    expect(store.getThread(threadId)?.status).toBe("idle");
+    const tool = store.listItems(threadId).find((i) => i.kind === "tool");
+    expect(tool).toMatchObject({
+      status: "pending",
+      questions: [
+        {
+          question: "Quelle couleur préfères-tu ?",
+          options: ["(Recommandé) Bleu", "Vert", "Rouge"],
+        },
+      ],
+    });
+  });
+
   it("streams a supervised turn, waits for permission, and persists the timeline", async () => {
     const { hub, store, client, projectId } = setup();
     const asked = client.next(isPermissionRequest);
