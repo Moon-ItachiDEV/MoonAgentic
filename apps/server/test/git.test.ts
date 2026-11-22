@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from "node:os";
 import path from "node:path";
 import type { ServerMessage } from "@moonagentic/protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { branchName, githubRepo, parseDiff } from "../src/git.ts";
 import { Hub } from "../src/hub.ts";
@@ -92,10 +92,13 @@ describe("thread workspaces", () => {
 
   it("ships one branch at a time, never during a turn, and only from the thread's branch", async () => {
     const { hub, store, projectId } = repository();
+    let asked = () => {};
+    const waiting = new Promise<void>((resolve) => (asked = resolve));
     const client = {
       messages: [] as ServerMessage[],
       send(m: ServerMessage) {
         this.messages.push(m);
+        if (m.type === "thread" && m.thread.status === "waiting") asked();
       },
     };
     hub.connect(client);
@@ -107,7 +110,7 @@ describe("thread workspaces", () => {
       text: "Un",
     });
     // The demo agent waits for this answer, so its turn is still running.
-    await vi.waitUntil(() => store.getThread(threadId)?.status === "waiting");
+    await waiting;
     await expect(hub.ship(threadId, "x", false)).rejects.toThrow("Attends la fin");
     await hub.cancel(threadId);
     await hub.whenIdle(threadId);
