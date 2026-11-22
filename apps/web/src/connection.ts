@@ -3,6 +3,7 @@ import type {
   ClientMessage,
   Favorites,
   Item,
+  McpServerInfo,
   Project,
   ServerMessage,
   Thread,
@@ -16,6 +17,7 @@ export interface State {
   ready: boolean;
   agents: AgentInfo[];
   favorites: Favorites;
+  mcpServers: McpServerInfo[];
   projects: Project[];
   threads: Thread[];
   items: Record<string, Item[]>;
@@ -53,6 +55,8 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, agents: message.agents };
     case "favorites":
       return { ...state, favorites: message.favorites };
+    case "mcpServers":
+      return { ...state, mcpServers: message.servers };
     case "project":
       return { ...state, projects: upsert(state.projects, message.project) };
     case "thread":
@@ -100,6 +104,7 @@ export class Connection {
     ready: false,
     agents: [],
     favorites: {},
+    mcpServers: [],
     projects: [],
     threads: [],
     items: {},

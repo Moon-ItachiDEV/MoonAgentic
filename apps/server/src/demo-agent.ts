@@ -10,6 +10,7 @@ const pause = Number(process.env.MOONAGENTIC_DEMO_DELAY_MS ?? 0);
 const modelStyle = process.env.MOONAGENTIC_DEMO_MODELS ?? "options";
 const cancelled = new Set<string>();
 const models = new Map<string, string>();
+const mcpNames = new Map<string, string[]>();
 
 const configOptions = (sessionId: string): acp.SessionConfigOption[] => [
   {
@@ -41,12 +42,19 @@ const app = acp
     if (modelStyle === "fail") throw new Error("Connecte-toi d'abord.");
     return {
       protocolVersion: acp.PROTOCOL_VERSION,
-      agentCapabilities: { loadSession: modelStyle === "load" },
+      agentCapabilities: {
+        loadSession: modelStyle === "load",
+        mcpCapabilities: { http: false, sse: false },
+      },
       agentInfo: { name: "moonagentic-demo", version: "0.1.0" },
     };
   })
-  .onRequest("session/new", () => {
+  .onRequest("session/new", ({ params }) => {
     const sessionId = randomUUID();
+    mcpNames.set(
+      sessionId,
+      params.mcpServers.map((m) => m.name),
+    );
     if (modelStyle === "legacy") return { sessionId, models: legacyModels(sessionId) };
     if (modelStyle === "none") return { sessionId };
     return { sessionId, configOptions: configOptions(sessionId) };
@@ -62,6 +70,10 @@ const app = acp
   // Like a real agent reloading a saved session: it replays the model the session last ran.
   .onRequest("session/load", async ({ params, client }) => {
     const { sessionId } = params;
+    mcpNames.set(
+      sessionId,
+      params.mcpServers.map((m) => m.name),
+    );
     await client.notify("session/update", {
       sessionId,
       update: { sessionUpdate: "config_option_update", configOptions: configOptions(sessionId) },
@@ -109,7 +121,10 @@ const app = acp
       content: [{ type: "content", content: { type: "text", text: "export const answer = 41;" } }],
     });
     await say(
-      `Tu m'as demandé : « ${ask} » (modèle ${models.get(sessionId) ?? "rapide"}). `,
+      `Tu m'as demandé : « ${ask} » (modèle ${models.get(sessionId) ?? "rapide"}). ` +
+        (mcpNames.get(sessionId)?.length
+          ? `Serveurs MCP reçus : ${mcpNames.get(sessionId)?.join(", ")}. `
+          : ""),
       "agent_message_chunk",
     );
 

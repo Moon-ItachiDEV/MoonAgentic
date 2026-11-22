@@ -1,6 +1,6 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
-import { IconCompose, IconFolder } from "./icons.tsx";
+import { IconCompose, IconFolder, IconPlug } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
 
 function ThreadStatus({ thread }: { thread: Thread }) {
@@ -16,6 +16,7 @@ export function Sidebar(props: {
   activeProjectId: string | undefined;
   onNewThread: () => void;
   onNewProject: () => void;
+  onOpenMcp: () => void;
   onPickProject: (id: string) => void;
   onOpenThread: (id: string) => void;
 }) {
@@ -38,6 +39,11 @@ export function Sidebar(props: {
         <button onClick={props.onNewProject}>
           <IconFolder />
           Nouveau projet
+        </button>
+        <button onClick={props.onOpenMcp}>
+          <IconPlug />
+          Serveurs MCP
+          <span className="aux">{state.mcpServers.filter((s) => s.enabled).length || ""}</span>
         </button>
       </nav>
       <div className="side-scroll">

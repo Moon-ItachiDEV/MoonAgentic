@@ -8,6 +8,7 @@ import type {
   ClientMessage,
   Favorites,
   Item,
+  McpServerInput,
   PermissionMode,
   ServerMessage,
   Snapshot,
@@ -15,6 +16,7 @@ import type {
   ToolContent,
 } from "@moonagentic/protocol";
 import type { Agents } from "./agents.ts";
+import { mcpInfo, type McpServerRecord } from "./mcp.ts";
 import { AgentSession, describe, type ModelOption, modelOption } from "./session.ts";
 import type { Store } from "./store.ts";
 
@@ -74,6 +76,7 @@ export class Hub {
   snapshot(): Snapshot {
     return {
       favorites: this.store.getSetting<Favorites>("favorites", {}),
+      mcpServers: this.mcpServers().map(mcpInfo),
       agents: this.agentList(),
       projects: this.store.listProjects(),
       threads: this.store.listThreads(),
@@ -116,6 +119,19 @@ export class Hub {
         return;
       case "favorites.toggle":
         this.toggleFavorite(message.agentId, message.model, message.starred);
+        return;
+      case "mcp.add": {
+        const id = this.addMcpServer(message.server);
+        client.send({ type: "created", requestId: message.requestId, id });
+        return;
+      }
+      case "mcp.setEnabled":
+        this.updateMcpServers((servers) =>
+          servers.map((s) => (s.id === message.id ? { ...s, enabled: message.enabled } : s)),
+        );
+        return;
+      case "mcp.remove":
+        this.updateMcpServers((servers) => servers.filter((s) => s.id !== message.id));
         return;
       case "agent.discover":
         await this.discover(message.agentId, message.projectId);
@@ -214,6 +230,26 @@ export class Hub {
     favorites[agentId] = starred ? [...next, model] : next;
     this.store.setSetting("favorites", favorites);
     this.broadcast({ type: "favorites", favorites });
+  }
+
+  /** Registers an MCP server for every agent session started from now on. */
+  addMcpServer(input: McpServerInput): string {
+    if (this.mcpServers().some((s) => s.name === input.name)) {
+      throw new Error(`Un serveur MCP s'appelle déjà « ${input.name} ».`);
+    }
+    const id = randomUUID();
+    this.updateMcpServers((servers) => [...servers, { ...input, id, enabled: true }]);
+    return id;
+  }
+
+  private mcpServers(): McpServerRecord[] {
+    return this.store.getSetting<McpServerRecord[]>("mcpServers", []);
+  }
+
+  private updateMcpServers(change: (servers: McpServerRecord[]) => McpServerRecord[]): void {
+    const servers = change(this.mcpServers());
+    this.store.setSetting("mcpServers", servers);
+    this.broadcast({ type: "mcpServers", servers: servers.map(mcpInfo) });
   }
 
   /**
@@ -331,6 +367,7 @@ export class Hub {
       launch: this.agents.launch(thread.agentId),
       cwd,
       previousSessionId: this.store.getSessionId(thread.id),
+      mcpServers: this.mcpServers(),
       handlers: {
         onUpdate: (update) => this.applyUpdate(thread.id, update),
         requestPermission: (request, signal) => this.requestPermission(thread.id, request, signal),

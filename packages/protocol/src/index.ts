@@ -24,6 +24,21 @@ export interface AgentInfo {
   modelsError?: string;
 }
 
+/**
+ * An MCP server handed to every agent session. Secret values (environment variables, HTTP
+ * headers) stay on the server; clients only see their names.
+ */
+export interface McpServerInfo {
+  id: string;
+  name: string;
+  enabled: boolean;
+  transport: "stdio" | "http";
+  /** stdio: the command line that starts the server. http: its URL. */
+  target: string;
+  /** Names of the environment variables (stdio) or headers (http) it is given. */
+  secretNames: string[];
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -98,6 +113,7 @@ export type Favorites = Record<AgentId, string[]>;
 
 export interface Snapshot {
   favorites: Favorites;
+  mcpServers: McpServerInfo[];
   agents: AgentInfo[];
   projects: Project[];
   threads: Thread[];
@@ -107,6 +123,7 @@ export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "agents"; agents: AgentInfo[] }
   | { type: "favorites"; favorites: Favorites }
+  | { type: "mcpServers"; servers: McpServerInfo[] }
   | { type: "project"; project: Project }
   | { type: "thread"; thread: Thread }
   | { type: "items"; threadId: string; items: Item[] }
@@ -119,6 +136,25 @@ export type ServerMessage =
 
 const id = z.string().min(1).max(200);
 const text = z.string().min(1).max(200_000);
+const secret = z.object({ name: z.string().trim().min(1).max(200), value: z.string().max(10_000) });
+
+export const McpServerInput = z.object({
+  name: z.string().trim().min(1).max(120),
+  transport: z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("stdio"),
+      command: z.string().trim().min(1).max(4096),
+      args: z.array(z.string().max(4096)).max(100),
+      env: z.array(secret).max(50),
+    }),
+    z.object({
+      type: z.literal("http"),
+      url: z.url({ protocol: /^https?$/ }).max(4096),
+      headers: z.array(secret).max(50),
+    }),
+  ]),
+});
+export type McpServerInput = z.infer<typeof McpServerInput>;
 
 export const ClientMessage = z.discriminatedUnion("type", [
   z.object({
@@ -152,6 +188,9 @@ export const ClientMessage = z.discriminatedUnion("type", [
     model: id,
     starred: z.boolean(),
   }),
+  z.object({ type: z.literal("mcp.add"), requestId: id, server: McpServerInput }),
+  z.object({ type: z.literal("mcp.setEnabled"), id, enabled: z.boolean() }),
+  z.object({ type: z.literal("mcp.remove"), id }),
   /** Starts the agent briefly to learn which models it offers. */
   z.object({ type: z.literal("agent.discover"), agentId: id, projectId: id }),
   z.object({

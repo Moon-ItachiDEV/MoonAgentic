@@ -3,6 +3,7 @@ import { useState, useSyncExternalStore } from "react";
 import { Composer } from "./components/Composer.tsx";
 import { Home } from "./components/Home.tsx";
 import { IconMenu, IconCompose } from "./components/icons.tsx";
+import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
@@ -16,6 +17,7 @@ export function App() {
   const route = useRoute();
   const [drawer, setDrawer] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
   const [pickedProjectId, setPickedProjectId] = useState(() => readPref("project"));
 
   if (state.status === "unauthorized") return <Unauthorized />;
@@ -45,6 +47,10 @@ export function App() {
         onNewProject={() => {
           setDrawer(false);
           setCreatingProject(true);
+        }}
+        onOpenMcp={() => {
+          setDrawer(false);
+          setMcpOpen(true);
         }}
         onPickProject={(id) => {
           pickProject(id);
@@ -106,6 +112,7 @@ export function App() {
           }}
         />
       )}
+      {mcpOpen && <McpDialog servers={state.mcpServers} onClose={() => setMcpOpen(false)} />}
       {state.notice && (
         <div className="toast" role="status">
           {state.notice}

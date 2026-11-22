@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { AgentLaunch } from "./agents.ts";
+import { acpMcpServers, type McpServerRecord } from "./mcp.ts";
 
 export interface SessionHandlers {
   onUpdate(update: acp.SessionUpdate): void;
@@ -135,6 +136,8 @@ export class AgentSession {
     handlers: SessionHandlers;
     /** Stops the agent if it has not opened its session yet. */
     signal?: AbortSignal;
+    /** MCP servers handed to the agent's session. */
+    mcpServers?: McpServerRecord[];
   }): Promise<AgentSession> {
     const { launch, cwd, handlers, signal } = options;
     signal?.throwIfAborted();
@@ -211,10 +214,11 @@ export class AgentSession {
         await connection.agent.request("authenticate", { methodId: launch.authMethodId });
       }
       const caps = init.agentCapabilities;
+      const mcpServers = acpMcpServers(options.mcpServers ?? [], caps?.mcpCapabilities);
       const previous = options.previousSessionId;
       if (previous && caps?.sessionCapabilities?.resume) {
         await connection.agent
-          .request("session/resume", { sessionId: previous, cwd, mcpServers: [] })
+          .request("session/resume", { sessionId: previous, cwd, mcpServers })
           .then((r) => {
             sessionId = previous;
             absorb(state, r);
@@ -224,14 +228,14 @@ export class AgentSession {
         replaying = true;
         sessionId = previous;
         await connection.agent
-          .request("session/load", { sessionId: previous, cwd, mcpServers: [] })
+          .request("session/load", { sessionId: previous, cwd, mcpServers })
           .then((r) => absorb(state, r))
           .catch(() => (sessionId = null));
         replaying = false;
       }
       const fresh = !sessionId;
       if (!sessionId) {
-        const created = await connection.agent.request("session/new", { cwd, mcpServers: [] });
+        const created = await connection.agent.request("session/new", { cwd, mcpServers });
         sessionId = created.sessionId;
         absorb(state, created);
       }
