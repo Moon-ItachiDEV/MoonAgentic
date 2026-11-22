@@ -355,6 +355,8 @@ export function App() {
         ) : route.name === "project" ? (
           routeProject ? (
             <ProjectPage
+              // Another project starts afresh: a name being typed never follows to the next.
+              key={routeProject.id}
               project={routeProject}
               threads={state.threads}
               agents={state.agents}

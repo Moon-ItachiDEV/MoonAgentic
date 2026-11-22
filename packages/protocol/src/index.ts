@@ -373,11 +373,19 @@ const TEAM_AT_WORK: readonly TeamPhase[] = ["planning", "coding", "merging"];
 /**
  * The group of a thread, worked out from what is really going on: its agent, the team it
  * leads, its pull request. `waiting` means the next step is the user's: an answer, an
- * error to look at, a pull request to merge or whose checks failed.
+ * error to look at, a pull request to merge or whose checks failed. `members` are the
+ * threads of the team it leads: the lead's own pull request is its team's, kept on it by
+ * the server.
  */
-export function threadGroup(thread: Thread): ThreadGroup {
+export function threadGroup(thread: Thread, members: readonly Thread[] = []): ThreadGroup {
   if (thread.archived) return "resolved";
-  if (thread.status === "waiting" || thread.team?.phase === "blocked") return "waiting";
+  // A team's member that asks the user something makes the whole team wait on them.
+  if (
+    thread.status === "waiting" ||
+    thread.team?.phase === "blocked" ||
+    members.some((m) => m.status === "waiting" && !m.archived)
+  )
+    return "waiting";
   if (thread.status === "running" || (thread.team && TEAM_AT_WORK.includes(thread.team.phase)))
     return "running";
   if (thread.status === "error" || thread.team?.phase === "failed") return "waiting";

@@ -7,6 +7,7 @@ import {
   FOLDED_BY_DEFAULT,
   GROUP_LABEL,
   groupThreads,
+  membersByLead,
   shortAgo,
   threadLine,
 } from "../project-threads.ts";
@@ -60,7 +61,7 @@ export function ProjectPage(props: {
   }, []);
   const groups = groupThreads(props.threads, props.project.id);
   const total = groups.reduce((n, g) => n + g.threads.length, 0);
-  const members = (leadId: string) => props.threads.filter((t) => t.parentId === leadId).length;
+  const members = membersByLead(props.threads);
 
   return (
     <div className="view">
@@ -133,8 +134,8 @@ export function ProjectPage(props: {
               </button>
               {open &&
                 threads.map((t) => {
-                  const line = threadLine(t);
-                  const team = members(t.id);
+                  const line = threadLine(t, members.get(t.id));
+                  const team = members.get(t.id)?.length ?? 0;
                   const checks = t.pr ? checksLabel(t.pr) : "";
                   return (
                     <div key={t.id} className="pp-row" data-group={group}>
