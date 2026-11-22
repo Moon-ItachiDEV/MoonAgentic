@@ -5,6 +5,7 @@ import type {
   Item,
   ModelChoice,
   PermissionMode,
+  PlanTask,
   Project,
   SearchHit,
   Thread,
@@ -153,6 +154,20 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
         db.exec(`ALTER TABLE threads ADD COLUMN ${column} TEXT`);
       }
     }
+  },
+  // 2. The planner's cards (jalon 8a). A project's numbers go on from `plan_next`.
+  (db) => {
+    db.exec(`
+      CREATE TABLE plan_tasks (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        number INTEGER NOT NULL,
+        data TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX plan_tasks_by_project ON plan_tasks(project_id, number);
+      ALTER TABLE projects ADD COLUMN plan_next INTEGER NOT NULL DEFAULT 1;
+    `);
   },
 ];
 
@@ -443,7 +458,41 @@ export class Store {
     });
   }
 
-  /** Removes the item and every item after it; returns what was removed. */
+  listPlanTasks(): PlanTask[] {
+    const rows = this.sql(`SELECT data FROM plan_tasks ORDER BY created_at, number`).all() as {
+      data: string;
+    }[];
+    return rows.map((r) => JSON.parse(r.data) as PlanTask);
+  }
+
+  getPlanTask(id: string): PlanTask | undefined {
+    const row = this.sql(`SELECT data FROM plan_tasks WHERE id = ?`).get(id) as
+      { data: string } | undefined;
+    return row && (JSON.parse(row.data) as PlanTask);
+  }
+
+  /** Takes the project's next card number: a number is never given twice. */
+  nextPlanNumber(projectId: string): number {
+    return this.transaction(() => {
+      const row = this.sql(`SELECT plan_next FROM projects WHERE id = ?`).get(projectId) as
+        { plan_next: number } | undefined;
+      if (!row) throw new Error("Projet introuvable.");
+      this.sql(`UPDATE projects SET plan_next = ? WHERE id = ?`).run(row.plan_next + 1, projectId);
+      return row.plan_next;
+    });
+  }
+
+  putPlanTask(task: PlanTask): void {
+    this.sql(
+      `INSERT INTO plan_tasks (id, project_id, number, data, created_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET data = excluded.data`,
+    ).run(task.id, task.projectId, task.number, JSON.stringify(task), task.createdAt);
+  }
+
+  deletePlanTask(id: string): void {
+    this.sql(`DELETE FROM plan_tasks WHERE id = ?`).run(id);
+  }
+
   /** Deletes the thread and its timeline. */
   deleteThread(id: string): void {
     this.sql(`DELETE FROM threads WHERE id = ?`).run(id);
@@ -454,6 +503,7 @@ export class Store {
     this.sql(`DELETE FROM projects WHERE id = ?`).run(id);
   }
 
+  /** Removes the item and every item after it; returns what was removed. */
   removeItemsFrom(threadId: string, id: string): Item[] {
     const from = `(SELECT seq FROM items WHERE thread_id = ? AND id = ?)`;
     const removed = this.sql(

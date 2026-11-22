@@ -1,4 +1,4 @@
-import type { Item, Thread } from "@moonagentic/protocol";
+import type { Item, PlanTask, Thread } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import { initialState, reduce } from "./state.ts";
 
@@ -9,6 +9,16 @@ const thread = (id: string, title = id): Thread => ({
   agentId: "demo",
   status: "idle",
   permissionMode: "supervised",
+  createdAt: 1,
+  updatedAt: 1,
+});
+const card = (id: string, projectId: string): PlanTask => ({
+  id,
+  projectId,
+  number: 1,
+  title: id,
+  status: "todo",
+  source: "user",
   createdAt: 1,
   updatedAt: 1,
 });
@@ -25,6 +35,7 @@ describe("client state", () => {
         agents: [],
         projects: [],
         threads: [thread("a")],
+        plan: [],
       },
     });
     expect(state.ready).toBe(true);
@@ -49,6 +60,7 @@ describe("client state", () => {
           { id: "q", name: "q", path: "/q", createdAt: 1 },
         ],
         threads: [thread("a"), thread("b"), { ...thread("c"), projectId: "q" }],
+        plan: [card("c1", "p"), card("c2", "q")],
       },
     });
     state = reduce(state, { type: "items", threadId: "a", items: [user("u1", "Un")] });
@@ -58,6 +70,19 @@ describe("client state", () => {
     state = reduce(state, { type: "projectRemoved", projectId: "p" });
     expect(state.projects.map((p) => p.id)).toEqual(["q"]);
     expect(state.threads.map((t) => t.id)).toEqual(["c"]);
+    expect(state.plan.map((c) => c.id)).toEqual(["c2"]);
+  });
+
+  it("keeps the planner's cards in the order they were made", () => {
+    let state = reduce(initialState, { type: "planTask", task: card("c1", "p") });
+    state = reduce(state, { type: "planTask", task: card("c2", "p") });
+    state = reduce(state, { type: "planTask", task: { ...card("c1", "p"), status: "doing" } });
+    expect(state.plan.map((c) => [c.id, c.status])).toEqual([
+      ["c1", "doing"],
+      ["c2", "todo"],
+    ]);
+    state = reduce(state, { type: "planTaskRemoved", id: "c1" });
+    expect(state.plan.map((c) => c.id)).toEqual(["c2"]);
   });
 
   it("adds items at the end and streams text into the right one", () => {

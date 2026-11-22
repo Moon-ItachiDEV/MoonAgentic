@@ -346,4 +346,80 @@ describe("composer", () => {
     await strip.getByText(/^Arrêtée · /).waitFor();
     await page.close();
   });
+
+  it("plans the project's work: the teams' cards follow their pieces, the user's are theirs to move", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    await page.locator(".thr-row.proj", { hasText: "equipe" }).locator(".thr").click();
+    await page.getByRole("button", { name: "Planner", exact: true }).click();
+    const column = (name: string) => page.getByRole("region", { name, exact: true });
+    const cardOf = (title: string) => page.getByRole("button", { name: new RegExp(`: ${title},`) });
+
+    // The first team's plan, laid down by its lead and carried to the end by its pieces.
+    await column("Livré").getByText("Documenter answer").waitFor();
+    expect(await column("Livré").locator(".pl-card").count()).toBe(2);
+    expect(await column("Livré").locator(".pl-src").first().textContent()).toBe("Chef");
+    // The team that was stopped left its pieces where they stopped.
+    await column("Reporté").getByText("arrêtée").first().waitFor();
+
+    // A card of the user's own, added in place.
+    await page.getByRole("button", { name: "Ajouter une tâche" }).click();
+    await page.getByLabel("Nouvelle tâche, À faire").fill("Écrire le changelog");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Escape");
+    const mine = cardOf("Écrire le changelog");
+    await column("À faire").getByText("Écrire le changelog").waitFor();
+    expect(await mine.locator(".pl-src").textContent()).toBe("À la main");
+
+    // Moved from the keyboard, then from its detail, where it gets a due day and a thread.
+    await mine.focus();
+    await page.keyboard.press("ArrowRight");
+    await column("En cours").getByText("Écrire le changelog").waitFor();
+    await mine.click();
+    const detail = page.getByRole("dialog", { name: /^Tâche \d+$/ });
+    await detail.getByRole("button", { name: "En test" }).click();
+    await detail.getByLabel("Échéance").fill("2020-01-15");
+    await detail
+      .getByLabel("Fil qui s'en occupe")
+      .selectOption({ label: "Équipe : Corrige answer et documente-la" });
+    await detail.getByText("Agent de démo").waitFor();
+    // A click outside closes the panel, and keeps what was being typed.
+    await detail.getByLabel("Description").fill("Pour la v1");
+    await page.mouse.click(300, 600);
+    await expect.poll(() => detail.count()).toBe(0);
+    await mine.click();
+    await expect.poll(() => detail.getByLabel("Description").inputValue()).toBe("Pour la v1");
+    // A year half typed in the date field is not sent, so nothing complains.
+    await detail.getByLabel("Échéance").fill("0002-01-15");
+    await detail.getByLabel("Échéance").fill("2020-01-15");
+    expect(await page.locator(".toast").count()).toBe(0);
+    await detail.getByRole("button", { name: "Fermer" }).click();
+    await column("En test").getByText("en retard · 15 janv").waitFor();
+    await shot(page, "c14-planner");
+
+    // A team's card says what moves it, and cannot be moved by hand.
+    await column("Livré").getByText("Documenter answer").click();
+    await detail.getByText("Cette carte suit le travail de l'équipe").waitFor();
+    expect(await detail.getByRole("button", { name: "En cours" }).isDisabled()).toBe(true);
+    if (shots) await page.waitForTimeout(400);
+    await shot(page, "c15-planner-carte");
+    await detail.getByRole("button", { name: "Ouvrir le fil" }).click();
+    await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).waitFor();
+    await page.goBack();
+
+    // On a phone the columns scroll sideways; the page itself does not.
+    await page.setViewportSize({ width: 390, height: 780 });
+    await column("À faire").waitFor();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    await column("En test").getByText("Écrire le changelog").scrollIntoViewIfNeeded();
+    await mine.click();
+    await detail.getByLabel("Titre").waitFor();
+    if (shots) await page.waitForTimeout(400);
+    await shot(page, "c16-planner-mobile");
+    await detail.getByRole("button", { name: "Supprimer" }).click();
+    await expect.poll(() => mine.count()).toBe(0);
+    await page.close();
+  });
 });

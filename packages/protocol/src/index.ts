@@ -312,6 +312,32 @@ export interface Thread {
   updatedAt: number;
 }
 
+/** The planner's columns, in order. */
+export const PLAN_STATUSES = ["todo", "doing", "report", "test", "live"] as const;
+export type PlanStatus = (typeof PLAN_STATUSES)[number];
+
+/** A card of a project's planner: written by the user, or laid down by a team's lead. */
+export interface PlanTask {
+  id: string;
+  projectId: string;
+  /** Its number in the project, shown as `#12`; never used twice. */
+  number: number;
+  title: string;
+  description?: string;
+  /** The user sets it, unless a team does the task: then it follows the team's piece. */
+  status: PlanStatus;
+  /** `lead` when a team's lead planned it, `user` when written by hand. */
+  source: "user" | "lead";
+  /** The thread that works on it, when the user linked one. */
+  threadId?: string;
+  /** The piece of a team it stands for: its status then follows that piece. */
+  team?: { leadId: string; index: number };
+  /** The day it is due, as a timestamp. */
+  due?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export type ToolStatus = "pending" | "in_progress" | "completed" | "failed";
 
 export interface PermissionOption {
@@ -384,6 +410,7 @@ export interface Snapshot {
   agents: AgentInfo[];
   projects: Project[];
   threads: Thread[];
+  plan: PlanTask[];
 }
 
 export type ServerMessage =
@@ -397,6 +424,9 @@ export type ServerMessage =
   | { type: "thread"; thread: Thread }
   /** The thread was deleted, its timeline with it. */
   | { type: "threadRemoved"; threadId: string }
+  /** A planner card, new or changed. */
+  | { type: "planTask"; task: PlanTask }
+  | { type: "planTaskRemoved"; id: string }
   /** The project was removed from MoonAgentic, with its threads; its folder stays. */
   | { type: "projectRemoved"; projectId: string }
   | { type: "items"; threadId: string; items: Item[] }
@@ -432,6 +462,8 @@ export type ServerMessage =
 
 const id = z.string().min(1).max(200);
 const text = z.string().min(1).max(200_000);
+const planTitle = z.string().trim().min(1).max(200);
+const planDescription = z.string().trim().max(4000);
 /** Names an MCP secret may take: an environment variable, or an HTTP header (RFC 9110 token). */
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 export const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
@@ -533,6 +565,31 @@ export const ClientMessage = z.discriminatedUnion("type", [
     threadId: id,
     index: z.number().int().min(0).max(63).optional(),
   }),
+  /** Adds a card to the project's planner. */
+  z.object({
+    type: z.literal("plan.add"),
+    requestId: id,
+    projectId: id,
+    title: planTitle,
+    description: planDescription.optional(),
+    status: z.enum(PLAN_STATUSES).optional(),
+    due: z.number().int().positive().optional(),
+  }),
+  /**
+   * Changes a card. `null` clears its description, its due day or its thread. The status
+   * of a card a team works on follows the team, and cannot be set here.
+   */
+  z.object({
+    type: z.literal("plan.update"),
+    requestId: id,
+    id,
+    title: planTitle.optional(),
+    description: planDescription.nullable().optional(),
+    status: z.enum(PLAN_STATUSES).optional(),
+    due: z.number().int().positive().nullable().optional(),
+    threadId: id.nullable().optional(),
+  }),
+  z.object({ type: z.literal("plan.remove"), requestId: id, id }),
   z.object({ type: z.literal("thread.setArchived"), threadId: id, archived: z.boolean() }),
   z.object({ type: z.literal("thread.delete"), requestId: id, threadId: id }),
   z.object({ type: z.literal("project.remove"), requestId: id, projectId: id }),

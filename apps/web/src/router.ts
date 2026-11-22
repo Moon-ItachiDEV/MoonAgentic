@@ -11,6 +11,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
 
 export type Route =
   | { name: "home" }
+  | { name: "planner" }
   | { name: "thread"; threadId: string }
   | { name: "settings"; section: SettingsSection };
 
@@ -26,6 +27,7 @@ const parse = (pathname: string): Route => {
   } catch {
     // an address no thread can have
   }
+  if (pathname === "/planner") return { name: "planner" };
   return { name: "home" };
 };
 
@@ -40,9 +42,11 @@ export function navigate(route: Route): void {
   const path =
     route.name === "thread"
       ? `/t/${encodeURIComponent(route.threadId)}`
-      : route.name === "settings"
-        ? `/reglages/${route.section}`
-        : "/";
+      : route.name === "planner"
+        ? "/planner"
+        : route.name === "settings"
+          ? `/reglages/${route.section}`
+          : "/";
   if (path !== location.pathname) history.pushState(null, "", path);
   current = route;
   for (const l of listeners) l();

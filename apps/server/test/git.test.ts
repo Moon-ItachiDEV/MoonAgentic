@@ -699,6 +699,16 @@ describe("teams", () => {
       ["Corriger answer", "done"],
       ["Documenter answer", "done"],
     ]);
+    // The lead's plan fed the planner, and each card followed its piece to the end.
+    expect(hub.snapshot().plan).toMatchObject([
+      { title: "Corriger answer", status: "live", source: "lead", team: { leadId, index: 0 } },
+      { title: "Documenter answer", status: "live", source: "lead", team: { leadId, index: 1 } },
+    ]);
+    const moves = seen.flatMap((m) =>
+      m.type === "planTask" && m.task.team?.index === 0 ? [m.task.status] : [],
+    );
+    expect(moves[0]).toMatch(/^(todo|doing)$/);
+    expect(moves.at(-1)).toBe("live");
     const coders = tasks.map((t) => store.getThread(t.threadId!)!);
     for (const coder of coders) {
       expect(coder).toMatchObject({ role: "coder", parentId: leadId, status: "idle" });

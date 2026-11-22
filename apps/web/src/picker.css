@@ -65,6 +65,28 @@
   line-height: 1.45;
   color: var(--muted);
 }
+/* Under the wheel: always two lines high, so the sheet, anchored above the composer, never
+   grows or shrinks while the wheel turns. The text slides in when it changes. */
+.wheel-desc {
+  height: calc(2 * 1.45em);
+  overflow: hidden;
+}
+.wheel-desc > span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+.swap {
+  animation: swap 0.2s cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes swap {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
 .mp-hint {
   display: flex;
   align-items: center;

@@ -3,6 +3,7 @@ import "@fontsource-variable/geist-mono";
 import "@fontsource/instrument-serif";
 import "./styles.css";
 import "./picker.css";
+import "./planner.css";
 import "./review.css";
 import "./settings.css";
 import "./sidebar.css";

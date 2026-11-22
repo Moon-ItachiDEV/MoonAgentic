@@ -142,6 +142,13 @@ export const IconChat = ({ size = 15 }: P) => (
     <path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.1A8 8 0 1 1 20 12Z" />
   </svg>
 );
+export const IconBoard = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <rect x="3" y="4" width="5" height="16" rx="1.5" />
+    <rect x="9.5" y="4" width="5" height="10" rx="1.5" />
+    <rect x="16" y="4" width="5" height="13" rx="1.5" />
+  </svg>
+);
 export const IconInbox = ({ size = 16 }: P) => (
   <svg {...base(size)}>
     <path d="M3 13h5l1.5 3h5L16 13h5" />
