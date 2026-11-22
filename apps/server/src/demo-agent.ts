@@ -210,6 +210,28 @@ const app = acp
       await say("Toujours pas de plan.", "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
+    // A team's reviewer and tester answer with the verdict MoonAgentic reads.
+    const answer = async (text: string) => {
+      await say(text, "agent_message_chunk");
+      return { stopReason: "end_turn" as const };
+    };
+    if (ask.startsWith("Tu relis le travail d'un codeur")) {
+      if (ask.includes("toujours refuser")) {
+        return answer("Il manque une vérification de answer.\n\nVERDICT : À CORRIGER");
+      }
+      if (ask.includes("sans verdict")) return answer("Ça me paraît correct.");
+      return answer("Le travail est fait, sans oubli.\n\nVERDICT : OK");
+    }
+    if (ask.startsWith("Je n'ai pas trouvé ton verdict")) return answer("**VERDICT : OK**");
+    if (ask.startsWith("Tu testes le travail d'un codeur")) {
+      return answer("J'ai lancé les tests : tout passe.\n\nVERDICT : OK");
+    }
+    // As a lead whose piece is stuck, it rewrites the brief.
+    if (ask.startsWith("La sous-tâche « ") && ask.includes("bloque après")) {
+      return answer(
+        'Nouvelle consigne :\n\n```json\n{"brief": "Passe answer à 42, et rien d\'autre."}\n```',
+      );
+    }
     // As a team lead, it splits the work into two pieces, the way MoonAgentic asks.
     if (ask.includes("tu es le chef d'une équipe") || ask.includes("Tu es le chef d'une équipe")) {
       if (ask.includes("sans plan")) {

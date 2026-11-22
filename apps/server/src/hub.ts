@@ -16,6 +16,8 @@ import type {
   ServerMessage,
   Snapshot,
   Team,
+  TeamMember,
+  TeamRole,
   Thread,
   ToolContent,
   Workspace,
@@ -177,6 +179,11 @@ export class Hub {
       send: (id, text) => this.send(id, text),
       cancel: (id) => this.cancel(id),
       setTeam: (id, team) => this.updateThread(id, { team }),
+      changes: async (id) => {
+        const workspace = this.store.getThread(id)?.workspace;
+        if (!workspace?.base || !existsSync(workspace.path)) return { files: [] };
+        return reviewChanges(workspace.path, workspace.base);
+      },
       lastReply: (id) => {
         const items = this.items(id);
         return items
@@ -279,6 +286,9 @@ export class Hub {
       }
       case "team.stop":
         await this.teams.stop(message.threadId);
+        return;
+      case "team.retry":
+        this.teams.retry(message.threadId, message.index);
         return;
       case "thread.setPinned":
         this.requireThread(message.threadId);
@@ -398,7 +408,9 @@ export class Hub {
     /** Otherwise taken from the first line of the text. */
     title?: string | undefined;
     parentId?: string | undefined;
-    role?: "lead" | "coder" | undefined;
+    role?: TeamRole | undefined;
+    /** Works in that thread's folder: a team's reviewer or tester. */
+    worksIn?: string | undefined;
     team?: Team | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
@@ -409,7 +421,7 @@ export class Hub {
     const title = titleFrom(input.title ?? input.text);
     // The worktree itself is made when the agent first starts, so creating stays instant.
     const workspace =
-      input.isolated && this.withGit(project).git
+      input.isolated && !input.worksIn && this.withGit(project).git
         ? // A short folder name keeps deep projects under Windows' path length limit.
           { branch: branchName(title, id), path: path.join(this.worktreesDir, id.slice(0, 8)) }
         : undefined;
@@ -425,6 +437,7 @@ export class Hub {
       ...(workspace ? { workspace } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.role ? { role: input.role } : {}),
+      ...(input.worksIn ? { worksIn: input.worksIn } : {}),
       ...(input.team ? { team: input.team } : {}),
       createdAt: now,
       updatedAt: now,
@@ -441,6 +454,8 @@ export class Hub {
     task: string;
     lead: { agentId: string; model?: string | undefined };
     coder: { agentId: string; model?: string | undefined };
+    reviewer?: { agentId: string; model?: string | undefined } | undefined;
+    tester?: { agentId: string; model?: string | undefined } | undefined;
     coders: number;
     permissionMode: PermissionMode;
   }): string {
@@ -453,17 +468,16 @@ export class Hub {
       );
     }
     // Checked before anything starts, so a missing agent fails the whole team at once.
-    this.agents.launch(input.coder.agentId);
+    const member = (m: { agentId: string; model?: string | undefined }): TeamMember => {
+      this.agents.launch(m.agentId);
+      return { agentId: m.agentId, ...(m.model ? { model: m.model } : {}) };
+    };
     return this.teams.start({
       ...input,
-      lead: {
-        agentId: input.lead.agentId,
-        ...(input.lead.model ? { model: input.lead.model } : {}),
-      },
-      coder: {
-        agentId: input.coder.agentId,
-        ...(input.coder.model ? { model: input.coder.model } : {}),
-      },
+      lead: member(input.lead),
+      coder: member(input.coder),
+      reviewer: input.reviewer && member(input.reviewer),
+      tester: input.tester && member(input.tester),
     });
   }
 
@@ -1012,6 +1026,7 @@ export class Hub {
   /** Stops every agent and resolves once their turns have ended. */
   async close(): Promise<void> {
     this.closed = true;
+    this.teams.close();
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
     await this.recovered;
@@ -1100,6 +1115,13 @@ export class Hub {
     if (!threadId) return project.path;
     const thread = this.requireThread(threadId);
     if (thread.projectId !== projectId) throw new Error("Ce fil n'est pas dans ce projet.");
+    if (thread.worksIn) {
+      try {
+        return this.borrowedFolder(thread.worksIn);
+      } catch {
+        return project.path;
+      }
+    }
     // Until its worktree exists, a thread's files are the project's.
     const workspace = thread.workspace;
     return workspace?.base && existsSync(workspace.path) ? workFolder(workspace) : project.path;
@@ -1145,8 +1167,21 @@ export class Hub {
     }
   }
 
+  /** The folder of the thread a reviewer or a tester works in, while it is there. */
+  private borrowedFolder(threadId: string): string {
+    const owner = this.store.getThread(threadId);
+    const workspace = owner?.workspace;
+    if (!owner) throw new Error("Le fil dont ce fil utilise le dossier n'existe plus.");
+    if (!workspace?.base || !existsSync(workspace.path)) {
+      throw new Error(`Le dossier de « ${owner.title} » n'existe plus : ramène ce fil d'abord.`);
+    }
+    return workFolder(workspace);
+  }
+
   /** Makes the thread's worktree on first use; returns the folder the agent works in. */
   private async prepareWorkspace(threadId: string, project: Project): Promise<string> {
+    const worksIn = this.store.getThread(threadId)?.worksIn;
+    if (worksIn) return this.borrowedFolder(worksIn);
     let workspace = this.store.getThread(threadId)?.workspace;
     if (!workspace) return project.path;
     if (!workspace.base) {

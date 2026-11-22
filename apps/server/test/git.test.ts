@@ -646,15 +646,20 @@ describe("teams", () => {
     projectId: string,
     task: string,
     permissionMode: "full" | "supervised" = "full",
+    checks: { reviewer?: boolean; tester?: boolean } = {},
   ) =>
     hub.startTeam({
       projectId,
       task,
       lead: { agentId: "demo" },
       coder: { agentId: "demo" },
+      ...(checks.reviewer ? { reviewer: { agentId: "demo" } } : {}),
+      ...(checks.tester ? { tester: { agentId: "demo" } } : {}),
       coders: 2,
       permissionMode,
     });
+  const asked = (store: Store, threadId: string) =>
+    store.listItems(threadId).flatMap((i) => (i.kind === "user" ? [i.text] : []));
 
   it("has the lead split the task, then coders do the pieces at once, each on its own branch", async () => {
     const { hub, store, projectId } = repository();
@@ -724,6 +729,91 @@ describe("teams", () => {
       "stopped",
     ]);
     await hub.deleteThread(leadId);
+  });
+
+  it("has each piece reviewed then tested in its coder's folder before it counts as done", async () => {
+    const { hub, store, projectId } = repository();
+    // The demo reviewer leaves its verdict out the first time.
+    const leadId = team(hub, projectId, "Corrige answer sans verdict", "full", {
+      reviewer: true,
+      tester: true,
+    });
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    for (const task of store.getThread(leadId)!.team!.tasks) {
+      expect(task).toMatchObject({ status: "done", reviewThreadId: expect.any(String) });
+      const coder = store.getThread(task.threadId!)!;
+      const reviewer = store.getThread(task.reviewThreadId!)!;
+      const tester = store.getThread(task.testThreadId!)!;
+      expect(reviewer).toMatchObject({
+        role: "reviewer",
+        parentId: leadId,
+        worksIn: coder.id,
+        permissionMode: "supervised",
+      });
+      expect(reviewer.workspace).toBeUndefined();
+      expect(tester).toMatchObject({ role: "tester", worksIn: coder.id, permissionMode: "full" });
+      const [review, again] = asked(store, reviewer.id);
+      expect(review).toContain("Ses changements");
+      expect(review).toContain(task.brief);
+      expect(again).toContain("verdict");
+      expect(asked(store, tester.id)[0]).toContain("Lance les tests");
+      // Nothing went back to the coder.
+      expect(asked(store, coder.id)).toHaveLength(1);
+      // The reviewer and the tester work in the coder's worktree.
+      writeFileSync(path.join(coder.workspace!.path, `seulement-${coder.id}.txt`), "");
+      const seen: ServerMessage[] = [];
+      await hub.handle(
+        { send: (m) => seen.push(m) },
+        {
+          type: "files.search",
+          requestId: "r",
+          projectId,
+          threadId: tester.id,
+          query: "seulement",
+        },
+      );
+      expect(JSON.stringify(seen)).toContain(`seulement-${coder.id}.txt`);
+    }
+  });
+
+  it("sends fixes back three times, then to the lead once, then leaves the piece to the user", async () => {
+    const { hub, store, projectId } = repository();
+    const leadId = team(hub, projectId, "Corrige answer, à toujours refuser", "full", {
+      reviewer: true,
+    });
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.phase, { timeout: 60_000 })
+      .toBe("blocked");
+    const blocked = store.getThread(leadId)!.team!;
+    for (const task of blocked.tasks) {
+      expect(task).toMatchObject({
+        status: "blocked",
+        tries: 3,
+        leadHelped: true,
+        brief: "Passe answer à 42, et rien d'autre.",
+        note: expect.stringContaining("Il manque"),
+      });
+      const coder = asked(store, task.threadId!);
+      expect(coder).toHaveLength(5);
+      expect(coder[1]).toContain("correction 1 sur 3");
+      expect(coder[4]).toContain("Le chef a revu ta consigne");
+    }
+    expect(blocked.leadTask).toBeUndefined();
+    // The plan, then one rewritten brief for each piece, one after the other.
+    expect(asked(store, leadId).filter((t) => t.includes("bloque après"))).toHaveLength(2);
+    // Nothing runs: the lead can be put away, and the user can start a piece again.
+    expect(hub.teams.isActive(leadId)).toBe(false);
+
+    await hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId, index: 0 });
+    expect(store.getThread(leadId)!.team).toMatchObject({ phase: "coding" });
+    expect(store.getThread(leadId)!.team!.tasks[0]).toMatchObject({ status: "running", tries: 0 });
+    expect(asked(store, blocked.tasks[0]!.threadId!).at(-1)).toContain("Reprends ta sous-tâche");
+    await expect(
+      hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId, index: 0 }),
+    ).rejects.toThrow("déjà en cours");
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.phase, { timeout: 60_000 })
+      .toBe("blocked");
   });
 
   it("marks a team cut short by a stop of the server, keeping what was done", async () => {
