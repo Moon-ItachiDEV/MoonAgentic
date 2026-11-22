@@ -35,6 +35,35 @@ export const IconArrowUp = ({ size = 16 }: P) => (
     <path d="M12 19V5M5 12l7-7 7 7" />
   </svg>
 );
+/** The microphone, as in the mockup: its capsule fills with the voice's level (`--lv`). */
+export const IconMic = () => (
+  <svg
+    className="mic"
+    width={16}
+    height={16}
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.4}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden
+  >
+    <rect className="mic-fill" x="6" y="2" width="4" height="7.5" rx="2" fill="currentColor" />
+    <rect x="6" y="2" width="4" height="7.5" rx="2" />
+    <path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2" />
+  </svg>
+);
+/** Five bars: talk instead of typing. */
+export const IconWave = () => (
+  <span className="vw" aria-hidden>
+    <i />
+    <i />
+    <i />
+    <i />
+    <i />
+  </span>
+);
 export const IconStop = ({ size = 12 }: P) => (
   <svg width={size} height={size} viewBox="0 0 12 12" aria-hidden>
     <rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor" />

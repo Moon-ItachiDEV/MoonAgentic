@@ -493,6 +493,8 @@ describe("composer", () => {
     await page.keyboard.press("Escape");
     await composer(page).fill("Dis bonjour");
     await composer(page).press("Enter");
+    // The new thread opens by itself: only then back to the project, or it would take over.
+    await page.waitForURL(/\/t\//);
     await inSidebar.click();
     const group = (name: string) => page.locator(".pp-group", { hasText: name });
     const fold = (name: string) => page.locator(".pp-gh", { hasText: name });
