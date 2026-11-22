@@ -29,3 +29,21 @@ export function wheelEntries(
   }
   return entries;
 }
+
+/** What tells two lines of the wheel apart. */
+export const entryKey = (e: WheelEntry) => `${e.agent.id}/${e.model ?? ""}`;
+
+/**
+ * The lines the open wheel shows, from the ones it shows now and the live list. As in the
+ * mockup they stay put while it is open: landing on a favorite drops the non-favorite pick
+ * from the live list, and removing that line would shift every other one under the finger.
+ * They change only when a new line appears (a favorite added, models learned); the next
+ * opening starts from the live list.
+ */
+export function keepLines(kept: WheelEntry[], live: WheelEntry[]): WheelEntry[] {
+  const keys = new Set(kept.map(entryKey));
+  if (live.some((e) => !keys.has(entryKey(e)))) return live;
+  // Same lines: take the fresh ones, so names stay current.
+  const fresh = new Map(live.map((e) => [entryKey(e), e]));
+  return kept.map((e) => fresh.get(entryKey(e)) ?? e);
+}

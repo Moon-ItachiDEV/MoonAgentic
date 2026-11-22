@@ -3,7 +3,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "re
 import { connection } from "../connection.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconBack, IconCheck, IconStar, IconX } from "./icons.tsx";
-import { type WheelEntry, wheelEntries } from "../wheel.ts";
+import { entryKey, keepLines, type WheelEntry, wheelEntries } from "../wheel.ts";
 
 type View = "model" | "all" | "effort" | "options";
 
@@ -232,7 +232,7 @@ function Wheel(props: {
   onEffort: () => void;
   onPick: (entry: WheelEntry, settle: boolean) => void;
 }) {
-  const { entries } = props;
+  const entries = useStableEntries(props.entries);
   const currentIndex = Math.max(
     0,
     entries.findIndex((e) => e.agent.id === props.agent?.id && e.model === props.model),
@@ -243,6 +243,8 @@ function Wheel(props: {
   // Only a scroll the user makes picks: not the one that opens the wheel on the current line.
   const touched = useRef(false);
   const touch = () => (touched.current = true);
+  // The line the wheel itself last picked: when the pick comes back, the wheel is already there.
+  const picked = useRef<number>(undefined);
 
   const paint = () => {
     const el = wheel.current;
@@ -257,10 +259,15 @@ function Wheel(props: {
     return Math.max(0, Math.min(entries.length - 1, Math.round(top / LINE)));
   };
 
-  // Opens on the current pick, and follows it when it changes elsewhere.
+  // Opens on the current pick, and follows it when it changes elsewhere. A pick the wheel made
+  // itself is left alone, so a scroll that goes on is never pulled back to it.
   useLayoutEffect(() => {
     const el = wheel.current;
     if (!el) return;
+    if (picked.current === currentIndex) {
+      picked.current = undefined;
+      return;
+    }
     touched.current = false;
     el.scrollTop = currentIndex * LINE;
     setCentered(currentIndex);
@@ -279,6 +286,7 @@ function Wheel(props: {
       if (!entry || index === currentIndex) return;
       // Handing a thread over is never done by a scroll that went one line too far.
       if (props.inThread && entry.agent.id !== props.agent?.id) return;
+      picked.current = index;
       props.onPick(entry, true);
     }, SETTLE_MS);
   };
@@ -337,7 +345,7 @@ function Wheel(props: {
         >
           {entries.map((entry, i) => (
             <button
-              key={`${entry.agent.id}/${entry.model ?? ""}`}
+              key={entryKey(entry)}
               id={`wh-${i}`}
               className={`wh${i === centered ? " on" : ""}`}
               role="option"
@@ -366,11 +374,20 @@ function Wheel(props: {
           </button>
         )}
       </div>
-      <p className="mp-desc" aria-live="polite">
-        {description}
+      <p className="mp-desc wheel-desc" aria-live="polite">
+        <span key={description} className="swap">
+          {description}
+        </span>
       </p>
     </>
   );
+}
+
+/** The wheel keeps its lines while it is open: see `keepLines`. */
+function useStableEntries(live: WheelEntry[]): WheelEntry[] {
+  const kept = useRef(live);
+  kept.current = keepLines(kept.current, live);
+  return kept.current;
 }
 
 /** Every model of one agent, with its star; an agent not set up says what to do. */
