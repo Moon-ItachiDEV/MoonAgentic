@@ -9,6 +9,7 @@ import { IconAlert, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx"
 import { Markdown } from "./Markdown.tsx";
 import { TeamCard } from "./TeamCard.tsx";
 import { TeamStrip } from "./TeamStrip.tsx";
+import { withoutTeamJson } from "../team-json.ts";
 
 export function ThreadView({
   thread,
@@ -202,7 +203,8 @@ function FeedItem({
               {agent?.name ?? "Agent retiré"}
             </div>
           )}
-          <Markdown text={item.text} />
+          {/* The team card shows the plan; its raw JSON is for the server only. */}
+          <Markdown text={thread.role === "lead" ? withoutTeamJson(item.text) : item.text} />
         </div>
       );
     case "thought":

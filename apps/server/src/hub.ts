@@ -58,7 +58,7 @@ import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { historyBefore } from "./history.ts";
 import { Planner } from "./planner.ts";
 import { Scheduler } from "./scheduler.ts";
-import { Teams } from "./team.ts";
+import { Teams, teamStatus } from "./team.ts";
 import { mcpInfo } from "./mcp.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
@@ -223,13 +223,7 @@ export class Hub {
         if (!workspace?.base || !existsSync(workspace.path)) return { files: [] };
         return reviewChanges(workspace.path, workspace.base);
       },
-      lastReply: (id) => {
-        const items = this.items(id);
-        return items
-          .slice(items.findLastIndex((i) => i.kind === "user") + 1)
-          .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
-          .join("\n");
-      },
+      lastReply: (id) => this.lastReply(id),
     });
     store.recoverAfterRestart();
     this.teams.recover();
@@ -319,7 +313,7 @@ export class Hub {
         });
         return;
       case "thread.send":
-        this.send(message.threadId, message.text);
+        this.send(message.threadId, message.text, this.leadContext(message.threadId));
         return;
       case "thread.cancel":
         await this.cancel(message.threadId);
@@ -594,7 +588,27 @@ export class Hub {
     });
   }
 
-  send(threadId: string, text: string): void {
+  /**
+   * For the user writing to a team's lead: the team's real state, given before the message.
+   * The server runs the pieces, so the lead would otherwise know nothing past its plan.
+   */
+  private leadContext(threadId: string): string | undefined {
+    const thread = this.store.getThread(threadId);
+    if (thread?.role !== "lead" || !thread.team) return undefined;
+    return teamStatus(thread.team, Date.now(), (id) => this.lastReply(id));
+  }
+
+  /** Everything the agent said in the thread's last turn. */
+  private lastReply(threadId: string): string {
+    const items = this.items(threadId);
+    return items
+      .slice(items.findLastIndex((i) => i.kind === "user") + 1)
+      .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
+      .join("\n");
+  }
+
+  /** Sends the user's message to the thread's agent; `context` goes before it, unseen. */
+  send(threadId: string, text: string, context?: string): void {
     const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
     const busy = this.busy.get(threadId);
@@ -607,7 +621,7 @@ export class Hub {
     this.turnIds.set(threadId, randomUUID());
     this.cancelled.delete(threadId);
     this.clearIdle(threadId);
-    const turn = this.runTurn(thread, text, itemId).finally(() => {
+    const turn = this.runTurn(thread, text, itemId, context).finally(() => {
       const cancelled = this.cancelled.has(threadId);
       this.turns.delete(threadId);
       this.turnIds.delete(threadId);
@@ -1198,7 +1212,12 @@ export class Hub {
     for (const threadId of this.drafts.keys()) this.flushText(threadId);
   }
 
-  private async runTurn(thread: Thread, text: string, itemId: string): Promise<void> {
+  private async runTurn(
+    thread: Thread,
+    text: string,
+    itemId: string,
+    context?: string,
+  ): Promise<void> {
     try {
       const continuing = this.sessions.has(thread.id);
       const session = await this.session(thread);
@@ -1213,7 +1232,8 @@ export class Hub {
         !continuing && session.fresh
           ? historyBefore(this.items(thread.id), itemId, this.catalog.name)
           : undefined;
-      const stopReason = await session.prompt(text, history, this.linksFor(session, text));
+      const prompt = context ? `${context}\n\n${text}` : text;
+      const stopReason = await session.prompt(prompt, history, this.linksFor(session, text));
       const error =
         stopReason === "refusal"
           ? "L'agent a refusé de continuer."
