@@ -422,6 +422,19 @@ export async function commitAll(dir: string, message: string): Promise<boolean> 
   return true;
 }
 
+/**
+ * Whether the folder holds nothing past `commit`: no changed or new file, and its last
+ * commit is that one. Then removing it loses nothing that is not on GitHub already.
+ */
+export async function nothingPast(dir: string, commit: string): Promise<boolean> {
+  try {
+    if ((await git(dir, ["status", "--porcelain"])).trim()) return false;
+    return (await git(dir, ["rev-parse", "HEAD"])).trim() === commit;
+  } catch {
+    return false;
+  }
+}
+
 /** The files a merge left in conflict, while one is under way; undefined when none is. */
 export async function unfinishedMerge(dir: string): Promise<string[] | undefined> {
   const merging = await git(dir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).then(

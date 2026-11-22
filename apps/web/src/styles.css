@@ -570,6 +570,25 @@ svg {
 .ag[data-agent="hermes"] {
   background: var(--a-hermes);
 }
+/* Official logo on the brand's own tile (see agent-logos.ts). */
+.ag.logo {
+  background: #1b1913;
+  /* Keeps the dark tile distinct on the dark theme. */
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12);
+}
+.ag.logo img {
+  width: 62%;
+  height: 62%;
+  display: block;
+}
+/* Hermes' icon is a full square picture: it fills the tile. */
+.ag.logo[data-agent="hermes"] {
+  overflow: hidden;
+}
+.ag.logo[data-agent="hermes"] img {
+  width: 100%;
+  height: 100%;
+}
 
 /* Popover menus */
 .menu {
