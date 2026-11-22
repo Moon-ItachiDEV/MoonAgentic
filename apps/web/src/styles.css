@@ -1038,6 +1038,20 @@ svg {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.approve.ask {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+}
+.approve.ask .row {
+  justify-content: flex-start;
+}
+.ask-q {
+  display: grid;
+  gap: 8px;
+}
+.ask-hint {
+  font-size: 12px;
+  color: var(--muted);
+}
 .approve.done {
   border-color: var(--line);
   color: var(--muted);

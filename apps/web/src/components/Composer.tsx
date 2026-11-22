@@ -69,6 +69,12 @@ export function Composer(props: {
   const { agents, thread, project } = props;
   const [text, setText] = useState("");
   const [menu, setMenu] = useState(false);
+  // A favorite of another agent picked in a thread: its model, once that agent has the thread.
+  const [handoffModel, setHandoffModel] = useState<{
+    threadId: string;
+    agentId: string;
+    model: string;
+  }>();
   const [busy, setBusy] = useState(false);
   const [pickedAgentId, setPickedAgentId] = useState(() => readPref("agent"));
   const [newMode, setNewMode] = useState<PermissionMode>(() =>
@@ -130,6 +136,15 @@ export function Composer(props: {
   // device) closes the picker for good rather than hiding it until the turn ends.
   if (menu && thread && running) setMenu(false);
   const pickerOpen = menu && !(thread && running);
+
+  useEffect(() => {
+    if (!handoffModel) return;
+    if (thread?.id !== handoffModel.threadId) return setHandoffModel(undefined);
+    if (thread.agentId !== handoffModel.agentId || running) return;
+    setHandoffModel(undefined);
+    if (thread.model !== handoffModel.model)
+      connection.send({ type: "thread.setModel", threadId: thread.id, model: handoffModel.model });
+  }, [handoffModel, thread?.id, thread?.agentId, running]);
 
   // Close the picker on Escape or on any press outside the composer.
   useEffect(() => {
@@ -600,6 +615,7 @@ export function Composer(props: {
           model={model}
           favorites={props.favorites}
           projectId={project?.id}
+          inThread={!!thread}
           agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
           settings={settings}
           onPickSetting={pickSetting}
@@ -611,6 +627,22 @@ export function Composer(props: {
             }
             setPickedAgentId(id);
             writePref("agent", id);
+          }}
+          onPickAgentModel={(id, model) => {
+            if (thread) {
+              // The model is set once the new agent has the thread: the server takes one change at a time.
+              if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
+              connection.send({ type: "thread.switchAgent", threadId: thread.id, agentId: id });
+            } else {
+              setPickedAgentId(id);
+              writePref("agent", id);
+              if (model) {
+                setModelPicks((p) => ({ ...p, [id]: model }));
+                writePref(`model.${id}`, model);
+              }
+            }
+            setMenu(false);
+            input.current?.focus();
           }}
           onPickModel={(id) => {
             if (thread)

@@ -212,6 +212,28 @@ const app = acp
       await usage(3_000, false);
       return { stopReason: "end_turn" };
     }
+    if (ask.trim() === "/question") {
+      // As Antigravity asks: a tool call left unfinished, the question as text, and the
+      // turn ends; the answer is the next message.
+      const question = {
+        toolCallId: "ask-1",
+        title: "Run ask_question",
+        kind: "other" as const,
+        rawInput: {
+          questions: [
+            {
+              question: "Quelle couleur préfères-tu ?",
+              options: ["(Recommandé) Bleu", "Vert", "Rouge"],
+              is_multi_select: false,
+            },
+          ],
+        },
+      };
+      await update({ sessionUpdate: "tool_call", ...question, status: "in_progress" });
+      await update({ sessionUpdate: "tool_call_update", ...question, status: "pending" });
+      await say("Quelle couleur préfères-tu ?", "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
     await usage((used.get(sessionId) ?? 0) + 24_000);
     if (ask.startsWith("Je n'ai pas trouvé ton plan")) {
       await say("Toujours pas de plan.", "agent_message_chunk");

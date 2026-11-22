@@ -76,6 +76,19 @@ export function ThreadView({
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   }, [items, thread.status]);
 
+  // A question the agent asked with a tool can be answered until the user writes again.
+  const lastQuestion = items?.findLast(
+    (i) => i.kind === "user" || (i.kind === "tool" && i.questions),
+  );
+  const openQuestion =
+    lastQuestion?.kind === "tool" && thread.status === "idle" && !thread.archived
+      ? lastQuestion.id
+      : undefined;
+
+  // Only the current turn's tools are at work: one left unfinished earlier stays still.
+  const lastUser = items?.findLastIndex((i) => i.kind === "user") ?? -1;
+  const working = thread.status === "running" || thread.status === "waiting";
+
   return (
     <div
       className="view"
@@ -110,6 +123,8 @@ export function ThreadView({
               agents={agents}
               agent={agents.find((a) => a.id === authors[i])}
               showBy={startsAgentBlock(items, i)}
+              openQuestion={openQuestion}
+              live={working && i > lastUser}
             />
           </div>
         ))}
@@ -152,12 +167,18 @@ function FeedItem({
   agents,
   agent,
   showBy,
+  openQuestion,
+  live,
 }: {
   item: Item;
   thread: Thread;
   agents: AgentInfo[];
   agent: AgentInfo | undefined;
   showBy: boolean;
+  /** The question still waiting for an answer, if any. */
+  openQuestion: string | undefined;
+  /** Part of the turn the agent is working on now. */
+  live: boolean;
 }) {
   switch (item.kind) {
     case "user":
@@ -194,7 +215,10 @@ function FeedItem({
         </details>
       );
     case "tool":
-      return <ToolRow item={item} />;
+      if (item.questions) {
+        return <QuestionCard item={item} threadId={thread.id} open={item.id === openQuestion} />;
+      }
+      return <ToolRow item={item} live={live} />;
     case "plan":
       return (
         <div className="card">
@@ -306,7 +330,98 @@ const TOOL_KIND: Record<string, string> = {
   think: "réflexion",
 };
 
-function ToolRow({ item }: { item: Extract<Item, { kind: "tool" }> }) {
+/**
+ * A question the agent asks with a tool of its own, such as Antigravity's `ask_question`.
+ * The turn has ended on it: the answer goes out as the user's next message.
+ */
+function QuestionCard({
+  item,
+  threadId,
+  open,
+}: {
+  item: Extract<Item, { kind: "tool" }>;
+  threadId: string;
+  open: boolean;
+}) {
+  const questions = item.questions ?? [];
+  const [picked, setPicked] = useState<Record<number, string[]>>({});
+  // One question with one answer goes out on the click; anything more is sent together.
+  const direct = questions.length === 1 && !questions[0]?.multi;
+  // Sent once: a second click before the thread shows as running would send it twice.
+  const [sent, setSent] = useState(false);
+  if (sent && !open) setSent(false);
+  const send = (text: string) => {
+    if (!sent && connection.send({ type: "thread.send", threadId, text })) setSent(true);
+  };
+  const complete = questions.every((_, i) => picked[i]?.length);
+  return (
+    <div className={`approve ask${open ? "" : " done"}`}>
+      {questions.map((q, i) => (
+        <div key={i} className="ask-q" role="group" aria-label={q.question}>
+          <div className="q">
+            <span>
+              {i === 0 && open && "L'agent te pose une question : "}
+              <b>{q.question}</b>
+            </span>
+          </div>
+          {open && (
+            <div className="row">
+              {q.options.map((option) => {
+                const on = picked[i]?.includes(option) ?? false;
+                return (
+                  <button
+                    key={option}
+                    className={`btn sm${on ? " pri" : ""}`}
+                    aria-pressed={direct ? undefined : on}
+                    disabled={sent}
+                    onClick={() => {
+                      if (direct) return send(option);
+                      setPicked((p) => {
+                        const mine = p[i] ?? [];
+                        const next = !q.multi
+                          ? [option]
+                          : on
+                            ? mine.filter((o) => o !== option)
+                            : [...mine, option];
+                        return { ...p, [i]: next };
+                      });
+                    }}
+                  >
+                    {option}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      ))}
+      {open && !direct && (
+        <div className="row">
+          <button
+            className="btn sm pri"
+            disabled={!complete || sent}
+            onClick={() =>
+              send(
+                questions
+                  .map((q, i) =>
+                    questions.length > 1
+                      ? `${q.question} ${picked[i]?.join(", ")}`
+                      : (picked[i]?.join(", ") ?? ""),
+                  )
+                  .join("\n"),
+              )
+            }
+          >
+            Répondre
+          </button>
+        </div>
+      )}
+      {open && <div className="ask-hint">Tu peux aussi répondre en écrivant un message.</div>}
+    </div>
+  );
+}
+
+function ToolRow({ item, live }: { item: Extract<Item, { kind: "tool" }>; live: boolean }) {
   const [open, setOpen] = useState(false);
   const hasBody = item.content.length > 0;
   return (
@@ -316,7 +431,7 @@ function ToolRow({ item }: { item: Extract<Item, { kind: "tool" }> }) {
         onClick={() => hasBody && setOpen((o) => !o)}
         aria-expanded={hasBody ? open : undefined}
       >
-        <ToolStatusIcon status={item.status} />
+        <ToolStatusIcon status={item.status === "in_progress" && !live ? "pending" : item.status} />
         <span className="nm">{item.title}</span>
         <span className="meta">{TOOL_KIND[item.toolKind] ?? ""}</span>
         {hasBody && <IconChevron />}
