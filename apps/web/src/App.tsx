@@ -88,6 +88,7 @@ export function App() {
           <Composer
             key={thread?.id ?? "new"}
             agents={state.agents}
+            favorites={state.favorites}
             thread={thread}
             project={project}
             onNewProject={() => setCreatingProject(true)}

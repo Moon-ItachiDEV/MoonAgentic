@@ -7,12 +7,18 @@ import type { AgentInfo } from "@moonagentic/protocol";
 export interface AgentLaunch {
   command: string;
   args: string[];
+  /** ACP auth method to call before opening a session, for agents that expect it. */
+  authMethodId?: string;
+  /** How the user signs in with the agent's own tool, shown when the agent asks for it. */
+  login?: string;
 }
 
 interface AgentDefinition {
   id: string;
   name: string;
   short: string;
+  /** Model picked for new threads when the user chose none, if the agent offers it. */
+  preferredModel?: RegExp;
   /** Returns how to start the agent, or a hint explaining what is missing. */
   resolve(): AgentLaunch | { hint: string };
 }
@@ -37,16 +43,26 @@ export function findOnPath(command: string, envPath = process.env.PATH ?? ""): s
 const require = createRequire(import.meta.url);
 
 /** Agents that speak ACP natively, started as `<cli> acp`. */
-const nativeAcp = (id: string, name: string, short: string, cli: string, hint: string) =>
-  ({
-    id,
-    name,
-    short,
+function nativeAcp(
+  base: Omit<AgentDefinition, "resolve">,
+  clis: string[],
+  setup: { hint: string; login: string; authMethodId?: string },
+): AgentDefinition {
+  const { hint, ...launch } = setup;
+  return {
+    ...base,
     resolve: () => {
-      const command = findOnPath(cli);
-      return command ? { command, args: ["acp"] } : { hint };
+      const command = clis.map((cli) => findOnPath(cli)).find(Boolean);
+      return command ? { command, args: ["acp"], ...launch } : { hint };
     },
-  }) satisfies AgentDefinition;
+  };
+}
+
+/** Runs an ACP adapter published on npm with this Node, from its package's entry file. */
+function nodeAdapter(pkg: string): AgentLaunch {
+  const main = path.join(path.dirname(require.resolve(`${pkg}/package.json`)), "dist/index.js");
+  return { command: process.execPath, args: [main] };
+}
 
 const definitions: AgentDefinition[] = [
   {
@@ -54,35 +70,43 @@ const definitions: AgentDefinition[] = [
     name: "Claude Code",
     short: "CC",
     resolve: () => ({
-      command: process.execPath,
-      args: [
-        path.join(
-          path.dirname(require.resolve("@agentclientprotocol/claude-agent-acp/package.json")),
-          "dist/index.js",
-        ),
-      ],
+      ...nodeAdapter("@agentclientprotocol/claude-agent-acp"),
+      login: "lance « claude » puis « /login »",
+    }),
+  },
+  {
+    id: "codex",
+    name: "Codex",
+    short: "Cx",
+    resolve: () => ({
+      ...nodeAdapter("@agentclientprotocol/codex-acp"),
+      login: "lance « codex login »",
     }),
   },
   nativeAcp(
-    "antigravity",
-    "Antigravity",
-    "Ag",
-    "agy",
-    "Installe Antigravity CLI (commande agy), puis lance « agy » une fois pour te connecter.",
+    { id: "antigravity", name: "Antigravity", short: "Ag", preferredModel: /neon/i },
+    ["agy"],
+    {
+      hint: "Installe Antigravity CLI (commande agy), puis lance « agy » une fois pour te connecter.",
+      login: "lance « agy »",
+    },
   ),
-  nativeAcp(
-    "hermes",
-    "Hermes",
-    "He",
-    "hermes",
-    "Installe Hermes Agent (commande hermes), puis configure-le une fois dans un terminal.",
-  ),
+  nativeAcp({ id: "cursor", name: "Cursor", short: "Cu" }, ["cursor-agent", "agent"], {
+    hint: "Installe Cursor CLI (commande agent), puis lance « agent login » une fois.",
+    login: "lance « agent login »",
+    authMethodId: "cursor_login",
+  }),
+  nativeAcp({ id: "hermes", name: "Hermes", short: "He" }, ["hermes"], {
+    hint: "Installe Hermes Agent avec son extension ACP, puis lance « hermes model » une fois.",
+    login: "lance « hermes model »",
+  }),
 ];
 
 const demoAgent: AgentDefinition = {
   id: "demo",
   name: "Agent de démo",
   short: "Dm",
+  preferredModel: /précis/i,
   resolve: () => ({
     command: process.execPath,
     args: [fileURLToPath(new URL("./demo-agent.ts", import.meta.url))],
@@ -107,6 +131,10 @@ export class Agents {
         ...("hint" in launch ? { hint: launch.hint } : {}),
       };
     });
+  }
+
+  preferredModel(id: string): RegExp | undefined {
+    return this.all.find((a) => a.id === id)?.preferredModel;
   }
 
   launch(id: string): AgentLaunch {

@@ -6,16 +6,73 @@ import { setTimeout as delay } from "node:timers/promises";
 import * as acp from "@agentclientprotocol/sdk";
 
 const pause = Number(process.env.MOONAGENTIC_DEMO_DELAY_MS ?? 0);
+// How the demo offers models: as a config option (default), the older `models` field, or not at all.
+const modelStyle = process.env.MOONAGENTIC_DEMO_MODELS ?? "options";
 const cancelled = new Set<string>();
+const models = new Map<string, string>();
+
+const configOptions = (sessionId: string): acp.SessionConfigOption[] => [
+  {
+    id: "model",
+    name: "Modèle",
+    category: "model",
+    type: "select",
+    currentValue: models.get(sessionId) ?? "rapide",
+    options: [
+      { value: "rapide", name: "Démo rapide" },
+      { value: "precis", name: "Démo précis", description: "Prend son temps" },
+    ],
+  },
+];
+
+const legacyModels = (sessionId: string) => ({
+  availableModels: [
+    { modelId: "rapide", name: "Démo rapide" },
+    { modelId: "precis", name: "Démo précis" },
+  ],
+  currentModelId: models.get(sessionId) ?? "rapide",
+});
 
 const app = acp
   .agent({ name: "demo" })
-  .onRequest("initialize", () => ({
-    protocolVersion: acp.PROTOCOL_VERSION,
-    agentCapabilities: { loadSession: false },
-    agentInfo: { name: "moonagentic-demo", version: "0.1.0" },
-  }))
-  .onRequest("session/new", () => ({ sessionId: randomUUID() }))
+  .onRequest("initialize", async () => {
+    // Stands for an agent stuck at startup, such as one waiting for a sign-in.
+    if (modelStyle === "hang") await new Promise(() => undefined);
+    if (modelStyle === "fail") throw new Error("Connecte-toi d'abord.");
+    return {
+      protocolVersion: acp.PROTOCOL_VERSION,
+      agentCapabilities: { loadSession: modelStyle === "load" },
+      agentInfo: { name: "moonagentic-demo", version: "0.1.0" },
+    };
+  })
+  .onRequest("session/new", () => {
+    const sessionId = randomUUID();
+    if (modelStyle === "legacy") return { sessionId, models: legacyModels(sessionId) };
+    if (modelStyle === "none") return { sessionId };
+    return { sessionId, configOptions: configOptions(sessionId) };
+  })
+  .onRequest(
+    "session/set_model",
+    (params) => params as { sessionId: string; modelId: string },
+    ({ params }) => {
+      models.set(params.sessionId, params.modelId);
+      return {};
+    },
+  )
+  // Like a real agent reloading a saved session: it replays the model the session last ran.
+  .onRequest("session/load", async ({ params, client }) => {
+    const { sessionId } = params;
+    await client.notify("session/update", {
+      sessionId,
+      update: { sessionUpdate: "config_option_update", configOptions: configOptions(sessionId) },
+    });
+    return { configOptions: configOptions(sessionId) };
+  })
+  .onRequest("session/set_config_option", ({ params }) => {
+    if ("value" in params && typeof params.value === "string")
+      models.set(params.sessionId, params.value);
+    return { configOptions: configOptions(params.sessionId) };
+  })
   .onNotification("session/cancel", ({ params }) => {
     cancelled.add(params.sessionId);
   })
@@ -51,7 +108,10 @@ const app = acp
       status: "completed",
       content: [{ type: "content", content: { type: "text", text: "export const answer = 41;" } }],
     });
-    await say(`Tu m'as demandé : « ${ask} ». `, "agent_message_chunk");
+    await say(
+      `Tu m'as demandé : « ${ask} » (modèle ${models.get(sessionId) ?? "rapide"}). `,
+      "agent_message_chunk",
+    );
 
     const edit = {
       toolCallId: "edit-1",

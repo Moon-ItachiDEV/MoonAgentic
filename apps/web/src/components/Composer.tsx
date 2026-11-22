@@ -1,25 +1,14 @@
-import type { AgentInfo, PermissionMode, Project, Thread } from "@moonagentic/protocol";
-import { useLayoutEffect, useRef, useState } from "react";
+import type { AgentInfo, Favorites, PermissionMode, Project, Thread } from "@moonagentic/protocol";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { connection } from "../connection.ts";
 import { readPref, writePref } from "../prefs.ts";
-import { IconArrowUp, IconCheck, IconShield, IconStop } from "./icons.tsx";
-
-export function AgentBadge({
-  agent,
-  small,
-}: {
-  agent: Pick<AgentInfo, "id" | "short"> | undefined;
-  small?: boolean;
-}) {
-  return (
-    <span className={`ag${small ? " sm" : ""}`} data-agent={agent?.id}>
-      {agent?.short ?? "?"}
-    </span>
-  );
-}
+import { AgentBadge } from "./AgentBadge.tsx";
+import { IconArrowUp, IconShield, IconStop } from "./icons.tsx";
+import { Picker } from "./Picker.tsx";
 
 export function Composer(props: {
   agents: AgentInfo[];
+  favorites: Favorites;
   thread: Thread | undefined;
   project: Project | undefined;
   onNewProject: () => void;
@@ -34,6 +23,8 @@ export function Composer(props: {
     readPref("permissionMode") === "full" ? "full" : "supervised",
   );
   const input = useRef<HTMLTextAreaElement>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const [modelPicks, setModelPicks] = useState<Record<string, string>>({});
 
   const agentId =
     thread?.agentId ??
@@ -41,7 +32,36 @@ export function Composer(props: {
       ?.id;
   const agent = agents.find((a) => a.id === agentId);
   const mode = thread?.permissionMode ?? newMode;
+  const pickedModel = agent && (modelPicks[agent.id] ?? readPref(`model.${agent.id}`));
+  const model =
+    thread?.model ??
+    (agent?.models?.some((m) => m.id === pickedModel) ? pickedModel : agent?.defaultModel) ??
+    undefined;
+  const modelName = agent?.models?.find((m) => m.id === model)?.name ?? model;
   const running = thread?.status === "running" || thread?.status === "waiting";
+  // The model is switched between turns only, so a turn starting (here or on another
+  // device) closes the picker for good rather than hiding it until the turn ends.
+  if (menu && thread && running) setMenu(false);
+  const pickerOpen = menu && !(thread && running);
+
+  // Close the picker on Escape or on any press outside the composer.
+  useEffect(() => {
+    if (!pickerOpen) return;
+    const close = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setMenu(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMenu(false);
+      input.current?.focus();
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [pickerOpen]);
   const canSend = text.trim().length > 0 && !busy && !running && !!agent?.available && !!project;
 
   useLayoutEffect(() => {
@@ -66,6 +86,7 @@ export function Composer(props: {
         projectId: project.id,
         agentId,
         permissionMode: newMode,
+        ...(model ? { model } : {}),
         text: value,
       });
       setText("");
@@ -98,7 +119,7 @@ export function Composer(props: {
       : "Demande n'importe quoi à tes agents…";
 
   return (
-    <div className="composer">
+    <div className="composer" ref={root}>
       <textarea
         ref={input}
         rows={1}
@@ -117,13 +138,18 @@ export function Composer(props: {
       <div className="cbar">
         <button
           className="agentchip"
-          disabled={!!thread}
+          disabled={!agent?.available || (!!thread && running)}
+          title={thread && running ? "Le modèle se change entre deux réponses" : undefined}
           aria-haspopup="menu"
-          aria-expanded={menu}
+          aria-expanded={pickerOpen}
           onClick={() => setMenu((m) => !m)}
         >
           <AgentBadge agent={agent} />
-          <span className="lbl">{agent?.name ?? "Aucun agent installé"}</span>
+          <span className="lbl">
+            {agent?.name ?? "Aucun agent installé"}
+            {modelName && <span className="sep"> · </span>}
+            {modelName}
+          </span>
         </button>
         <span className="grow" />
         <button
@@ -159,34 +185,30 @@ export function Composer(props: {
           </button>
         )}
       </div>
-      {menu && !thread && (
-        <div className="menu" role="menu" onMouseLeave={() => setMenu(false)}>
-          <div className="menu-h">Agent</div>
-          {agents.map((a) => (
-            <button
-              key={a.id}
-              role="menuitem"
-              disabled={!a.available}
-              onClick={() => {
-                setPickedAgentId(a.id);
-                writePref("agent", a.id);
-                setMenu(false);
-                input.current?.focus();
-              }}
-            >
-              <AgentBadge agent={a} />
-              <span className="tx">
-                {a.name}
-                {!a.available && a.hint && <small>{a.hint}</small>}
-              </span>
-              {a.id === agentId && (
-                <span className="on-mark">
-                  <IconCheck />
-                </span>
-              )}
-            </button>
-          ))}
-        </div>
+      {pickerOpen && (
+        <Picker
+          agents={agents}
+          agent={agent}
+          model={model}
+          favorites={props.favorites}
+          projectId={project?.id}
+          showAgents={!thread}
+          onPickAgent={(id) => {
+            setPickedAgentId(id);
+            writePref("agent", id);
+          }}
+          onPickModel={(id) => {
+            if (thread)
+              connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
+            else if (agent) {
+              setModelPicks((p) => ({ ...p, [agent.id]: id }));
+              writePref(`model.${agent.id}`, id);
+            }
+            setMenu(false);
+            input.current?.focus();
+          }}
+          onClose={() => setMenu(false)}
+        />
       )}
     </div>
   );

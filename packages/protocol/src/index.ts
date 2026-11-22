@@ -2,6 +2,12 @@ import { z } from "zod";
 
 export type AgentId = string;
 
+export interface ModelChoice {
+  id: string;
+  name: string;
+  description?: string;
+}
+
 export interface AgentInfo {
   id: AgentId;
   name: string;
@@ -10,6 +16,12 @@ export interface AgentInfo {
   available: boolean;
   /** Why the agent cannot run, shown to the user when `available` is false. */
   hint?: string;
+  /** Models the agent offered the last time one of its sessions started; absent until then. */
+  models?: ModelChoice[];
+  /** The model a new thread gets when the user picks none. */
+  defaultModel?: string;
+  /** Why the agent could not list its models, while it has none on record. */
+  modelsError?: string;
 }
 
 export interface Project {
@@ -30,6 +42,8 @@ export interface Thread {
   agentId: AgentId;
   status: ThreadStatus;
   permissionMode: PermissionMode;
+  /** The model the agent runs, once known. */
+  model?: string;
   /** Set when the last turn ended with an error. */
   error?: string;
   createdAt: number;
@@ -79,7 +93,11 @@ export type Item =
 
 export type ItemKind = Item["kind"];
 
+/** Favorite model ids per agent, shared by every device. */
+export type Favorites = Record<AgentId, string[]>;
+
 export interface Snapshot {
+  favorites: Favorites;
   agents: AgentInfo[];
   projects: Project[];
   threads: Thread[];
@@ -87,6 +105,8 @@ export interface Snapshot {
 
 export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
+  | { type: "agents"; agents: AgentInfo[] }
+  | { type: "favorites"; favorites: Favorites }
   | { type: "project"; project: Project }
   | { type: "thread"; thread: Thread }
   | { type: "items"; threadId: string; items: Item[] }
@@ -113,6 +133,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     projectId: id,
     agentId: id,
     permissionMode: z.enum(["supervised", "full"]),
+    model: id.optional(),
     text,
   }),
   z.object({ type: z.literal("thread.open"), threadId: id }),
@@ -123,6 +144,16 @@ export const ClientMessage = z.discriminatedUnion("type", [
     threadId: id,
     permissionMode: z.enum(["supervised", "full"]),
   }),
+  z.object({ type: z.literal("thread.setModel"), threadId: id, model: id }),
+  /** Stars or unstars one model, so two devices editing favorites never overwrite each other. */
+  z.object({
+    type: z.literal("favorites.toggle"),
+    agentId: id,
+    model: id,
+    starred: z.boolean(),
+  }),
+  /** Starts the agent briefly to learn which models it offers. */
+  z.object({ type: z.literal("agent.discover"), agentId: id, projectId: id }),
   z.object({
     type: z.literal("permission.respond"),
     threadId: id,

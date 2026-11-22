@@ -23,6 +23,8 @@
   --a-claude: #c2563a;
   --a-antigravity: #2b7fd1;
   --a-hermes: #0d9488;
+  --a-codex: #3f3f46;
+  --a-cursor: #7a4fd6;
   --a-demo: #52525b;
   --scrim: rgba(20, 20, 24, 0.28);
   --shadow: 0 20px 50px -18px rgba(20, 20, 30, 0.25), 0 3px 10px rgba(20, 20, 30, 0.06);
@@ -258,6 +260,7 @@ svg {
 .center {
   display: grid;
   grid-template-rows: 56px minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   position: relative;
@@ -349,6 +352,7 @@ svg {
 .dock {
   padding: 6px 16px max(16px, env(safe-area-inset-bottom));
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   justify-items: center;
 }
 .home-route .dock {
@@ -489,6 +493,12 @@ svg {
 .ag[data-agent="antigravity"] {
   background: var(--a-antigravity);
 }
+.ag[data-agent="codex"] {
+  background: var(--a-codex);
+}
+.ag[data-agent="cursor"] {
+  background: var(--a-cursor);
+}
 .ag[data-agent="hermes"] {
   background: var(--a-hermes);
 }
@@ -508,6 +518,65 @@ svg {
   padding: 6px;
   display: grid;
   gap: 1px;
+  width: 340px;
+  max-height: min(460px, calc(100dvh - 160px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.menu-models {
+  display: grid;
+  gap: 1px;
+}
+.mrow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.mrow > button:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.menu .star {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  justify-content: center;
+  color: var(--faint);
+}
+.menu .star.on {
+  color: var(--accent);
+}
+.menu-note {
+  padding: 6px 10px 8px;
+  font-size: 13px;
+  color: var(--faint);
+}
+.menu .menu-close,
+.menu-scrim {
+  display: none;
+}
+.menu-note.err small {
+  display: block;
+  margin-top: 4px;
+  max-height: 4.2em;
+  overflow: hidden;
+  color: var(--err);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.menu .retry {
+  display: inline-flex;
+  margin-top: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  color: var(--fg);
+  font-size: 12px;
+}
+.agentchip .sep {
+  color: var(--faint);
 }
 .menu-h {
   padding: 6px 10px 4px;
@@ -1056,6 +1125,30 @@ svg {
   }
   .composer textarea {
     font-size: 16px;
+  }
+  .menu {
+    position: fixed;
+    left: 8px;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    width: auto;
+    max-width: none;
+    max-height: 70dvh;
+    z-index: 50;
+  }
+  /* Catches taps outside the sheet so they never reach the buttons underneath. */
+  .menu-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: var(--scrim);
+  }
+  .menu .menu-close {
+    display: flex;
+    justify-content: center;
+    margin-top: 4px;
+    color: var(--muted);
   }
 }
 

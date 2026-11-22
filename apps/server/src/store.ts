@@ -1,5 +1,18 @@
 import { DatabaseSync } from "node:sqlite";
-import type { Item, PermissionMode, Project, Thread, ThreadStatus } from "@moonagentic/protocol";
+import type {
+  Item,
+  ModelChoice,
+  PermissionMode,
+  Project,
+  Thread,
+  ThreadStatus,
+} from "@moonagentic/protocol";
+
+export interface AgentModels {
+  models: ModelChoice[];
+  /** What the agent picks on its own for a new session. */
+  current: string;
+}
 
 interface ThreadRow {
   id: string;
@@ -9,6 +22,7 @@ interface ThreadRow {
   status: ThreadStatus;
   permission_mode: PermissionMode;
   error: string | null;
+  model: string | null;
   acp_session_id: string | null;
   created_at: number;
   updated_at: number;
@@ -21,6 +35,7 @@ const toThread = (row: ThreadRow): Thread => ({
   agentId: row.agent_id,
   status: row.status,
   permissionMode: row.permission_mode,
+  ...(row.model ? { model: row.model } : {}),
   ...(row.error ? { error: row.error } : {}),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -61,7 +76,49 @@ export class Store {
         PRIMARY KEY (thread_id, id)
       );
       CREATE INDEX IF NOT EXISTS items_by_seq ON items(thread_id, seq);
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS agent_models (
+        agent_id TEXT PRIMARY KEY,
+        data TEXT NOT NULL
+      );
     `);
+    const threadColumns = this.db.prepare(`PRAGMA table_info(threads)`).all() as { name: string }[];
+    if (!threadColumns.some((c) => c.name === "model")) {
+      this.db.exec(`ALTER TABLE threads ADD COLUMN model TEXT`);
+    }
+  }
+
+  getSetting<T>(key: string, fallback: T): T {
+    const row = this.db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as
+      { value: string } | undefined;
+    return row ? (JSON.parse(row.value) as T) : fallback;
+  }
+
+  setSetting(key: string, value: unknown): void {
+    this.db
+      .prepare(
+        `INSERT INTO settings (key, value) VALUES (?, ?)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+      )
+      .run(key, JSON.stringify(value));
+  }
+
+  getAgentModels(agentId: string): AgentModels | undefined {
+    const row = this.db.prepare(`SELECT data FROM agent_models WHERE agent_id = ?`).get(agentId) as
+      { data: string } | undefined;
+    return row && (JSON.parse(row.data) as AgentModels);
+  }
+
+  setAgentModels(agentId: string, models: AgentModels): void {
+    this.db
+      .prepare(
+        `INSERT INTO agent_models (agent_id, data) VALUES (?, ?)
+         ON CONFLICT (agent_id) DO UPDATE SET data = excluded.data`,
+      )
+      .run(agentId, JSON.stringify(models));
   }
 
   /** Work that was in flight when the server stopped cannot resume, so settle it. */
@@ -116,8 +173,8 @@ export class Store {
   addThread(thread: Thread): void {
     this.db
       .prepare(
-        `INSERT INTO threads (id, project_id, title, agent_id, status, permission_mode, error, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+        `INSERT INTO threads (id, project_id, title, agent_id, status, permission_mode, model, error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       )
       .run(
         thread.id,
@@ -126,6 +183,7 @@ export class Store {
         thread.agentId,
         thread.status,
         thread.permissionMode,
+        thread.model ?? null,
         thread.createdAt,
         thread.updatedAt,
       );
@@ -133,17 +191,29 @@ export class Store {
 
   updateThread(
     id: string,
-    patch: Partial<Pick<Thread, "status" | "permissionMode" | "title">> & { error?: string | null },
+    patch: Partial<Pick<Thread, "status" | "permissionMode" | "title" | "model">> & {
+      error?: string | null;
+    },
   ): Thread {
     const current = this.getThread(id);
     if (!current) throw new Error(`Unknown thread ${id}`);
-    const next = { ...current, ...patch, updatedAt: Date.now() };
+    // Only activity moves a thread up the sidebar, not a settings change.
+    const active = patch.status !== undefined || patch.title !== undefined;
+    const next = { ...current, ...patch, updatedAt: active ? Date.now() : current.updatedAt };
     const error = patch.error === undefined ? (current.error ?? null) : patch.error;
     this.db
       .prepare(
-        `UPDATE threads SET status = ?, permission_mode = ?, title = ?, error = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE threads SET status = ?, permission_mode = ?, title = ?, model = ?, error = ?, updated_at = ? WHERE id = ?`,
       )
-      .run(next.status, next.permissionMode, next.title, error, next.updatedAt, id);
+      .run(
+        next.status,
+        next.permissionMode,
+        next.title,
+        next.model ?? null,
+        error,
+        next.updatedAt,
+        id,
+      );
     return this.getThread(id)!;
   }
 
