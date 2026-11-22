@@ -2034,9 +2034,6 @@ kbd {
 .menu.thread-menu button.danger {
   color: var(--err);
 }
-.thr-row.proj .thr {
-  padding-right: 34px;
-}
 .thr-row.proj .aux {
   margin-right: 4px;
 }
@@ -2198,9 +2195,6 @@ kbd {
   color: var(--muted);
   text-decoration: underline;
   text-underline-offset: 3px;
-}
-.thr-row.child .thr {
-  padding-left: 26px;
 }
 @media (max-width: 860px) {
   .field select {

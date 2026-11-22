@@ -2,7 +2,14 @@ import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
 import { useState } from "react";
 import { readPref, writePref } from "../prefs.ts";
-import { recentAlwaysShown } from "../recent.ts";
+import { RECENT, recentAlwaysShown } from "../recent.ts";
+import {
+  childrenOf as membersOf,
+  conversationsByProject,
+  lineStatus,
+  projectOpen,
+  type LineStatus,
+} from "../sidebar-tree.ts";
 import {
   IconArchive,
   IconBoard,
@@ -13,17 +20,17 @@ import {
   IconGear,
   IconPin,
   IconPlug,
+  IconPlus,
   IconSearch,
   IconShield,
 } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
 
-function ThreadStatus({ thread }: { thread: Thread }) {
-  if (thread.status === "running") return <span className="spin" aria-label="En cours" />;
-  if (thread.status === "waiting")
+function ThreadStatus({ status }: { status: LineStatus }) {
+  if (status === "running") return <span className="spin" aria-label="En cours" />;
+  if (status === "waiting")
     return <span className="dot" title="Attend ta réponse" aria-label="Attend ta réponse" />;
-  if (thread.status === "error")
-    return <span className="dot err" title="Erreur" aria-label="Erreur" />;
+  if (status === "error") return <span className="dot err" title="Erreur" aria-label="Erreur" />;
   return null;
 }
 
@@ -38,7 +45,10 @@ export function Sidebar(props: {
   onNewProject: () => void;
   onOpenConnections: () => void;
   onOpenRequests: () => void;
+  /** Shows the project: its planner on the planner's page, else its new conversation. */
   onPickProject: (id: string) => void;
+  /** Starts a new conversation in the project. */
+  onNewInProject: (id: string) => void;
   onOpenThread: (id: string) => void;
   onTogglePin: (id: string, pinned: boolean) => void;
   onRemoveProject: (id: string) => void;
@@ -47,51 +57,87 @@ export function Sidebar(props: {
 }) {
   const { state } = props;
   const available = state.agents.filter((a) => a.available).length;
-  const countByProject = new Map<string, number>();
-  for (const t of state.threads)
-    countByProject.set(t.projectId, (countByProject.get(t.projectId) ?? 0) + 1);
-
   const [showArchived, setShowArchived] = useState(false);
-  const [showAll, setShowAll] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(() => readPref("projectsOpen") !== "false");
+  // Each project folded or not, as the user left it.
+  const [folds, setFolds] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(readPref("projectFolds") ?? "{}") as Record<string, boolean>;
+    } catch {
+      return {};
+    }
+  });
+  const setFold = (id: string, open: boolean) => {
+    const next = { ...folds, [id]: open };
+    setFolds(next);
+    writePref("projectFolds", JSON.stringify(next));
+  };
+  // Projects and teams whose every line is shown, past « Voir plus », or whose members are.
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (key: string) => {
+    const next = new Set(unfolded);
+    if (!next.delete(key)) next.add(key);
+    setUnfolded(next);
+  };
+
   const live = state.threads.filter((t) => !t.archived);
   const archived = state.threads.filter((t) => t.archived);
-  // A coder's thread sits under its lead's, wherever the lead is listed.
-  const listed = new Set(live.map((t) => t.id));
-  const childrenOf = new Map<string, Thread[]>();
-  for (const t of live) {
-    if (t.parentId && listed.has(t.parentId)) {
-      childrenOf.set(t.parentId, [...(childrenOf.get(t.parentId) ?? []), t]);
-    }
-  }
-  const top = live.filter((t) => !(t.parentId && listed.has(t.parentId)));
-  // A team's reviewers and testers are reached from its card; they show here only while
-  // open, pinned, or waiting on the user.
-  const shown = (t: Thread) =>
-    (t.role !== "reviewer" && t.role !== "tester") ||
-    t.id === props.activeThreadId ||
-    t.pinned ||
-    t.status === "waiting";
-  const pinned = top.filter((t) => t.pinned);
-  const recent = top.filter((t) => !t.pinned);
-  const { always, foldable } = recentAlwaysShown(recent, childrenOf, props.activeThreadId);
-  const recentShown = showAll ? recent : always;
-  // Coders in the order the lead handed out their pieces.
-  const tree = (t: Thread) => [
-    row(t),
-    ...(childrenOf.get(t.id) ?? [])
-      .filter(shown)
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map((c) => row(c, true)),
-  ];
-  const row = (t: Thread, child = false) => (
-    <div key={t.id} className={`thr-row${t.pinned ? " pinned" : ""}${child ? " child" : ""}`}>
+  const members = membersOf(live);
+  const byProject = conversationsByProject(live);
+  const active = live.find((t) => t.id === props.activeThreadId);
+  const activeLead =
+    active?.parentId && members.has(active.parentId) ? active.parentId : active?.id;
+  const known = new Set(state.projects.map((p) => p.id));
+  const pinned = [...byProject.values()].flat().filter((t) => t.pinned);
+  // Across projects, only when there are several; a thread whose project is gone too.
+  const recent = [...byProject.values()]
+    .flat()
+    .filter((t) => !t.pinned && (state.projects.length > 1 || !known.has(t.projectId)))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, RECENT);
+
+  // A team on one line, its members folded under it unless asked or one of them is open.
+  const tree = (t: Thread, prefix: string) => {
+    const team = members.get(t.id) ?? [];
+    const open = team.length > 0 && (unfolded.has(`${prefix}${t.id}`) || activeLead === t.id);
+    return [
+      row(t, {
+        status: lineStatus(t, open ? [] : team),
+        team: team.length ? { open, toggle: () => toggle(`${prefix}${t.id}`) } : undefined,
+        key: `${prefix}${t.id}`,
+      }),
+      ...(open ? team.map((c) => row(c, { child: true, key: `${prefix}${c.id}` })) : []),
+    ];
+  };
+  const row = (
+    t: Thread,
+    opts: {
+      key: string;
+      child?: boolean;
+      status?: LineStatus;
+      team?: { open: boolean; toggle: () => void } | undefined;
+    },
+  ) => (
+    <div
+      key={opts.key}
+      className={`thr-row${t.pinned ? " pinned" : ""}${opts.child ? " child" : ""}${opts.team ? " lead" : ""}`}
+    >
+      {opts.team && (
+        <button
+          className={`fold-team${opts.team.open ? " open" : ""}`}
+          aria-expanded={opts.team.open}
+          aria-label={`${opts.team.open ? "Replier" : "Déplier"} l'équipe ${t.title}`}
+          onClick={opts.team.toggle}
+        >
+          <IconChevron size={11} />
+        </button>
+      )}
       <button
         className={`thr${t.id === props.activeThreadId ? " on" : ""}`}
         onClick={() => props.onOpenThread(t.id)}
       >
         <span className="t">{t.title}</span>
-        <ThreadStatus thread={t} />
+        <ThreadStatus status={opts.status ?? lineStatus(t)} />
       </button>
       {!t.archived && (
         <button
@@ -106,6 +152,80 @@ export function Sidebar(props: {
       )}
     </div>
   );
+
+  const project = (p: State["projects"][number]) => {
+    const all = (byProject.get(p.id) ?? []).filter((t) => !t.pinned);
+    const open = projectOpen(folds[p.id], state.projects.length === 1, active?.projectId === p.id);
+    const { always, foldable } = recentAlwaysShown(all, members, props.activeThreadId);
+    const more = unfolded.has(`more:${p.id}`);
+    const count = byProject.get(p.id)?.length ?? 0;
+    return [
+      <div key={p.id} className={`thr-row proj${open ? " open" : ""}`}>
+        <button
+          className="fold-proj"
+          aria-expanded={open}
+          aria-label={`${open ? "Replier" : "Déplier"} le projet ${p.name}`}
+          onClick={() => setFold(p.id, !open)}
+        >
+          <IconFolder />
+          <IconChevron size={11} />
+        </button>
+        <button
+          className={`thr${!props.activeThreadId && p.id === props.activeProjectId ? " on" : ""}`}
+          title={p.path}
+          onClick={() => {
+            if (!open) setFold(p.id, true);
+            props.onPickProject(p.id);
+          }}
+        >
+          <span className="t">{p.name}</span>
+          <span className="aux" title={`${count} discussion${count > 1 ? "s" : ""}`}>
+            {count || ""}
+          </span>
+        </button>
+        <button
+          className="pin new"
+          aria-label={`Nouvelle discussion dans ${p.name}`}
+          title="Nouvelle discussion"
+          onClick={() => props.onNewInProject(p.id)}
+        >
+          <IconPlus size={14} />
+        </button>
+        <button
+          className="pin"
+          aria-label={`Retirer le projet ${p.name}`}
+          title="Retirer de MoonAgentic"
+          onClick={() => props.onRemoveProject(p.id)}
+        >
+          <IconClose />
+        </button>
+      </div>,
+      ...(open
+        ? [
+            ...(all.length === 0
+              ? [
+                  <div key={`${p.id}:empty`} className="empty-note in-proj">
+                    Aucune discussion.
+                  </div>,
+                ]
+              : []),
+            ...(more ? all : always).flatMap((t) => tree(t, "")),
+            ...(foldable > 0
+              ? [
+                  <button
+                    key={`${p.id}:more`}
+                    className="more in-proj"
+                    aria-expanded={more}
+                    onClick={() => toggle(`more:${p.id}`)}
+                  >
+                    {more ? "Voir moins" : `Voir plus (${foldable})`}
+                  </button>,
+                ]
+              : []),
+          ]
+        : []),
+    ];
+  };
 
   return (
     <aside className="side">
@@ -164,36 +284,11 @@ export function Sidebar(props: {
         {projectsOpen && state.ready && state.projects.length === 0 && (
           <div className="empty-note">Aucun projet pour l'instant.</div>
         )}
-        {(projectsOpen ? state.projects : []).map((p) => (
-          <div key={p.id} className="thr-row proj">
-            <button
-              className={`thr${!props.activeThreadId && p.id === props.activeProjectId ? " on" : ""}`}
-              title={p.path}
-              onClick={() => props.onPickProject(p.id)}
-            >
-              <IconFolder />
-              <span className="t">{p.name}</span>
-              <span className="aux">{countByProject.get(p.id) ?? ""}</span>
-            </button>
-            <button
-              className="pin"
-              aria-label={`Retirer le projet ${p.name}`}
-              title="Retirer de MoonAgentic"
-              onClick={() => props.onRemoveProject(p.id)}
-            >
-              <IconClose />
-            </button>
-          </div>
-        ))}
+        {(projectsOpen ? state.projects : []).flatMap(project)}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
-        {pinned.flatMap(tree)}
+        {pinned.flatMap((t) => tree(t, "pin:"))}
         {recent.length > 0 && <div className="sec-h">Récents</div>}
-        {recentShown.flatMap(tree)}
-        {foldable > 0 && (
-          <button className="more" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>
-            {showAll ? "Voir moins" : `Voir plus (${foldable})`}
-          </button>
-        )}
+        {recent.flatMap((t) => tree(t, "recent:"))}
         {archived.length > 0 && (
           <button
             className="sec-h arch-toggle"
@@ -204,7 +299,7 @@ export function Sidebar(props: {
             Archivés ({archived.length})
           </button>
         )}
-        {showArchived && archived.map((t) => row(t))}
+        {showArchived && archived.map((t) => row(t, { key: t.id }))}
       </div>
       {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}
       <div className="side-foot">
