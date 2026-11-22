@@ -165,7 +165,10 @@ describe("thread workspaces", () => {
     rmSync(path.join(dir, ".gitignore"));
     await hub.restore(threadId, second.id);
 
-    expect(readFileSync(path.join(dir, "README.md"), "utf8")).toBe("# Demo\npremier tour\n");
+    // Git writes restored files with the line endings its config asks for (CRLF on Windows).
+    expect(readFileSync(path.join(dir, "README.md"), "utf8").replaceAll("\r\n", "\n")).toBe(
+      "# Demo\npremier tour\n",
+    );
     expect(existsSync(path.join(dir, ".gitignore"))).toBe(true);
     expect(existsSync(path.join(dir, "src"))).toBe(false);
     expect(readFileSync(path.join(dir, "cache", "garde.txt"), "utf8")).toBe("ignoré\n");
