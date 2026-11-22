@@ -103,19 +103,24 @@ export function App() {
   };
   const setArchived = (id: string, archived: boolean) =>
     connection.send({ type: "thread.setArchived", threadId: id, archived });
-  const askDeleteThread = (t: Thread) =>
+  const askDeleteThread = (t: Thread) => {
+    // A team goes whole: its lead's thread takes the members' with it.
+    const members = state.threads.filter((m) => m.parentId === t.id).length;
     setConfirm({
-      title: "Supprimer cette discussion ?",
-      text: t.workspace
-        ? `« ${t.title} » et sa copie de travail seront supprimées. Sa branche ${t.workspace.branch} reste dans le dépôt, avec ses commits.`
-        : `« ${t.title} » sera supprimée, avec tous ses messages.`,
+      title: members ? "Supprimer cette équipe ?" : "Supprimer cette discussion ?",
+      text: members
+        ? `« ${t.title} » et les ${members} fils de son équipe seront supprimés, avec leurs copies de travail. Leurs branches restent dans le dépôt, avec leurs commits.`
+        : t.workspace
+          ? `« ${t.title} » et sa copie de travail seront supprimées. Sa branche ${t.workspace.branch} reste dans le dépôt, avec ses commits.`
+          : `« ${t.title} » sera supprimée, avec tous ses messages.`,
       action: "Supprimer",
       // The box stays open, and says why, until the server has really deleted it.
       run: async () => {
         await connection.request({ type: "thread.delete", requestId: newId(), threadId: t.id });
-        if (thread?.id === t.id) go({ name: "home" });
+        if (thread?.id === t.id || thread?.parentId === t.id) go({ name: "home" });
       },
     });
+  };
   const askRemoveProject = (id: string) => {
     const p = state.projects.find((x) => x.id === id);
     if (!p) return;
@@ -240,6 +245,11 @@ export function App() {
           }}
           onOpenThread={(id) => go({ name: "thread", threadId: id })}
           onTogglePin={togglePin}
+          onSetArchived={setArchived}
+          onDeleteThread={(t) => {
+            setDrawer(false);
+            askDeleteThread(t);
+          }}
           onRemoveProject={(id) => {
             setDrawer(false);
             askRemoveProject(id);

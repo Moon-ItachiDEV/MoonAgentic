@@ -290,8 +290,53 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Désarchiver" }).click();
     await expect.poll(() => composer(page).count()).toBe(1);
 
-    await menu.click();
-    await page.getByRole("menuitem", { name: "Supprimer…" }).click();
+    // The same actions from the sidebar, behind « … » on the thread's line.
+    const more = page.getByRole("button", { name: /^Actions de Corrige la réponse/ }).first();
+    const rowMenu = page.getByRole("menu", { name: /^Actions de Corrige la réponse/ });
+    await more.click();
+    await rowMenu.getByRole("menuitem", { name: /pingler$/ }).waitFor();
+    if (shots) await page.waitForTimeout(300);
+    await shot(page, "c9b-menu-ligne");
+    await page.keyboard.press("Escape");
+    await expect.poll(() => rowMenu.count()).toBe(0);
+    // A pinned thread is listed twice: the menu belongs to one line, and moves to the other.
+    const twice = page.getByRole("button", { name: /^Actions de Lis/ });
+    expect(await twice.count()).toBe(2);
+    // The lower line first: its menu drops below it, clear of the other line's button.
+    await twice.last().click();
+    await expect.poll(() => page.locator(".thr-row.menu-open").count()).toBe(1);
+    await twice.first().click();
+    await expect.poll(() => twice.first().getAttribute("aria-expanded")).toBe("true");
+    expect(await twice.last().getAttribute("aria-expanded")).toBe("false");
+    expect(await page.locator(".thr-row.menu-open").count()).toBe(1);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.getByRole("menu", { name: /^Actions de Lis/ }).count()).toBe(0);
+    await more.click();
+    await rowMenu.getByRole("menuitem", { name: "Archiver" }).click();
+    await page.getByText("Cette discussion est archivée.").waitFor();
+    await more.click();
+    await rowMenu.getByRole("menuitem", { name: "Désarchiver" }).click();
+    await expect.poll(() => composer(page).count()).toBe(1);
+    // On a phone there is no hover: the button is always there, and the menu is a sheet.
+    await page.setViewportSize({ width: 390, height: 780 });
+    await page.getByRole("button", { name: "Menu", exact: true }).click();
+    await more.click();
+    // The sheet slides up: wait until it sits whole on the screen.
+    await expect
+      .poll(async () => {
+        const sheet = await rowMenu.boundingBox();
+        return (
+          !!sheet && sheet.x >= 0 && sheet.x + sheet.width <= 390 && sheet.y + sheet.height <= 780
+        );
+      })
+      .toBe(true);
+    if (shots) await page.waitForTimeout(400);
+    await shot(page, "c9c-menu-ligne-mobile");
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 1280, height: 820 });
+
+    await more.click();
+    await rowMenu.getByRole("menuitem", { name: "Supprimer…" }).click();
     const confirm = page.getByRole("alertdialog", { name: "Supprimer cette discussion ?" });
     await confirm.getByRole("button", { name: "Supprimer" }).click();
     await expect
