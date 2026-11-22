@@ -150,6 +150,8 @@ export interface TimelineBar {
   /** Its line in the lane: bars that overlap sit on different lines. */
   row: number;
   planned: boolean;
+  /** Too short to hold its title, which is then written after it. */
+  tight: boolean;
 }
 
 export interface TimelineLane {
@@ -168,15 +170,21 @@ export interface Timeline {
   lanes: TimelineLane[];
 }
 
+/** A bar under this width cannot hold its title. */
+const TIGHT = 96;
+/** The room a title written after its bar is given, so the next bar does not cover it. */
+const TITLE = 170;
+
 /**
  * Lays the cards out by who works on them: a lane per agent, cards no agent has last.
- * The days shown hold every card, with room around today.
+ * The days shown hold every card, with room around today. `px` is the width of a day.
  */
 export function timeline(
   cards: PlanTask[],
   threads: Thread[],
   agents: AgentInfo[],
   now: number,
+  px = 32,
 ): Timeline {
   const today = dayStart(now);
   const spans = cards.map((card) => ({
@@ -184,8 +192,10 @@ export function timeline(
     work: cardWork(card, threads, agents),
     ...cardSpan(card, now),
   }));
-  const from = Math.min(today - 14 * DAY, ...spans.map((s) => s.from - 3 * DAY));
-  const to = Math.max(today + 28 * DAY, ...spans.map((s) => s.to + 7 * DAY));
+  const before = Math.max(14, Math.ceil(300 / px));
+  const after = Math.max(28, Math.ceil(1400 / px));
+  const from = Math.min(today - before * DAY, ...spans.map((s) => s.from - 3 * DAY));
+  const to = Math.max(today + after * DAY, ...spans.map((s) => s.to + 7 * DAY));
   const index = (at: number) => Math.round((at - from) / DAY);
 
   const byLane = new Map<string, typeof spans>();
@@ -203,10 +213,11 @@ export function timeline(
         .map((s): TimelineBar => {
           const day = index(s.from);
           const days = Math.max(1, index(s.to) - day);
+          const tight = days * px < TIGHT;
           let row = ends.findIndex((end) => end <= day);
           if (row === -1) row = ends.length;
-          ends[row] = day + days;
-          return { card: s.card, work: s.work, day, days, row, planned: s.planned };
+          ends[row] = day + days + (tight ? Math.ceil(TITLE / px) : 0);
+          return { card: s.card, work: s.work, day, days, row, planned: s.planned, tight };
         });
       return { name, rows: Math.max(1, ends.length), bars };
     });

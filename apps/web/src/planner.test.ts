@@ -151,6 +151,14 @@ describe("timeline", () => {
       ["b", 1, 3],
       ["c", 0, 2],
     ]);
+    // A bar too short for its title writes it after, and keeps that room on its line.
+    expect(t.lanes[0]!.bars.map((b) => b.tight)).toEqual([false, false, true]);
+    const month = timeline(cards, threads, agents, now, 16);
+    expect(month.lanes[0]!.bars.map((b) => [b.card.id, b.row, b.tight])).toEqual([
+      ["a", 0, true],
+      ["b", 1, true],
+      ["c", 2, true],
+    ]);
     // Two weeks before today at least, four after, and every card inside.
     expect(t.today).toBe(14);
     expect(t.days).toBeGreaterThanOrEqual(42);

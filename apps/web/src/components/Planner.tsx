@@ -18,7 +18,9 @@ import {
   isLate,
   planLabel,
 } from "../planner.ts";
+import { readPref, writePref } from "../prefs.ts";
 import { IconClose, IconFolder } from "./icons.tsx";
+import { PlanTimeline } from "./PlanTimeline.tsx";
 
 type Filter = "all" | "lead" | "user";
 type PlanRequest = Extract<ClientMessage, { type: `plan.${string}` }>;
@@ -58,6 +60,13 @@ export function Planner({
   const [adding, setAdding] = useState<PlanStatus | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [over, setOver] = useState<PlanStatus | null>(null);
+  // The view and its scale are this device's own choice.
+  const [view, setView] = useState<"tableau" | "timeline">(() =>
+    readPref("plannerView") === "timeline" ? "timeline" : "tableau",
+  );
+  const [zoom, setZoom] = useState<"sem" | "mois">(() =>
+    readPref("plannerZoom") === "sem" ? "sem" : "mois",
+  );
 
   if (!project) {
     return (
@@ -93,7 +102,57 @@ export function Planner({
         <h1>
           Planner <span className="pl-chip">{project.name}</span>
         </h1>
-        <button className="btn pri" onClick={() => setAdding("todo")}>
+        {view === "timeline" && (
+          <div className="pl-seg pl-zoom" role="group" aria-label="Échelle">
+            {(
+              [
+                ["sem", "Semaines"],
+                ["mois", "Mois"],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                className={zoom === key ? "on" : ""}
+                aria-pressed={zoom === key}
+                onClick={() => {
+                  setZoom(key);
+                  writePref("plannerZoom", key);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="pl-seg" role="tablist" aria-label="Vue">
+          {(
+            [
+              ["tableau", "Tableau"],
+              ["timeline", "Timeline"],
+            ] as const
+          ).map(([key, label]) => (
+            <button
+              key={key}
+              role="tab"
+              aria-selected={view === key}
+              className={view === key ? "on" : ""}
+              onClick={() => {
+                setView(key);
+                writePref("plannerView", key);
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <button
+          className="btn pri"
+          onClick={() => {
+            // A card is written on the board, where its column is chosen.
+            setView("tableau");
+            setAdding("todo");
+          }}
+        >
           Ajouter une tâche
         </button>
       </div>
@@ -126,7 +185,16 @@ export function Planner({
           </button>
         ))}
       </div>
-      <div className="pl-board">
+      {view === "timeline" && (
+        <PlanTimeline
+          cards={shown}
+          threads={threads}
+          agents={agents}
+          zoom={zoom}
+          onOpen={setOpenId}
+        />
+      )}
+      <div className="pl-board" hidden={view !== "tableau"}>
         {PLAN_COLUMNS.map((column) => {
           const list = shown.filter((c) => c.status === column.status);
           return (
@@ -419,6 +487,17 @@ function Detail({
               </small>
             )}
           </div>
+          <label className="field">
+            Début prévu
+            <input
+              type="date"
+              value={dueDay(card.start)}
+              onChange={(e) => {
+                const start = dayToDue(e.target.value);
+                if (start !== null || e.target.value === "") void update({ start });
+              }}
+            />
+          </label>
           <label className="field">
             Échéance
             <input

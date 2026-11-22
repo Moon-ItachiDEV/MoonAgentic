@@ -163,6 +163,28 @@ describe("planner", () => {
     expect(plan.update(cards[1]!.id, { status: "report" }).status).toBe("report");
   });
 
+  it("writes down when a card's work really began and ended", () => {
+    const { plan } = planner();
+    const card = plan.add({ projectId: "p", title: "Un", start: 5, due: 9 });
+    expect(card).toMatchObject({ start: 5, due: 9 });
+    expect(card.startedAt ?? card.doneAt).toBeUndefined();
+    const doing = plan.update(card.id, { status: "doing" });
+    expect(doing.startedAt).toBeGreaterThan(0);
+    expect(doing.doneAt).toBeUndefined();
+    const live = plan.update(card.id, { status: "live" });
+    expect(live.startedAt).toBe(doing.startedAt);
+    expect(live.doneAt).toBeGreaterThanOrEqual(doing.startedAt!);
+    // Taken up again, it is no longer done; back to « À faire », it never began.
+    expect(plan.update(card.id, { status: "test" })).toMatchObject({ startedAt: doing.startedAt });
+    expect(plan.update(card.id, { status: "test" }).doneAt).toBeUndefined();
+    const todo = plan.update(card.id, { status: "todo", start: null });
+    expect(todo.startedAt ?? todo.start).toBeUndefined();
+    expect(todo.due).toBe(9);
+    // A team's card is stamped by its piece's real state.
+    plan.syncTeam(thread("lead", { team: team("coding", [piece("A", "running")]) }));
+    expect(plan.list().find((c) => c.title === "A")!.startedAt).toBeGreaterThan(0);
+  });
+
   it("drops a project's cards with the project", () => {
     const { plan, store } = planner();
     plan.add({ projectId: "p", title: "Un" });
