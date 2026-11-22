@@ -306,9 +306,8 @@ export class AgentSession {
     const child = spawn(plan.command, plan.args, {
       cwd,
       env: process.env,
-      // On Windows a plain pipe is synchronous: a Python agent (Hermes) that reads it in a thread
-      // and starts git, which inherits it, hangs git for good. Overlapped is a plain pipe elsewhere.
-      stdio: ["overlapped", "pipe", "pipe"],
+      // Overlapped only where asked (see AgentLaunch); it is a plain pipe off Windows anyway.
+      stdio: [launch.overlappedStdin ? "overlapped" : "pipe", "pipe", "pipe"],
       // Its own process group on Unix, so stopping it also stops what it started.
       detached: process.platform !== "win32",
       windowsHide: true,
