@@ -74,7 +74,6 @@ export function Sidebar(props: {
 }) {
   const { state } = props;
   const available = state.agents.filter((a) => a.available).length;
-  const [showArchived, setShowArchived] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(() => readPref("projectsOpen") !== "false");
   // Each project folded or not, as the user left it.
   const [folds, setFolds] = useState<Record<string, boolean>>(() => {
@@ -271,6 +270,9 @@ export function Sidebar(props: {
     const more = unfolded.has(`more:${p.id}`);
     const count = byProject.get(p.id)?.length ?? 0;
     const waiting = waitingCount(live, p.id);
+    // Put away inside their project, as a folder of its own: never beside the projects.
+    const resolved = archived.filter((t) => t.projectId === p.id);
+    const resolvedOpen = unfolded.has(`resolved:${p.id}`);
     return [
       <div key={p.id} className={`thr-row proj${open ? " open" : ""}`}>
         <button
@@ -322,7 +324,7 @@ export function Sidebar(props: {
       open && (
         <div key={`${p.id}:items`} className="proj-items">
           {[
-            ...(all.length === 0
+            ...(all.length === 0 && resolved.length === 0
               ? [
                   <div key={`${p.id}:empty`} className="empty-note">
                     Aucune discussion.
@@ -340,6 +342,23 @@ export function Sidebar(props: {
                   >
                     {more ? "Voir moins" : `Voir plus (${foldable})`}
                   </button>,
+                ]
+              : []),
+            ...(resolved.length > 0
+              ? [
+                  <button
+                    key={`${p.id}:resolved`}
+                    className={`more resolved${resolvedOpen ? " open" : ""}`}
+                    aria-expanded={resolvedOpen}
+                    onClick={() => toggle(`resolved:${p.id}`)}
+                  >
+                    <IconArchive size={13} />
+                    Résolus ({resolved.length})
+                    <IconChevron size={11} />
+                  </button>,
+                  ...(resolvedOpen
+                    ? resolved.map((t) => row(t, { key: `resolved:${t.id}`, child: true }))
+                    : []),
                 ]
               : []),
           ]}
@@ -454,17 +473,6 @@ export function Sidebar(props: {
         {pinned.flatMap((t) => tree(t, "pin:"))}
         {recent.length > 0 && <div className="sec-h">Récents</div>}
         {recent.flatMap((t) => tree(t, "recent:"))}
-        {archived.length > 0 && (
-          <button
-            className="sec-h arch-toggle"
-            aria-expanded={showArchived}
-            onClick={() => setShowArchived(!showArchived)}
-          >
-            <IconArchive size={13} />
-            Résolus ({archived.length})
-          </button>
-        )}
-        {showArchived && archived.map((t) => row(t, { key: t.id }))}
       </div>
       {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}
       <div className="side-foot">

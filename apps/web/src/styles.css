@@ -2043,20 +2043,6 @@ kbd {
     visibility: hidden;
   }
 }
-.sec-h.arch-toggle {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-  width: 100%;
-  border: none;
-  background: none;
-  cursor: pointer;
-  text-align: left;
-}
-.sec-h.arch-toggle:hover {
-  color: var(--fg);
-}
 .archived-bar {
   width: min(720px, 100%);
   display: flex;

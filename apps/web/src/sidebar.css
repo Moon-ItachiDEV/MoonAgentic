@@ -283,3 +283,17 @@
     transform: translateY(-100%);
   }
 }
+
+/* A project's resolved threads: a folder of its own, at the end of the project. */
+.proj-items .more.resolved {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.proj-items .more.resolved svg:last-child {
+  margin-left: auto;
+  transition: transform 0.15s;
+}
+.proj-items .more.resolved.open svg:last-child {
+  transform: rotate(90deg);
+}
