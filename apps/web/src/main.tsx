@@ -7,6 +7,7 @@ import "./planner.css";
 import "./review.css";
 import "./settings.css";
 import "./sidebar.css";
+import "./github.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ReviewFile } from "@moonagentic/protocol";
 import { findOnPath } from "./agents.ts";
+import { ghCredentialArgs } from "./github.ts";
 
 const MAX_PATCH_LINES = 2000;
 /** The review lists at most this many files; the rest are only counted. */
@@ -117,7 +118,7 @@ async function isWorktreeRoot(dir: string): Promise<boolean> {
  * (`C:\Users\RUNNER~1\…`, as the temp folder often is) where git gives the long one: only
  * the system's own `realpath` turns one into the other, and Windows paths ignore case.
  */
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   const [x, y] = [realpathSync.native(a), realpathSync.native(b)];
   return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
@@ -499,7 +500,13 @@ export async function ship(
   const remotes = (await git(dir, ["remote"])).split("\n").filter(Boolean);
   const remote = remotes.includes("origin") ? "origin" : remotes[0];
   if (!remote) throw new Error("Ce dépôt n'a pas de remote où pousser la branche.");
-  await git(dir, ["push", "-u", remote, options.branch], undefined, NETWORK_TIMEOUT_MS);
+  // Without a credential helper of its own, git signs in through the user's `gh`.
+  await git(
+    dir,
+    [...ghCredentialArgs(), "push", "-u", remote, options.branch],
+    undefined,
+    NETWORK_TIMEOUT_MS,
+  );
   const repo = githubRepo(await git(dir, ["remote", "get-url", remote]));
   const result: ShipResult = { ...(commit ? { commit } : {}), prOpened: false };
   if (!options.pr || !repo) return result;

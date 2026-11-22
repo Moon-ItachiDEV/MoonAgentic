@@ -1,6 +1,7 @@
-import type { AgentInfo, McpServerInfo } from "@moonagentic/protocol";
-import { useEffect, useState } from "react";
+import type { AgentInfo, GithubStatus, McpServerInfo } from "@moonagentic/protocol";
+import { useCallback, useEffect, useState } from "react";
 import { connection, newId } from "../connection.ts";
+import { githubStatusText } from "../github.ts";
 import { splitCommandLine } from "../mcp-input.ts";
 import { agentStatus } from "../status.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
@@ -57,6 +58,49 @@ function AgentRow(props: { agent: AgentInfo; checking: boolean; onCheck: () => v
             {confirming ? "Confirmer ?" : "Retirer"}
           </button>
         )}
+      </div>
+    </li>
+  );
+}
+
+/** GitHub as the user's own `git` and `gh` see it on the machine running MoonAgentic. */
+function GithubRow() {
+  const [status, setStatus] = useState<GithubStatus | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const check = useCallback(() => {
+    setChecking(true);
+    setError(null);
+    connection
+      .ask({ type: "github.status", requestId: newId() })
+      .then((reply) => setStatus(reply.status))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setChecking(false));
+  }, []);
+  useEffect(check, [check]);
+  const text = status && githubStatusText(status);
+  return (
+    <li className="cx-row">
+      <span className="ag gh" aria-hidden>
+        GH
+      </span>
+      <div className="cx-tx">
+        <div className="cx-top">
+          <b>GitHub</b>
+          <span className={`st ${text?.tone ?? ""}`}>
+            {checking ? "Vérification…" : (text?.label ?? "Inconnu")}
+          </span>
+        </div>
+        {text && <small>{text.detail}</small>}
+        {status?.error && !status.login && status.gh && (
+          <small className="cx-err">{status.error}</small>
+        )}
+        {error && <small className="cx-err">{error}</small>}
+      </div>
+      <div className="cx-acts">
+        <button className="btn sm" disabled={checking} onClick={check}>
+          Vérifier
+        </button>
       </div>
     </li>
   );
@@ -124,10 +168,11 @@ export function ConnectionsDialog(props: {
       <div className="dialog connections" role="dialog" aria-modal aria-labelledby="cx-title">
         <h2 id="cx-title">Connexions</h2>
         <p>
-          Les agents passent par leur propre outil et ta propre connexion. MoonAgentic ne voit ni ne
-          garde aucun mot de passe ni jeton.
+          Les agents et GitHub passent par leur propre outil et ta propre connexion. MoonAgentic ne
+          voit ni ne garde aucun mot de passe ni jeton.
         </p>
         <ul className="cx-list">
+          <GithubRow />
           {agents.map((a) => (
             <AgentRow key={a.id} agent={a} checking={isChecking(a)} onCheck={() => check(a)} />
           ))}
