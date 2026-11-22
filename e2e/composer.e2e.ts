@@ -258,6 +258,7 @@ describe("composer", () => {
     expect(await page.getByRole("textbox", { name: "Nom" }).getAttribute("placeholder")).toBe(
       "site",
     );
+    await expect.poll(() => page.getByRole("button", { name: "Cloner" }).isDisabled()).toBe(false);
     await page.close();
   });
   it("archives a thread, brings it back, deletes it, then removes the project", async () => {
