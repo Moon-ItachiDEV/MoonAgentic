@@ -1,0 +1,158 @@
+/* The phone, as in the mockup (and the cards on a computer whose side bar is folded): the live conversations above the composer on the home page,
+   a back arrow in a conversation. Values measured on the mockup at 390 px. */
+
+/* With the side bar in view, its list already shows them: only a folded bar brings them. */
+@media (min-width: 861px) {
+  .app:not(.side-off) .qcards {
+    display: none;
+  }
+}
+.qcards {
+  width: min(600px, 100%);
+  display: grid;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.qcard {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  text-align: left;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--fg);
+}
+.qcard:hover {
+  border-color: var(--line2);
+}
+.qcard > svg {
+  color: var(--faint);
+  flex: none;
+}
+.qcard .stk {
+  display: flex;
+  flex: none;
+}
+.qcard .stk .ag {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  font-size: 9px;
+  margin-left: -5px;
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.qcard .stk .ag:first-child {
+  margin-left: 0;
+}
+.qc-tx {
+  min-width: 0;
+  flex: 1;
+}
+.qc-t {
+  display: block;
+  font-size: 13.5px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qc-s {
+  display: block;
+  font-size: 12px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qc-s.wait {
+  color: var(--warn);
+}
+.qc-bars {
+  display: flex;
+  gap: 3px;
+  margin-top: 6px;
+}
+.qc-bars i {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line);
+}
+.qc-bars i.done {
+  background: var(--ok);
+}
+/* Under way: how far it is, nobody knows; it is only marked as started. */
+.qc-bars i.busy {
+  background: color-mix(in srgb, var(--ok) 45%, var(--line));
+}
+
+/* In a conversation on a phone, the arrow goes back home, as in the mockup. */
+.back-home {
+  display: none;
+}
+@media (max-width: 860px) {
+  .in-thread .top .menu-btn {
+    display: none;
+  }
+  .in-thread .top .back-home {
+    display: grid;
+  }
+}
+
+/* The tabs at the bottom of the phone's home page: Nouveau, Projets, Code. */
+.tabbar {
+  display: none;
+}
+@media (max-width: 860px) {
+  .home-route .dock:has(.tabbar) {
+    padding-bottom: max(6px, env(safe-area-inset-bottom));
+  }
+  .tabbar {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    width: 100%;
+    padding: 0 8px;
+    margin: 6px 0 -8px;
+  }
+  .tabbar button {
+    position: relative;
+    justify-self: center;
+    height: 48px;
+    width: 64px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border-radius: 12px;
+    color: var(--muted);
+    transition: transform 0.15s var(--ease);
+  }
+  .tabbar button:active:not(:disabled) {
+    transform: scale(0.9);
+  }
+  .tabbar button.on {
+    color: var(--fg);
+  }
+  .tabbar button:disabled {
+    opacity: 0.4;
+  }
+  .tabbar .tl {
+    font-size: 10.5px;
+    line-height: 1;
+    font-weight: 500;
+  }
+  .tabbar .bdg {
+    position: absolute;
+    top: 7px;
+    left: calc(50% + 4px);
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+  }
+}

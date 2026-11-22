@@ -120,6 +120,31 @@ export const IconGear = ({ size = 16 }: P) => (
     <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
   </svg>
 );
+/** A speech bubble: the phone's « Nouveau » tab. */
+export const IconBubble = ({ size = 20 }: P) => (
+  <svg {...fine(size)}>
+    <path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h7A1.5 1.5 0 0 1 13 4.5v5a1.5 1.5 0 0 1-1.5 1.5H7l-3 2.5V11h.5A1.5 1.5 0 0 1 3 9.5Z" />
+  </svg>
+);
+/** Three stacked layers: the phone's « Projets » tab. */
+export const IconStack = ({ size = 20 }: P) => (
+  <svg {...fine(size)}>
+    <path d="M8 2.5 13.5 5 8 7.5 2.5 5Z" />
+    <path d="M2.5 8 8 10.5 13.5 8M2.5 11 8 13.5l5.5-2.5" />
+  </svg>
+);
+/** Two angle brackets, on the mockup's grid: the phone's « Code » tab. */
+export const IconBrackets = ({ size = 20 }: P) => (
+  <svg {...fine(size)}>
+    <path d="m5.5 4.5-3.5 3.5 3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />
+  </svg>
+);
+/** An arrow to the left: back home, in a conversation on a phone. */
+export const IconArrowLeft = ({ size = 18 }: P) => (
+  <svg {...base(size)}>
+    <path d="M19 12H5M11 18l-6-6 6-6" />
+  </svg>
+);
 export const IconBack = ({ size = 14 }: P) => (
   <svg {...base(size)} strokeWidth={2}>
     <path d="m15 6-6 6 6 6" />

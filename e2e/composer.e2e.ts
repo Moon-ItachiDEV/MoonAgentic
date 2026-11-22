@@ -318,8 +318,10 @@ describe("composer", () => {
     await rowMenu.getByRole("menuitem", { name: "Rouvrir" }).click();
     await expect.poll(() => composer(page).count()).toBe(1);
     // On a phone there is no hover: the button is always there, and the menu is a sheet.
+    // In a conversation, the arrow goes back home, where the « Projets » tab opens the list.
     await page.setViewportSize({ width: 390, height: 780 });
-    await page.getByRole("button", { name: "Menu", exact: true }).click();
+    await page.getByRole("button", { name: "Retour", exact: true }).click();
+    await page.locator(".tabbar").getByRole("button", { name: "Projets" }).click();
     await more.click();
     // The sheet slides up: wait until it sits whole on the screen.
     await expect
