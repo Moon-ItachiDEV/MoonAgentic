@@ -130,7 +130,14 @@ export function TeamStrip({
           : phase === "testing"
             ? task.testThreadId
             : task.threadId;
-      return { lane: i, who: task.title, sub: label(byId(task.threadId)), open: live, live };
+      // The agent shown is the one at work: the reviewer or tester during their phases.
+      return {
+        lane: i,
+        who: task.title,
+        sub: label(byId(live ?? task.threadId)),
+        open: live,
+        live,
+      };
     }),
     ...(team.mergeThreadId || team.phase === "merging"
       ? [
@@ -219,7 +226,12 @@ export function TeamStrip({
                   tabIndex={0}
                   aria-label={`${l.who} : ${s.asks ? "attend ton accord" : LABEL[s.phase ?? "idle"] || "au repos"}`}
                   onClick={() => l.open && onOpenThread(l.open)}
-                  onKeyDown={(e) => e.key === "Enter" && l.open && onOpenThread(l.open)}
+                  onKeyDown={(e) => {
+                    if ((e.key === "Enter" || e.key === " ") && l.open) {
+                      e.preventDefault();
+                      onOpenThread(l.open);
+                    }
+                  }}
                 >
                   <span className="tl-who">
                     <b>{l.who}</b>

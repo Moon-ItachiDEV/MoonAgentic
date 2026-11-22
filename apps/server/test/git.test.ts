@@ -374,7 +374,11 @@ describe("git helpers", () => {
     const dir = path.join(root, "worktrees", "kept");
     await ensureWorktree(repo, dir, "kept", base);
     writeFileSync(path.join(dir, "brouillon.txt"), "pas encore commité\n");
-    git(dir, "update-ref", "MERGE_HEAD", base);
+    // A merge under way, as git leaves it (newer git refuses update-ref on MERGE_HEAD).
+    writeFileSync(
+      path.resolve(dir, git(dir, "rev-parse", "--git-path", "MERGE_HEAD")),
+      `${base}\n`,
+    );
     await ensureWorktree(repo, dir, "kept", base);
     expect(existsSync(path.join(dir, "brouillon.txt"))).toBe(true);
     expect(git(dir, "rev-parse", "MERGE_HEAD")).toBe(base);

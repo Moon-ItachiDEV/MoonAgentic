@@ -99,7 +99,8 @@ export function ThreadView({
       }}
     >
       <div className="feed">
-        {strip && (
+        {/* A team started before the timeline was recorded has nothing to draw. */}
+        {!!strip?.team.timeline?.length && (
           <TeamStrip
             key={strip.lead.id}
             lead={strip.lead}
