@@ -48,7 +48,7 @@ describe("an agent's output", () => {
 });
 
 describe("an agent that asks to sign in on its output", () => {
-  const start = (login?: string) => {
+  const start = (login?: string, output = "log") => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-session-"));
     cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5 }));
     const agent = path.join(dir, "agent.mjs");
@@ -56,7 +56,9 @@ describe("an agent that asks to sign in on its output", () => {
     writeFileSync(
       agent,
       `process.stdin.once("data", () => {
-        console.log("Open the following link to authenticate the ACP server: https://example.test/o?x=1");
+        console.${output}("Avant");
+        console.${output}("Open the following link to authenticate the ACP server:");
+        console.${output}("https://example.test/o?x=1");
       });
       setInterval(() => {}, 1000);`,
     );
@@ -77,6 +79,20 @@ describe("an agent that asks to sign in on its output", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("Connecte-toi d'abord avec ton compte : lance « agy ».");
     expect(needsSignIn(error)).toBe(true);
+  });
+
+  it("does the same when the agent writes it on its error output", async () => {
+    const error = await start("lance « agy »", "error").catch((e: unknown) => e);
+    expect((error as Error).message).toBe("Connecte-toi d'abord avec ton compte : lance « agy ».");
+    expect(needsSignIn(error)).toBe(true);
+  });
+
+  it("never keeps the link, on either output", async () => {
+    for (const output of ["log", "error"]) {
+      const error = await start(undefined, output).catch((e: unknown) => e);
+      expect((error as Error).message).toContain("Avant");
+      expect((error as Error).message).not.toContain("example.test");
+    }
   });
 
   it("says so for an agent whose sign-in command is not known", async () => {

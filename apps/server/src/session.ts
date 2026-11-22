@@ -314,11 +314,43 @@ export class AgentSession {
     });
     // Writes racing the agent's exit fail with EPIPE; the exit handler reports the real cause.
     child.stdin.on("error", () => undefined);
+    let askSignIn = () => undefined as void;
+    const signInAsked = new Promise<never>((_, reject) => {
+      askSignIn = () =>
+        reject(
+          Object.assign(new Error("L'agent demande d'abord une connexion avec son propre outil."), {
+            code: AUTH_REQUIRED,
+          }),
+        );
+    });
+    signInAsked.catch(() => undefined);
     let stderr = "";
+    let signInSeen = false;
+    /** A line of plain text from the agent, on either output: kept for its error report. */
+    const textLine = (line: string) => {
+      // The sign-in link is neither kept nor shown, wherever the agent writes it and even
+      // on a line of its own after the sentence: the user signs in with the agent's own tool.
+      if (signInSeen) return;
+      if (SIGN_IN_LINE.test(line)) {
+        signInSeen = true;
+        askSignIn();
+      } else {
+        stderr = `${stderr}${line}\n`.slice(-STDERR_TAIL);
+      }
+    };
+    // Whole lines only, so a link cut in two by a read is never kept by halves.
+    let stderrRest = "";
+    const flushStderr = () => {
+      if (stderrRest.trim()) textLine(stderrRest);
+      stderrRest = "";
+    };
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      stderr = (stderr + chunk).slice(-STDERR_TAIL);
+      const lines = (stderrRest + chunk).split("\n");
+      stderrRest = (lines.pop() ?? "").slice(-STDERR_TAIL);
+      for (const line of lines) textLine(line);
     });
+    child.stderr.on("end", flushStderr);
     const spawned = new Promise<void>((resolve, reject) => {
       child.once("spawn", resolve);
       child.once("error", reject);
@@ -362,23 +394,8 @@ export class AgentSession {
       );
 
     await spawned;
-    let askSignIn = () => undefined as void;
-    const signInAsked = new Promise<never>((_, reject) => {
-      askSignIn = () =>
-        reject(
-          Object.assign(new Error("L'agent demande d'abord une connexion avec son propre outil."), {
-            code: AUTH_REQUIRED,
-          }),
-        );
-    });
-    signInAsked.catch(() => undefined);
     const messages = (Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>).pipeThrough(
-      jsonLines((line) => {
-        // The sign-in link itself is neither kept nor shown: the user signs in with the
-        // agent's own tool.
-        if (SIGN_IN_LINE.test(line)) askSignIn();
-        else stderr = `${stderr}${line}\n`.slice(-STDERR_TAIL);
-      }),
+      jsonLines(textLine),
     );
     const connection = app.connect(
       acp.ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>, messages),
@@ -388,6 +405,7 @@ export class AgentSession {
     const exit = new Promise<void>((resolve) => {
       child.once("exit", (code) => {
         exited = true;
+        flushStderr();
         connection.close();
         const failed = code !== 0 && !stopping;
         handlers.onExit(
