@@ -7,12 +7,15 @@ import { findOnPath } from "./agents.ts";
 
 const MAX_PATCH_LINES = 2000;
 
+/** No one can answer a password prompt from here, so git and gh fail instead of waiting. */
+const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GH_PROMPT_DISABLED: "1" };
+
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
       args,
-      { cwd, env: { ...process.env, ...env }, maxBuffer: 256 * 1024 * 1024 },
+      { cwd, env: { ...process.env, ...NO_PROMPT, ...env }, maxBuffer: 256 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) reject(new Error(stderr.trim() || error.message, { cause: error }));
         else resolve(stdout);
@@ -21,14 +24,17 @@ function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<stri
   });
 }
 
-/** True when the folder sits inside a git work tree (and git is installed). */
+/**
+ * True when the folder sits inside a git work tree with at least one commit, which a
+ * thread's branch starts from (and git is installed).
+ */
 export function isGitRepo(dir: string): boolean {
   try {
-    const out = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    execFileSync("git", ["rev-parse", "--verify", "--quiet", "HEAD"], {
       cwd: dir,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "ignore", "ignore"],
     });
-    return out.toString().trim() === "true";
+    return true;
   } catch {
     return false;
   }
@@ -72,7 +78,12 @@ export async function reviewChanges(dir: string, base: string): Promise<ReviewFi
     const env = { GIT_INDEX_FILE: index };
     await git(dir, ["add", "-A"], env);
     const numstat = await git(dir, ["diff", "--cached", "--numstat", "-z", "-M", base], env);
-    const patch = await git(dir, ["diff", "--cached", "--no-color", "-M", base], env);
+    // An external diff tool from the user's config would replace the unified diff.
+    const patch = await git(
+      dir,
+      ["diff", "--cached", "--no-color", "--no-ext-diff", "-M", base],
+      env,
+    );
     return parseDiff(numstat, patch);
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -142,6 +153,14 @@ export async function ship(
   dir: string,
   options: { branch: string; baseBranch?: string; message: string; pr: boolean; title: string },
 ): Promise<ShipResult> {
+  const current = (await git(dir, ["branch", "--show-current"])).trim();
+  if (current !== options.branch) {
+    throw new Error(
+      `La copie de travail n'est plus sur la branche ${options.branch}` +
+        (current ? ` mais sur ${current}.` : " (HEAD détachée).") +
+        " Reviens sur la branche du fil avant d'envoyer.",
+    );
+  }
   let commit: string | undefined;
   if ((await git(dir, ["status", "--porcelain"])).trim()) {
     await git(dir, ["add", "-A"]);
@@ -177,12 +196,13 @@ async function openPullRequest(
 ): Promise<string | undefined> {
   const run = (args: string[]) =>
     new Promise<string>((resolve, reject) => {
-      execFile(gh, args, { cwd: dir }, (error, stdout) =>
+      execFile(gh, args, { cwd: dir, env: { ...process.env, ...NO_PROMPT } }, (error, stdout) =>
         error ? reject(error) : resolve(stdout),
       );
     });
   const lastUrl = (out: string) => out.match(/https:\/\/\S+/g)?.at(-1);
   try {
+    // `gh pr view` also finds a branch's closed or merged pull requests.
     const existing = await run([
       "pr",
       "view",
@@ -190,9 +210,9 @@ async function openPullRequest(
       "--repo",
       repo,
       "--json",
-      "url",
+      "url,state",
       "-q",
-      ".url",
+      'select(.state == "OPEN") | .url',
     ]);
     if (lastUrl(existing)) return lastUrl(existing);
   } catch {

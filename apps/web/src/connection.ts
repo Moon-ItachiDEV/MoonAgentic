@@ -12,6 +12,12 @@ import type {
 
 export type ConnectionStatus = "connecting" | "open" | "closed" | "unauthorized";
 
+/** What changed on a thread's branch, or why it could not be read. */
+export interface Review {
+  files: ReviewFile[];
+  error?: string;
+}
+
 export interface State {
   status: ConnectionStatus;
   /** False until the first snapshot arrives, so the UI does not flash empty lists. */
@@ -23,7 +29,7 @@ export interface State {
   threads: Thread[];
   items: Record<string, Item[]>;
   /** The last review fetched for each thread with its own branch. */
-  reviews: Record<string, ReviewFile[]>;
+  reviews: Record<string, Review>;
   notice: string | null;
 }
 
@@ -61,7 +67,16 @@ export function reduce(state: State, message: ServerMessage): State {
     case "mcpServers":
       return { ...state, mcpServers: message.servers };
     case "review":
-      return { ...state, reviews: { ...state.reviews, [message.threadId]: message.files } };
+      return {
+        ...state,
+        reviews: {
+          ...state.reviews,
+          [message.threadId]: {
+            files: message.files,
+            ...(message.error ? { error: message.error } : {}),
+          },
+        },
+      };
     case "project":
       return { ...state, projects: upsert(state.projects, message.project) };
     case "thread":

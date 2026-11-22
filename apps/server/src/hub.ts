@@ -66,6 +66,8 @@ export class Hub {
 
   /** Where threads with their own branch get their worktree. */
   private readonly worktreesDir: string;
+  /** Threads whose branch is being committed and pushed, when no turn may start. */
+  private readonly shipping = new Set<string>();
   /** Whether each project's folder is in a git repository, checked once. */
   private readonly gitProjects = new Map<string, boolean>();
 
@@ -145,11 +147,18 @@ export class Hub {
         this.updateMcpServers((servers) => servers.filter((s) => s.id !== message.id));
         return;
       case "workspace.review":
-        client.send({
-          type: "review",
-          threadId: message.threadId,
-          files: await this.review(message.threadId),
-        });
+        // The panel waits for this reply, so a failure is sent to it rather than thrown.
+        client.send(
+          await this.review(message.threadId).then(
+            (files) => ({ type: "review", threadId: message.threadId, files }),
+            (error: unknown) => ({
+              type: "review",
+              threadId: message.threadId,
+              files: [],
+              error: describe(error),
+            }),
+          ),
+        );
         return;
       case "workspace.ship": {
         const result = await this.ship(message.threadId, message.message, message.pr);
@@ -202,7 +211,8 @@ export class Hub {
     // The worktree itself is made when the agent first starts, so creating stays instant.
     const workspace =
       input.isolated && this.withGit(project).git
-        ? { branch: branchName(title, id), path: path.join(this.worktreesDir, id) }
+        ? // A short folder name keeps deep projects under Windows' path length limit.
+          { branch: branchName(title, id), path: path.join(this.worktreesDir, id.slice(0, 8)) }
         : undefined;
     const thread: Thread = {
       id,
@@ -225,6 +235,7 @@ export class Hub {
   send(threadId: string, text: string): void {
     const thread = this.requireThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
+    if (this.shipping.has(threadId)) throw new Error("Attends la fin de l'envoi de la branche.");
     this.putItem(threadId, { id: `user:${randomUUID()}`, kind: "user", text, at: Date.now() });
     this.updateThread(threadId, { status: "running", error: null });
     this.turnIds.set(threadId, randomUUID());
@@ -284,19 +295,26 @@ export class Hub {
     if (!workspace?.base)
       throw new Error("Ce fil travaille dans le dossier du projet, sans branche à lui.");
     if (this.turns.has(threadId)) throw new Error("Attends la fin de la réponse de l'agent.");
-    const result = await ship(workspace.path, {
-      branch: workspace.branch,
-      message,
-      pr,
-      title: thread.title,
-      ...(workspace.baseBranch ? { baseBranch: workspace.baseBranch } : {}),
-    });
-    if (result.url) {
-      this.updateThread(threadId, {
-        workspace: { ...workspace, prUrl: result.url, prOpened: result.prOpened },
+    if (this.shipping.has(threadId)) throw new Error("Cette branche est déjà en cours d'envoi.");
+    this.shipping.add(threadId);
+    try {
+      const result = await ship(workspace.path, {
+        branch: workspace.branch,
+        message,
+        pr,
+        title: thread.title,
+        ...(workspace.baseBranch ? { baseBranch: workspace.baseBranch } : {}),
       });
+      // A link to open a pull request never replaces one that is already open.
+      if (result.url && !(workspace.prOpened && !result.prOpened)) {
+        this.updateThread(threadId, {
+          workspace: { ...workspace, prUrl: result.url, prOpened: result.prOpened },
+        });
+      }
+      return result;
+    } finally {
+      this.shipping.delete(threadId);
     }
-    return result;
   }
 
   /** Registers an MCP server for every agent session started from now on. */

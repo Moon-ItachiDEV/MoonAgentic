@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import type { ServerMessage } from "@moonagentic/protocol";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { branchName, githubRepo, parseDiff } from "../src/git.ts";
 import { Hub } from "../src/hub.ts";
@@ -49,6 +50,8 @@ function repository() {
 describe("thread workspaces", () => {
   it("gives a thread its own branch, reviews its changes, then commits and pushes them", async () => {
     const { repo, remote, store, hub, projectId } = repository();
+    // A diff tool from the user's own config must not replace the unified diff.
+    git(repo, "config", "diff.external", "echo external");
     expect(hub.snapshot().projects[0]?.git).toBe(true);
     const threadId = hub.createThread({
       projectId,
@@ -87,6 +90,48 @@ describe("thread workspaces", () => {
     expect(git(remote, "log", "-1", "--format=%s", workspace!.branch)).toBe("Corrige le README");
   });
 
+  it("ships one branch at a time, never during a turn, and only from the thread's branch", async () => {
+    const { hub, store, projectId } = repository();
+    const client = {
+      messages: [] as ServerMessage[],
+      send(m: ServerMessage) {
+        this.messages.push(m);
+      },
+    };
+    hub.connect(client);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      isolated: true,
+      text: "Un",
+    });
+    // The demo agent waits for this answer, so its turn is still running.
+    await vi.waitUntil(() => store.getThread(threadId)?.status === "waiting");
+    await expect(hub.ship(threadId, "x", false)).rejects.toThrow("Attends la fin");
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+
+    const workspace = store.getThread(threadId)!.workspace!;
+    writeFileSync(path.join(workspace.path, "a.txt"), "a\n");
+    const first = hub.ship(threadId, "Ajoute a", false);
+    expect(() => hub.send(threadId, "Deux")).toThrow("envoi de la branche");
+    await expect(hub.ship(threadId, "x", false)).rejects.toThrow("déjà en cours");
+    await first;
+
+    git(workspace.path, "checkout", "-q", "-b", "autre");
+    await expect(hub.ship(threadId, "x", false)).rejects.toThrow("plus sur la branche");
+
+    // A review that cannot be read still answers the panel waiting for it.
+    rmSync(workspace.path, { recursive: true, force: true });
+    await hub.handle(client, { type: "workspace.review", threadId });
+    expect(client.messages.at(-1)).toMatchObject({
+      type: "review",
+      files: [],
+      error: expect.any(String),
+    });
+  });
+
   it("works in the project folder when asked, or when the folder is not in git", async () => {
     const { root, hub, store, projectId } = repository();
     const direct = hub.createThread({
@@ -110,6 +155,12 @@ describe("thread workspaces", () => {
 
     expect(store.getThread(direct)?.workspace).toBeUndefined();
     expect(store.getThread(notGit)?.workspace).toBeUndefined();
+    // A repository without a commit has nothing for a branch to start from.
+    const empty = path.join(root, "empty");
+    mkdirSync(empty);
+    git(empty, "init", "-q");
+    hub.createProject("empty", empty);
+    expect(hub.snapshot().projects.find((p) => p.name === "empty")?.git).toBeUndefined();
     await expect(hub.ship(direct, "x", false)).rejects.toThrow("sans branche");
     expect(existsSync(path.join(root, "worktrees"))).toBe(false);
   });

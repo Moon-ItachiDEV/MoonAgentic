@@ -128,8 +128,9 @@ export function App() {
       )}
       {reviewOpen && thread?.workspace && (
         <ReviewPanel
+          key={thread.id}
           thread={thread}
-          files={state.reviews[thread.id]}
+          review={state.reviews[thread.id]}
           onClose={() => setReviewOpen(false)}
         />
       )}

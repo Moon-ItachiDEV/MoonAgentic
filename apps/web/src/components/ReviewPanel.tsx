@@ -1,6 +1,6 @@
 import type { ReviewFile, Thread } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
-import { connection } from "../connection.ts";
+import { connection, type Review } from "../connection.ts";
 import { IconBranch } from "./icons.tsx";
 
 const STATUS: Record<ReviewFile["status"], string> = {
@@ -11,8 +11,10 @@ const STATUS: Record<ReviewFile["status"], string> = {
 };
 
 function FileDiff({ file }: { file: ReviewFile }) {
+  // Long diffs are drawn only once opened, so a big change set keeps the panel light.
+  const [open, setOpen] = useState(false);
   return (
-    <details className="rv-file">
+    <details className="rv-file" onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>
         <span className="rv-path">{file.path}</span>
         <span className="rv-st">{STATUS[file.status]}</span>
@@ -25,7 +27,7 @@ function FileDiff({ file }: { file: ReviewFile }) {
           </span>
         )}
       </summary>
-      {file.patch && (
+      {open && file.patch && (
         <div className="diff-b">
           {file.patch.split("\n").map((line, i) => (
             <div
@@ -53,13 +55,14 @@ function FileDiff({ file }: { file: ReviewFile }) {
 /** What the thread's agent changed on its branch, and the way to commit, push and open a PR. */
 export function ReviewPanel({
   thread,
-  files,
+  review,
   onClose,
 }: {
   thread: Thread;
-  files: ReviewFile[] | undefined;
+  review: Review | undefined;
   onClose: () => void;
 }) {
+  const files = review?.files;
   const workspace = thread.workspace;
   const running = thread.status === "running" || thread.status === "waiting";
   const [message, setMessage] = useState(thread.title);
@@ -67,9 +70,9 @@ export function ReviewPanel({
   const [error, setError] = useState<string | null>(null);
   const [pushed, setPushed] = useState(false);
 
-  // The server holds the files; ask again whenever the agent finishes a turn.
+  // The server holds the files; ask on opening and again whenever a turn starts or ends.
   useEffect(() => {
-    if (!running) connection.send({ type: "workspace.review", threadId: thread.id });
+    connection.send({ type: "workspace.review", threadId: thread.id });
   }, [thread.id, running]);
 
   useEffect(() => {
@@ -114,6 +117,8 @@ export function ReviewPanel({
         )}
         {!workspace?.base ? (
           <p>La branche sera créée quand l'agent démarrera.</p>
+        ) : review?.error ? (
+          <p className="error">Impossible de lire les changements : {review.error}</p>
         ) : !files ? (
           <p>Je regarde ce qui a changé…</p>
         ) : files.length === 0 ? (

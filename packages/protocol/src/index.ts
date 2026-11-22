@@ -159,7 +159,7 @@ export type ServerMessage =
   | { type: "item"; threadId: string; item: Item }
   /** Streaming text appended to an existing agent or thought item. */
   | { type: "append"; threadId: string; itemId: string; text: string }
-  | { type: "review"; threadId: string; files: ReviewFile[] }
+  | { type: "review"; threadId: string; files: ReviewFile[]; error?: string }
   | {
       type: "shipped";
       requestId: string;
