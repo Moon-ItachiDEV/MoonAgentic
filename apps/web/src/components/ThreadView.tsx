@@ -1,15 +1,17 @@
 import type { AgentInfo, Item, Thread, ToolContent } from "@moonagentic/protocol";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { messageTokens } from "../commands.ts";
 import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
+import { Clamp } from "./Clamp.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TeamCard } from "./TeamCard.tsx";
 import { TeamStrip } from "./TeamStrip.tsx";
 import { withoutTeamJson } from "../team-json.ts";
+import { isTeamThread, teamFeed } from "../team-feed.ts";
 
 export function ThreadView({
   thread,
@@ -57,19 +59,29 @@ export function ThreadView({
   // A message picked in the quick search is shown once the timeline is here.
   const [focusTick, setFocusTick] = useState(0);
   useEffect(() => onFocusRequest(() => setFocusTick((n) => n + 1)), []);
+  // A message folded in a team's detail opens it first, then is shown on the next pass.
+  const [reveal, setReveal] = useState<string>();
+  const revealing = useRef<string>(undefined);
   useLayoutEffect(() => {
     if (!items) return;
-    const itemId = takeFocus(thread.id);
+    const itemId = takeFocus(thread.id) ?? revealing.current;
+    revealing.current = undefined;
     const el =
       itemId && view.current?.querySelector<HTMLElement>(`[data-item="${CSS.escape(itemId)}"]`);
-    if (!el) return;
+    if (!el) {
+      if (itemId && itemId !== reveal && items.some((i) => i.id === itemId)) {
+        revealing.current = itemId;
+        setReveal(itemId);
+      }
+      return;
+    }
     pinned.current = false;
     el.scrollIntoView({ block: "center" });
     el.classList.remove("flash");
     // Restarts the highlight when the same message is picked twice.
     void el.offsetWidth;
     el.classList.add("flash");
-  }, [items, thread.id, focusTick]);
+  }, [items, thread.id, focusTick, reveal]);
 
   // Keep following new output while the reader is at the bottom.
   useLayoutEffect(() => {
@@ -89,6 +101,24 @@ export function ThreadView({
   // Only the current turn's tools are at work: one left unfinished earlier stays still.
   const lastUser = items?.findLastIndex((i) => i.kind === "user") ?? -1;
   const working = thread.status === "running" || thread.status === "waiting";
+
+  const renderItem = (i: number, clamp?: boolean, showBy?: boolean) => {
+    const item = items![i]!;
+    return (
+      <div key={item.id} className="item" data-item={item.id}>
+        <FeedItem
+          item={item}
+          thread={thread}
+          agents={agents}
+          agent={agents.find((a) => a.id === authors[i])}
+          showBy={showBy ?? startsAgentBlock(items!, i)}
+          openQuestion={openQuestion}
+          live={working && i > lastUser}
+          clamp={clamp}
+        />
+      </div>
+    );
+  };
 
   return (
     <div
@@ -117,24 +147,37 @@ export function ThreadView({
             Sous-tâche de l'équipe « {lead.title.replace(/^Équipe : /, "")} »
           </button>
         )}
-        {items?.map((item, i) => (
-          <div key={item.id} className="item" data-item={item.id}>
-            <FeedItem
-              item={item}
-              thread={thread}
-              agents={agents}
-              agent={agents.find((a) => a.id === authors[i])}
-              showBy={startsAgentBlock(items, i)}
-              openQuestion={openQuestion}
-              live={working && i > lastUser}
-            />
-          </div>
-        ))}
+        {items &&
+          (isTeamThread(thread)
+            ? teamFeed(thread, items).map((block, b, blocks) => {
+                if (block.kind === "detail") {
+                  return (
+                    <TeamDetail
+                      key={block.key}
+                      items={items}
+                      indices={block.indices}
+                      live={working && block.indices.some((i) => i > lastUser)}
+                      revealed={!!reveal && block.indices.some((i) => items[i]?.id === reveal)}
+                      onFold={() => setReveal(undefined)}
+                      render={renderItem}
+                    />
+                  );
+                }
+                // An answer gets its agent's name unless the block just above is one too:
+                // what is folded away does not count.
+                const above = blocks[b - 1];
+                const showBy =
+                  items[block.index]?.kind === "agent" &&
+                  !(above?.kind === "item" && items[above.index]?.kind === "agent");
+                return renderItem(block.index, block.clamp, showBy);
+              })
+            : items.map((_, i) => renderItem(i)))}
         {thread.team && (
           <TeamCard
             thread={thread}
             team={thread.team}
             threads={threads}
+            agents={agents}
             onOpenThread={onOpenThread}
           />
         )}
@@ -171,6 +214,7 @@ function FeedItem({
   showBy,
   openQuestion,
   live,
+  clamp,
 }: {
   item: Item;
   thread: Thread;
@@ -181,6 +225,8 @@ function FeedItem({
   openQuestion: string | undefined;
   /** Part of the turn the agent is working on now. */
   live: boolean;
+  /** A long answer shows its start, with a way to read the rest. */
+  clamp?: boolean | undefined;
 }) {
   switch (item.kind) {
     case "user":
@@ -204,7 +250,13 @@ function FeedItem({
             </div>
           )}
           {/* The team card shows the plan; its raw JSON is for the server only. */}
-          <Markdown text={thread.role === "lead" ? withoutTeamJson(item.text) : item.text} />
+          {clamp ? (
+            <Clamp>
+              <Markdown text={item.text} />
+            </Clamp>
+          ) : (
+            <Markdown text={thread.role === "lead" ? withoutTeamJson(item.text) : item.text} />
+          )}
         </div>
       );
     case "thought":
@@ -250,6 +302,54 @@ function FeedItem({
     case "permission":
       return <PermissionCard item={item} threadId={thread.id} />;
   }
+}
+
+/**
+ * What a team's agent did out of sight, folded: while it works, its last step shows.
+ * Opened, it is the thread as it ran, the engine's own messages included.
+ */
+function TeamDetail({
+  items,
+  indices,
+  live,
+  revealed,
+  onFold,
+  render,
+}: {
+  items: Item[];
+  indices: number[];
+  live: boolean;
+  /** Holds a message picked in the quick search: it stays open to show it. */
+  revealed: boolean;
+  onFold: () => void;
+  render: (index: number) => ReactNode;
+}) {
+  const [opened, setOpened] = useState(false);
+  const open = opened || revealed;
+  const steps = indices.filter((i) => items[i]?.kind === "tool").length;
+  const lastTool = indices.map((i) => items[i]).findLast((i) => i?.kind === "tool");
+  const label = live && lastTool?.kind === "tool" ? lastTool.title : "Voir le détail";
+  return (
+    <div className={`team-detail${open ? " open" : ""}`}>
+      <button
+        className="team-detail-h"
+        aria-expanded={open}
+        onClick={() => {
+          if (open) onFold();
+          setOpened(!open);
+        }}
+      >
+        {live ? <span className="spin" /> : <IconChevron />}
+        <span className="nm">{label}</span>
+        {steps > 0 && (
+          <span className="meta">
+            {steps} {steps > 1 ? "étapes" : "étape"}
+          </span>
+        )}
+      </button>
+      {open && <div className="team-detail-b">{indices.map((i) => render(i))}</div>}
+    </div>
+  );
 }
 
 /** The user's message, with a way back to the files as they were just before it. */

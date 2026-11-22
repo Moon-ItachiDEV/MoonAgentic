@@ -331,13 +331,36 @@ describe("composer", () => {
     await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Agent de démo" });
     await shot(page, "c10-equipe-lancer");
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
+    // Every role is on the timeline from the start, the agent and model of each said.
+    const strip = page.getByRole("region", { name: "Frise de l'équipe" });
+    await strip.getByText(/^Fusionneur · Agent de démo/).waitFor();
+    await dialog.waitFor({ state: "hidden" });
+    await shot(page, "c10b-equipe-depart");
 
     const card = page.getByRole("region", { name: "Équipe", exact: true });
     await card.getByText("Terminé : tout est réuni sur une branche").waitFor({ timeout: 30_000 });
+    // One calm step per role: the lead's plan, each piece with its coder, then the merge.
     expect(await card.getByRole("listitem").allTextContents()).toEqual([
-      "Corriger answerfusionnéeRelectureTests",
-      "Documenter answerfusionnéeRelectureTests",
+      "Découper la tâcheChef · Agent de démo2 sous-tâches",
+      "Corriger answerCodeur · Agent de démofusionnéeRelectureTests",
+      "Documenter answerCodeur · Agent de démofusionnéeRelectureTests",
+      "Réunir les sous-tâchesFusionneur · Agent de démofaiteOuvrir la fusion",
     ]);
+    // The lead's internal prompt and plan stay folded: only « Voir le détail » shows.
+    expect(await page.getByText("Tu es le chef d'une équipe").count()).toBe(0);
+    await page.locator(".team-detail-h").first().click();
+    await page.getByText("Tu es le chef d'une équipe").waitFor();
+    await page.locator(".team-detail-h").first().click();
+    // Ctrl K leaves the team's own messages out, and opens the detail that holds a hit.
+    await page.keyboard.press("Control+k");
+    const search = page.getByRole("combobox", { name: "Rechercher" });
+    await search.fill("Tu es le chef d'une équipe");
+    await page.getByText("Aucun résultat.").waitFor();
+    await search.fill("Voici le plan");
+    await page.getByRole("option", { name: /Voici le plan/ }).click();
+    await page.getByText("Voici le plan.").waitFor();
+    expect(await page.locator(".team-detail.open").count()).toBe(1);
+    await page.locator(".team-detail-h").first().click();
     // The team is one line of its project in the sidebar; open, its lead shows every member
     // under it: two coders, their reviewers and testers, and the merge.
     expect(await page.locator(".thr-row.lead").count()).toBe(1);
@@ -351,7 +374,6 @@ describe("composer", () => {
     await page.getByRole("button", { name: /^Déplier l'équipe/ }).click();
     // The timeline, drawn from what the team really did: a lane for the lead, each piece
     // and the merge, ended.
-    const strip = page.getByRole("region", { name: "Frise de l'équipe" });
     expect(
       await strip
         .getByRole("button", { name: /^(Chef|Corriger answer|Documenter answer|Fusion) :/ })
@@ -364,6 +386,7 @@ describe("composer", () => {
 
     await card.getByRole("button", { name: "Documenter answer" }).click();
     await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).waitFor();
+    await shot(page, "c11b-equipe-codeur");
 
     // A piece the reviewer keeps refusing goes back three times, then to the lead, then to the user.
     await composer(page).fill("/equipe Corrige answer, à toujours refuser");

@@ -445,13 +445,17 @@ export class Store {
     ).run(threadId, item.id, threadId, JSON.stringify(item));
   }
 
-  /** Messages from the user or an agent that contain `query`, newest first. */
+  /**
+   * Messages from the user or an agent that contain `query`, newest first. A team's own
+   * messages to its agents are left out: they are long, and not the user's words.
+   */
   searchItems(query: string, limit = 30): SearchHit[] {
     const pattern = `%${fold(query).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const rows = this.sql(
       `SELECT items.thread_id, items.id, items.data FROM items
          JOIN threads ON threads.id = items.thread_id
          WHERE json_extract(items.data, '$.kind') IN ('user', 'agent')
+           AND json_extract(items.data, '$.byTeam') IS NOT 1
            AND moon_fold(json_extract(items.data, '$.text')) LIKE ? ESCAPE '\\'
          ORDER BY threads.updated_at DESC, items.seq DESC
          LIMIT ?`,
