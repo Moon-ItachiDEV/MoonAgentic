@@ -6,6 +6,7 @@ import {
   shortAgo,
   threadLine,
   waitingCount,
+  pinnedFirst,
 } from "./project-threads.ts";
 
 const thread = (id: string, patch: Partial<Thread> = {}): Thread => ({
@@ -167,5 +168,15 @@ describe("small labels", () => {
     expect(shortAgo(0, 5 * 60_000)).toBe("5 min");
     expect(shortAgo(0, 3 * 3_600_000)).toBe("3 h");
     expect(shortAgo(0, 50 * 3_600_000)).toBe("2 j");
+  });
+
+  it("puts pinned projects first, the others in their order", () => {
+    const projects = [
+      { id: "a" },
+      { id: "b", pinned: true },
+      { id: "c" },
+      { id: "d", pinned: true },
+    ];
+    expect(pinnedFirst(projects).map((p) => p.id)).toEqual(["b", "d", "a", "c"]);
   });
 });

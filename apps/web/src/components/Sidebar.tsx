@@ -1,7 +1,7 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
 import { useEffect, useRef, useState } from "react";
-import { waitingCount } from "../project-threads.ts";
+import { pinnedFirst, waitingCount } from "../project-threads.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { RECENT, recentAlwaysShown } from "../recent.ts";
 import {
@@ -296,6 +296,11 @@ export function Sidebar(props: {
           }}
         >
           <span className="t">{p.name}</span>
+          {p.pinned && (
+            <span className="proj-pin" title="Projet épinglé" aria-label="Épinglé">
+              <IconPin size={11} filled />
+            </span>
+          )}
           {waiting > 0 && (
             <span
               className="dot"
@@ -476,7 +481,7 @@ export function Sidebar(props: {
         {projectsOpen && state.ready && state.projects.length === 0 && (
           <div className="empty-note">Aucun projet pour l'instant.</div>
         )}
-        {(projectsOpen ? state.projects : []).flatMap(project)}
+        {(projectsOpen ? pinnedFirst(state.projects) : []).flatMap(project)}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
         {pinned.flatMap((t) => tree(t, "pin:"))}
         {recent.length > 0 && <div className="sec-h">Récents</div>}

@@ -124,3 +124,9 @@ export const listedThreads = (threads: Thread[]): Thread[] =>
   threads.some((t) => t.kind === "coordinator")
     ? threads.filter((t) => t.kind !== "coordinator")
     : threads;
+
+/** Pinned projects first, each group in the order the server keeps. */
+export const pinnedFirst = <P extends { pinned?: boolean }>(projects: readonly P[]): P[] => [
+  ...projects.filter((p) => p.pinned),
+  ...projects.filter((p) => !p.pinned),
+];

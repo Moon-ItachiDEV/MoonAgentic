@@ -386,3 +386,10 @@
 .proj-items .more.resolved.open svg:last-child {
   transform: rotate(90deg);
 }
+
+/* A pinned project says so, quietly, after its name. */
+.thr .proj-pin {
+  flex: none;
+  display: inline-flex;
+  color: var(--faint);
+}

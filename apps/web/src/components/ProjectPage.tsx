@@ -110,6 +110,15 @@ export function ProjectPage(props: {
                   label: "Ouvrir dans une nouvelle fenêtre",
                   run: () => window.open(location.href, "_blank", "noopener"),
                 },
+                {
+                  label: props.project.pinned ? "Désépingler" : "Épingler",
+                  run: () =>
+                    connection.send({
+                      type: "project.setPinned",
+                      projectId: props.project.id,
+                      pinned: !props.project.pinned,
+                    }),
+                },
                 { label: "Renommer", run: () => setRenaming(props.project.name) },
                 { label: "Planner du projet", run: props.onOpenPlanner },
                 { label: "Retirer de MoonAgentic…", danger: true, run: props.onRemoveProject },

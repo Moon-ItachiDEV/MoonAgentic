@@ -420,3 +420,21 @@ describe("a project's coordinator", () => {
     await hub.whenIdle(second.opened.id);
   });
 });
+
+describe("a project", () => {
+  it("is pinned for every window, and forgotten once removed", async () => {
+    const { hub, projectId, otherId } = await coordinated();
+    const sent: unknown[] = [];
+    const client: Client = { send: (m) => sent.push(m) };
+    await hub.handle(client, { type: "project.setPinned", projectId: otherId, pinned: true });
+    const pinned = () =>
+      hub
+        .snapshot()
+        .projects.filter((p) => p.pinned)
+        .map((p) => p.id);
+    expect(pinned()).toEqual([otherId]);
+    await hub.handle(client, { type: "project.setPinned", projectId, pinned: true });
+    await hub.handle(client, { type: "project.setPinned", projectId: otherId, pinned: false });
+    expect(pinned()).toEqual([projectId]);
+  });
+});

@@ -140,6 +140,9 @@ const withOrigin = (brief: string, asked: string | undefined) =>
         .join("\n")}`
     : brief;
 
+/** The setting that lists the projects kept at the top. */
+const PINNED_PROJECTS = "pinnedProjects";
+
 /** The level a coordinator starts on, as agents name it. */
 const LOW_EFFORT = /^(low|bas)$/i;
 
@@ -502,6 +505,17 @@ export class Hub {
         if (!this.store.getProject(message.projectId)) throw new Error("Ce projet n'existe plus.");
         this.store.renameProject(message.projectId, message.name);
         const project = this.store.getProject(message.projectId)!;
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
+      case "project.setPinned": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        const others = this.store
+          .getSetting<string[]>(PINNED_PROJECTS, [])
+          // Projects removed since are dropped on the way.
+          .filter((p) => p !== project.id && this.store.getProject(p));
+        this.store.setSetting(PINNED_PROJECTS, message.pinned ? [...others, project.id] : others);
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
@@ -2220,7 +2234,10 @@ export class Hub {
       git = isGitRepo(project.path);
       this.gitProjects.set(project.id, git);
     }
-    return git ? { ...project, git } : project;
+    const pinned = this.store.getSetting<string[]>(PINNED_PROJECTS, []).includes(project.id);
+    return git || pinned
+      ? { ...project, ...(git ? { git } : {}), ...(pinned ? { pinned } : {}) }
+      : project;
   }
 
   private async startSession(

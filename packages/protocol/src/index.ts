@@ -144,6 +144,8 @@ export interface Project {
   createdAt: number;
   /** True when the folder is in a git repository, so threads can get their own branch. */
   git?: boolean;
+  /** Kept at the top of the list of projects. */
+  pinned?: boolean;
 }
 
 /** A thread's own branch, checked out in a separate folder (a git worktree). */
@@ -882,6 +884,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     projectId: id,
     name: z.string().trim().min(1).max(120),
   }),
+  z.object({ type: z.literal("project.setPinned"), projectId: id, pinned: z.boolean() }),
   /** Looks for project files to mention with `@`, in the thread's folder when given. */
   z.object({
     type: z.literal("files.search"),
