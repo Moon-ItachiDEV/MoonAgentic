@@ -1052,7 +1052,8 @@ describe("teams", () => {
     // The project goes whole, reviewers first, though they work in their coders' folders.
     await hub.removeProject(projectId);
     expect(store.listThreads()).toEqual([]);
-  });
+    // Its waits allow a minute: Windows runners take about 15 s for the whole round.
+  }, 90_000);
 
   it("marks a team cut short by a stop of the server, keeping what was done", async () => {
     const { hub, store, root, projectId } = repository();
