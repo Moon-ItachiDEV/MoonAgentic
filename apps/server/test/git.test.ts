@@ -831,6 +831,9 @@ describe("teams", () => {
     await expect
       .poll(() => store.getThread(leadId)?.team?.phase, { timeout: 60_000 })
       .toBe("blocked");
+    // The project goes whole, reviewers first, though they work in their coders' folders.
+    await hub.removeProject(projectId);
+    expect(store.listThreads()).toEqual([]);
   });
 
   it("marks a team cut short by a stop of the server, keeping what was done", async () => {

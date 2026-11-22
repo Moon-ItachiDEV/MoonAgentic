@@ -785,7 +785,9 @@ export class Hub {
     this.removingProjects.add(projectId);
     for (const thread of threads) this.busy.set(thread.id, reason);
     const step = (async () => {
-      for (const thread of threads) {
+      // A team's reviewers and testers go before the coders whose folder they work in.
+      const order = [...threads].sort((a, b) => Number(!a.worksIn) - Number(!b.worksIn));
+      for (const thread of order) {
         this.busy.delete(thread.id);
         await this.deleteThread(thread.id);
       }
