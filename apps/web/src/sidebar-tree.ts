@@ -50,3 +50,16 @@ export function conversationsByProject(threads: Thread[]): Map<string, Thread[]>
 export function projectOpen(saved: boolean | undefined, onlyProject: boolean): boolean {
   return saved ?? onlyProject;
 }
+
+/**
+ * Whether a team's members are shown under its lead: true when the user unfolded it, or
+ * when one of its threads is open and the user has not folded it during this visit.
+ */
+export function teamOpen(
+  key: string,
+  active: boolean,
+  unfolded: ReadonlySet<string>,
+  foldedActive: ReadonlySet<string>,
+): boolean {
+  return active ? !foldedActive.has(key) : unfolded.has(key);
+}
