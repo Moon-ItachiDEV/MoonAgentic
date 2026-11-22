@@ -41,12 +41,26 @@ export function usePullRequest(thread: Thread, stamp: unknown) {
     if (reply.pr) prStates.learn(reply.pr.url, reply.pr.state);
   }, []);
 
+  /** Set when asked again while an answer is on its way: that answer may already be stale. */
+  const again = useRef(false);
   const refresh = useCallback(async () => {
-    if (!branch || asking.current) return;
+    if (!branch) return;
+    if (asking.current) {
+      again.current = true;
+      return;
+    }
     asking.current = true;
     setLoading(true);
     try {
-      take(await connection.ask({ type: "workspace.pr", requestId: newId(), threadId: thread.id }));
+      do {
+        again.current = false;
+        const reply = await connection.ask({
+          type: "workspace.pr",
+          requestId: newId(),
+          threadId: thread.id,
+        });
+        take(reply);
+      } while (again.current);
     } catch {
       // no connection right now: what was last known stays, the next round asks again
     } finally {
@@ -127,8 +141,9 @@ export function PullRequestStatus(props: {
           </p>
           {ci.failed.length > 0 && (
             <ul className="rv-prs-f">
-              {ci.failed.map((check) => (
-                <li key={check.name}>
+              {ci.failed.map((check, i) => (
+                // Two workflows may each have a job of the same name.
+                <li key={`${i}:${check.name}`}>
                   {check.url ? (
                     <a href={check.url} target="_blank" rel="noopener noreferrer">
                       {check.name}

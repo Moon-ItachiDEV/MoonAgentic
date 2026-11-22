@@ -36,7 +36,8 @@ function checkOf(raw: unknown): (PullRequestCheck & { key: string; at: string })
     const url = text(raw.targetUrl);
     return {
       key: `status/${name}`,
-      at: text(raw.startedAt),
+      // A commit status has no start: it is dated by when it was posted.
+      at: text(raw.startedAt) || text(raw.createdAt),
       name,
       state:
         state === "SUCCESS"

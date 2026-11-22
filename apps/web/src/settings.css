@@ -296,6 +296,15 @@
   transform: translateX(16px);
   background: var(--bg);
 }
+.set-sw:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.set-notif {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 .set-dot {
   width: 8px;
   height: 8px;
