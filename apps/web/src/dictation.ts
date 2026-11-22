@@ -29,7 +29,14 @@ function recognitionClass(): RecognitionClass | undefined {
 
 /** True when this browser can turn speech into text (Chrome, Edge, Safari). */
 export function dictationSupported(): boolean {
-  return !!recognitionClass();
+  // Over plain HTTP on the network, Chrome lists the API but refuses the microphone.
+  return typeof window !== "undefined" && window.isSecureContext && !!recognitionClass();
+}
+
+/** On a phone, a second hold on the microphone can cut speech recognition: no level there. */
+function levelSafe(): boolean {
+  const ua = typeof navigator === "undefined" ? "" : navigator.userAgent;
+  return !/Android|iPhone|iPad|Mobile/i.test(ua);
 }
 
 /** What was said so far: the sentences settled, then the words still being heard. */
@@ -48,15 +55,16 @@ export function joinDictation(typed: string, heard: Heard): string {
 
 /** Reads every result the recognizer holds, settled ones first. */
 export function readResults(results: RecognitionEvent["results"]): Heard {
-  let final = "";
-  let interim = "";
+  // Some browsers start a new segment without a space: segments are joined with one.
+  const final: string[] = [];
+  const interim: string[] = [];
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
-    if (!r) continue;
-    if (r.isFinal) final += r[0].transcript;
-    else interim += r[0].transcript;
+    const said = r?.[0].transcript.trim();
+    if (!r || !said) continue;
+    (r.isFinal ? final : interim).push(said);
   }
-  return { final: final.trim(), interim: interim.trim() };
+  return { final: final.join(" "), interim: interim.join(" ") };
 }
 
 const ERRORS: Record<string, string> = {
@@ -80,7 +88,8 @@ export interface Dictation {
 export function startDictation(handlers: {
   onHeard: (heard: Heard) => void;
   onLevel: (level: number) => void;
-  onEnd: (kept: boolean, error?: string) => void;
+  /** `heard` is the last text heard, read here so the last words before the end count. */
+  onEnd: (kept: boolean, heard: Heard, error?: string) => void;
 }): Dictation | undefined {
   const Class = recognitionClass();
   if (!Class) return undefined;
@@ -95,6 +104,7 @@ export function startDictation(handlers: {
   let stream: MediaStream | undefined;
   let audio: AudioContext | undefined;
   let frame = 0;
+  let heard: Heard = { final: "", interim: "" };
 
   const release = () => {
     cancelAnimationFrame(frame);
@@ -102,7 +112,10 @@ export function startDictation(handlers: {
     void audio?.close().catch(() => undefined);
   };
 
-  recognition.onresult = (event) => handlers.onHeard(readResults(event.results));
+  recognition.onresult = (event) => {
+    heard = readResults(event.results);
+    handlers.onHeard(heard);
+  };
   recognition.onerror = (event) => {
     if (event.error === "aborted" || event.error === "no-speech") return;
     error = ERRORS[event.error] ?? `La dictée s'est arrêtée (${event.error}).`;
@@ -111,31 +124,36 @@ export function startDictation(handlers: {
     if (ended) return;
     ended = true;
     release();
-    handlers.onEnd(kept && !error, error);
+    handlers.onEnd(kept && !error, heard, error);
   };
-  recognition.start();
+  try {
+    recognition.start();
+  } catch {
+    return undefined;
+  }
 
   // The level only draws the waveform: dictation works without it.
-  navigator.mediaDevices
-    ?.getUserMedia({ audio: true })
-    .then((s) => {
-      if (ended) return s.getTracks().forEach((t) => t.stop());
-      stream = s;
-      audio = new AudioContext();
-      const analyser = audio.createAnalyser();
-      analyser.fftSize = 512;
-      audio.createMediaStreamSource(s).connect(analyser);
-      const data = new Uint8Array(analyser.fftSize);
-      const tick = () => {
-        analyser.getByteTimeDomainData(data);
-        let sum = 0;
-        for (const v of data) sum += ((v - 128) / 128) ** 2;
-        handlers.onLevel(Math.min(1, Math.sqrt(sum / data.length) * 4));
-        frame = requestAnimationFrame(tick);
-      };
-      tick();
-    })
-    .catch(() => undefined);
+  if (levelSafe())
+    navigator.mediaDevices
+      ?.getUserMedia({ audio: true })
+      .then((s) => {
+        if (ended) return s.getTracks().forEach((t) => t.stop());
+        stream = s;
+        audio = new AudioContext();
+        const analyser = audio.createAnalyser();
+        analyser.fftSize = 512;
+        audio.createMediaStreamSource(s).connect(analyser);
+        const data = new Uint8Array(analyser.fftSize);
+        const tick = () => {
+          analyser.getByteTimeDomainData(data);
+          let sum = 0;
+          for (const v of data) sum += ((v - 128) / 128) ** 2;
+          handlers.onLevel(Math.min(1, Math.sqrt(sum / data.length) * 4));
+          frame = requestAnimationFrame(tick);
+        };
+        tick();
+      })
+      .catch(() => undefined);
 
   return {
     stop: () => recognition.stop(),

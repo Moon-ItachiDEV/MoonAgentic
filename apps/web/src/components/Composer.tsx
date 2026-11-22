@@ -131,6 +131,8 @@ export function Composer(props: {
   const dictation = useRef<Dictation | undefined>(undefined);
   const [, tick] = useState(0);
   const [focused, setFocused] = useState(false);
+  /** A press that started inside the composer, so a blur it causes does not fold it. */
+  const pressedInside = useRef(false);
 
   const agentId =
     thread?.agentId ??
@@ -214,14 +216,13 @@ export function Composer(props: {
     const started = startDictation({
       onHeard: (heard) => setVoice((v) => v && { ...v, heard }),
       onLevel: (level) => root.current?.style.setProperty("--lv", level.toFixed(2)),
-      onEnd: (kept, error) => {
-        const v = voiceRef.current;
+      onEnd: (kept, heard, error) => {
         dictation.current = undefined;
         root.current?.style.removeProperty("--lv");
         setVoice(null);
         if (error) connection.notify(error);
-        if (kept && v) {
-          const value = joinDictation(v.typed, v.heard);
+        if (kept) {
+          const value = joinDictation(typed, heard);
           putText(value, value.length);
         } else input.current?.focus();
       },
@@ -540,8 +541,22 @@ export function Composer(props: {
       className={`composer${open ? " open" : ""}${voice ? " vx-on" : ""}`}
       ref={root}
       onFocus={() => setFocused(true)}
+      onPointerDownCapture={() => {
+        pressedInside.current = true;
+      }}
       onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFocused(false);
+        const box = e.currentTarget;
+        if (box.contains(e.relatedTarget as Node | null)) return;
+        // Safari gives no `relatedTarget` when a button is touched: wait for the click to
+        // land before folding the composer, then fold only if the focus really left it.
+        if (pressedInside.current) {
+          setTimeout(() => {
+            pressedInside.current = false;
+            if (!box.contains(document.activeElement)) setFocused(false);
+          }, 300);
+          return;
+        }
+        setFocused(false);
       }}
     >
       {voice && (

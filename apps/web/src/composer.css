@@ -187,6 +187,7 @@
 
 /* « Branche à part » lives in the « + » menu; this mark only says it is on. */
 .perm.branch.mark {
+  flex: none;
   width: 26px;
   padding: 0;
   justify-content: center;
@@ -266,9 +267,6 @@
 
 /* A phone: one line (+, text, microphone, voice) until the composer is used. */
 @media (max-width: 860px) {
-  .composer .perm:not(.mark) {
-    display: none;
-  }
   .composer:not(.open) {
     display: flex;
     align-items: center;
