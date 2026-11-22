@@ -203,7 +203,8 @@ describe("composer", () => {
     await composer(page).fill("Corrige la réponse");
     await composer(page).press("Enter");
     const inbox = page.getByRole("button", { name: /À traiter/ });
-    await expect.poll(() => inbox.textContent()).toContain("1");
+    // The agent starts its process before it asks: more than the poll's usual second on CI.
+    await expect.poll(() => inbox.textContent(), { timeout: 15_000 }).toContain("1");
     await inbox.click();
     const requests = page.getByRole("dialog", { name: "À traiter" });
     await requests.getByText("Modifier src/app.ts").waitFor();
