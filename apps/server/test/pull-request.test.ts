@@ -417,6 +417,87 @@ describe("what lists of threads keep of a pull request", () => {
   });
 });
 
+describe("a pull request merged, or a team's", () => {
+  const settle = (dir: string) => {
+    git(dir, "add", "-A");
+    if (git(dir, "status", "--porcelain")) git(dir, "commit", "-q", "-m", "travail");
+    return git(dir, "rev-parse", "HEAD");
+  };
+
+  it("resolves a thread whose pull request was merged before it was ever asked about", async () => {
+    const { hub, store, github, threadId } = await threadOnGithub();
+    const workspace = store.getThread(threadId)!.workspace!;
+    const head = settle(workspace.path);
+    // As after a push that opened it: known to be open, not yet read from GitHub.
+    store.updateThread(threadId, { workspace: { ...workspace, prUrl: OPEN.url, prOpened: true } });
+    github.pr = { ...OPEN, head, state: "merged" };
+    await hub.watchPullRequests();
+    expect(store.getThread(threadId)!.archived).toBe(true);
+  });
+
+  it("leaves alone a merged pull request MoonAgentic never opened nor saw open", async () => {
+    const { hub, store, github, threadId } = await threadOnGithub();
+    const head = settle(store.getThread(threadId)!.workspace!.path);
+    github.pr = { ...OPEN, head, state: "merged" };
+    await hub.pullRequest(threadId);
+    expect(store.getThread(threadId)!.pr!.state).toBe("merged");
+    expect(store.getThread(threadId)!.archived).toBeUndefined();
+  });
+
+  it("shows a team's pull request on its lead, and resolves the whole team once merged", async () => {
+    // The thread with the branch stands for the team's merge thread; its lead has no branch.
+    const { hub, store, github, threadId: leadless } = await threadOnGithub();
+    const projectId = store.getThread(leadless)!.projectId;
+    const leadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "",
+      title: "Équipe",
+      role: "lead",
+    });
+    const mergeId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: true,
+      text: "Fusionne",
+      title: "Fusion",
+      parentId: leadId,
+      role: "merger",
+    });
+    await hub.whenIdle(mergeId);
+    store.updateThread(leadId, {
+      team: {
+        phase: "done",
+        task: "t",
+        coder: { agentId: "demo" },
+        coders: 2,
+        permissionMode: "full",
+        mergeThreadId: mergeId,
+        tasks: [
+          { title: "A", brief: "", status: "done" },
+          { title: "B", brief: "", status: "done" },
+        ],
+      },
+    });
+    const head = settle(store.getThread(mergeId)!.workspace!.path);
+
+    github.pr = { ...OPEN, head, checks: [{ name: "ci", state: "passed" }] };
+    await hub.pullRequest(mergeId);
+    const lead = store.getThread(leadId)!;
+    expect(lead.pr).toMatchObject({ number: 42, state: "open", checks: "passed" });
+    // Green and open: the team waits on the user's merge.
+    expect(threadGroup(lead)).toBe("waiting");
+
+    github.pr = { ...OPEN, head, state: "merged" };
+    await hub.watchPullRequests();
+    expect(store.getThread(leadId)!.pr!.state).toBe("merged");
+    expect(store.getThread(leadId)!.archived).toBe(true);
+    expect(store.getThread(mergeId)!.archived).toBe(true);
+  });
+});
+
 describe("a thread's summary", () => {
   it("is the start of what its agent last said, on one line", async () => {
     const { store, threadId } = await threadOnGithub();

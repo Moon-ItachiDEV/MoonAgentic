@@ -71,13 +71,21 @@ describe("a project's threads by group", () => {
       "resolved",
     ]);
     expect(ids("waiting").sort()).toEqual(
-      ["asks", "conflict", "failed", "green", "lead-blocked", "red"].sort(),
+      ["asks", "conflict", "failed", "green", "lead", "lead-blocked", "red"].sort(),
     );
-    expect(waitingCount(threads, "p")).toBe(6);
+    expect(waitingCount(threads, "p")).toBe(7);
   });
 
   it("counts a team once, as its lead, and lists the latest first", () => {
-    expect(ids("running")).toEqual(["works-later", "works", "lead"]);
+    expect(ids("running")).toEqual(["works-later", "works"]);
+    // A team whose member asks the user something waits on them, even while it works.
+    expect(ids("waiting")).toContain("lead");
+    const quiet = threads.filter((t) => t.id !== "coder");
+    expect(
+      groupThreads(quiet, "p")
+        .find((g) => g.group === "running")!
+        .threads.map((t) => t.id),
+    ).toContain("lead");
     expect(ids("idle").sort()).toEqual(["checking", "draft", "held", "idle"].sort());
     expect(ids("resolved")).toEqual(["done"]);
   });
@@ -108,6 +116,16 @@ describe("the line under a thread's title", () => {
         }),
       ),
     ).toBe("Équipe bloquée sur « Écran » : à toi de décider.");
+  });
+
+  it("names the member a team waits for, and shows the team's pull request on its lead", () => {
+    const coder = thread("Écran", { parentId: "a", status: "waiting" });
+    expect(threadLine(thread("a", { team: team({}) }), [coder])).toBe(
+      "« Écran » attend ta réponse.",
+    );
+    expect(threadLine(thread("a", { team: team({ phase: "done" }), pr: pr() }))).toBe(
+      "PR #7 prête : il ne manque que ton merge.",
+    );
   });
 
   it("says where a team is, from its real pieces", () => {

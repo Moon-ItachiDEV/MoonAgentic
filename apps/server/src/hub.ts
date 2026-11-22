@@ -70,7 +70,7 @@ import {
 } from "./coordinator-tools.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
-import { Teams, teamStatus } from "./team.ts";
+import { shipTarget, Teams, teamStatus } from "./team.ts";
 import { mcpInfo, type McpServerRecord } from "./mcp.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
@@ -1094,6 +1094,14 @@ export class Hub {
         });
       }
       return result;
+    }).then((result) => {
+      // Its pull request shows on the lists at once, without waiting for the next round.
+      if (result.prOpened && !this.closed) {
+        const asked = this.pullRequest(threadId).catch(() => undefined);
+        this.steps.add(asked);
+        void asked.finally(() => this.steps.delete(asked));
+      }
+      return result;
     });
   }
 
@@ -1129,15 +1137,30 @@ export class Hub {
     const thread = this.store.getThread(threadId);
     if (!thread) return;
     const pr = info && threadPullRequest(info);
+    // A team's pull request is its merge thread's, or its only coder's: the lead shows it,
+    // and is the one resolved, which puts the whole team away.
+    const parent = thread.parentId ? this.store.getThread(thread.parentId) : undefined;
+    const lead = parent?.team && shipTarget(parent.team) === threadId ? parent : undefined;
+    if (lead && JSON.stringify(pr) !== JSON.stringify(lead.pr)) {
+      this.updateThread(lead.id, { pr: pr ?? null });
+    }
     if (JSON.stringify(pr) === JSON.stringify(thread.pr)) return;
-    const merged = pr?.state === "merged" && !!thread.pr && thread.pr.state !== "merged";
+    // Merged since it was last seen open; or merged before it was ever asked about, when
+    // MoonAgentic opened it itself.
+    const merged =
+      pr?.state === "merged" &&
+      (thread.pr ? thread.pr.state !== "merged" : !!thread.workspace?.prOpened);
     this.updateThread(threadId, { pr: pr ?? null });
-    if (!merged || !info || thread.archived || thread.parentId) return;
-    if (this.turns.has(threadId) || this.busy.has(threadId) || this.teams.isActive(threadId))
-      return;
+    if (!merged || !info) return;
+    // A member that is not its team's branch is never resolved on its own.
+    if (thread.parentId && !lead) return;
+    const target = lead ?? thread;
+    if (target.archived || thread.archived) return;
+    const atWork = (id: string) => this.turns.has(id) || this.busy.has(id);
+    if (atWork(threadId) || atWork(target.id) || this.teams.isActive(target.id)) return;
     const path = thread.workspace?.path;
     if (!path || !existsSync(path) || !(await nothingPast(path, info.head))) return;
-    await this.setArchived(threadId, true).catch((error) =>
+    await this.setArchived(target.id, true).catch((error) =>
       console.error("Résolution après merge :", error),
     );
   }

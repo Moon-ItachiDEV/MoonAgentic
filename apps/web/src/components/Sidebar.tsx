@@ -133,7 +133,11 @@ export function Sidebar(props: {
 
   const scheduled = state.schedules.filter((s) => s.enabled).length;
   const live = state.threads.filter((t) => !t.archived);
-  const archived = state.threads.filter((t) => t.archived);
+  // A resolved team counts once, as its lead: its members are put away with it.
+  const resolvedLeads = new Set(state.threads.filter((t) => t.archived).map((t) => t.id));
+  const archived = state.threads.filter(
+    (t) => t.archived && !(t.parentId && resolvedLeads.has(t.parentId)),
+  );
   const members = membersOf(live);
   const byProject = conversationsByProject(live);
   const active = live.find((t) => t.id === props.activeThreadId);
