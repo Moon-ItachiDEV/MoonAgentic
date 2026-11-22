@@ -407,8 +407,46 @@ describe("composer", () => {
     await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).waitFor();
     await page.goBack();
 
-    // On a phone the columns scroll sideways; the page itself does not.
+    // The same cards over time: a lane per agent, bars drawn from what really happened.
+    await page.getByRole("tab", { name: "Timeline" }).click();
+    const lanes = page.getByRole("region", { name: "Timeline" });
+    const bar = (title: string) => lanes.getByRole("button", { name: new RegExp(`: ${title},`) });
+    await lanes.getByRole("region", { name: "Agent de démo" }).waitFor();
+    const done = bar("Documenter answer, Livré");
+    await done.waitFor();
+    // Delivered work is solid; the user's card is under the agent of the thread it was given.
+    expect(await done.getAttribute("class")).not.toContain("planned");
+    expect(await bar("Écrire le changelog").getAttribute("class")).toContain("s-test");
+    // Today is in view when the timeline opens.
+    await expect
+      .poll(() =>
+        lanes.locator(".pl-tl-grid .today").evaluate((el) => {
+          const box = el.getBoundingClientRect();
+          return box.left > 0 && box.left < window.innerWidth;
+        }),
+      )
+      .toBe(true);
+    await page
+      .getByRole("group", { name: "Échelle" })
+      .getByRole("button", { name: "Mois" })
+      .click();
+    await shot(page, "c17-planner-timeline");
+    // A bar opens the same detail as its card, where the planned start is set.
+    await bar("Écrire le changelog").click();
+    await detail.getByLabel("Début prévu").fill("2020-01-10");
+    await detail.getByRole("button", { name: "Fermer" }).click();
+
+    // On a phone the timeline scrolls inside itself; the page does not.
     await page.setViewportSize({ width: 390, height: 780 });
+    await done.waitFor();
+    if (shots) await page.waitForTimeout(400);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    await shot(page, "c18-planner-timeline-mobile");
+    await page.getByRole("tab", { name: "Tableau" }).click();
+
+    // On a phone the columns scroll sideways; the page itself does not.
     await column("À faire").waitFor();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,

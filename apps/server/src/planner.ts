@@ -26,11 +26,25 @@ export function pieceStatus(task: TeamTask, teamDone: boolean): PlanStatus {
   }
 }
 
+/**
+ * Writes down when the card's work really began and ended, from where it now stands: it
+ * began when it first left « À faire », and ended when it was delivered.
+ */
+export function stamped(task: PlanTask, now: number): PlanTask {
+  const { startedAt, doneAt, ...rest } = task;
+  if (task.status === "todo") return rest;
+  const started = startedAt ?? now;
+  return task.status === "live"
+    ? { ...rest, startedAt: started, doneAt: doneAt ?? now }
+    : { ...rest, startedAt: started };
+}
+
 export interface PlanAdd {
   projectId: string;
   title: string;
   description?: string | undefined;
   status?: PlanStatus | undefined;
+  start?: number | undefined;
   due?: number | undefined;
 }
 
@@ -38,6 +52,7 @@ export interface PlanPatch {
   title?: string | undefined;
   description?: string | null | undefined;
   status?: PlanStatus | undefined;
+  start?: number | null | undefined;
   due?: number | null | undefined;
   threadId?: string | null | undefined;
 }
@@ -70,6 +85,7 @@ export class Planner {
       status: input.status ?? "todo",
       source: extra.source,
       ...(extra.team ? { team: extra.team } : {}),
+      ...(input.start ? { start: input.start } : {}),
       ...(input.due ? { due: input.due } : {}),
       createdAt: now,
       updatedAt: now,
@@ -89,6 +105,10 @@ export class Planner {
     if (patch.description !== undefined) {
       if (patch.description) next.description = patch.description;
       else delete next.description;
+    }
+    if (patch.start !== undefined) {
+      if (patch.start) next.start = patch.start;
+      else delete next.start;
     }
     if (patch.due !== undefined) {
       if (patch.due) next.due = patch.due;
@@ -163,7 +183,8 @@ export class Planner {
     }
   }
 
-  private put(task: PlanTask): PlanTask {
+  private put(card: PlanTask): PlanTask {
+    const task = stamped(card, Date.now());
     this.store.putPlanTask(task);
     this.broadcast({ type: "planTask", task });
     return task;

@@ -116,3 +116,154 @@ export const isLate = (card: PlanTask, now: number) =>
 
 export const dueLabel = (due: number) =>
   new Date(due).toLocaleDateString("fr-FR", { day: "numeric", month: "short" }).replace(".", "");
+
+export const DAY = 86_400_000;
+const dayStart = (at: number) => new Date(at).setHours(0, 0, 0, 0);
+/**
+ * Midnight `days` days after the day of `at`, counted on the calendar: a day is 23 or 25
+ * hours long when the clocks change.
+ */
+const addDays = (at: number, days: number) => {
+  const d = new Date(at);
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days).getTime();
+};
+/** The timeline never shows more than this many days before or after today. */
+export const TIMELINE_REACH = 366;
+
+/**
+ * The days a card covers on the timeline. Real dates come first: from when its work began
+ * to when it was delivered, or to today while it goes on. A card not started shows what is
+ * planned, from its start day to its due day. `planned` is true for those.
+ */
+export function cardSpan(
+  card: PlanTask,
+  now: number,
+): { from: number; to: number; planned: boolean } {
+  const from = dayStart(card.startedAt ?? card.start ?? card.createdAt);
+  const due = card.due ? addDays(card.due, 1) : undefined;
+  const planned = card.status === "todo" || !card.startedAt;
+  const end = card.doneAt
+    ? card.doneAt
+    : planned
+      ? (due ?? addDays(from, 1))
+      : // Work that goes on runs to today, past its due day when it is late.
+        Math.max(due ?? 0, now);
+  return { from, to: Math.max(addDays(end - 1, 1), addDays(from, 1)), planned };
+}
+
+export interface TimelineBar {
+  card: PlanTask;
+  work: CardWork;
+  /** Days from the timeline's first day. */
+  day: number;
+  days: number;
+  /** Its line in the lane: bars that overlap sit on different lines. */
+  row: number;
+  planned: boolean;
+  /** Too short to hold its title, which is then written after it. */
+  tight: boolean;
+}
+
+export interface TimelineLane {
+  /** The agent at work on these cards, or "" for cards no agent has. */
+  name: string;
+  rows: number;
+  bars: TimelineBar[];
+}
+
+export interface Timeline {
+  /** Midnight of the first day shown. */
+  from: number;
+  days: number;
+  /** Today, in days from the first. */
+  today: number;
+  lanes: TimelineLane[];
+}
+
+/** A bar under this width cannot hold its title. */
+const TIGHT = 96;
+/** The room a title written after its bar is given, so the next bar does not cover it. */
+const TITLE = 170;
+
+/**
+ * Lays the cards out by who works on them: a lane per agent, cards no agent has last.
+ * The days shown hold every card, with room around today, up to a year each way: a card
+ * dated further (a year mistyped) is drawn at the edge. `px` is the width of a day.
+ */
+export function timeline(
+  cards: PlanTask[],
+  threads: Thread[],
+  agents: AgentInfo[],
+  now: number,
+  px = 32,
+): Timeline {
+  const today = dayStart(now);
+  const first = addDays(today, -TIMELINE_REACH);
+  const last = addDays(today, TIMELINE_REACH);
+  const spans = cards.map((card) => {
+    const span = cardSpan(card, now);
+    // Kept inside the days shown, a day long at least.
+    const start = Math.min(Math.max(span.from, first), addDays(last, -1));
+    return {
+      card,
+      work: cardWork(card, threads, agents),
+      planned: span.planned,
+      from: start,
+      to: Math.min(Math.max(span.to, addDays(start, 1)), last),
+    };
+  });
+  const before = Math.max(14, Math.ceil(300 / px));
+  const after = Math.max(28, Math.ceil(1400 / px));
+  const from = Math.max(
+    first,
+    Math.min(addDays(today, -before), ...spans.map((s) => addDays(s.from, -3))),
+  );
+  const to = Math.min(last, Math.max(addDays(today, after), ...spans.map((s) => addDays(s.to, 7))));
+  // Rounded, as a day of 23 or 25 hours is still one day.
+  const index = (at: number) => Math.round((at - from) / DAY);
+
+  const byLane = new Map<string, typeof spans>();
+  for (const span of spans) {
+    const name = span.work.agent ?? "";
+    byLane.set(name, [...(byLane.get(name) ?? []), span]);
+  }
+  const lanes = [...byLane.entries()]
+    .sort(([a], [b]) => Number(!a) - Number(!b) || a.localeCompare(b, "fr"))
+    .map(([name, list]): TimelineLane => {
+      // Each bar takes the first line free at its first day.
+      const ends: number[] = [];
+      const bars = list
+        .sort((a, b) => a.from - b.from || a.card.number - b.card.number)
+        .map((s): TimelineBar => {
+          const day = index(s.from);
+          const days = Math.max(1, index(s.to) - day);
+          const tight = days * px < TIGHT;
+          let row = ends.findIndex((end) => end <= day);
+          if (row === -1) row = ends.length;
+          ends[row] = day + days + (tight ? Math.ceil(TITLE / px) : 0);
+          return { card: s.card, work: s.work, day, days, row, planned: s.planned, tight };
+        });
+      return { name, rows: Math.max(1, ends.length), bars };
+    });
+  return { from, days: index(to), today: index(today), lanes };
+}
+
+/** The first of each month and each Monday among the days shown, for the header. */
+export function timelineTicks(from: number, days: number) {
+  const months: { day: number; label: string }[] = [];
+  const weeks: { day: number; label: string }[] = [];
+  for (let day = 0; day < days; day++) {
+    const d = new Date(from + day * DAY + DAY / 2);
+    if (d.getDate() === 1 || day === 0) {
+      months.push({
+        day,
+        label: d.toLocaleDateString("fr-FR", {
+          month: "long",
+          ...(d.getMonth() === 0 || day === 0 ? { year: "numeric" } : {}),
+        }),
+      });
+    }
+    if (d.getDay() === 1) weeks.push({ day, label: String(d.getDate()) });
+  }
+  return { months, weeks };
+}

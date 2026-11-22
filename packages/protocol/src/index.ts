@@ -332,8 +332,14 @@ export interface PlanTask {
   threadId?: string;
   /** The piece of a team it stands for: its status then follows that piece. */
   team?: { leadId: string; index: number };
+  /** The day its work is meant to start, as a timestamp. */
+  start?: number;
   /** The day it is due, as a timestamp. */
   due?: number;
+  /** When its work really began: when it first left « À faire ». The server sets it. */
+  startedAt?: number;
+  /** When it was delivered. The server sets it, and clears it if the card comes back. */
+  doneAt?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -573,10 +579,11 @@ export const ClientMessage = z.discriminatedUnion("type", [
     title: planTitle,
     description: planDescription.optional(),
     status: z.enum(PLAN_STATUSES).optional(),
+    start: z.number().int().positive().optional(),
     due: z.number().int().positive().optional(),
   }),
   /**
-   * Changes a card. `null` clears its description, its due day or its thread. The status
+   * Changes a card. `null` clears its description, its days or its thread. The status
    * of a card a team works on follows the team, and cannot be set here.
    */
   z.object({
@@ -586,6 +593,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     title: planTitle.optional(),
     description: planDescription.nullable().optional(),
     status: z.enum(PLAN_STATUSES).optional(),
+    start: z.number().int().positive().nullable().optional(),
     due: z.number().int().positive().nullable().optional(),
     threadId: id.nullable().optional(),
   }),
