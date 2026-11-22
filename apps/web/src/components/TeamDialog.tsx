@@ -32,6 +32,7 @@ function MemberPicker({
       <label className="field">
         {label}
         <select
+          aria-label={label}
           value={member?.agentId ?? ""}
           onChange={(e) => {
             const next = agents.find((a) => a.id === e.target.value);
@@ -133,8 +134,8 @@ export function TeamDialog({
       >
         <h2 id="team-title">Confier à une équipe</h2>
         <p>
-          Le chef lit {project.name} sans rien modifier et découpe la tâche. Chaque codeur fait sa
-          part en même temps, sur sa propre branche.
+          Le chef lit « {project.name} » sans rien modifier et découpe la tâche. Chaque codeur fait
+          sa part en même temps, sur sa propre branche.
         </p>
         <label className="field">
           Tâche
@@ -180,7 +181,7 @@ export function TeamDialog({
           <button type="button" className="btn quiet" disabled={busy} onClick={onClose}>
             Annuler
           </button>
-          <button className="btn" disabled={busy || !lead || !coder || !task.trim()}>
+          <button className="btn pri" disabled={busy || !lead || !coder || !task.trim()}>
             {busy ? "Lancement…" : "Lancer l'équipe"}
           </button>
         </div>

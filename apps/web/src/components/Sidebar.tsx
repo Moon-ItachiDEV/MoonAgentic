@@ -52,7 +52,13 @@ export function Sidebar(props: {
   const top = live.filter((t) => !(t.parentId && listed.has(t.parentId)));
   const pinned = top.filter((t) => t.pinned);
   const recent = top.filter((t) => !t.pinned);
-  const tree = (t: Thread) => [row(t), ...(childrenOf.get(t.id) ?? []).map((c) => row(c, true))];
+  // Coders in the order the lead handed out their pieces.
+  const tree = (t: Thread) => [
+    row(t),
+    ...(childrenOf.get(t.id) ?? [])
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((c) => row(c, true)),
+  ];
   const row = (t: Thread, child = false) => (
     <div key={t.id} className={`thr-row${t.pinned ? " pinned" : ""}${child ? " child" : ""}`}>
       <button

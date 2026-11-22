@@ -805,7 +805,12 @@ svg {
   border-radius: 5px;
   background: var(--card);
 }
+/* A long line scrolls inside its block rather than widening the message. */
+.md {
+  min-width: 0;
+}
 .md pre {
+  max-width: 100%;
   background: var(--card);
   border-radius: 12px;
   padding: 10px 14px;
