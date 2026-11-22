@@ -7,6 +7,7 @@ import {
   IconClose,
   IconCompose,
   IconFolder,
+  IconGear,
   IconInbox,
   IconPin,
   IconPlug,
@@ -35,6 +36,7 @@ export function Sidebar(props: {
   onOpenThread: (id: string) => void;
   onTogglePin: (id: string, pinned: boolean) => void;
   onRemoveProject: (id: string) => void;
+  onOpenSettings: () => void;
 }) {
   const { state } = props;
   const available = state.agents.filter((a) => a.available).length;
@@ -171,6 +173,14 @@ export function Sidebar(props: {
         {showArchived && archived.map((t) => row(t))}
       </div>
       <div className="side-foot">
+        <button
+          className="ib set-gear"
+          aria-label="Réglages"
+          title="Réglages"
+          onClick={props.onOpenSettings}
+        >
+          <IconGear size={17} />
+        </button>
         {state.status === "open" ? (
           <button className={`st ${available ? "ok" : "warn"}`} onClick={props.onOpenConnections}>
             {available} {available > 1 ? "agents prêts" : "agent prêt"}

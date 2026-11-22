@@ -1,21 +1,13 @@
 /* Planner: a top bar, a summary, filters, then the board's five columns, which scroll
    sideways when they do not fit. A card's detail opens as a panel on the right, or as a
    sheet from the bottom under 860px. */
+/* light-dark() follows the theme in force: the system's, or the one picked in Réglages. */
 :root {
-  --s-todo: #8b8b93;
-  --s-doing: #3a55d6;
-  --s-report: #b06f0a;
-  --s-test: #7a4fd0;
-  --s-live: #1f8a50;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    --s-todo: #85858d;
-    --s-doing: #8399ff;
-    --s-report: #e2a740;
-    --s-test: #b39cff;
-    --s-live: #52c585;
-  }
+  --s-todo: light-dark(#8b8b93, #85858d);
+  --s-doing: light-dark(#3a55d6, #8399ff);
+  --s-report: light-dark(#b06f0a, #e2a740);
+  --s-test: light-dark(#7a4fd0, #b39cff);
+  --s-live: light-dark(#1f8a50, #52c585);
 }
 .vh {
   position: absolute;
@@ -148,7 +140,7 @@
   min-height: 0;
   overflow: auto;
   display: grid;
-  grid-template-columns: repeat(5, minmax(190px, 320px));
+  grid-template-columns: repeat(5, minmax(172px, 320px));
   justify-content: start;
   align-items: start;
   gap: 10px;

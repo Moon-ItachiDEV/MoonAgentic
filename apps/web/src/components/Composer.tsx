@@ -26,6 +26,7 @@ import { AgentBadge } from "./AgentBadge.tsx";
 import { ContextGauge } from "./ContextGauge.tsx";
 import { IconArrowUp, IconBranch, IconShield, IconStop } from "./icons.tsx";
 import { Picker } from "./Picker.tsx";
+import { PlusMenu } from "./PlusMenu.tsx";
 import { type Suggestion, Suggestions } from "./Suggestions.tsx";
 
 const NARROW = "(max-width: 860px)";
@@ -59,6 +60,8 @@ export function Composer(props: {
   onRequests: () => void;
   /** Opens the agents' connections. */
   onConnections: () => void;
+  /** Opens the settings. */
+  onSettings: () => void;
   /** Archives the thread. */
   onArchive: () => void;
   /** Asks before deleting the thread. */
@@ -69,6 +72,7 @@ export function Composer(props: {
   const { agents, thread, project } = props;
   const [text, setText] = useState("");
   const [menu, setMenu] = useState(false);
+  const [plusOpen, setPlusOpen] = useState(false);
   // A favorite of another agent picked in a thread: its model, once that agent has the thread.
   const [handoffModel, setHandoffModel] = useState<{
     threadId: string;
@@ -314,6 +318,9 @@ export function Composer(props: {
       case "connections":
         props.onConnections();
         return;
+      case "settings":
+        props.onSettings();
+        return;
       case "archive":
         props.onArchive();
         return;
@@ -502,6 +509,32 @@ export function Composer(props: {
         }}
       />
       <div className="cbar">
+        <PlusMenu
+          open={plusOpen}
+          disabled={!project}
+          inThread={!!thread}
+          onToggle={(open) => {
+            setPlusOpen(open);
+            if (open) setMenu(false);
+          }}
+          onPick={(insert) => {
+            setPlusOpen(false);
+            input.current?.focus();
+            // Starts the word the composer already completes: @ files, $ skills, / commands.
+            if (insert === "/") {
+              // A command is the message's first word.
+              const rest = text.trimStart();
+              putText(rest ? `/ ${rest}` : "/", 1);
+              return;
+            }
+            const before = text.slice(0, caret);
+            const space = before && !/\s$/.test(before) ? " " : "";
+            putText(
+              before + space + insert + text.slice(caret),
+              before.length + space.length + insert.length,
+            );
+          }}
+        />
         <button
           className="agentchip"
           // In a thread whose agent is gone, the picker is how it goes to another one.
@@ -628,7 +661,7 @@ export function Composer(props: {
             setPickedAgentId(id);
             writePref("agent", id);
           }}
-          onPickAgentModel={(id, model) => {
+          onPickAgentModel={(id, model, stay) => {
             if (thread) {
               // The model is set once the new agent has the thread: the server takes one change at a time.
               if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
@@ -641,16 +674,18 @@ export function Composer(props: {
                 writePref(`model.${id}`, model);
               }
             }
+            if (stay) return;
             setMenu(false);
             input.current?.focus();
           }}
-          onPickModel={(id) => {
+          onPickModel={(id, stay) => {
             if (thread)
               connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
             else if (agent) {
               setModelPicks((p) => ({ ...p, [agent.id]: id }));
               writePref(`model.${agent.id}`, id);
             }
+            if (stay) return;
             setMenu(false);
             input.current?.focus();
           }}
