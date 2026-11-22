@@ -1027,6 +1027,8 @@ export class Hub {
   async close(): Promise<void> {
     this.closed = true;
     this.teams.close();
+    // A review starting reads the changes first; it must not reach the store once closed.
+    await this.teams.settled();
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
     await this.recovered;

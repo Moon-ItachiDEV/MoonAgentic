@@ -712,6 +712,9 @@ describe("teams", () => {
       .toBe(2);
     await expect(hub.deleteThread(leadId)).rejects.toThrow("équipe");
     await expect(hub.setArchived(leadId, true)).rejects.toThrow("équipe");
+    // Nor its coders' threads, whose folder a reviewer or a tester may be working in.
+    const coderId = store.getThread(leadId)!.team!.tasks[0]!.threadId!;
+    expect(hub.teams.isActive(coderId)).toBe(true);
     // Nor does the project go, not even in part.
     const before = store.listThreads().length;
     await expect(hub.removeProject(projectId)).rejects.toThrow("travaille encore");
@@ -803,6 +806,16 @@ describe("teams", () => {
     expect(asked(store, leadId).filter((t) => t.includes("bloque après"))).toHaveLength(2);
     // Nothing runs: the lead can be put away, and the user can start a piece again.
     expect(hub.teams.isActive(leadId)).toBe(false);
+
+    // A piece whose coder's thread was deleted starts over with a new coder.
+    const gone = blocked.tasks[1]!;
+    await hub.deleteThread(gone.threadId!);
+    await hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId, index: 1 });
+    const again = store.getThread(leadId)!.team!.tasks[1]!;
+    expect(again.threadId).toBeDefined();
+    expect(again.threadId).not.toBe(gone.threadId);
+    expect(again.reviewThreadId).toBeUndefined();
+    expect(asked(store, again.threadId!)[0]).toContain("Tu fais partie d'une équipe");
 
     await hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId, index: 0 });
     expect(store.getThread(leadId)!.team).toMatchObject({ phase: "coding" });
