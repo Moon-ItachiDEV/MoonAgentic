@@ -1,4 +1,5 @@
 import type { Team, TeamTask, Thread } from "@moonagentic/protocol";
+import { useState } from "react";
 import { connection } from "../connection.ts";
 
 const active = (team: Team) => team.phase === "planning" || team.phase === "coding";
@@ -43,6 +44,8 @@ export function TeamCard({
   threads: Thread[];
   onOpenThread: (id: string) => void;
 }) {
+  // Once asked, the button waits for the team to stop rather than asking again.
+  const [stopping, setStopping] = useState(false);
   return (
     <div className="card team-card" role="region" aria-label="Équipe">
       <div className="card-h">
@@ -73,9 +76,12 @@ export function TeamCard({
         <div className="row">
           <button
             className="btn sm danger"
-            onClick={() => connection.send({ type: "team.stop", threadId: thread.id })}
+            disabled={stopping}
+            onClick={() => {
+              if (connection.send({ type: "team.stop", threadId: thread.id })) setStopping(true);
+            }}
           >
-            Arrêter l'équipe
+            {stopping ? "Arrêt…" : "Arrêter l'équipe"}
           </button>
         </div>
       )}

@@ -19,6 +19,8 @@ export interface TeamHost {
     title: string;
     parentId?: string;
     role: "lead" | "coder";
+    /** Given at creation, so the thread is never seen without its team. */
+    team?: Team;
   }): string;
   send(threadId: string, text: string): void;
   cancel(threadId: string): Promise<void>;
@@ -58,12 +60,33 @@ ${piece.brief}
 
 Travaille seulement sur cette sous-tâche, dans ce dossier. Quand tu as fini, résume ce que tu as changé.`;
 
+/** The JSON object that starts at `start`, up to its matching brace, strings skipped. */
+function objectAt(text: string, start: number): string | undefined {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === "\\") i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return text.slice(start, i + 1);
+  }
+  return undefined;
+}
+
 /** Reads the lead's plan from the last JSON block of its reply, or undefined. */
 export function readPlan(reply: string): { title: string; brief: string }[] | undefined {
-  const blocks = [...reply.matchAll(/```(?:json)?\s*\n([\s\S]*?)```/g)].map((m) => m[1] ?? "");
-  // A bare object at the end works too, for an agent that left the fence out.
-  const bare = reply.slice(reply.lastIndexOf('{"tasks"'));
-  for (const raw of [...blocks.reverse(), bare]) {
+  const blocks = [...reply.matchAll(/```(?:json)?[ \t]*\r?\n([\s\S]*?)```/gi)].map(
+    (m) => m[1] ?? "",
+  );
+  // A bare object works too, for an agent that left the fence out, however it is laid out
+  // and whatever it wrote after it.
+  const bare = [...reply.matchAll(/\{\s*"tasks"\s*:/g)]
+    .map((m) => objectAt(reply, m.index))
+    .filter((raw): raw is string => raw !== undefined);
+  for (const raw of [...blocks.reverse(), ...bare.reverse()]) {
     try {
       const parsed = JSON.parse(raw.trim()) as { tasks?: unknown };
       if (!Array.isArray(parsed.tasks)) continue;
@@ -116,8 +139,8 @@ export class Teams {
       text: planPrompt(input.task, input.coders),
       title: `Équipe : ${input.task}`,
       role: "lead",
+      team,
     });
-    this.host.setTeam(leadId, team);
     return leadId;
   }
 

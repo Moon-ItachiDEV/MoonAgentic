@@ -17,8 +17,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import {
   branchName,
+  ensureWorktree,
   githubRepo,
   parseDiff,
+  removeWorktree,
   restoreCheckpoint,
   saveCheckpoint,
 } from "../src/git.ts";
@@ -347,6 +349,23 @@ describe("choosing what to ship", () => {
 });
 
 describe("git helpers", () => {
+  it("makes and removes worktrees of one repository one at a time, all of them kept", async () => {
+    const { root, repo } = repository();
+    const base = git(repo, "rev-parse", "HEAD");
+    const dirs = [0, 1, 2, 3].map((i) => path.join(root, "worktrees", `w${i}`));
+    await Promise.all(dirs.map((dir, i) => ensureWorktree(repo, dir, `piece-${i}`, base)));
+    for (const dir of dirs) expect(existsSync(path.join(dir, "README.md"))).toBe(true);
+    expect(git(repo, "worktree", "list").split("\n")).toHaveLength(5);
+    // A removal running beside new worktrees takes none of them with it.
+    const more = [4, 5].map((i) => path.join(root, "worktrees", `w${i}`));
+    await Promise.all([
+      removeWorktree(repo, dirs[0]!),
+      ...more.map((dir, i) => ensureWorktree(repo, dir, `piece-${i + 4}`, base)),
+    ]);
+    expect(existsSync(dirs[0]!)).toBe(false);
+    expect(git(repo, "worktree", "list").split("\n")).toHaveLength(6);
+  });
+
   it("reads GitHub remotes in their https and ssh forms only", () => {
     for (const url of [
       "https://github.com/moon/app.git",
@@ -639,11 +658,16 @@ describe("teams", () => {
 
   it("has the lead split the task, then coders do the pieces at once, each on its own branch", async () => {
     const { hub, store, projectId } = repository();
+    const seen: ServerMessage[] = [];
+    hub.connect({ send: (m) => seen.push(m) });
     const leadId = team(hub, projectId, "Corrige answer et documente-la");
     expect(store.getThread(leadId)).toMatchObject({
       role: "lead",
       title: expect.stringContaining("Équipe"),
     });
+    // The lead's thread is never seen without its team.
+    const first = seen.find((m) => m.type === "thread" && m.thread.id === leadId);
+    expect(first?.type === "thread" && first.thread.team?.phase).toBe("planning");
 
     await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
     const { tasks } = store.getThread(leadId)!.team!;
@@ -683,6 +707,10 @@ describe("teams", () => {
       .toBe(2);
     await expect(hub.deleteThread(leadId)).rejects.toThrow("équipe");
     await expect(hub.setArchived(leadId, true)).rejects.toThrow("équipe");
+    // Nor does the project go, not even in part.
+    const before = store.listThreads().length;
+    await expect(hub.removeProject(projectId)).rejects.toThrow("travaille encore");
+    expect(store.listThreads()).toHaveLength(before);
 
     await hub.teams.stop(leadId);
     const stopped = store.getThread(leadId)!.team!;

@@ -19,6 +19,21 @@ describe("readPlan", () => {
     ).toEqual([{ title: "A", brief: "Fais A" }]);
   });
 
+  it("reads a bare plan laid out on several lines, with text after it, and a ```JSON fence", () => {
+    const plan = [{ title: "A", brief: 'Fais "A" {vite}' }];
+    expect(
+      readPlan(
+        `Le plan :\n{\n  "tasks": [\n    {"title": "A", "brief": "Fais \\"A\\" {vite}"}\n  ]\n}\nBon courage !`,
+      ),
+    ).toEqual(plan);
+    expect(readPlan(`{ "tasks" : [{"title": "A", "brief": "Fais \\"A\\" {vite}"}] } fin`)).toEqual(
+      plan,
+    );
+    expect(readPlan('```JSON\n{"tasks": [{"title": "B", "brief": "Fais B"}]}\n```')).toEqual([
+      { title: "B", brief: "Fais B" },
+    ]);
+  });
+
   it("finds no plan in prose or broken json, and keeps eight pieces at most", () => {
     expect(readPlan("Je préfère ne pas faire de plan.")).toBeUndefined();
     expect(readPlan('```json\n{"tasks": [\n```')).toBeUndefined();

@@ -15,6 +15,7 @@ import type {
   ReviewFile,
   ServerMessage,
   Snapshot,
+  Team,
   Thread,
   ToolContent,
   Workspace,
@@ -398,6 +399,7 @@ export class Hub {
     title?: string | undefined;
     parentId?: string | undefined;
     role?: "lead" | "coder" | undefined;
+    team?: Team | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
@@ -423,6 +425,7 @@ export class Hub {
       ...(workspace ? { workspace } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.role ? { role: input.role } : {}),
+      ...(input.team ? { team: input.team } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -756,7 +759,9 @@ export class Hub {
     if (this.removingProjects.has(projectId))
       throw new Error("Ce projet est déjà en cours de retrait.");
     const threads = this.store.listThreads().filter((t) => t.projectId === projectId);
-    if (threads.some((t) => this.turns.has(t.id) || this.busy.has(t.id))) {
+    if (
+      threads.some((t) => this.turns.has(t.id) || this.busy.has(t.id) || this.teams.isActive(t.id))
+    ) {
       throw new Error("Un fil de ce projet travaille encore : arrête-le d'abord.");
     }
     // No new thread, message or step starts in the project while it goes, and closing waits.
