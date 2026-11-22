@@ -50,7 +50,9 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
         ? Extract<ServerMessage, { type: "github" }>
         : T extends "github.repos"
           ? Extract<ServerMessage, { type: "githubRepos" }>
-          : ServerMessage;
+          : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
+            ? Extract<ServerMessage, { type: "pullRequest" }>
+            : ServerMessage;
 
 export class Connection {
   private state: State = initialState;

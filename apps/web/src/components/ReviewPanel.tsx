@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { connection, newId, type Review } from "../connection.ts";
 import { type DiffLine, type LineComment, parsePatch, reviewMessage } from "../diff.ts";
 import { IconBranch, IconChevron, IconX } from "./icons.tsx";
+import { PullRequestStatus, usePullRequest } from "./PullRequestStatus.tsx";
 
 const STATUS: Record<ReviewFile["status"], { letter: string; label: string }> = {
   added: { letter: "A", label: "nouveau" },
@@ -211,6 +212,9 @@ export function ReviewPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pushed, setPushed] = useState(false);
+  /** Counts the pushes made from here: each one may have opened or moved the pull request. */
+  const [pushes, setPushes] = useState(0);
+  const pull = usePullRequest(thread, `${running}:${pushes}`);
   /** Ticks the user changed, by path; the others follow `looksSecret`. */
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
   /** Files the user folded or unfolded, by path; the others follow the size of the change. */
@@ -249,6 +253,7 @@ export function ReviewPanel({
         files: picked.flatMap((f) => (f.from ? [f.path, f.from] : [f.path])),
       });
       setPushed(true);
+      setPushes((n) => n + 1);
       connection.send({ type: "workspace.review", threadId: thread.id });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -372,14 +377,28 @@ export function ReviewPanel({
               </button>
             </div>
           )}
-          {workspace?.prUrl && (
-            <p className="rv-pr">
-              <a href={workspace.prUrl} target="_blank" rel="noreferrer">
-                {workspace.prOpened ? "Voir la pull request" : "Ouvrir la pull request sur GitHub"}
-              </a>
-            </p>
+          {pull.pr ? (
+            <PullRequestStatus
+              pr={pull.pr}
+              loading={pull.loading}
+              onRefresh={() => void pull.refresh()}
+              onMerge={pull.merge}
+            />
+          ) : (
+            workspace?.prUrl && (
+              <p className="rv-pr">
+                <a href={workspace.prUrl} target="_blank" rel="noreferrer">
+                  {workspace.prOpened
+                    ? "Voir la pull request"
+                    : "Ouvrir la pull request sur GitHub"}
+                </a>
+              </p>
+            )
           )}
-          {pushed && !workspace?.prUrl && <p className="rv-pr">Branche poussée.</p>}
+          {pull.error && !pull.pr && (
+            <p className="rv-msg">État de la pull request indisponible : {pull.error}</p>
+          )}
+          {pushed && !workspace?.prUrl && !pull.pr && <p className="rv-pr">Branche poussée.</p>}
           {running && (
             <p className="rv-msg">
               L'agent travaille encore. Tu pourras envoyer quand il aura fini.
