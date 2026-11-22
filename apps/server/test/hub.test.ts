@@ -30,13 +30,14 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-function setup() {
+function setup(options: { idleMs?: number; maxLiveAgents?: number } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-test-"));
   mkdirSync(path.join(dir, ".home"));
   const store = new Store(path.join(dir, "state.sqlite"));
   const hub = new Hub(store, new Agents({ demo: true }), {
     worktreesDir: path.join(dir, ".worktrees"),
     homeDir: path.join(dir, ".home"),
+    ...options,
   });
   const client = new TestClient();
   hub.connect(client);
@@ -1045,5 +1046,80 @@ describe("Connexions: agents' state, custom agents and pending requests", () => 
     hub.send(threadId, "Reprends");
     await hub.whenIdle(threadId);
     expect(store.getThread(threadId)).toMatchObject({ agentId: "demo", status: "idle" });
+  });
+});
+
+describe("agents left alone", () => {
+  it("stops an idle agent, keeps its session, and picks the thread up on the next message", async () => {
+    const { hub, store, projectId } = setup({ idleMs: 30 });
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    await expect.poll(() => hub.liveAgents).toBe(0);
+    // The session stays known, so the agent can resume it.
+    expect(store.getSessionId(threadId)).not.toBeNull();
+
+    // Sent while the agent may still be stopping: it waits rather than being refused.
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)).toMatchObject({ status: "idle" });
+    expect(lastTurnSaid(store.listItems(threadId))).not.toBe("");
+  });
+
+  it("keeps no more agents running than allowed, stopping the one left alone longest", async () => {
+    const { hub, store, projectId } = setup({ maxLiveAgents: 2 });
+    const start = async (text: string) => {
+      const id = hub.createThread({ projectId, agentId: "demo", permissionMode: "full", text });
+      await hub.whenIdle(id);
+      return id;
+    };
+    const first = await start("Un");
+    const second = await start("Deux");
+    expect(hub.liveAgents).toBe(2);
+    const third = await start("Trois");
+    // The one paused counts until its process is gone.
+    await expect.poll(() => hub.liveAgents).toBe(2);
+
+    // The first, left alone longest, was the one stopped: it comes back on its next message.
+    hub.send(first, "Encore");
+    await hub.whenIdle(first);
+    expect(store.getThread(first)).toMatchObject({ status: "idle" });
+    await expect.poll(() => hub.liveAgents).toBe(2);
+    for (const id of [second, third]) expect(store.getThread(id)?.status).toBe("idle");
+  });
+});
+
+describe("streamed text", () => {
+  it("sends each piece at once but writes the text down in batches", async () => {
+    const { hub, store, client, projectId } = setup();
+    let writes = 0;
+    const putItem = store.putItem.bind(store);
+    store.putItem = (threadId, item) => {
+      if (item.kind === "agent") writes += 1;
+      putItem(threadId, item);
+    };
+    await hub.handle(client, {
+      type: "thread.create",
+      requestId: "r1",
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Corrige la réponse",
+    });
+    const threadId = client.openThreadId!;
+    await hub.whenIdle(threadId);
+    const appends = client.messages.filter((m) => m.type === "append").length;
+    expect(appends).toBeGreaterThan(10);
+    expect(writes).toBeLessThan(appends / 2);
+    // Nothing is lost: what was written is what viewers saw.
+    const said = store
+      .listItems(threadId)
+      .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
+      .join("");
+    expect(said).toContain("42");
   });
 });
