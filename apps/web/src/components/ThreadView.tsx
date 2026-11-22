@@ -71,6 +71,10 @@ export function ThreadView({
       ? lastQuestion.id
       : undefined;
 
+  // Only the current turn's tools are at work: one left unfinished earlier stays still.
+  const lastUser = items?.findLastIndex((i) => i.kind === "user") ?? -1;
+  const working = thread.status === "running" || thread.status === "waiting";
+
   return (
     <div
       className="view"
@@ -90,6 +94,7 @@ export function ThreadView({
               agent={agents.find((a) => a.id === authors[i])}
               showBy={startsAgentBlock(items, i)}
               openQuestion={openQuestion}
+              live={working && i > lastUser}
             />
           </div>
         ))}
@@ -125,6 +130,7 @@ function FeedItem({
   agent,
   showBy,
   openQuestion,
+  live,
 }: {
   item: Item;
   thread: Thread;
@@ -133,6 +139,8 @@ function FeedItem({
   showBy: boolean;
   /** The question still waiting for an answer, if any. */
   openQuestion: string | undefined;
+  /** Part of the turn the agent is working on now. */
+  live: boolean;
 }) {
   switch (item.kind) {
     case "user":
@@ -172,10 +180,7 @@ function FeedItem({
       if (item.questions) {
         return <QuestionCard item={item} threadId={thread.id} open={item.id === openQuestion} />;
       }
-      // Once the turn is over, a tool the agent left unfinished is no longer at work.
-      return (
-        <ToolRow item={item} live={thread.status === "running" || thread.status === "waiting"} />
-      );
+      return <ToolRow item={item} live={live} />;
     case "plan":
       return (
         <div className="card">
@@ -304,7 +309,12 @@ function QuestionCard({
   const [picked, setPicked] = useState<Record<number, string[]>>({});
   // One question with one answer goes out on the click; anything more is sent together.
   const direct = questions.length === 1 && !questions[0]?.multi;
-  const send = (text: string) => connection.send({ type: "thread.send", threadId, text });
+  // Sent once: a second click before the thread shows as running would send it twice.
+  const [sent, setSent] = useState(false);
+  if (sent && !open) setSent(false);
+  const send = (text: string) => {
+    if (!sent && connection.send({ type: "thread.send", threadId, text })) setSent(true);
+  };
   const complete = questions.every((_, i) => picked[i]?.length);
   return (
     <div className={`approve ask${open ? "" : " done"}`}>
@@ -325,8 +335,9 @@ function QuestionCard({
                     key={option}
                     className={`btn sm${on ? " pri" : ""}`}
                     aria-pressed={direct ? undefined : on}
+                    disabled={sent}
                     onClick={() => {
-                      if (direct) return void send(option);
+                      if (direct) return send(option);
                       setPicked((p) => {
                         const mine = p[i] ?? [];
                         const next = !q.multi
@@ -350,7 +361,7 @@ function QuestionCard({
         <div className="row">
           <button
             className="btn sm pri"
-            disabled={!complete}
+            disabled={!complete || sent}
             onClick={() =>
               send(
                 questions

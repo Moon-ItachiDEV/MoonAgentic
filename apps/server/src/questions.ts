@@ -21,10 +21,14 @@ export function toolQuestions(rawInput: unknown): ToolQuestion[] | undefined {
     const raw = entry as Record<string, unknown> | null;
     const question = text(raw?.question);
     if (!question || !Array.isArray(raw?.options)) return [];
-    const options = raw.options
-      .slice(0, MAX_OPTIONS)
-      .map((o) => text(typeof o === "string" ? o : (o as { label?: unknown } | null)?.label))
-      .filter(Boolean);
+    // Each option once: the same text twice could not be told apart when picked.
+    const options = [
+      ...new Set(
+        raw.options
+          .map((o) => text(typeof o === "string" ? o : (o as { label?: unknown } | null)?.label))
+          .filter(Boolean),
+      ),
+    ].slice(0, MAX_OPTIONS);
     if (options.length < 2) return [];
     const multi = raw.is_multi_select === true || raw.multiSelect === true;
     return [{ question, options, ...(multi ? { multi } : {}) }];

@@ -31,6 +31,15 @@ describe("questions an agent asks with a tool", () => {
     ).toEqual([{ question: "Quoi ?", options: ["A", "B"], multi: true }]);
   });
 
+  it("keeps each option once", () => {
+    expect(
+      toolQuestions({ questions: [{ question: "Quoi ?", options: ["A", "B", " A ", "B"] }] }),
+    ).toEqual([{ question: "Quoi ?", options: ["A", "B"] }]);
+    expect(
+      toolQuestions({ questions: [{ question: "Quoi ?", options: ["A", "A"] }] }),
+    ).toBeUndefined();
+  });
+
   it("takes nothing else for a question", () => {
     expect(toolQuestions(undefined)).toBeUndefined();
     expect(toolQuestions({ Path: "a.txt", Content: "ok" })).toBeUndefined();
