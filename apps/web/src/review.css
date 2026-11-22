@@ -1,0 +1,392 @@
+/* « À revoir » docked beside the conversation, as drawn in the mockup: numbered diffs,
+   remarks on any line, then commit, push and PR at the bottom. */
+.app.reviewing {
+  grid-template-columns: 264px minmax(0, 1fr) minmax(440px, 46%);
+}
+.review-btn.on {
+  background: var(--card);
+  border-color: var(--line2);
+}
+.review-btn .cnt {
+  font-size: 11px;
+  color: var(--muted);
+}
+.rv-scrim {
+  display: none;
+}
+.rv-panel {
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--line);
+  animation: rv-in 0.22s var(--ease);
+}
+@keyframes rv-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+.rv-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 10px 6px 12px;
+}
+.rv-tabs {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--card);
+}
+.rv-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.rv-tab.on {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.rv-tab b {
+  font-weight: 400;
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.rv-panel .rv-branch {
+  margin: 0;
+  padding: 2px 16px 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.rv-chip {
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--card);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.rv-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 0 12px;
+}
+.rv-hint {
+  margin: 0 12px 6px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: var(--card);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.rv-msg {
+  margin: 8px 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.rv-msg.error {
+  color: var(--err);
+}
+.rv-sum {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px 6px 16px;
+  font: 12.5px var(--mono);
+  color: var(--muted);
+}
+
+/* One file */
+.rvf {
+  border-top: 1px solid var(--line);
+}
+.rvf-h {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0 12px 0 6px;
+  background: var(--surface);
+  font: 12.5px var(--mono);
+}
+.rvf-tg {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  color: var(--faint);
+  flex: none;
+}
+.rvf-tg:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.rvf-tg svg {
+  transition: transform 0.18s var(--ease);
+}
+.rvf.open .rvf-tg svg {
+  transform: rotate(90deg);
+}
+.rvf-st {
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  font: 600 10.5px var(--sans);
+  flex: none;
+}
+.rvf-st.st-added {
+  background: var(--add-bg);
+  color: var(--add-fg);
+}
+.rvf-st.st-modified {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+.rvf-st.st-deleted {
+  background: var(--del-bg);
+  color: var(--del-fg);
+}
+.rvf-st.st-renamed {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.rvf-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg);
+}
+.rvf-n {
+  white-space: nowrap;
+  font-size: 12px;
+}
+.rvf-h input {
+  width: 16px;
+  height: 16px;
+  margin: 0 0 0 4px;
+  accent-color: var(--accent);
+  flex: none;
+}
+.rvf-secret {
+  margin: 0 16px 6px 58px;
+  font-size: 12px;
+  color: var(--warn);
+}
+
+/* The numbered diff */
+.rvd {
+  overflow-x: auto;
+  font: 12.5px/1.6 var(--mono);
+  padding-bottom: 6px;
+}
+.rvd-l {
+  display: grid;
+  grid-template-columns: 36px 36px 16px max-content;
+  width: max-content;
+  min-width: 100%;
+}
+.rvd-l.can {
+  cursor: pointer;
+}
+.rvd-l.can:hover {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.rvd-l.can:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1.5px var(--accent);
+}
+.rvd-no {
+  padding-right: 8px;
+  text-align: right;
+  color: var(--faint);
+  user-select: none;
+  font-size: 11.5px;
+}
+.rvd-s {
+  color: var(--faint);
+  user-select: none;
+}
+.rvd-t {
+  white-space: pre;
+  padding-right: 16px;
+}
+.rvd-l.add {
+  background: var(--add-bg);
+}
+.rvd-l.add .rvd-s,
+.rvd-l.add .rvd-t {
+  color: var(--add-fg);
+}
+.rvd-l.del {
+  background: var(--del-bg);
+}
+.rvd-l.del .rvd-s,
+.rvd-l.del .rvd-t {
+  color: var(--del-fg);
+}
+.rvd-l.hunk,
+.rvd-l.note {
+  display: block;
+  padding: 2px 16px;
+  background: var(--sunken);
+  color: var(--faint);
+}
+
+/* Remarks on a line */
+.rvc,
+.rvc-edit {
+  margin: 4px 12px 6px 88px;
+  max-width: 460px;
+  font-family: var(--sans);
+}
+.rvc {
+  display: block;
+  padding: 7px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 13px;
+  color: var(--fg);
+  text-align: left;
+  white-space: pre-wrap;
+}
+.rvc-edit {
+  padding: 8px;
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.rvc-edit textarea {
+  display: block;
+  width: 100%;
+  border: 0;
+  outline: none;
+  resize: vertical;
+  background: none;
+  font: 13px/1.45 var(--sans);
+  color: var(--fg);
+}
+.rvc-act {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+/* Bottom: remarks to send, then the commit */
+.rv-foot {
+  border-top: 1px solid var(--line);
+  padding: 8px 12px 12px;
+  display: grid;
+  gap: 8px;
+}
+.rv-foot:empty {
+  display: none;
+}
+.rv-foot .rv-msg,
+.rv-foot .rv-pr {
+  margin: 0 4px;
+  font-size: 13px;
+}
+.rv-remarks {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 12px;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  font-size: 13px;
+  color: var(--accent);
+}
+.rv-ship {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rv-commit {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  font: inherit;
+  font-size: 13px;
+  color: var(--fg);
+  outline: none;
+}
+.rv-commit:focus {
+  border-color: var(--line2);
+}
+.rv-ship .btn {
+  height: 36px;
+  flex: none;
+}
+
+/* Not enough room beside the conversation: the panel slides over it. */
+@media (max-width: 1180px) {
+  .app.reviewing {
+    grid-template-columns: 264px minmax(0, 1fr);
+  }
+  .rv-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    background: var(--scrim);
+  }
+  .rv-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 45;
+    width: min(620px, 100%);
+    box-shadow: var(--shadow);
+  }
+}
+@media (max-width: 860px) {
+  .app.reviewing {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .rv-panel {
+    width: 100%;
+    border-left: 0;
+  }
+  .rvc,
+  .rvc-edit {
+    margin-left: 12px;
+  }
+  .rv-ship {
+    flex-wrap: wrap;
+  }
+  .rv-commit {
+    flex-basis: 100%;
+  }
+  .rv-ship .btn {
+    flex: 1;
+  }
+}
+.rv-panel .grow {
+  flex: 1;
+}
