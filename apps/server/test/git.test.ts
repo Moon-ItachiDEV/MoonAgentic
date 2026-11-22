@@ -122,7 +122,9 @@ describe("thread workspaces", () => {
     git(workspace.path, "checkout", "-q", "-b", "autre");
     await expect(hub.ship(threadId, "x", false)).rejects.toThrow("plus sur la branche");
 
-    // A review that cannot be read still answers the panel waiting for it.
+    // A review that cannot be read still answers the panel waiting for it. Windows keeps
+    // a folder that a live process works in, so the agent stops first.
+    await hub.close();
     rmSync(workspace.path, { recursive: true, force: true });
     await hub.handle(client, { type: "workspace.review", threadId });
     expect(client.messages.at(-1)).toMatchObject({

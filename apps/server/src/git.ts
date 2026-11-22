@@ -30,11 +30,12 @@ function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<stri
  */
 export function isGitRepo(dir: string): boolean {
   try {
-    execFileSync("git", ["rev-parse", "--verify", "--quiet", "HEAD"], {
-      cwd: dir,
-      stdio: ["ignore", "ignore", "ignore"],
-    });
-    return true;
+    const out = execFileSync(
+      "git",
+      ["rev-parse", "--is-inside-work-tree", "--verify", "--quiet", "HEAD"],
+      { cwd: dir, stdio: ["ignore", "pipe", "ignore"] },
+    );
+    return out.toString().startsWith("true");
   } catch {
     return false;
   }

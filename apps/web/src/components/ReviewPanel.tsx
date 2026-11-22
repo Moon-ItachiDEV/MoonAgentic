@@ -70,10 +70,11 @@ export function ReviewPanel({
   const [error, setError] = useState<string | null>(null);
   const [pushed, setPushed] = useState(false);
 
-  // The server holds the files; ask on opening and again whenever a turn starts or ends.
+  // The server holds the files; ask on opening, once the branch exists, and whenever a
+  // turn starts or ends.
   useEffect(() => {
     connection.send({ type: "workspace.review", threadId: thread.id });
-  }, [thread.id, running]);
+  }, [thread.id, running, workspace?.base]);
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
