@@ -152,17 +152,9 @@ export async function restoreCheckpoint(dir: string, tree: string): Promise<void
     await git(dir, ["add", "-A"], env);
     await git(dir, ["read-tree", "--reset", "-u", tree], env);
   });
-  // The folder's own staging area is left alone, except for files staged since that are
-  // gone again: they would show as added and deleted at once.
-  const gone = (await git(dir, ["ls-files", "-z", "--deleted"])).split("\0").filter(Boolean);
-  if (!gone.length) return;
-  const committed = new Set(
-    (await git(dir, ["ls-tree", "-r", "-z", "--name-only", "HEAD"])).split("\0"),
-  );
-  const staged = gone.filter((f) => !committed.has(f));
-  for (let i = 0; i < staged.length; i += 100) {
-    await git(dir, ["update-index", "--force-remove", "--", ...staged.slice(i, i + 100)]);
-  }
+  // The folder's own staging area goes back to the last commit: what the undone turns had
+  // staged would otherwise be in the agent's next commit. No file is touched by this.
+  await git(dir, ["reset", "--quiet", "--mixed"]);
 }
 
 const ALL_GITIGNORES = ":(glob)**/.gitignore";

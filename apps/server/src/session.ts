@@ -306,14 +306,19 @@ export class AgentSession {
       });
     });
     /** Stops the agent and resolves once its process is gone, forcing it after a grace period. */
+    let killed: Promise<void> | undefined;
     const kill = () => {
-      stopping = true;
-      connection.close();
-      if (!exited) {
-        killTree(child, "SIGTERM");
-        setTimeout(() => exited || killTree(child, "SIGKILL"), KILL_GRACE_MS).unref();
-      }
-      return exit;
+      // Asked twice, it is still stopped once.
+      killed ??= (async () => {
+        stopping = true;
+        connection.close();
+        if (!exited) {
+          setTimeout(() => exited || void killTree(child, "SIGKILL"), KILL_GRACE_MS).unref();
+          await killTree(child, "SIGTERM");
+        }
+        await exit;
+      })();
+      return killed;
     };
 
     const aborted = new Promise<never>((_, reject) => {

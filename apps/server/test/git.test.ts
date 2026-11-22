@@ -217,10 +217,18 @@ describe("thread workspaces", () => {
     writeFileSync(path.join(repo, "gen.txt"), "produit\n");
     writeFileSync(path.join(repo, "indexe.txt"), "ajouté\n");
     git(repo, "add", "indexe.txt");
+    writeFileSync(path.join(repo, "README.md"), "# Demo\nchangé puis indexé\n");
+    git(repo, "add", "README.md");
 
     await restoreCheckpoint(repo, tree);
     expect(git(repo, "status", "--porcelain", "--ignored")).toBe("");
     expect(existsSync(path.join(repo, "gen.txt"))).toBe(false);
+
+    // The same for a file removed with git itself.
+    git(repo, "rm", "-q", "README.md");
+    await restoreCheckpoint(repo, tree);
+    expect(git(repo, "status", "--porcelain", "--ignored")).toBe("");
+    expect(existsSync(path.join(repo, "README.md"))).toBe(true);
   });
 
   it("works in the project folder when asked, or when the folder is not in git", async () => {

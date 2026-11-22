@@ -583,6 +583,12 @@ export class Hub {
     const discoveries = [...this.discoveries.values()];
     for (const d of discoveries) d.stop.abort();
     await Promise.all(discoveries.map((d) => d.done.catch(() => undefined)));
+    // An agent still starting is stopped now rather than waited for, and its turn ends
+    // as stopped, not as failed.
+    for (const [threadId, stop] of this.starting) {
+      this.cancelled.add(threadId);
+      stop.abort();
+    }
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
     await Promise.all(

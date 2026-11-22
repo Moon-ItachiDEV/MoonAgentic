@@ -9,7 +9,8 @@ export interface SpawnPlan {
 const BATCH_FILE = /\.(cmd|bat)$/i;
 /** Characters cmd.exe gives a meaning to, even between quotes. */
 const CMD_SPECIAL = /["%^!&|<>\r\n]/;
-const PLAIN_ARG = /^[\w./:=@\\-]+$/;
+/** No space, comma, semicolon or equals sign either: a command file splits its arguments on them. */
+const PLAIN_ARG = /^[\w./:@\\-]+$/;
 
 /**
  * How to start a command. Windows only runs `.cmd` and `.bat` files, which is how npm
@@ -38,21 +39,26 @@ export function spawnPlan(
 /**
  * Stops a process and everything it started: an agent's adapter starts the agent's own
  * CLI and its MCP servers, which would otherwise live on. On Unix the process must have
- * been spawned `detached`, so that it leads a group the signal can reach.
+ * been spawned `detached`, so that it leads a group the signal can reach. Resolves once
+ * the request to stop is made, which on Windows is once the tree is gone.
  */
-export function killTree(child: ChildProcess, signal: "SIGTERM" | "SIGKILL"): void {
+export function killTree(child: ChildProcess, signal: "SIGTERM" | "SIGKILL"): Promise<void> {
   const pid = child.pid;
-  if (pid === undefined) return;
+  if (pid === undefined) return Promise.resolve();
   if (process.platform === "win32") {
-    // Windows has no signals: taskkill ends the whole tree at once.
-    execFile("taskkill", ["/pid", String(pid), "/T", "/F"], (error) => {
-      if (error) child.kill();
+    // Windows has no signals: taskkill ends the whole tree at once. Its own end is waited
+    // for, since the process it was given can be gone a moment before the ones it started.
+    return new Promise((resolve) => {
+      execFile("taskkill", ["/pid", String(pid), "/T", "/F"], (error) => {
+        if (error) child.kill();
+        resolve();
+      });
     });
-    return;
   }
   try {
     process.kill(-pid, signal);
   } catch {
     child.kill(signal);
   }
+  return Promise.resolve();
 }

@@ -46,7 +46,7 @@ describe("spawnPlan", () => {
   });
 
   it("refuses anything cmd.exe could read as a command of its own", () => {
-    for (const arg of ["a & calc", "%PATH%", 'a"b', "a b", "a|b", "^", ""]) {
+    for (const arg of ["a & calc", "%PATH%", 'a"b', "a b", "a|b", "a=b", "a,b", "^", ""]) {
       expect(() => spawnPlan("C:\\npm\\agent.cmd", [arg], "win32")).toThrow();
     }
     expect(() => spawnPlan("C:\\a&b\\agent.cmd", ["acp"], "win32")).toThrow();
@@ -90,7 +90,7 @@ describe("killTree", () => {
     expect(alive(grandchild)).toBe(true);
 
     const exited = new Promise((resolve) => parent.once("exit", resolve));
-    killTree(parent, "SIGKILL");
+    await killTree(parent, "SIGKILL");
     await exited;
     await expect.poll(() => alive(grandchild), { timeout: 10_000 }).toBe(false);
   });

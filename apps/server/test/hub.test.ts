@@ -531,6 +531,21 @@ describe("Hub with the demo agent", () => {
     expect(hub.snapshot().agents.find((a) => a.id === "demo")).not.toHaveProperty("models");
   });
 
+  it("stops a turn whose agent is still starting up when the server stops", async () => {
+    demoModels("hang");
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Bonjour",
+    });
+    // Well under the two minutes a start may take, and the test's own time limit.
+    await hub.close();
+    expect(store.getThread(threadId)).toMatchObject({ status: "idle" });
+    expect(store.getThread(threadId)?.error).toBeUndefined();
+  });
+
   it("stars and unstars favorite models one at a time, for known agents only", async () => {
     const { hub, client } = setup();
     hub.toggleFavorite("demo", "precis", true);

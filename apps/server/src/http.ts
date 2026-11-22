@@ -125,6 +125,8 @@ export function createHttpServer(options: { hub: Hub; token: string; webDir?: st
     const stream = createReadStream(file);
     // A file that vanished or cannot be read ends this response, not the server.
     stream.on("error", () => res.destroy());
+    // A reader who leaves before the end would otherwise leave the file open.
+    res.on("close", () => stream.destroy());
     stream.once("open", () => {
       res.writeHead(200, {
         "content-type": TYPES[path.extname(file)] ?? "application/octet-stream",
