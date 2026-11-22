@@ -281,7 +281,7 @@ const runningThread = (t: TeamTask) =>
 
 /** The team with every piece at work cut short, what was done kept: a stop or a restart. */
 const cutShort = (team: Team): Team => {
-  const { leadTask: _lead, mergeStep: _step, ...rest } = team;
+  const { leadTask: _lead, mergeStep: _step, mergeReasked: _reasked, ...rest } = team;
   return { ...rest, tasks: team.tasks.map((t) => (open(t) ? { ...t, status: "stopped" } : t)) };
 };
 
@@ -971,7 +971,7 @@ export class Teams {
       throw new Error("La fusion en cours attend son commit : fais-le dans le fil de fusion.");
     const fresh = this.host.thread(lead.id)?.team;
     if (!fresh || active(fresh)) return;
-    const { error: _error, mergeStep: _step, ...rest } = fresh;
+    const { error: _error, mergeStep: _step, mergeReasked: _reasked, ...rest } = fresh;
     this.save(lead.id, { ...rest, phase: "merging" });
     this.merge(lead.id);
   }

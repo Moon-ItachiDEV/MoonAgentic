@@ -175,7 +175,7 @@ export function TeamStrip({
       ]
         .filter(Boolean)
         .join(" · ")
-    : `${team.phase === "done" ? "Terminée" : team.phase === "blocked" ? "En attente de toi" : "Arrêtée"} · ${span(end - start)} en tout`;
+    : `${team.phase === "done" ? "Terminée" : team.phase === "blocked" ? "En attente de toi" : team.phase === "failed" ? "Échouée" : "Arrêtée"} · ${span(end - start)} en tout`;
 
   return (
     <section
@@ -222,8 +222,9 @@ export function TeamStrip({
                 <div
                   key={l.lane}
                   className={`tl-l${s.phase === "idle" ? " ph-idle" : ""}`}
-                  role="button"
-                  tabIndex={0}
+                  // A lane whose thread is not made yet opens nothing: it is no button.
+                  role={l.open ? "button" : "group"}
+                  tabIndex={l.open ? 0 : undefined}
                   aria-label={`${l.who} : ${s.asks ? "attend ton accord" : LABEL[s.phase ?? "idle"] || "au repos"}`}
                   onClick={() => l.open && onOpenThread(l.open)}
                   onKeyDown={(e) => {
