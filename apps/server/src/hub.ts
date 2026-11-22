@@ -118,6 +118,9 @@ const archiveRef = (threadId: string) => `refs/moonagentic/${threadId}/archive`;
 const workFolder = (workspace: Workspace) =>
   workspace.subdir ? path.join(workspace.path, workspace.subdir) : workspace.path;
 
+/** What a team's reviewer never does on its own, whatever its access: it reads, it does not change. */
+const READ_ONLY_REFUSED = new Set(["edit", "delete", "move"]);
+
 const TEAM_AT_WORK = "Cette équipe travaille encore : arrête-la d'abord.";
 
 /** A step back under way, kept until it is done so a stop in the middle is finished later. */
@@ -1134,8 +1137,15 @@ export class Hub {
   }
 
   setPermissionMode(threadId: string, permissionMode: PermissionMode): void {
-    this.requireThread(threadId);
+    const thread = this.requireThread(threadId);
     this.updateThread(threadId, { permissionMode });
+    // A team's lead speaks for its team: its agents, and those it starts later, follow.
+    if (thread.role !== "lead" || !thread.team) return;
+    this.teams.setPermissionMode(threadId, permissionMode);
+    for (const member of this.store.listThreads()) {
+      if (member.parentId === threadId && member.permissionMode !== permissionMode)
+        this.updateThread(member.id, { permissionMode });
+    }
   }
 
   respondToPermission(threadId: string, itemId: string, optionId: string): void {
@@ -1617,7 +1627,9 @@ export class Hub {
   ): Promise<acp.RequestPermissionResponse> {
     const thread = this.requireThread(threadId);
     if (request.toolCall.title) this.upsertTool(threadId, request.toolCall);
-    if (thread.permissionMode === "full") {
+    // A reviewer only reads and runs checks: even with full access, a change waits on the user.
+    const edits = thread.role === "reviewer" && READ_ONLY_REFUSED.has(request.toolCall.kind ?? "");
+    if (thread.permissionMode === "full" && !edits) {
       const allow =
         request.options.find((o) => o.kind === "allow_once") ??
         request.options.find((o) => o.kind === "allow_always");

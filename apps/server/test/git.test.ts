@@ -888,6 +888,24 @@ describe("teams", () => {
     await hub.deleteThread(leadId);
   });
 
+  it("gives the lead's access to the whole team, and to the agents it starts later", async () => {
+    const { hub, store, projectId } = repository();
+    const leadId = team(hub, projectId, "Corrige answer", "supervised");
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.tasks.filter((t) => t.threadId).length, {
+        timeout: 30_000,
+      })
+      .toBe(2);
+    hub.setPermissionMode(leadId, "full");
+    const lead = store.getThread(leadId)!;
+    expect(lead.permissionMode).toBe("full");
+    expect(lead.team!.permissionMode).toBe("full");
+    for (const t of lead.team!.tasks)
+      expect(store.getThread(t.threadId!)?.permissionMode).toBe("full");
+    await hub.teams.stop(leadId);
+    for (const t of store.getThread(leadId)!.team!.tasks) await hub.whenIdle(t.threadId!);
+  });
+
   it("has each piece reviewed then tested in its coder's folder before it counts as done", async () => {
     const { hub, store, projectId } = repository();
     // The demo reviewer leaves its verdict out the first time.
@@ -916,7 +934,8 @@ describe("teams", () => {
         role: "reviewer",
         parentId: leadId,
         worksIn: coder.id,
-        permissionMode: "supervised",
+        // The team's access; the hub still asks before a reviewer changes a file.
+        permissionMode: "full",
       });
       expect(reviewer.workspace).toBeUndefined();
       expect(tester).toMatchObject({ role: "tester", worksIn: coder.id, permissionMode: "full" });

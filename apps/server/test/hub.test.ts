@@ -94,6 +94,24 @@ describe("Hub with the demo agent", () => {
     });
   });
 
+  it("lets a team's reviewer with full access run things, but asks before it changes a file", async () => {
+    const { hub, store, client, projectId } = setup();
+    const asked = client.next(isPermissionRequest);
+    // The demo agent reads a file, then asks to edit one.
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Relis",
+      role: "reviewer",
+    });
+    client.openThreadId = threadId;
+    await asked;
+    expect(store.getThread(threadId)?.status).toBe("waiting");
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+  });
+
   it("streams a supervised turn, waits for permission, and persists the timeline", async () => {
     const { hub, store, client, projectId } = setup();
     const asked = client.next(isPermissionRequest);
