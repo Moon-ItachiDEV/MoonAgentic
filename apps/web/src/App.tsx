@@ -10,6 +10,7 @@ import {
   IconCompose,
   IconFile,
   IconArchive,
+  IconBoard,
   IconClose,
   IconFolder,
   IconInbox,
@@ -19,6 +20,7 @@ import {
 } from "./components/icons.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
+import { Planner } from "./components/Planner.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
@@ -142,6 +144,7 @@ export function App() {
       icon: <IconInbox size={15} />,
       run: () => setRequestsOpen(true),
     },
+    { label: "Planner", icon: <IconBoard size={15} />, run: () => go({ name: "planner" }) },
     { label: "Connexions", icon: <IconPlug size={15} />, run: () => setConnectionsOpen(true) },
     { label: "Serveurs MCP", icon: <IconPlug size={15} />, run: () => setMcpOpen(true) },
     ...(thread
@@ -172,6 +175,8 @@ export function App() {
         state={state}
         activeThreadId={thread?.id}
         activeProjectId={project?.id}
+        onPlanner={route.name === "planner"}
+        onOpenPlanner={() => go({ name: "planner" })}
         onNewThread={() => go({ name: "home" })}
         onNewProject={() => {
           setDrawer(false);
@@ -187,7 +192,8 @@ export function App() {
         }}
         onPickProject={(id) => {
           pickProject(id);
-          go({ name: "home" });
+          // On the planner, picking a project shows that project's planner.
+          go(route.name === "planner" ? { name: "planner" } : { name: "home" });
         }}
         onOpenThread={(id) => go({ name: "thread", threadId: id })}
         onTogglePin={togglePin}
@@ -251,37 +257,48 @@ export function App() {
               </div>
             </div>
           )
+        ) : route.name === "planner" ? (
+          <Planner
+            project={project}
+            plan={state.plan}
+            threads={state.threads}
+            agents={state.agents}
+            onOpenThread={(id) => go({ name: "thread", threadId: id })}
+            onNewProject={() => setCreatingProject(true)}
+          />
         ) : (
           <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
         )}
-        <div className="dock">
-          {thread?.archived ? (
-            <div className="archived-bar" role="status">
-              <IconArchive />
-              <span>Cette discussion est archivée.</span>
-              <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
-                Désarchiver
-              </button>
-            </div>
-          ) : (
-            <Composer
-              key={thread?.id ?? "new"}
-              agents={state.agents}
-              favorites={state.favorites}
-              thread={thread}
-              project={project}
-              onNewProject={() => setCreatingProject(true)}
-              onCreated={(id) => navigate({ name: "thread", threadId: id })}
-              onExport={exportThread}
-              onSearch={() => setSearchOpen(true)}
-              onRequests={() => setRequestsOpen(true)}
-              onConnections={() => setConnectionsOpen(true)}
-              onArchive={() => thread && setArchived(thread.id, true)}
-              onDelete={() => thread && askDeleteThread(thread)}
-              onTeam={(task) => setTeamTask(task)}
-            />
-          )}
-        </div>
+        {route.name !== "planner" && (
+          <div className="dock">
+            {thread?.archived ? (
+              <div className="archived-bar" role="status">
+                <IconArchive />
+                <span>Cette discussion est archivée.</span>
+                <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
+                  Désarchiver
+                </button>
+              </div>
+            ) : (
+              <Composer
+                key={thread?.id ?? "new"}
+                agents={state.agents}
+                favorites={state.favorites}
+                thread={thread}
+                project={project}
+                onNewProject={() => setCreatingProject(true)}
+                onCreated={(id) => navigate({ name: "thread", threadId: id })}
+                onExport={exportThread}
+                onSearch={() => setSearchOpen(true)}
+                onRequests={() => setRequestsOpen(true)}
+                onConnections={() => setConnectionsOpen(true)}
+                onArchive={() => thread && setArchived(thread.id, true)}
+                onDelete={() => thread && askDeleteThread(thread)}
+                onTeam={(task) => setTeamTask(task)}
+              />
+            )}
+          </div>
+        )}
       </main>
       {teamTask !== null && project && (
         <TeamDialog

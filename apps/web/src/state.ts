@@ -4,6 +4,7 @@ import type {
   Item,
   McpServerInfo,
   PendingRequest,
+  PlanTask,
   Project,
   ReviewFile,
   ServerMessage,
@@ -31,6 +32,8 @@ export interface State {
   mcpServers: McpServerInfo[];
   projects: Project[];
   threads: Thread[];
+  /** The planner's cards, of every project. */
+  plan: PlanTask[];
   items: Record<string, Item[]>;
   /** The last review fetched for each thread with its own branch. */
   reviews: Record<string, Review>;
@@ -66,6 +69,10 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, projects: upsert(state.projects, message.project) };
     case "thread":
       return { ...state, threads: upsert(state.threads, message.thread) };
+    case "planTask":
+      return { ...state, plan: upsert(state.plan, message.task, false) };
+    case "planTaskRemoved":
+      return { ...state, plan: state.plan.filter((c) => c.id !== message.id) };
     case "threadRemoved": {
       const { [message.threadId]: _items, ...items } = state.items;
       const { [message.threadId]: _review, ...reviews } = state.reviews;
@@ -88,6 +95,7 @@ export function reduce(state: State, message: ServerMessage): State {
         items: Object.fromEntries(Object.entries(state.items).filter(([id]) => !gone.has(id))),
         reviews: Object.fromEntries(Object.entries(state.reviews).filter(([id]) => !gone.has(id))),
         requests: state.requests.filter((r) => !gone.has(r.threadId)),
+        plan: state.plan.filter((c) => c.projectId !== message.projectId),
       };
     }
     case "items":
@@ -139,6 +147,7 @@ export const initialState: State = {
   mcpServers: [],
   projects: [],
   threads: [],
+  plan: [],
   items: {},
   reviews: {},
   notice: null,

@@ -3,6 +3,7 @@ import "@fontsource-variable/geist-mono";
 import "@fontsource/instrument-serif";
 import "./styles.css";
 import "./picker.css";
+import "./planner.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

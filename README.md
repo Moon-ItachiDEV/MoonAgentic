@@ -199,6 +199,7 @@ flowchart TB
 | `apps/server/src/hub.ts`     | Orchestration des projets, fils, tours, verrous exclusifs, permissions, git, relais et agents en pause.         |
 | `apps/server/src/catalog.ts` | Catalogue des agents : vérifications, modèles et réglages connus, agents ajoutés, MCP, favoris.                 |
 | `apps/server/src/team.ts`    | Équipes : plan du chef, codeurs sur leur branche, relecture et tests, reprise en 3 essais, fusion des branches. |
+| `apps/server/src/planner.ts` | Planner : cartes de chaque projet, plan du chef versé dans le tableau, cartes d’équipe qui suivent leur part.   |
 | `apps/server/src/session.ts` | Client ACP unique (`initialize`, `authenticate`, `session/*`, `configOptions`, `modes`, `usage_update`).        |
 | `apps/server/src/agents.ts`  | Résolution des adaptateurs npm inclus et des CLI ACP natives sur le `PATH`.                                     |
 | `apps/server/src/git.ts`     | Worktrees, revue de diff sur index jetable, checkpoints `refs/moonagentic/*`, commit, push et PR (`gh`).        |
@@ -224,6 +225,7 @@ MoonAgentic est construit par jalons successifs :
 - [x] **Jalon 7a — Équipe** : commande `/equipe`, un chef lit le projet et découpe la tâche, des codeurs font chaque part en même temps sur leur propre branche ; fils des codeurs rangés sous celui du chef, carte de l’équipe et arrêt d’urgence.
 - [x] **Jalon 7b — Relecture et tests** : un relecteur lit les changements de chaque part et un testeur lance les tests dans le dossier du codeur ; ce qu’ils trouvent repart au codeur trois fois au plus, puis le chef réécrit la consigne, puis la part attend l’utilisateur, qui peut la relancer.
 - [x] **Jalon 7c — Fusion et préréglages** : une fois chaque part terminée, leurs branches sont réunies sur un fil « Fusion » à relire et envoyer ; un fusionneur règle les conflits et vérifie l’ensemble, sinon l’utilisateur ; préréglages Équilibrée, Économique, Qualité max et « Neon relit et teste » ; fils de relecture et de tests rangés dans la carte de l’équipe ; frise d’équipe en direct, tirée du vrai déroulé de chaque part.
+- [x] **Jalon 8a — Planner, le tableau** : un tableau par projet en cinq colonnes (À faire, En cours, Reporté, En test, Livré) ; cartes ajoutées à la main, déplacées à la souris, au clavier ou depuis leur détail, avec échéance et fil lié ; le plan du chef d’une équipe y dépose ses cartes, qui ne bougent qu’avec le vrai travail de leur part.
 - [ ] **Suite** : synchronisation/rebase des branches, et emballage en **application desktop Windows (Electron)** une fois le cœur stabilisé.
 
 ---

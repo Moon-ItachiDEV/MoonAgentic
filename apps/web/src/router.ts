@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
 
-export type Route = { name: "home" } | { name: "thread"; threadId: string };
+export type Route = { name: "home" } | { name: "planner" } | { name: "thread"; threadId: string };
 
 const parse = (pathname: string): Route => {
   const match = /^\/t\/([^/]+)$/.exec(pathname);
@@ -9,6 +9,7 @@ const parse = (pathname: string): Route => {
   } catch {
     // an address no thread can have
   }
+  if (pathname === "/planner") return { name: "planner" };
   return { name: "home" };
 };
 
@@ -20,7 +21,12 @@ window.addEventListener("popstate", () => {
 });
 
 export function navigate(route: Route): void {
-  const path = route.name === "thread" ? `/t/${encodeURIComponent(route.threadId)}` : "/";
+  const path =
+    route.name === "thread"
+      ? `/t/${encodeURIComponent(route.threadId)}`
+      : route.name === "planner"
+        ? "/planner"
+        : "/";
   if (path !== location.pathname) history.pushState(null, "", path);
   current = route;
   for (const l of listeners) l();

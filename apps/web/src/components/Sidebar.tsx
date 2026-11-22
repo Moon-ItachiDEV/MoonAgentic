@@ -3,6 +3,7 @@ import type { State } from "../connection.ts";
 import { useState } from "react";
 import {
   IconArchive,
+  IconBoard,
   IconClose,
   IconCompose,
   IconFolder,
@@ -23,6 +24,9 @@ export function Sidebar(props: {
   state: State;
   activeThreadId: string | undefined;
   activeProjectId: string | undefined;
+  /** True on the planner's page. */
+  onPlanner: boolean;
+  onOpenPlanner: () => void;
   onNewThread: () => void;
   onNewProject: () => void;
   onOpenConnections: () => void;
@@ -96,13 +100,24 @@ export function Sidebar(props: {
         <Wordmark />
       </div>
       <nav className="nav">
-        <button className={!props.activeThreadId ? "on" : ""} onClick={props.onNewThread}>
+        <button
+          className={!props.activeThreadId && !props.onPlanner ? "on" : ""}
+          onClick={props.onNewThread}
+        >
           <IconCompose />
           Nouvelle discussion
         </button>
         <button onClick={props.onNewProject}>
           <IconFolder />
           Nouveau projet
+        </button>
+        <button
+          className={props.onPlanner ? "on" : ""}
+          aria-current={props.onPlanner ? "page" : undefined}
+          onClick={props.onOpenPlanner}
+        >
+          <IconBoard />
+          Planner
         </button>
         <button onClick={props.onOpenRequests}>
           <IconInbox />À traiter
