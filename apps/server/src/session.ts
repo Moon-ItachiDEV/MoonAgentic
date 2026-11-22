@@ -457,8 +457,11 @@ export class AgentSession {
             `MoonAgentic la version ${acp.PROTOCOL_VERSION}. Mets à jour l'agent ou MoonAgentic.`,
         );
       }
-      if (launch.authMethodId && init.authMethods?.some((m) => m.id === launch.authMethodId)) {
-        await connection.agent.request("authenticate", { methodId: launch.authMethodId });
+      const authMethodId = init.authMethods?.some((m) => m.id === launch.authMethodId)
+        ? launch.authMethodId
+        : undefined;
+      if (authMethodId && !launch.authWhenAsked) {
+        await connection.agent.request("authenticate", { methodId: authMethodId });
       }
       const caps = init.agentCapabilities;
       const mcpServers = acpMcpServers(options.mcpServers ?? [], caps?.mcpCapabilities);
@@ -484,7 +487,13 @@ export class AgentSession {
       }
       const fresh = !sessionId;
       if (!sessionId) {
-        const created = await connection.agent.request("session/new", { cwd, mcpServers });
+        const create = () => connection.agent.request("session/new", { cwd, mcpServers });
+        const created = await create().catch(async (error: unknown) => {
+          const asked = (error as { code?: unknown } | null)?.code === AUTH_REQUIRED;
+          if (!asked || !authMethodId || !launch.authWhenAsked) throw error;
+          await connection.agent.request("authenticate", { methodId: authMethodId });
+          return create();
+        });
         sessionId = created.sessionId;
         absorb(state, created);
       }

@@ -102,3 +102,64 @@ describe("an agent that asks to sign in on its output", () => {
     expect(needsSignIn(error)).toBe(true);
   });
 });
+
+describe("an agent that lists its sign-in methods whatever the user set up", () => {
+  /** Answers like an ACP agent, and tells on its error output when it is asked to sign in. */
+  const start = (signedIn: boolean, authWhenAsked: boolean) => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-session-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5 }));
+    const agent = path.join(dir, "agent.mjs");
+    writeFileSync(
+      agent,
+      `import { createInterface } from "node:readline";
+      let signedIn = ${signedIn};
+      const reply = (id, body) => console.log(JSON.stringify({ jsonrpc: "2.0", id, ...body }));
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const { id, method } = JSON.parse(line);
+        if (method === "initialize") {
+          reply(id, { result: { protocolVersion: 1, authMethods: [
+            { id: "oauth-personal", name: "Compte" }, { id: "gemini-api-key", name: "Clé" } ] } });
+        } else if (method === "authenticate") {
+          signedIn = true;
+          reply(id, { result: {} });
+        } else if (method === "session/new") {
+          if (signedIn) reply(id, { result: { sessionId: "s1" } });
+          else reply(id, { error: { code: -32000, message: "Authentication required" } });
+        }
+        if (method === "authenticate") console.error("AUTHENTICATE");
+        if (method === "session/new" && signedIn) process.exit(3);
+      });`,
+    );
+    let exit!: (reason: string | undefined) => void;
+    const exited = new Promise<string | undefined>((resolve) => (exit = resolve));
+    const session = AgentSession.start({
+      launch: {
+        command: process.execPath,
+        args: [agent],
+        authMethodId: "oauth-personal",
+        ...(authWhenAsked ? { authWhenAsked } : {}),
+      },
+      cwd: dir,
+      previousSessionId: null,
+      handlers: {
+        onUpdate: () => undefined,
+        requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+        onExit: exit,
+      },
+    });
+    // The agent stops itself once the session is open: what it wrote says what it was asked.
+    return session.then(() => exited);
+  };
+
+  it("leaves the user's own set-up alone when the session opens without signing in", async () => {
+    expect(await start(true, true)).not.toContain("AUTHENTICATE");
+  });
+
+  it("signs in once the agent asks for it, then opens the session", async () => {
+    expect(await start(false, true)).toContain("AUTHENTICATE");
+  });
+
+  it("still signs in first with agents that expect it", async () => {
+    expect(await start(true, false)).toContain("AUTHENTICATE");
+  });
+});
