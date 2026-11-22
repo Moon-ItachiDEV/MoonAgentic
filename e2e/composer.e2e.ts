@@ -493,4 +493,91 @@ describe("composer", () => {
     await expect.poll(() => mine.count()).toBe(0);
     await page.close();
   });
+
+  it("plans a task for later: it starts by itself at its time, in a thread of its own", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    await page.locator(".thr-row.proj", { hasText: "equipe" }).locator(".thr").click();
+    const dialog = page.getByRole("dialog", { name: "Planifier une tâche" });
+    const list = page.getByRole("list", { name: "Tâches planifiées" });
+    const row = (title: string) => list.getByRole("listitem").filter({ hasText: title });
+    const field = (at: Date) => {
+      const two = (n: number) => String(n).padStart(2, "0");
+      return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}T${two(at.getHours())}:${two(at.getMinutes())}`;
+    };
+
+    // The command carries what follows it into the dialog; a time in the past is refused.
+    await composer(page).fill("/planifier Résume les changements de la semaine");
+    await composer(page).press("Enter");
+    await composer(page).press("Enter");
+    await dialog.getByLabel("Tâche").waitFor();
+    expect(await dialog.getByLabel("Tâche").inputValue()).toBe(
+      "Résume les changements de la semaine",
+    );
+    await dialog.getByLabel("Agent", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Quand").fill("2020-01-15T09:00");
+    await dialog.getByRole("button", { name: "Planifier", exact: true }).click();
+    await dialog.getByText("Ce moment est déjà passé").waitFor();
+
+    // Planned every day from tomorrow: it waits, and says when it will start.
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    tomorrow.setHours(9, 0, 0, 0);
+    await dialog.getByLabel("Quand").fill(field(tomorrow));
+    await dialog.getByLabel("Répéter").selectOption({ label: "Tous les jours" });
+    await dialog.getByLabel("Nom").fill("Résumé du matin");
+    await dialog.getByRole("button", { name: "Planifier", exact: true }).click();
+    await row("Résumé du matin").getByText("Prochain lancement demain à 09:00").waitFor();
+    await row("Résumé du matin").getByText("Tous les jours à 09:00 · Agent de démo").waitFor();
+
+    // One for this very minute: the server starts it by itself, in a thread of its own.
+    await page.getByRole("button", { name: "Planifier une tâche" }).click();
+    await dialog.getByLabel("Tâche").fill("Dis bonjour");
+    await dialog.getByLabel("Agent", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Quand").fill(field(new Date()));
+    await dialog.getByRole("button", { name: "Planifier", exact: true }).click();
+    await row("Dis bonjour")
+      .getByText(/^Lancée aujourd'hui à/)
+      .waitFor();
+    await shot(page, "c19-planifiees");
+    await row("Dis bonjour").getByRole("button", { name: "Ouvrir le fil" }).click();
+    await page.locator(".view").getByText("Dis bonjour").first().waitFor();
+    await page.goBack();
+
+    // Paused, it no longer has a next time; changed, it keeps what was not touched.
+    await row("Résumé du matin").getByRole("switch").click();
+    await row("Résumé du matin").getByText("En pause").waitFor();
+    // Paused, it still opens on its own time, and stays paused when only its text changes.
+    await row("Résumé du matin").getByRole("button", { name: "Modifier" }).click();
+    const paused = page.getByRole("dialog", { name: "Modifier la tâche planifiée" });
+    expect(await paused.getByLabel("Quand").inputValue()).toBe(field(tomorrow));
+    await paused.getByRole("button", { name: "Enregistrer" }).click();
+    await row("Résumé du matin").getByText("En pause").waitFor();
+    await row("Résumé du matin").getByRole("switch").click();
+    await row("Résumé du matin").getByText("Prochain lancement demain à 09:00").waitFor();
+    await row("Résumé du matin").getByRole("button", { name: "Modifier" }).click();
+    const edit = page.getByRole("dialog", { name: "Modifier la tâche planifiée" });
+    await edit.getByLabel("Nom").fill("Résumé quotidien");
+    await edit.getByRole("button", { name: "Enregistrer" }).click();
+    await row("Résumé quotidien").getByText("Prochain lancement demain à 09:00").waitFor();
+
+    // Started by hand, its time does not move.
+    await row("Résumé quotidien").getByRole("button", { name: "Lancer maintenant" }).click();
+    await page.locator(".view").getByText("Résume les changements de la semaine").first().waitFor();
+    await page.goBack();
+    await row("Résumé quotidien")
+      .getByText(/Dernier lancement aujourd'hui/)
+      .waitFor();
+    await row("Résumé quotidien").getByText("Prochain lancement demain à 09:00").waitFor();
+
+    // On a phone the list fits the screen.
+    await page.setViewportSize({ width: 390, height: 780 });
+    if (shots) await page.waitForTimeout(400);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    await shot(page, "c20-planifiees-mobile");
+    await row("Résumé quotidien").getByRole("button", { name: "Supprimer" }).click();
+    await expect.poll(() => row("Résumé quotidien").count()).toBe(0);
+    await page.close();
+  });
 });

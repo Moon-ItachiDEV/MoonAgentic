@@ -15,7 +15,8 @@ export type AppAction =
   | "settings"
   | "archive"
   | "delete"
-  | "team";
+  | "team"
+  | "schedule";
 
 /**
  * Where a command comes from, in priority order when two share a name: MoonAgentic's own
@@ -99,6 +100,7 @@ export function composerCommands(options: {
     "Confier la tâche à une équipe : un chef découpe, des codeurs en parallèle",
     "team",
   );
+  add("planifier", "Lancer une tâche plus tard, une fois ou à intervalles réguliers", "schedule");
   if (inThread) {
     add("epingler", "Épingler ou désépingler cette discussion", "pin");
     add("exporter", "Exporter cette discussion en Markdown", "export");

@@ -57,6 +57,7 @@ import {
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { historyBefore } from "./history.ts";
 import { Planner } from "./planner.ts";
+import { Scheduler } from "./scheduler.ts";
 import { Teams } from "./team.ts";
 import { mcpInfo } from "./mcp.ts";
 import { toolQuestions } from "./questions.ts";
@@ -181,6 +182,19 @@ export class Hub {
     this.homeDir = options.homeDir ?? os.homedir();
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
     this.planner = new Planner(store, (m) => this.broadcast(m));
+    this.scheduler = new Scheduler(store, (m) => this.broadcast(m), {
+      start: (s) =>
+        this.createThread({
+          projectId: s.projectId,
+          agentId: s.agentId,
+          permissionMode: s.permissionMode,
+          model: s.model,
+          isolated: s.isolated,
+          title: s.title,
+          text: s.text,
+        }),
+      running: (id) => this.turns.has(id),
+    });
     this.teams = new Teams({
       thread: (id) => this.store.getThread(id),
       threads: () => this.store.listThreads(),
@@ -220,12 +234,18 @@ export class Hub {
     store.recoverAfterRestart();
     this.teams.recover();
     this.recovered = this.finishRestores();
+    // Tasks that were due while the server was off start once what was interrupted is put right.
+    void this.recovered.then(() => {
+      if (!this.closed) this.scheduler.start();
+    });
   }
 
   /** The agents, their models and checks, the MCP servers and the favorites. */
   readonly catalog: AgentCatalog;
   /** Each project's planner. */
   readonly planner: Planner;
+  /** The tasks planned for later. */
+  readonly scheduler: Scheduler;
   /** Teams of agents, each run from its lead's thread. */
   readonly teams: Teams;
 
@@ -247,6 +267,7 @@ export class Hub {
       projects: this.store.listProjects().map((p) => this.withGit(p)),
       threads: this.store.listThreads(),
       plan: this.planner.list(),
+      schedules: this.scheduler.list(),
     };
   }
 
@@ -358,6 +379,27 @@ export class Hub {
         this.planner.remove(message.id);
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "schedule.add": {
+        if (!this.store.getProject(message.projectId)) throw new Error("Projet introuvable.");
+        // Checked now, so a missing agent is said at once rather than at the task's time.
+        this.agents.launch(message.agentId);
+        const { id } = this.scheduler.add(message);
+        client.send({ type: "created", requestId: message.requestId, id });
+        return;
+      }
+      case "schedule.update":
+        this.scheduler.update(message.id, message);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "schedule.remove":
+        this.scheduler.remove(message.id);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "schedule.run": {
+        const id = this.scheduler.runNow(message.id);
+        client.send({ type: "created", requestId: message.requestId, id });
+        return;
+      }
       case "thread.setPinned":
         this.requireThread(message.threadId);
         this.updateThread(message.threadId, { pinned: message.pinned });
@@ -838,6 +880,7 @@ export class Hub {
       this.store.deleteThread(threadId);
       this.broadcast({ type: "threadRemoved", threadId });
       this.planner.threadDeleted(threadId);
+      this.scheduler.threadDeleted(threadId);
     });
   }
 
@@ -1123,6 +1166,7 @@ export class Hub {
   /** Stops every agent and resolves once their turns have ended. */
   async close(): Promise<void> {
     this.closed = true;
+    this.scheduler.close();
     this.teams.close();
     // A review starting reads the changes first; it must not reach the store once closed.
     await this.teams.settled();
