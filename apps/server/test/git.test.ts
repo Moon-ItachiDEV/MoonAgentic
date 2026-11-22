@@ -163,7 +163,11 @@ describe("thread workspaces", () => {
     writeFileSync(path.join(dir, "src", "neuf", "a.ts"), "export {};\n");
     // Without its rule, the ignored file would pass for one the turn made.
     rmSync(path.join(dir, ".gitignore"));
+    // Handed to another agent since: going back goes back to the agent of that time too.
+    await hub.switchAgent(threadId, "demo-2");
     await hub.restore(threadId, second.id);
+    expect(store.getThread(threadId)?.agentId).toBe("demo");
+    expect(store.listItems(threadId).some((i) => i.kind === "handoff")).toBe(false);
 
     // Git writes restored files with the line endings its config asks for (CRLF on Windows).
     expect(readFileSync(path.join(dir, "README.md"), "utf8").replaceAll("\r\n", "\n")).toBe(

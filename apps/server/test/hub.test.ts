@@ -427,6 +427,11 @@ describe("Hub with the demo agent", () => {
       from: "demo",
       to: "demo-2",
     });
+    // Changing again before any message moves that one hand-off rather than adding more.
+    await hub.switchAgent(threadId, "demo");
+    expect(store.listItems(threadId).some((i) => i.kind === "handoff")).toBe(false);
+    await hub.switchAgent(threadId, "demo-2");
+    expect(store.listItems(threadId).filter((i) => i.kind === "handoff")).toHaveLength(1);
     hub.setPermissionMode(threadId, "full");
     hub.send(threadId, "Deux");
     await hub.whenIdle(threadId);

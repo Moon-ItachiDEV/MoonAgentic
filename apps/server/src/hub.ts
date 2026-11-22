@@ -387,21 +387,32 @@ export class Hub {
     const tree = item?.kind === "user" ? item.checkpoint : undefined;
     if (!workspace || !tree) throw new Error("Ce message n'a pas de point de retour.");
     await this.exclusive(threadId, "Attends la fin du retour en arrière.", async () => {
-      await restoreCheckpoint(workspace.path, tree);
+      // The agent stops first, so nothing it started holds a file about to change (Windows).
       await this.forgetSession(threadId);
+      await restoreCheckpoint(workspace.path, tree);
       const removed = this.store.removeItemsFrom(threadId, itemId);
-      await dropCheckpoints(
-        workspace.path,
-        removed.flatMap((i) =>
-          i.kind === "user" && i.checkpoint ? [checkpointRef(threadId, i.id)] : [],
-        ),
-      );
-      this.updateThread(threadId, { status: "idle", usage: undefined, error: null });
+      // Going back before a hand-off goes back to the agent of that time, on its defaults.
+      const handoff = removed.find((i) => i.kind === "handoff");
+      this.updateThread(threadId, {
+        status: "idle",
+        usage: undefined,
+        error: null,
+        ...(handoff
+          ? { agentId: handoff.from, model: undefined, settings: undefined, canCompact: undefined }
+          : {}),
+      });
       this.sendToViewers(threadId, {
         type: "items",
         threadId,
         items: this.store.listItems(threadId),
       });
+      // A ref left behind only keeps an old tree alive, so failing here is harmless.
+      await dropCheckpoints(
+        workspace.path,
+        removed.flatMap((i) =>
+          i.kind === "user" && i.checkpoint ? [checkpointRef(threadId, i.id)] : [],
+        ),
+      ).catch(() => undefined);
     });
   }
 
@@ -422,13 +433,26 @@ export class Hub {
         status: "idle",
         error: null,
       });
-      this.putItem(threadId, {
-        id: `handoff:${randomUUID()}`,
-        kind: "handoff",
-        from: thread.agentId,
-        to: agentId,
-        at: Date.now(),
-      });
+      // Switching again before any message only changes where the last hand-off leads.
+      const last = this.store.lastItem(threadId);
+      if (last?.kind === "handoff" && last.from === agentId) {
+        this.store.removeItemsFrom(threadId, last.id);
+        this.sendToViewers(threadId, {
+          type: "items",
+          threadId,
+          items: this.store.listItems(threadId),
+        });
+      } else if (last?.kind === "handoff") {
+        this.putItem(threadId, { ...last, to: agentId });
+      } else {
+        this.putItem(threadId, {
+          id: `handoff:${randomUUID()}`,
+          kind: "handoff",
+          from: thread.agentId,
+          to: agentId,
+          at: Date.now(),
+        });
+      }
     });
   }
 
