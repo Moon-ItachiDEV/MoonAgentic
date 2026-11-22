@@ -125,7 +125,7 @@ node apps/server/src/bin.ts --host 0.0.0.0
 
 Ouvre le lien affiché en remplaçant `localhost` par l’adresse IP locale de ta machine (ou son adresse Tailscale / WireGuard), puis ajoute la page à l’écran d’accueil pour l’utiliser en mode application.
 
-> **Sécurité réseau** : le serveur n’écoute que sur `127.0.0.1` par défaut. N’utilise `--host 0.0.0.0` que sur un réseau local de confiance ou derrière un tunnel chiffré (Tailscale, WireGuard, SSH).
+> **Sécurité réseau** : le serveur n’écoute que sur `127.0.0.1` par défaut. N’utilise `--host 0.0.0.0` que sur un réseau local de confiance ou derrière un tunnel chiffré (Tailscale, WireGuard, SSH). Le lien contient ton jeton, qui donne la main sur tes agents et tes fichiers : en HTTP simple, quiconque écoute le réseau peut le lire. Le serveur te le rappelle au démarrage dès qu’il écoute au-delà de ta machine.
 
 ---
 
@@ -147,6 +147,7 @@ Le serveur (`apps/server/src/bin.ts`) accepte les options suivantes :
 
 - **Dossier privé** : sur Linux/macOS, `~/.moonagentic` est verrouillé en `0700`, et `token`, `state.sqlite`, `state.sqlite-wal` et `state.sqlite-shm` en `0600`.
 - **Authentification par jeton** : généré aléatoirement au premier démarrage (`~/.moonagentic/token`) et vérifié en temps constant (`timingSafeEqual`) sur `/api/auth` et `/ws`.
+- **Page protégée** : l’interface refuse d’être affichée dans le cadre d’un autre site et ne charge rien d’ailleurs (`Content-Security-Policy`), pour qu’une réponse d’agent ne puisse ni piéger un clic ni faire sortir des données par une adresse d’image.
 - **Secrets MCP non exposés** : seules les clés (`secretNames`) transitent vers l’interface ; les erreurs de saisie désignent la ligne fautive par son numéro sans jamais recopier son contenu.
 - **Contrat validé de bout en bout** : tous les messages WebSocket sont validés par Zod 4 (`packages/protocol`), les noms de variables d’environnement et d’en-têtes HTTP (RFC 9110) sont vérifiés, et le rendu Markdown est filtré par DOMPurify.
 
@@ -201,13 +202,15 @@ MoonAgentic est construit par jalons successifs :
 ## Développer
 
 ```sh
-pnpm dev        # serveur (--dev, avec 2 agents de démo) + Vite avec HMR (http://localhost:5173)
+pnpm dev        # serveur (--dev, avec 2 agents de démo) + Vite avec HMR (http://127.0.0.1:5173)
 pnpm test       # suite de tests Vitest (serveur, git, MCP, protocole, parsing web)
 pnpm lint       # Oxlint + vérification Prettier
 pnpm typecheck  # vérification TypeScript sur tout le monorepo
 pnpm format     # formatage automatique Prettier
 pnpm build      # build de production de l'interface web
 ```
+
+En développement, Vite n’écoute lui aussi que sur ta machine. Pour l’ouvrir depuis un autre appareil, sur un réseau de confiance : `MOONAGENTIC_DEV_HOST=0.0.0.0 pnpm dev`.
 
 ### Stack technique
 

@@ -2,10 +2,16 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ServerMessage } from "@moonagentic/protocol";
+import type { Item, ServerMessage } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
-import { branchName, githubRepo, parseDiff } from "../src/git.ts";
+import {
+  branchName,
+  githubRepo,
+  parseDiff,
+  restoreCheckpoint,
+  saveCheckpoint,
+} from "../src/git.ts";
 import { Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
 
@@ -13,6 +19,13 @@ const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
+
+/** Everything the agent said in the thread's last turn. */
+const lastTurnSaid = (items: Item[]) =>
+  items
+    .slice(items.findLastIndex((i) => i.kind === "user"))
+    .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
+    .join(" ");
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -192,9 +205,30 @@ describe("thread workspaces", () => {
 
     hub.send(threadId, "Trois");
     await hub.whenIdle(threadId);
-    expect(store.listItems(threadId).findLast((i) => i.kind === "agent")).toMatchObject({
-      text: expect.stringContaining("J'ai reçu l'historique, qui commence par « Un »."),
-    });
+    expect(lastTurnSaid(store.listItems(threadId))).toContain(
+      "J'ai reçu l'historique, qui commence par « Un ».",
+    );
+  });
+
+  it("leaves nothing of a turn behind: neither files its own ignore rules hid, nor staged ones", async () => {
+    const { repo } = repository();
+    const tree = await saveCheckpoint(repo, "refs/moonagentic/test/1");
+    writeFileSync(path.join(repo, ".gitignore"), "gen.txt\n");
+    writeFileSync(path.join(repo, "gen.txt"), "produit\n");
+    writeFileSync(path.join(repo, "indexe.txt"), "ajouté\n");
+    git(repo, "add", "indexe.txt");
+    writeFileSync(path.join(repo, "README.md"), "# Demo\nchangé puis indexé\n");
+    git(repo, "add", "README.md");
+
+    await restoreCheckpoint(repo, tree);
+    expect(git(repo, "status", "--porcelain", "--ignored")).toBe("");
+    expect(existsSync(path.join(repo, "gen.txt"))).toBe(false);
+
+    // The same for a file removed with git itself.
+    git(repo, "rm", "-q", "README.md");
+    await restoreCheckpoint(repo, tree);
+    expect(git(repo, "status", "--porcelain", "--ignored")).toBe("");
+    expect(existsSync(path.join(repo, "README.md"))).toBe(true);
   });
 
   it("works in the project folder when asked, or when the folder is not in git", async () => {

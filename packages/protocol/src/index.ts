@@ -1,5 +1,10 @@
 import { z } from "zod";
 
+// Zod builds faster checks with `new Function` when it can, and tries it as soon as a
+// schema is made. The web app's content security policy forbids that, so it is turned off
+// before any schema exists; messages here are small enough not to need it.
+z.config({ jitless: true });
+
 export type AgentId = string;
 
 export interface ModelChoice {

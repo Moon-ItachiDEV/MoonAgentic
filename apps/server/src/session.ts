@@ -4,6 +4,7 @@ import * as acp from "@agentclientprotocol/sdk";
 import type { AgentSetting } from "@moonagentic/protocol";
 import type { AgentLaunch } from "./agents.ts";
 import { acpMcpServers, type McpServerRecord } from "./mcp.ts";
+import { killTree, spawnPlan } from "./spawn.ts";
 
 export interface SessionHandlers {
   onUpdate(update: acp.SessionUpdate): void;
@@ -225,10 +226,15 @@ export class AgentSession {
   }): Promise<AgentSession> {
     const { launch, cwd, handlers, signal } = options;
     signal?.throwIfAborted();
-    const child = spawn(launch.command, launch.args, {
+    const plan = spawnPlan(launch.command, launch.args);
+    const child = spawn(plan.command, plan.args, {
       cwd,
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
+      // Its own process group on Unix, so stopping it also stops what it started.
+      detached: process.platform !== "win32",
+      windowsHide: true,
+      ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
     });
     // Writes racing the agent's exit fail with EPIPE; the exit handler reports the real cause.
     child.stdin.on("error", () => undefined);
@@ -300,18 +306,30 @@ export class AgentSession {
       });
     });
     /** Stops the agent and resolves once its process is gone, forcing it after a grace period. */
+    let killed: Promise<void> | undefined;
     const kill = () => {
-      stopping = true;
-      connection.close();
-      if (!exited) {
-        child.kill("SIGTERM");
-        setTimeout(() => exited || child.kill("SIGKILL"), KILL_GRACE_MS).unref();
-      }
-      return exit;
+      // Asked twice, it is still stopped once.
+      killed ??= (async () => {
+        stopping = true;
+        connection.close();
+        if (!exited) {
+          setTimeout(() => exited || void killTree(child, "SIGKILL"), KILL_GRACE_MS).unref();
+          await killTree(child, "SIGTERM");
+        }
+        await exit;
+      })();
+      return killed;
     };
 
     const aborted = new Promise<never>((_, reject) => {
-      const stop = () => reject(new Error("Démarrage de l'agent arrêté."));
+      const stop = () =>
+        reject(
+          new Error(
+            (signal?.reason as { name?: string } | undefined)?.name === "TimeoutError"
+              ? "L'agent n'a pas répondu à temps au démarrage."
+              : "Démarrage de l'agent arrêté.",
+          ),
+        );
       if (signal?.aborted) stop();
       signal?.addEventListener("abort", stop, { once: true });
     });
@@ -360,7 +378,8 @@ export class AgentSession {
     try {
       return await Promise.race([handshake(), aborted]);
     } catch (error) {
-      void kill();
+      // Its process is gone before the failure is reported, so nothing is left running.
+      await kill();
       if ((error as { code?: unknown } | null)?.code === AUTH_REQUIRED && launch.login) {
         throw new Error(`Connecte-toi d'abord avec ton compte : ${launch.login}.`, {
           cause: error,

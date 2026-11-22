@@ -42,11 +42,19 @@ const server = createHttpServer({
   ...(!values.dev && existsSync(webDir) ? { webDir } : {}),
 });
 
+const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
 const port = Number(values.port);
 server.listen(port, values.host, () => {
   const uiPort = values.dev ? 5173 : port;
   const host = values.host === "0.0.0.0" ? "localhost" : values.host;
   console.log(`MoonAgentic est prêt : http://${host}:${uiPort}/?token=${token}`);
+  if (!LOOPBACK.has(values.host)) {
+    console.warn(
+      "Attention : MoonAgentic écoute au-delà de cette machine, sans chiffrement. Ce lien donne " +
+        "la main sur tes agents et tes fichiers : ne l'utilise que sur un réseau de confiance " +
+        "ou derrière un tunnel chiffré (Tailscale, WireGuard, SSH).",
+    );
+  }
 });
 
 let stopping = false;

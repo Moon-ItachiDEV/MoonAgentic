@@ -58,6 +58,8 @@ const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolCon
   });
 
 const DISCOVERY_TIMEOUT_MS = 30_000;
+/** How long an agent may take to open its session before the turn gives up. */
+const START_TIMEOUT_MS = 120_000;
 
 const settingValues = (settings: AgentSetting[]) =>
   settings.length ? Object.fromEntries(settings.map((s) => [s.id, s.current])) : undefined;
@@ -73,6 +75,12 @@ export class Hub {
   private readonly clients = new Set<Client>();
   private readonly sessions = new Map<string, Promise<AgentSession>>();
   private readonly turns = new Map<string, Promise<void>>();
+  /** Threads whose running turn the user asked to stop. */
+  private readonly cancelled = new Set<string>();
+  /** Stops an agent that is still starting, by thread. */
+  private readonly starting = new Map<string, AbortController>();
+  /** Steps under way (a push, a step back, a hand-off), awaited before the server stops. */
+  private readonly steps = new Set<Promise<unknown>>();
   private readonly discoveries = new Map<string, { done: Promise<void>; stop: AbortController }>();
   /** Why listing an agent's models failed, until a retry succeeds. */
   private readonly discoveryErrors = new Map<string, string>();
@@ -275,9 +283,11 @@ export class Hub {
     this.putItem(threadId, { id: itemId, kind: "user", text, at: Date.now() });
     this.updateThread(threadId, { status: "running", error: null });
     this.turnIds.set(threadId, randomUUID());
+    this.cancelled.delete(threadId);
     const turn = this.runTurn(thread, text, itemId).finally(() => {
       this.turns.delete(threadId);
       this.turnIds.delete(threadId);
+      this.cancelled.delete(threadId);
     });
     this.turns.set(threadId, turn);
   }
@@ -288,6 +298,10 @@ export class Hub {
   }
 
   async cancel(threadId: string): Promise<void> {
+    // An agent only cancels a prompt it already has: one that is still starting never sees
+    // the request, so the turn remembers it and stops before sending its prompt.
+    if (this.turns.has(threadId)) this.cancelled.add(threadId);
+    this.starting.get(threadId)?.abort();
     this.settlePermissions(threadId);
     const session = await this.sessions.get(threadId)?.catch(() => undefined);
     await session?.cancel();
@@ -462,9 +476,12 @@ export class Hub {
     const busy = this.busy.get(threadId);
     if (busy) throw new Error(busy);
     this.busy.set(threadId, reason);
+    const step = work();
+    this.steps.add(step);
     try {
-      return await work();
+      return await step;
     } finally {
+      this.steps.delete(step);
       this.busy.delete(threadId);
     }
   }
@@ -525,7 +542,7 @@ export class Hub {
       .then(
         (session) => {
           this.learnCatalog(agentId, session.model, session.settings, session.fresh);
-          void session.close();
+          return session.close();
         },
         (error: unknown) => {
           if (stop.signal.aborted) return;
@@ -566,12 +583,19 @@ export class Hub {
     const discoveries = [...this.discoveries.values()];
     for (const d of discoveries) d.stop.abort();
     await Promise.all(discoveries.map((d) => d.done.catch(() => undefined)));
+    // An agent still starting is stopped now rather than waited for, and its turn ends
+    // as stopped, not as failed.
+    for (const [threadId, stop] of this.starting) {
+      this.cancelled.add(threadId);
+      stop.abort();
+    }
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
     await Promise.all(
       sessions.map((s) => s.then((session) => session.close()).catch(() => undefined)),
     );
     await Promise.all(this.turns.values());
+    await Promise.all([...this.steps].map((step) => step.catch(() => undefined)));
   }
 
   private async runTurn(thread: Thread, text: string, itemId: string): Promise<void> {
@@ -579,6 +603,10 @@ export class Hub {
       const continuing = this.sessions.has(thread.id);
       const session = await this.session(thread);
       await this.checkpoint(thread.id, itemId);
+      if (this.cancelled.has(thread.id)) {
+        this.updateThread(thread.id, { status: "idle" });
+        return;
+      }
       // A new session knows nothing of the thread: after a hand-off, a step back, or when
       // the agent could not resume its earlier session.
       const history =
@@ -595,6 +623,11 @@ export class Hub {
       this.updateThread(thread.id, error ? { status: "error", error } : { status: "idle" });
     } catch (error) {
       this.settlePermissions(thread.id);
+      // Stopping an agent that was still starting is what the user asked for, not a failure.
+      if (this.cancelled.has(thread.id)) {
+        this.updateThread(thread.id, { status: "idle", error: null });
+        return;
+      }
       // An agent that crashed already left its own reason, which beats "connection closed".
       if (this.store.getThread(thread.id)?.status !== "error") {
         this.updateThread(thread.id, { status: "error", error: describe(error) });
@@ -607,9 +640,13 @@ export class Hub {
     if (existing) return existing;
     const project = this.store.getProject(thread.projectId);
     if (!project) return Promise.reject(new Error("Projet introuvable."));
-    const started = this.prepareWorkspace(thread.id, project).then((cwd) =>
-      this.startSession(thread, cwd),
-    );
+    const stop = new AbortController();
+    this.starting.set(thread.id, stop);
+    const started = this.prepareWorkspace(thread.id, project)
+      .then((cwd) => this.startSession(thread, cwd, stop.signal))
+      .finally(() => {
+        if (this.starting.get(thread.id) === stop) this.starting.delete(thread.id);
+      });
     this.sessions.set(thread.id, started);
     started.then(
       (s) => this.store.setSessionId(thread.id, s.sessionId),
@@ -654,7 +691,11 @@ export class Hub {
     return git ? { ...project, git } : project;
   }
 
-  private async startSession(thread: Thread, cwd: string): Promise<AgentSession> {
+  private async startSession(
+    thread: Thread,
+    cwd: string,
+    stop: AbortSignal,
+  ): Promise<AgentSession> {
     // Until the thread's own model and settings are applied, the agent's are not news.
     let ready = false;
     const session = await AgentSession.start({
@@ -662,6 +703,7 @@ export class Hub {
       cwd,
       previousSessionId: this.store.getSessionId(thread.id),
       mcpServers: this.mcpServers(),
+      signal: AbortSignal.any([stop, AbortSignal.timeout(START_TIMEOUT_MS)]),
       handlers: {
         onUpdate: (update) => this.applyUpdate(thread.id, update),
         requestPermission: (request, signal) => this.requestPermission(thread.id, request, signal),
@@ -686,21 +728,27 @@ export class Hub {
         },
       },
     });
-    this.learnCatalog(thread.agentId, session.model, session.settings, session.fresh);
-    const model = session.model;
-    if (model) {
-      // A continued session already runs the model it was left on.
-      const wanted =
-        this.store.getThread(thread.id)?.model ??
-        (session.fresh ? this.defaultModel(thread.agentId) : undefined);
-      if (wanted && wanted !== model.current && model.choices.some((c) => c.id === wanted)) {
-        await session.setModel(wanted);
+    try {
+      this.learnCatalog(thread.agentId, session.model, session.settings, session.fresh);
+      const model = session.model;
+      if (model) {
+        // A continued session already runs the model it was left on.
+        const wanted =
+          this.store.getThread(thread.id)?.model ??
+          (session.fresh ? this.defaultModel(thread.agentId) : undefined);
+        if (wanted && wanted !== model.current && model.choices.some((c) => c.id === wanted)) {
+          await session.setModel(wanted);
+        }
+        this.updateThread(thread.id, { model: session.model?.current ?? model.current });
       }
-      this.updateThread(thread.id, { model: session.model?.current ?? model.current });
+      // After the model, which can change the effort levels on offer.
+      await this.applySettings(thread.id, session);
+      this.learnCatalog(thread.agentId, session.model, session.settings, false);
+    } catch (error) {
+      // An agent that started but could not be set up is stopped, not left running unseen.
+      await session.close();
+      throw error;
     }
-    // After the model, which can change the effort levels on offer.
-    await this.applySettings(thread.id, session);
-    this.learnCatalog(thread.agentId, session.model, session.settings, false);
     ready = true;
     return session;
   }
@@ -831,7 +879,9 @@ export class Hub {
   }
 
   private upsertTool(threadId: string, update: acp.ToolCall | acp.ToolCallUpdate): void {
-    const id = `tool:${update.toolCallId}`;
+    // Agents may number their tool calls from scratch on every turn or session, so the turn
+    // is part of the item's id: a later call never replaces an earlier turn's card.
+    const id = `tool:${this.turnIds.get(threadId) ?? "late"}:${update.toolCallId}`;
     const existing = this.store.getItem(threadId, id) as ToolItem | undefined;
     const content = update.content ? toolContent(update.content) : undefined;
     this.putItem(threadId, {

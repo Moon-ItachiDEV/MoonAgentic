@@ -118,6 +118,16 @@ function upsert<T extends { id: string }>(list: T[], value: T, newestFirst = tru
   return copy;
 }
 
+/**
+ * A fresh id for a request. `crypto.randomUUID` is missing on pages opened over plain HTTP
+ * from another machine, such as a phone on the local network.
+ */
+export function newId(): string {
+  if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 type Pending = { resolve: (id: string) => void; reject: (error: Error) => void };
 
 export class Connection {
@@ -151,6 +161,11 @@ export class Connection {
   };
 
   getState = () => this.state;
+
+  /** Shows a message to the user, for a failure no part of the page has room to show. */
+  notify(message: string): void {
+    this.set({ ...this.state, notice: message });
+  }
 
   dismissNotice(): void {
     this.set({ ...this.state, notice: null });

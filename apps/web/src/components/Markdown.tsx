@@ -4,7 +4,12 @@ import { memo } from "react";
 
 /** Renders agent Markdown; links open outside the app. */
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  const html = DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }));
+  const html = DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }), {
+    // An answer is text to read: nothing in it should look like part of the app or submit anything.
+    FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style"],
+    // Nor should it place itself over the app, which a style of its own would allow.
+    FORBID_ATTR: ["style"],
+  });
   return <div className="md" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
