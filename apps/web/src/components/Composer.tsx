@@ -175,7 +175,11 @@ export function Composer(props: {
         <button
           className="agentchip"
           disabled={!agent?.available || (!!thread && running)}
-          title={thread && running ? "Ces réglages se changent entre deux réponses" : undefined}
+          title={
+            thread && running
+              ? "L'agent et ses réglages se changent entre deux réponses"
+              : undefined
+          }
           aria-haspopup="menu"
           aria-expanded={pickerOpen}
           onClick={() => setMenu((m) => !m)}
