@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import type { AgentSetting } from "@moonagentic/protocol";
 import type { AgentLaunch } from "./agents.ts";
 import { acpMcpServers, type McpServerRecord } from "./mcp.ts";
 
@@ -12,8 +13,8 @@ export interface SessionHandlers {
   ): Promise<acp.RequestPermissionResponse>;
   /** The agent process ended; `reason` carries its last stderr lines when it failed. */
   onExit(reason: string | undefined): void;
-  /** The agent's settings (model, effort…) changed. */
-  onConfig?(options: acp.SessionConfigOption[]): void;
+  /** The agent changed its settings (model, mode, effort…) on its own. */
+  onConfig?(config: { model: ModelOption | undefined; settings: AgentSetting[] }): void;
 }
 
 export interface ModelOption {
@@ -41,6 +42,33 @@ export function modelOption(options: acp.SessionConfigOption[]): ModelOption | u
   };
 }
 
+const SETTING_KINDS = { mode: "mode", thought_level: "effort" } as const;
+
+/** Reads the agent's mode and reasoning effort selectors, if it has them. */
+export function settingOptions(options: acp.SessionConfigOption[]): AgentSetting[] {
+  return options.flatMap((o): AgentSetting[] => {
+    // Older adapters may leave the category out and only name the option.
+    const key = o.category ?? o.id;
+    const kind = Object.hasOwn(SETTING_KINDS, key)
+      ? SETTING_KINDS[key as keyof typeof SETTING_KINDS]
+      : undefined;
+    if (!kind || o.type !== "select") return [];
+    const flat = o.options.flatMap((c) => ("group" in c ? c.options : [c]));
+    return [
+      {
+        id: o.id,
+        kind,
+        current: o.currentValue,
+        choices: flat.map((c) => ({
+          id: c.value,
+          name: c.name,
+          ...(c.description ? { description: c.description } : {}),
+        })),
+      },
+    ];
+  });
+}
+
 /** Older ACP agents (Hermes among them) list models in a `models` field instead of a config option. */
 interface LegacyModels {
   availableModels: { modelId: string; name: string; description?: string | null }[];
@@ -54,9 +82,18 @@ function legacyModels(response: unknown): LegacyModels | undefined {
   return Array.isArray(models?.availableModels) ? models : undefined;
 }
 
+/** Agents without config options may list their modes in a `modes` field instead. */
+export const LEGACY_MODE = "session/set_mode";
+
+function legacyModes(response: unknown): acp.SessionModeState | undefined {
+  const modes = (response as { modes?: acp.SessionModeState | null } | null | undefined)?.modes;
+  return Array.isArray(modes?.availableModes) ? modes : undefined;
+}
+
 interface SessionState {
   options: acp.SessionConfigOption[];
   legacy: LegacyModels | undefined;
+  modes: acp.SessionModeState | undefined;
 }
 
 /** Keeps what the agent already sent when a response leaves a field out. */
@@ -65,6 +102,41 @@ function absorb(state: SessionState, response: unknown): void {
     ?.configOptions;
   if (options) state.options = options;
   state.legacy = legacyModels(response) ?? state.legacy;
+  state.modes = legacyModes(response) ?? state.modes;
+}
+
+function modelOf(state: SessionState): ModelOption | undefined {
+  const fromOptions = modelOption(state.options);
+  const legacy = state.legacy;
+  if (fromOptions || !legacy) return fromOptions;
+  return {
+    configId: LEGACY_MODEL,
+    current: legacy.currentModelId,
+    choices: legacy.availableModels.map((m) => ({
+      id: m.modelId,
+      name: m.name,
+      ...(m.description ? { description: m.description } : {}),
+    })),
+  };
+}
+
+function settingsOf(state: SessionState): AgentSetting[] {
+  const settings = settingOptions(state.options);
+  const modes = state.modes;
+  if (settings.some((s) => s.kind === "mode") || !modes) return settings;
+  return [
+    {
+      id: LEGACY_MODE,
+      kind: "mode",
+      current: modes.currentModeId,
+      choices: modes.availableModes.map((m) => ({
+        id: m.id,
+        name: m.name,
+        ...(m.description ? { description: m.description } : {}),
+      })),
+    },
+    ...settings,
+  ];
 }
 
 const STDERR_TAIL = 4000;
@@ -96,18 +168,7 @@ export class AgentSession {
   }
 
   get model(): ModelOption | undefined {
-    const fromOptions = modelOption(this.state.options);
-    const legacy = this.state.legacy;
-    if (fromOptions || !legacy) return fromOptions;
-    return {
-      configId: LEGACY_MODEL,
-      current: legacy.currentModelId,
-      choices: legacy.availableModels.map((m) => ({
-        id: m.modelId,
-        name: m.name,
-        ...(m.description ? { description: m.description } : {}),
-      })),
-    };
+    return modelOf(this.state);
   }
 
   async setModel(value: string): Promise<void> {
@@ -124,6 +185,28 @@ export class AgentSession {
     const response = await this.connection.agent.request("session/set_config_option", {
       sessionId: this.sessionId,
       configId: model.configId,
+      value,
+    });
+    absorb(this.state, response);
+  }
+
+  /** The agent's mode and reasoning effort settings, with their current values. */
+  get settings(): AgentSetting[] {
+    return settingsOf(this.state);
+  }
+
+  async setSetting(id: string, value: string): Promise<void> {
+    if (id === LEGACY_MODE && this.state.modes) {
+      await this.connection.agent.request("session/set_mode", {
+        sessionId: this.sessionId,
+        modeId: value,
+      });
+      this.state.modes = { ...this.state.modes, currentModeId: value };
+      return;
+    }
+    const response = await this.connection.agent.request("session/set_config_option", {
+      sessionId: this.sessionId,
+      configId: id,
       value,
     });
     absorb(this.state, response);
@@ -160,18 +243,37 @@ export class AgentSession {
     });
 
     let sessionId: string | null = null;
-    const state: SessionState = { options: [], legacy: undefined };
+    const state: SessionState = { options: [], legacy: undefined, modes: undefined };
     // session/load replays the history as updates; the timeline already holds it.
     let replaying = false;
+    // Updates can arrive in the same read as the reply that names the session, before
+    // `sessionId` is set; they wait here until it is.
+    const early: acp.SessionNotification[] = [];
+    // Settings seen while starting are the agent's own; the caller then applies the thread's.
+    let started = false;
+    const dispatch = (params: acp.SessionNotification) => {
+      if (params.sessionId !== sessionId) return;
+      const update = params.update;
+      if (update.sessionUpdate === "config_option_update") {
+        state.options = update.configOptions;
+      } else if (update.sessionUpdate === "current_mode_update") {
+        if (state.modes) state.modes = { ...state.modes, currentModeId: update.currentModeId };
+      } else {
+        // A replay repeats old messages, which the timeline already holds, but its commands
+        // and context use are the session's current state.
+        const current =
+          update.sessionUpdate === "available_commands_update" ||
+          update.sessionUpdate === "usage_update";
+        if (!replaying || current) handlers.onUpdate(update);
+        return;
+      }
+      if (started) handlers.onConfig?.({ model: modelOf(state), settings: settingsOf(state) });
+    };
     const app = acp
       .client({ name: "MoonAgentic" })
       .onNotification("session/update", ({ params }) => {
-        if (params.sessionId !== sessionId) return;
-        if (params.update.sessionUpdate === "config_option_update") {
-          state.options = params.update.configOptions;
-          // A replayed setting is the past; the thread's own model choice still wins.
-          if (!replaying) handlers.onConfig?.(state.options);
-        } else if (!replaying) handlers.onUpdate(params.update);
+        if (sessionId === null) early.push(params);
+        else dispatch(params);
       })
       .onRequest("session/request_permission", ({ params, signal }) =>
         handlers.requestPermission(params, signal),
@@ -250,6 +352,8 @@ export class AgentSession {
         sessionId = created.sessionId;
         absorb(state, created);
       }
+      for (const params of early.splice(0)) dispatch(params);
+      started = true;
       return new AgentSession(sessionId, connection, kill, state, fresh);
     };
 

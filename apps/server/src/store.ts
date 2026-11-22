@@ -1,5 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 import type {
+  AgentSetting,
   Item,
   ModelChoice,
   PermissionMode,
@@ -13,6 +14,8 @@ export interface AgentModels {
   models: ModelChoice[];
   /** What the agent picks on its own for a new session. */
   current: string;
+  /** Its other settings, with the value it picks on its own as `current`. */
+  settings?: AgentSetting[];
 }
 
 interface ThreadRow {
@@ -25,10 +28,23 @@ interface ThreadRow {
   error: string | null;
   model: string | null;
   workspace: string | null;
+  /** JSON of the thread's optional agent state: settings, usage, canCompact. */
+  extra: string | null;
   acp_session_id: string | null;
   created_at: number;
   updated_at: number;
 }
+
+type ThreadExtra = Pick<Thread, "settings" | "usage" | "canCompact">;
+
+const extraOf = (thread: ThreadExtra): string | null => {
+  const extra: ThreadExtra = {
+    ...(thread.settings ? { settings: thread.settings } : {}),
+    ...(thread.usage ? { usage: thread.usage } : {}),
+    ...(thread.canCompact ? { canCompact: true } : {}),
+  };
+  return Object.keys(extra).length ? JSON.stringify(extra) : null;
+};
 
 const toThread = (row: ThreadRow): Thread => ({
   id: row.id,
@@ -39,6 +55,7 @@ const toThread = (row: ThreadRow): Thread => ({
   permissionMode: row.permission_mode,
   ...(row.model ? { model: row.model } : {}),
   ...(row.workspace ? { workspace: JSON.parse(row.workspace) as Workspace } : {}),
+  ...(row.extra ? (JSON.parse(row.extra) as ThreadExtra) : {}),
   ...(row.error ? { error: row.error } : {}),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -89,11 +106,10 @@ export class Store {
       );
     `);
     const threadColumns = this.db.prepare(`PRAGMA table_info(threads)`).all() as { name: string }[];
-    if (!threadColumns.some((c) => c.name === "model")) {
-      this.db.exec(`ALTER TABLE threads ADD COLUMN model TEXT`);
-    }
-    if (!threadColumns.some((c) => c.name === "workspace")) {
-      this.db.exec(`ALTER TABLE threads ADD COLUMN workspace TEXT`);
+    for (const column of ["model", "workspace", "extra"]) {
+      if (!threadColumns.some((c) => c.name === column)) {
+        this.db.exec(`ALTER TABLE threads ADD COLUMN ${column} TEXT`);
+      }
     }
   }
 
@@ -179,8 +195,8 @@ export class Store {
   addThread(thread: Thread): void {
     this.db
       .prepare(
-        `INSERT INTO threads (id, project_id, title, agent_id, status, permission_mode, model, workspace, error, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+        `INSERT INTO threads (id, project_id, title, agent_id, status, permission_mode, model, workspace, extra, error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       )
       .run(
         thread.id,
@@ -191,6 +207,7 @@ export class Store {
         thread.permissionMode,
         thread.model ?? null,
         thread.workspace ? JSON.stringify(thread.workspace) : null,
+        extraOf(thread),
         thread.createdAt,
         thread.updatedAt,
       );
@@ -198,7 +215,19 @@ export class Store {
 
   updateThread(
     id: string,
-    patch: Partial<Pick<Thread, "status" | "permissionMode" | "title" | "model" | "workspace">> & {
+    patch: Partial<
+      Pick<
+        Thread,
+        | "status"
+        | "permissionMode"
+        | "title"
+        | "model"
+        | "workspace"
+        | "settings"
+        | "usage"
+        | "canCompact"
+      >
+    > & {
       error?: string | null;
     },
   ): Thread {
@@ -210,7 +239,7 @@ export class Store {
     const error = patch.error === undefined ? (current.error ?? null) : patch.error;
     this.db
       .prepare(
-        `UPDATE threads SET status = ?, permission_mode = ?, title = ?, model = ?, workspace = ?, error = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE threads SET status = ?, permission_mode = ?, title = ?, model = ?, workspace = ?, extra = ?, error = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.status,
@@ -218,6 +247,7 @@ export class Store {
         next.title,
         next.model ?? null,
         next.workspace ? JSON.stringify(next.workspace) : null,
+        extraOf(next),
         error,
         next.updatedAt,
         id,

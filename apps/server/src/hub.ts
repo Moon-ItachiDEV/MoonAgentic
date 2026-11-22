@@ -5,6 +5,7 @@ import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type {
   AgentInfo,
+  AgentSetting,
   ClientMessage,
   Favorites,
   Item,
@@ -20,7 +21,7 @@ import type {
 import type { Agents } from "./agents.ts";
 import { addWorktree, branchName, isGitRepo, reviewChanges, ship, type ShipResult } from "./git.ts";
 import { mcpInfo, type McpServerRecord } from "./mcp.ts";
-import { AgentSession, describe, type ModelOption, modelOption } from "./session.ts";
+import { AgentSession, describe, type ModelOption } from "./session.ts";
 import type { Store } from "./store.ts";
 
 export interface Client {
@@ -46,6 +47,9 @@ const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolCon
   });
 
 const DISCOVERY_TIMEOUT_MS = 30_000;
+
+const settingValues = (settings: AgentSetting[]) =>
+  settings.length ? Object.fromEntries(settings.map((s) => [s.id, s.current])) : undefined;
 
 /** Owns threads and their agent sessions, and keeps every connected client in sync. */
 export class Hub {
@@ -128,6 +132,9 @@ export class Hub {
       case "thread.setModel":
         await this.setModel(message.threadId, message.model);
         return;
+      case "thread.setSetting":
+        await this.setSetting(message.threadId, message.settingId, message.value);
+        return;
       case "favorites.toggle":
         this.toggleFavorite(message.agentId, message.model, message.starred);
         return;
@@ -199,6 +206,7 @@ export class Hub {
     agentId: string;
     permissionMode: PermissionMode;
     model?: string | undefined;
+    settings?: Record<string, string> | undefined;
     isolated?: boolean | undefined;
     text: string;
   }): string {
@@ -222,6 +230,7 @@ export class Hub {
       status: "idle",
       permissionMode: input.permissionMode,
       ...(input.model ? { model: input.model } : {}),
+      ...(input.settings ? { settings: input.settings } : {}),
       ...(workspace ? { workspace } : {}),
       createdAt: now,
       updatedAt: now,
@@ -266,8 +275,37 @@ export class Hub {
     const session = await this.sessions.get(threadId)?.catch(() => undefined);
     const choices = session?.model?.choices ?? this.store.getAgentModels(thread.agentId)?.models;
     if (!choices?.some((c) => c.id === model)) throw new Error("Modèle inconnu.");
-    if (session?.model) await session.setModel(model);
-    this.updateThread(threadId, { model: session?.model?.current ?? model });
+    if (session?.model) {
+      await session.setModel(model);
+      // A new model can bring other effort levels, for the picker too.
+      this.learnCatalog(thread.agentId, session.model, session.settings, false);
+    }
+    const settings = session && settingValues(session.settings);
+    this.updateThread(threadId, {
+      model: session?.model?.current ?? model,
+      ...(settings ? { settings } : {}),
+    });
+  }
+
+  /** Changes one of the agent's settings, such as its mode, between turns. */
+  async setSetting(threadId: string, settingId: string, value: string): Promise<void> {
+    const thread = this.requireThread(threadId);
+    if (this.turns.has(threadId))
+      throw new Error("Attends la fin de la réponse pour changer ce réglage.");
+    const session = await this.sessions.get(threadId)?.catch(() => undefined);
+    const offered = session?.settings ?? this.store.getAgentModels(thread.agentId)?.settings;
+    const setting = offered?.find((s) => s.id === settingId);
+    if (!setting?.choices.some((c) => c.id === value)) throw new Error("Réglage inconnu.");
+    if (session) {
+      await session.setSetting(settingId, value);
+      this.learnCatalog(thread.agentId, session.model, session.settings, false);
+    }
+    // One change can move others, so a running agent's own values win.
+    const settings = (session && settingValues(session.settings)) ?? {
+      ...this.requireThread(threadId).settings,
+      [settingId]: value,
+    };
+    this.updateThread(threadId, { settings });
   }
 
   toggleFavorite(agentId: string, model: string, starred: boolean): void {
@@ -364,7 +402,7 @@ export class Hub {
     })
       .then(
         (session) => {
-          this.learnModels(agentId, session.model, session.fresh);
+          this.learnCatalog(agentId, session.model, session.settings, session.fresh);
           void session.close();
         },
         (error: unknown) => {
@@ -474,6 +512,8 @@ export class Hub {
   }
 
   private async startSession(thread: Thread, cwd: string): Promise<AgentSession> {
+    // Until the thread's own model and settings are applied, the agent's are not news.
+    let ready = false;
     const session = await AgentSession.start({
       launch: this.agents.launch(thread.agentId),
       cwd,
@@ -489,16 +529,21 @@ export class Hub {
             this.updateThread(thread.id, { status: "error", error: reason });
           }
         },
-        onConfig: (options) => {
-          const model = modelOption(options);
-          this.learnModels(thread.agentId, model, false);
-          if (model && model.current !== this.store.getThread(thread.id)?.model) {
+        onConfig: ({ model, settings }) => {
+          if (!ready) return;
+          this.learnCatalog(thread.agentId, model, settings, false);
+          const current = this.store.getThread(thread.id);
+          if (model && model.current !== current?.model) {
             this.updateThread(thread.id, { model: model.current });
+          }
+          const values = settingValues(settings);
+          if (values && JSON.stringify(values) !== JSON.stringify(current?.settings)) {
+            this.updateThread(thread.id, { settings: values });
           }
         },
       },
     });
-    this.learnModels(thread.agentId, session.model, session.fresh);
+    this.learnCatalog(thread.agentId, session.model, session.settings, session.fresh);
     const model = session.model;
     if (model) {
       // A continued session already runs the model it was left on.
@@ -510,7 +555,24 @@ export class Hub {
       }
       this.updateThread(thread.id, { model: session.model?.current ?? model.current });
     }
+    // After the model, which can change the effort levels on offer.
+    await this.applySettings(thread.id, session);
+    this.learnCatalog(thread.agentId, session.model, session.settings, false);
+    ready = true;
     return session;
+  }
+
+  /** Gives a starting agent the mode and effort the thread asked for. */
+  private async applySettings(threadId: string, session: AgentSession): Promise<void> {
+    const wanted = this.store.getThread(threadId)?.settings ?? {};
+    for (const setting of session.settings) {
+      const value = Object.hasOwn(wanted, setting.id) ? wanted[setting.id] : undefined;
+      if (value && value !== setting.current && setting.choices.some((c) => c.id === value)) {
+        await session.setSetting(setting.id, value);
+      }
+    }
+    const values = settingValues(session.settings);
+    if (values) this.updateThread(threadId, { settings: values });
   }
 
   private agentList(): AgentInfo[] {
@@ -519,7 +581,13 @@ export class Hub {
       const modelsError = this.discoveryErrors.get(agent.id);
       if (!known) return modelsError ? { ...agent, modelsError } : agent;
       const defaultModel = this.defaultModel(agent.id);
-      return { ...agent, models: known.models, ...(defaultModel ? { defaultModel } : {}) };
+      return {
+        ...agent,
+        models: known.models,
+        ...(defaultModel ? { defaultModel } : {}),
+        // An empty list says the agent has none; a missing one, from an older cache, is unknown.
+        ...(known.settings ? { settings: known.settings } : {}),
+      };
     });
   }
 
@@ -533,15 +601,31 @@ export class Hub {
   }
 
   /**
-   * Remembers the models an agent offers, so new threads can offer them before starting it.
-   * Only a fresh session tells the agent's own default, or that it offers no model choice,
-   * which is remembered too so the UI stops asking.
+   * Remembers the models and settings an agent offers, so new threads can offer them before
+   * starting it. Only a fresh session tells the agent's own defaults, or that it offers no
+   * model choice, which is remembered too so the UI stops asking.
    */
-  private learnModels(agentId: string, model: ModelOption | undefined, fresh: boolean): void {
-    if (!model && !fresh) return;
+  private learnCatalog(
+    agentId: string,
+    model: ModelOption | undefined,
+    settings: AgentSetting[],
+    fresh: boolean,
+  ): void {
     const before = this.store.getAgentModels(agentId);
-    const current = model ? (fresh || !before ? model.current : before.current) : "";
-    const next = { models: model?.choices ?? [], current };
+    if (!fresh && !model && (!before || !settings.length)) return;
+    const keep = !fresh && before;
+    const next = {
+      models: model ? model.choices : keep ? before.models : [],
+      current: model ? (keep ? before.current : model.current) : keep ? before.current : "",
+      // A continued session that leaves its settings out does not take them away.
+      settings:
+        keep && !settings.length
+          ? (before.settings ?? [])
+          : settings.map((s) => ({
+              ...s,
+              current: (keep && before.settings?.find((b) => b.id === s.id)?.current) || s.current,
+            })),
+    };
     if (JSON.stringify(before) === JSON.stringify(next)) return;
     this.store.setAgentModels(agentId, next);
     this.broadcast({ type: "agents", agents: this.agentList() });
@@ -563,6 +647,20 @@ export class Hub {
       case "tool_call_update":
         this.upsertTool(threadId, update);
         return;
+      case "usage_update": {
+        if (!(update.size > 0 && update.used >= 0)) return;
+        const before = this.store.getThread(threadId)?.usage;
+        if (before?.used === update.used && before.size === update.size) return;
+        this.updateThread(threadId, { usage: { used: update.used, size: update.size } });
+        return;
+      }
+      case "available_commands_update": {
+        const canCompact = update.availableCommands.some((c) => c.name === "compact");
+        if (canCompact !== !!this.store.getThread(threadId)?.canCompact) {
+          this.updateThread(threadId, { canCompact });
+        }
+        return;
+      }
       case "plan":
         this.putItem(threadId, {
           id: `plan:${this.turnIds.get(threadId) ?? "late"}`,
