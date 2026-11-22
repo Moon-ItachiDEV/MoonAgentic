@@ -619,6 +619,19 @@ describe("composer", () => {
     );
     if (shots) await page.waitForTimeout(400);
     await shot(page, "p4-mobile");
+
+    // In the settings, each kind of work is sent to an agent; the server keeps the choice.
+    await page.setViewportSize({ width: 1280, height: 820 });
+    await page.evaluate(() => {
+      history.pushState(null, "", "/reglages/coordinator");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await page.getByLabel("Agent pour Bug").selectOption({ label: "Agent de démo" });
+    await page.getByLabel("Modèle pour Bug").selectOption({ label: "Démo précis" });
+    await page.reload();
+    await expect.poll(() => page.getByLabel("Modèle pour Bug").inputValue()).toBe("precis");
+    expect(await page.getByLabel("Agent pour Tests").inputValue()).toBe("");
+    await shot(page, "p8-reglages-coordinateur");
     await page.close();
   });
   it("plans the project's work: the teams' cards follow their pieces, the user's are theirs to move", async () => {

@@ -397,6 +397,7 @@ export function App() {
               section={route.section}
               agents={state.agents}
               favorites={state.favorites}
+              coordinator={state.coordinator}
               projects={state.projects}
               projectId={project?.id}
               mcpServers={state.mcpServers}
