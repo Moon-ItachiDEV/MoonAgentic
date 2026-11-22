@@ -75,6 +75,15 @@ export function repoFolderName(input: string): string {
   return last && /^[A-Za-z0-9._-]+$/.test(last) && !/^\.\.?$/.test(last) ? last : "";
 }
 
+/**
+ * Whether a repository can be cloned from what is typed: a repository (never a profile address,
+ * whatever the name), a parent folder, and a folder name, typed or taken from the repository.
+ */
+export function canClone(repo: string, parent: string, name: string): boolean {
+  if (!repo.trim() || !parent.trim() || githubOwner(repo)) return false;
+  return !!(name.trim() || repoFolderName(repo));
+}
+
 /** The folder holding a project's folder, written with the project's own separators. */
 export function parentFolder(projectPath: string): string {
   const trimmed = projectPath.replace(/[\\/]+$/, "");
