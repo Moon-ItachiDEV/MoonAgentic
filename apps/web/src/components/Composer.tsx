@@ -628,7 +628,7 @@ export function Composer(props: {
             setPickedAgentId(id);
             writePref("agent", id);
           }}
-          onPickAgentModel={(id, model) => {
+          onPickAgentModel={(id, model, stay) => {
             if (thread) {
               // The model is set once the new agent has the thread: the server takes one change at a time.
               if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
@@ -641,16 +641,18 @@ export function Composer(props: {
                 writePref(`model.${id}`, model);
               }
             }
+            if (stay) return;
             setMenu(false);
             input.current?.focus();
           }}
-          onPickModel={(id) => {
+          onPickModel={(id, stay) => {
             if (thread)
               connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
             else if (agent) {
               setModelPicks((p) => ({ ...p, [agent.id]: id }));
               writePref(`model.${agent.id}`, id);
             }
+            if (stay) return;
             setMenu(false);
             input.current?.focus();
           }}

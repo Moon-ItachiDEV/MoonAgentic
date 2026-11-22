@@ -31,10 +31,10 @@ export function Picker(props: {
   /** Page to open on, for `/modeles` the wheel. */
   start?: View;
   onPickAgent: (agentId: string) => void;
-  /** A model of the current agent: the sheet closes. */
-  onPickModel: (model: string) => void;
+  /** A model of the current agent: the sheet closes, unless the wheel only came to rest on it. */
+  onPickModel: (model: string, stay?: boolean) => void;
   /** A model of another agent: in a thread this hands it over, then sets the model. */
-  onPickAgentModel: (agentId: string, model: string | undefined) => void;
+  onPickAgentModel: (agentId: string, model: string | undefined, stay?: boolean) => void;
   onPickSetting: (settingId: string, value: string) => void;
   onClose: () => void;
 }) {
@@ -113,9 +113,11 @@ export function Picker(props: {
           onEffort={() => go("effort")}
           onPick={(entry, settle) => {
             if (entry.agent.id === agent?.id) {
-              if (entry.model && entry.model !== props.model) props.onPickModel(entry.model);
+              // Scrolling the wheel picks as it goes and keeps it open; a click closes it.
+              if (entry.model && entry.model !== props.model)
+                props.onPickModel(entry.model, settle);
               else if (!settle) props.onClose();
-            } else props.onPickAgentModel(entry.agent.id, entry.model);
+            } else props.onPickAgentModel(entry.agent.id, entry.model, settle);
           }}
         />
         <p className="mp-hint">
