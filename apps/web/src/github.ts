@@ -75,6 +75,24 @@ export function repoFolderName(input: string): string {
   return last && /^[A-Za-z0-9._-]+$/.test(last) && !/^\.\.?$/.test(last) ? last : "";
 }
 
+/** Same GitHub repository forms accepted by the server: `owner/name` or a github.com URL. */
+const GITHUB_REPO =
+  /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)?([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?(?:[#?].*|\/(?:tree|blob|pulls?|issues|commits?|compare|actions|releases|wiki|branches|tags|settings|security|discussions|projects|raw|blame)(?:[/?#].*)?)?$/i;
+
+/**
+ * Whether a repository can be cloned from what is typed: a valid GitHub repository (never a
+ * profile address, single word or other host, whatever the name), a parent folder, and a safe
+ * folder name, typed or taken from the repository.
+ */
+export function canClone(repo: string, parent: string, name: string): boolean {
+  if (!parent.trim() || !repoFolderName(repo)) return false;
+  const match = GITHUB_REPO.exec(repo.trim());
+  if (!match || match[2] === "." || match[2] === "..") return false;
+  const folder = name.trim();
+  if (folder && (/[\\/]/.test(folder) || folder === "." || folder === "..")) return false;
+  return true;
+}
+
 /** The folder holding a project's folder, written with the project's own separators. */
 export function parentFolder(projectPath: string): string {
   const trimmed = projectPath.replace(/[\\/]+$/, "");
