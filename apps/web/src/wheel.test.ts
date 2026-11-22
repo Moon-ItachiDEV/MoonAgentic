@@ -1,6 +1,6 @@
 import type { AgentInfo } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
-import { wheelEntries } from "./wheel.ts";
+import { keepLines, wheelEntries } from "./wheel.ts";
 
 const agent = (id: string, extra: Partial<AgentInfo> = {}): AgentInfo =>
   ({ id, name: id, short: id.slice(0, 2), available: true, ...extra }) as AgentInfo;
@@ -44,5 +44,37 @@ describe("wheelEntries", () => {
   it("shows an agent without models by its default", () => {
     const entries = wheelEntries([codex], {}, { agent: codex, model: undefined });
     expect(entries).toEqual([{ agent: codex, model: undefined, name: "Modèle par défaut" }]);
+  });
+});
+
+describe("keepLines", () => {
+  const claude = agent("claude", {
+    models: [
+      { id: "opus", name: "Opus" },
+      { id: "sonnet", name: "Sonnet" },
+      { id: "haiku", name: "Haiku" },
+    ],
+  });
+  const favorites = { claude: ["sonnet", "haiku"] };
+  const names = (entries: { name: string }[]) => entries.map((e) => e.name);
+
+  it("keeps the non-favorite line once the wheel lands on a favorite", () => {
+    const opened = wheelEntries([claude], favorites, { agent: claude, model: "opus" });
+    const live = wheelEntries([claude], favorites, { agent: claude, model: "sonnet" });
+    expect(names(live)).toEqual(["Sonnet", "Haiku"]);
+    expect(names(keepLines(opened, live))).toEqual(["Opus", "Sonnet", "Haiku"]);
+  });
+
+  it("takes the live list when a line appears", () => {
+    const opened = wheelEntries([claude], favorites, { agent: claude, model: "sonnet" });
+    const live = wheelEntries(
+      [claude],
+      { claude: ["opus", "sonnet", "haiku"] },
+      {
+        agent: claude,
+        model: "sonnet",
+      },
+    );
+    expect(names(keepLines(opened, live))).toEqual(["Opus", "Sonnet", "Haiku"]);
   });
 });
