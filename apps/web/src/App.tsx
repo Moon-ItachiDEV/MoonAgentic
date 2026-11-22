@@ -1,5 +1,5 @@
 import type { Schedule, Thread } from "@moonagentic/protocol";
-import { lazy, Suspense, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Composer } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
@@ -96,6 +96,26 @@ export function App() {
   const [projectTab, setProjectTab] = useState<"chat" | "threads">("chat");
   // Lists show every thread but the coordinators.
   const listed = useMemo(() => ({ ...state, threads: listedThreads(state.threads) }), [state]);
+  // A coordinator lives on its project's page: its own address, reached from a notification
+  // or an old link, leads there, and « back » does not come here again.
+  const strayProjectId =
+    route.name === "thread"
+      ? state.threads.find((t) => t.id === route.threadId && t.kind === "coordinator")?.projectId
+      : undefined;
+  useEffect(() => {
+    if (!strayProjectId) return;
+    setProjectTab("chat");
+    navigate({ name: "project", projectId: strayProjectId }, { replace: true });
+  }, [strayProjectId]);
+  // Another project's page starts on its coordinator, not on the tab left open before.
+  const pageProjectId = route.name === "project" ? route.projectId : undefined;
+  // Coming back to the same project from one of its threads keeps the tab.
+  const lastPage = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!pageProjectId) return;
+    if (lastPage.current && lastPage.current !== pageProjectId) setProjectTab("chat");
+    lastPage.current = pageProjectId;
+  }, [pageProjectId]);
 
   if (state.status === "unauthorized") return <Unauthorized />;
 
@@ -121,6 +141,14 @@ export function App() {
     setDrawer(false);
     setReviewOpen(false);
     navigate(next);
+  };
+  /** Opens a thread where it lives: a coordinator on its project's page. */
+  const openThread = (id: string) => {
+    const target = state.threads.find((t) => t.id === id);
+    if (target?.kind === "coordinator") {
+      setProjectTab("chat");
+      go({ name: "project", projectId: target.projectId });
+    } else go({ name: "thread", threadId: id });
   };
   const togglePin = (id: string, pinned: boolean) =>
     connection.send({ type: "thread.setPinned", threadId: id, pinned });
@@ -484,38 +512,41 @@ export function App() {
         ) : (
           <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
         )}
-        {route.name !== "settings" && route.name !== "planner" && (
-          <div className={`dock${coordinator && wide ? " beside-threads" : ""}`}>
-            {thread?.archived ? (
-              <div className="archived-bar" role="status">
-                <IconArchive />
-                <span>Cette discussion est résolue.</span>
-                <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
-                  Rouvrir
-                </button>
-              </div>
-            ) : (
-              <Composer
-                key={spoken?.id ?? "new"}
-                agents={state.agents}
-                favorites={state.favorites}
-                thread={spoken}
-                project={project}
-                onNewProject={() => setCreatingProject(true)}
-                onCreated={(id) => navigate({ name: "thread", threadId: id })}
-                onExport={exportThread}
-                onSearch={() => setSearchOpen(true)}
-                onRequests={() => setRequestsOpen(true)}
-                onConnections={() => setConnectionsOpen(true)}
-                onArchive={() => spoken && setArchived(spoken.id, true)}
-                onDelete={() => spoken && askDeleteThread(spoken)}
-                onTeam={(task) => setTeamTask(task)}
-                onSchedule={(text) => setScheduling({ text })}
-                onSettings={() => go({ name: "settings", section: "general" })}
-              />
-            )}
-          </div>
-        )}
+        {route.name !== "settings" &&
+          route.name !== "planner" &&
+          // Under the « Fils » tab the coordinator's conversation is out of sight: so is its composer.
+          !(coordinator && !wide && projectTab === "threads") && (
+            <div className={`dock${coordinator && wide ? " beside-threads" : ""}`}>
+              {thread?.archived ? (
+                <div className="archived-bar" role="status">
+                  <IconArchive />
+                  <span>Cette discussion est résolue.</span>
+                  <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
+                    Rouvrir
+                  </button>
+                </div>
+              ) : (
+                <Composer
+                  key={spoken?.id ?? "new"}
+                  agents={state.agents}
+                  favorites={state.favorites}
+                  thread={spoken}
+                  project={project}
+                  onNewProject={() => setCreatingProject(true)}
+                  onCreated={(id) => navigate({ name: "thread", threadId: id })}
+                  onExport={exportThread}
+                  onSearch={() => setSearchOpen(true)}
+                  onRequests={() => setRequestsOpen(true)}
+                  onConnections={() => setConnectionsOpen(true)}
+                  onArchive={() => spoken && setArchived(spoken.id, true)}
+                  onDelete={() => spoken && askDeleteThread(spoken)}
+                  onTeam={(task) => setTeamTask(task)}
+                  onSchedule={(text) => setScheduling({ text })}
+                  onSettings={() => go({ name: "settings", section: "general" })}
+                />
+              )}
+            </div>
+          )}
       </main>
       {reviewOpen && thread?.workspace && !thread.archived && (
         <ReviewPanel
@@ -584,7 +615,7 @@ export function App() {
           onOpenThread={(id, itemId) => {
             setRequestsOpen(false);
             focusItem(id, itemId);
-            go({ name: "thread", threadId: id });
+            openThread(id);
           }}
           onClose={() => setRequestsOpen(false)}
         />
@@ -597,12 +628,12 @@ export function App() {
       </Presence>
       {searchOpen && (
         <QuickSearch
-          state={state}
+          state={listed}
           actions={quickActions}
           onClose={() => setSearchOpen(false)}
           onOpenThread={(id, itemId) => {
             if (itemId) focusItem(id, itemId);
-            go({ name: "thread", threadId: id });
+            openThread(id);
           }}
           onPickProject={(id) => {
             pickProject(id);

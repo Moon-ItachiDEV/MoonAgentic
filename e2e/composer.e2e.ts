@@ -597,10 +597,23 @@ describe("composer", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
+    // The coordinator's composer goes with its conversation: nothing is sent out of sight.
+    expect(await composer(page).count()).toBe(0);
     if (shots) await page.waitForTimeout(400);
     await shot(page, "p6-mobile-fils");
     await page.getByRole("tab", { name: "Coordinateur" }).click();
     await card.waitFor();
+    await composer(page).waitFor();
+    // The quick search lists threads, never the coordinator as one of them.
+    await page.keyboard.press("Control+k");
+    await page.getByRole("dialog").getByText("Export Safari").first().waitFor();
+    expect(
+      await page
+        .getByRole("dialog")
+        .getByText(/^Coordinateur · /)
+        .count(),
+    ).toBe(0);
+    await page.keyboard.press("Escape");
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );

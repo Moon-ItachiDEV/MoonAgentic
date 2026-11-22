@@ -165,11 +165,20 @@ export function createHttpServer(options: {
       });
       req.on("error", () => undefined);
       req.on("end", () => {
-        let body: { tool?: unknown; args?: unknown };
+        let body: { tool?: unknown; args?: unknown; exchange?: unknown };
         try {
           body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as typeof body;
         } catch {
           json(res, 400, { error: "Requête illisible." });
+          return;
+        }
+        if (body?.exchange === true) {
+          // The bridge's first words: what it was started with, for the token it will use.
+          try {
+            json(res, 200, { token: hub.coordinatorExchange(given ?? "") });
+          } catch {
+            json(res, 401, { error: "Accès refusé." });
+          }
           return;
         }
         hub.coordinatorCall(given ?? "", String(body?.tool ?? ""), body?.args).then(
@@ -281,10 +290,13 @@ export function createHttpServer(options: {
   server.on("listening", () => {
     const address = server.address();
     if (typeof address === "object" && address) {
+      // Listening on the IPv6 loopback alone, nothing answers on 127.0.0.1.
       const host =
-        address.address === "::" || address.address === "0.0.0.0" || LOCAL.has(address.address)
-          ? "127.0.0.1"
-          : undefined;
+        address.address === "::1"
+          ? "[::1]"
+          : address.address === "::" || address.address === "0.0.0.0" || LOCAL.has(address.address)
+            ? "127.0.0.1"
+            : undefined;
       // Bound to one outside address only: no loopback to answer on, so no coordinator tools.
       hub.coordinatorUrl = host ? `http://${host}:${address.port}` : undefined;
     }

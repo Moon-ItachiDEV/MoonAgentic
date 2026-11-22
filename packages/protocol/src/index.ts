@@ -325,6 +325,8 @@ export interface Thread {
   kind?: "coordinator";
   /** The coordinator's thread, for a thread it opened. */
   openedBy?: string;
+  /** The coordinator's own name for the subject: asked again, it gets this thread back. */
+  taskKey?: string;
   /** The team lead's thread, for a coder's thread. */
   parentId?: string;
   /** The thread's part in a team. */

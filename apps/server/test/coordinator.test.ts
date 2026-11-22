@@ -65,13 +65,24 @@ async function coordinated() {
     await hub.whenIdle(coordinatorId);
     return store.getThread(coordinatorId)!.summary;
   };
+  // A turn of the coordinator kept under way: its agent waits for a permission. Its tools
+  // that change something only work meanwhile.
+  const hold = async () => {
+    await hub.handle(client, { type: "thread.send", threadId: coordinatorId, text: "Regarde" });
+    await expect.poll(() => store.getThread(coordinatorId)!.status).toBe("waiting");
+  };
+  const release = async () => {
+    await hub.cancel(coordinatorId);
+    await hub.whenIdle(coordinatorId);
+  };
+  cleanups.unshift(release);
   const post = (token: string, body: unknown, headers: Record<string, string> = {}) =>
     fetch(`${origin}${COORDINATOR_PATH}`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}`, ...headers },
       body: JSON.stringify(body),
     });
-  return { hub, store, projectId, otherId, coordinatorId, say, post, tokens };
+  return { hub, store, projectId, otherId, coordinatorId, say, post, tokens, hold, release };
 }
 
 describe("a project's coordinator", () => {
@@ -94,8 +105,11 @@ describe("a project's coordinator", () => {
     // The thread got the brief, and the coordinator's conversation links to it.
     expect(store.listItems(opened.id)[0]).toMatchObject({
       kind: "user",
-      text: "Corrige : Export Safari",
+      text: "Corrige : Export Safari\n\n---\nMessage d'origine de l'utilisateur, transmis tel quel par MoonAgentic :\n\n> /ouvre Export Safari",
     });
+    // Asked again for the same subject, it gets that thread back rather than a second one.
+    expect(await say("/ouvre Export Safari")).toBe("J'ai ouvert le fil « Export Safari ».");
+    expect(store.listThreads().filter((t) => t.openedBy === coordinatorId)).toHaveLength(1);
     expect(store.listItems(coordinatorId)).toContainEqual(
       expect.objectContaining({ kind: "opened", threadId: opened.id, title: "Export Safari" }),
     );
@@ -104,20 +118,31 @@ describe("a project's coordinator", () => {
   });
 
   it("stops opening threads past a few for one message", async () => {
-    const { tokens, post, say } = await coordinated();
+    const { tokens, post, say, hold, release } = await coordinated();
     await say("/fils");
-    const open = () => post(tokens[0]!, { tool: "open_thread", args: { title: "T", brief: "B" } });
-    for (let i = 0; i < 4; i += 1) expect((await open()).status).toBe(200);
-    const refused = await open();
+    await hold();
+    const open = (key: string) =>
+      post(tokens[0]!, { tool: "open_thread", args: { task_key: key, title: "T", brief: "B" } });
+    for (let i = 0; i < 4; i += 1) expect((await open(`sujet-${i}`)).status).toBe(200);
+    // A retry of one of them opens nothing and counts for nothing.
+    const again = (await (await open("sujet-0")).json()) as { result: { already_open?: boolean } };
+    expect(again.result.already_open).toBe(true);
+    const refused = await open("sujet-4");
     expect(refused.status).toBe(400);
     expect(((await refused.json()) as { error: string }).error).toContain("déjà ouvert 4 fils");
     // The next message of the user starts the count again.
-    await say("/fils");
-    expect((await open()).status).toBe(200);
+    await release();
+    await hold();
+    expect((await open("sujet-4")).status).toBe(200);
+    // Once it has answered, a bridge left behind opens nothing more.
+    await release();
+    const late = await open("sujet-5");
+    expect(late.status).toBe(400);
+    expect(((await late.json()) as { error: string }).error).toContain("pendant qu'il répond");
   });
 
   it("reaches its own project only, with its own token only", async () => {
-    const { hub, otherId, tokens, post, say } = await coordinated();
+    const { hub, otherId, tokens, post, say, hold } = await coordinated();
     const elsewhere = hub.createThread({
       projectId: otherId,
       agentId: "demo",
@@ -125,6 +150,7 @@ describe("a project's coordinator", () => {
       text: "",
     });
     await say("/fils");
+    await hold();
     const token = tokens[0]!;
     expect((await post(token, { tool: "list_threads" })).status).toBe(200);
 
@@ -157,7 +183,7 @@ describe("a project's coordinator", () => {
   });
 
   it("reads a thread's real state, follows it up, and resolves it", async () => {
-    const { hub, store, projectId, tokens, post, say } = await coordinated();
+    const { hub, store, projectId, tokens, post, say, hold } = await coordinated();
     const threadId = hub.createThread({
       projectId,
       agentId: "demo",
@@ -166,6 +192,7 @@ describe("a project's coordinator", () => {
     });
     await hub.whenIdle(threadId);
     await say("/fils");
+    await hold();
     const token = tokens[0]!;
     const read = (await (
       await post(token, { tool: "read_thread", args: { thread_id: threadId } })
@@ -188,5 +215,104 @@ describe("a project's coordinator", () => {
       (await post(token, { tool: "resolve_thread", args: { thread_id: threadId } })).status,
     ).toBe(200);
     expect(store.getThread(threadId)!.archived).toBe(true);
+  });
+
+  it("gives its bridge a token of its own for what it was started with, once", async () => {
+    const { hub, post, say, tokens, coordinatorId } = await coordinated();
+    const started: string[] = [];
+    const exchange = hub.coordinatorExchange.bind(hub);
+    hub.coordinatorExchange = (bootstrap) => {
+      started.push(bootstrap);
+      return exchange(bootstrap);
+    };
+    await say("/fils");
+    expect(started).toHaveLength(1);
+    // What was in the bridge's environment opens no tool, and trades for nothing twice.
+    expect(started[0]).not.toBe(tokens[0]);
+    expect((await post(started[0]!, { tool: "list_threads" })).status).toBe(401);
+    expect((await post(started[0]!, { exchange: true })).status).toBe(401);
+    expect((await post(tokens[0]!, { tool: "list_threads" })).status).toBe(200);
+    // A coordinator that is deleted takes its bridge's access with it.
+    await hub.deleteThread(coordinatorId);
+    expect((await post(tokens[0]!, { tool: "list_threads" })).status).toBe(401);
+  });
+
+  it("sees what a team's member waits for, on the team's own line", async () => {
+    const { hub, store, projectId, tokens, post, say } = await coordinated();
+    const lead = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "",
+    });
+    const member = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+      parentId: lead,
+    });
+    await expect.poll(() => store.getThread(member)!.status).toBe("waiting");
+    await say("/fils");
+    type Line = { id: string; state: string; waits_on?: string; asks_permission_for?: string[] };
+    const listed = (await (await post(tokens[0]!, { tool: "list_threads" })).json()) as {
+      result: Line[];
+    };
+    // The member is no line of its own: its wait shows on its lead.
+    expect(listed.result.map((t) => t.id)).toEqual([lead]);
+    expect(listed.result[0]).toMatchObject({ state: "en attente", waits_on: expect.any(String) });
+    const read = (await (
+      await post(tokens[0]!, { tool: "read_thread", args: { thread_id: lead } })
+    ).json()) as { result: Line };
+    expect(read.result.asks_permission_for).toHaveLength(1);
+    await hub.cancel(member);
+    await hub.whenIdle(member);
+  });
+
+  it("leaves a message for a thread at work, or cuts in when asked to", async () => {
+    const { hub, store, projectId, tokens, post, say, hold } = await coordinated();
+    await say("/fils");
+    await hold();
+    const token = tokens[0]!;
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Corrige la réponse",
+    });
+    const users = () =>
+      store.listItems(threadId).flatMap((i) => (i.kind === "user" ? [i.text] : []));
+    const message = async (text: string, mode?: string) =>
+      (await (
+        await post(token, { tool: "message_thread", args: { thread_id: threadId, text, mode } })
+      ).json()) as { result: Record<string, unknown> };
+
+    // Its agent is at work: the message waits, and is given when the turn ends.
+    expect((await message("Et les tests")).result.queued_for).toBeTruthy();
+    expect(users()).toEqual(["Corrige la réponse"]);
+    await hub.whenIdle(threadId);
+    await expect.poll(users).toEqual(["Corrige la réponse", "Et les tests"]);
+
+    // An urgent correction stops the turn under way and takes its place. This thread's
+    // agent waits for a permission, so its turn is still under way for sure.
+    await hub.whenIdle(threadId);
+    const held = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+    });
+    await expect.poll(() => store.getThread(held)!.status).toBe("waiting");
+    const steer = (mode: string) =>
+      post(token, { tool: "message_thread", args: { thread_id: held, text: "Stop", mode } });
+    expect((await steer("vite")).status).toBe(400);
+    const cut = (await (await steer("steer")).json()) as { result: { interrupted?: boolean } };
+    expect(cut.result.interrupted).toBe(true);
+    expect(store.listItems(held).findLast((i) => i.kind === "user")).toMatchObject({
+      text: "Stop",
+    });
+    await expect.poll(() => store.getThread(held)!.status).toBe("waiting");
+    await hub.cancel(held);
+    await hub.whenIdle(held);
   });
 });

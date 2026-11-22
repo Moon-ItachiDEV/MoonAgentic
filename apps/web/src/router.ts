@@ -46,7 +46,7 @@ window.addEventListener("popstate", () => {
   for (const l of listeners) l();
 });
 
-export function navigate(route: Route): void {
+export function navigate(route: Route, options: { replace?: boolean } = {}): void {
   const path =
     route.name === "thread"
       ? `/t/${encodeURIComponent(route.threadId)}`
@@ -57,7 +57,10 @@ export function navigate(route: Route): void {
           : route.name === "settings"
             ? `/reglages/${route.section}`
             : "/";
-  if (path !== location.pathname) history.pushState(null, "", path);
+  if (path !== location.pathname) {
+    if (options.replace) history.replaceState(null, "", path);
+    else history.pushState(null, "", path);
+  }
   current = route;
   for (const l of listeners) l();
 }
