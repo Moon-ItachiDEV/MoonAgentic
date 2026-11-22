@@ -202,7 +202,7 @@ export function App() {
 
   return (
     <div
-      className={`app${drawer ? " drawer" : ""}${sideOff ? " side-off" : ""}${route.name === "home" ? " home-route" : ""}${reviewing ? " reviewing" : ""}`}
+      className={`app${drawer ? " drawer" : ""}${sideOff && route.name !== "settings" ? " side-off" : ""}${route.name === "home" ? " home-route" : ""}${reviewing ? " reviewing" : ""}`}
     >
       {route.name === "settings" ? (
         // Until the settings arrive, an empty side bar keeps the layout in place.

@@ -360,6 +360,12 @@
     display: none;
   }
 }
+/* With the Code panel docked on the right, it keeps its column. */
+@media (min-width: 1181px) {
+  .app.side-off.reviewing {
+    grid-template-columns: minmax(0, 1fr) minmax(440px, 46%);
+  }
+}
 @media (max-width: 860px) {
   .side-fold,
   .open-side {
