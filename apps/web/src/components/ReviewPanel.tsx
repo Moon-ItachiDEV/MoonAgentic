@@ -1,6 +1,6 @@
 import type { ReviewFile, Thread } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
-import { connection, type Review } from "../connection.ts";
+import { connection, newId, type Review } from "../connection.ts";
 import { IconBranch } from "./icons.tsx";
 
 const STATUS: Record<ReviewFile["status"], string> = {
@@ -88,7 +88,7 @@ export function ReviewPanel({
     try {
       await connection.request({
         type: "workspace.ship",
-        requestId: crypto.randomUUID(),
+        requestId: newId(),
         threadId: thread.id,
         message: message.trim(),
         pr,

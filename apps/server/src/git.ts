@@ -10,14 +10,28 @@ const MAX_PATCH_LINES = 2000;
 /** No one can answer a password prompt from here, so git and gh fail instead of waiting. */
 const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GH_PROMPT_DISABLED: "1" };
 
-function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<string> {
+/** A push or a call to GitHub that hangs on the network gives up, so its thread is freed. */
+const NETWORK_TIMEOUT_MS = 5 * 60_000;
+
+function git(
+  cwd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+  timeout?: number,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
       args,
-      { cwd, env: { ...process.env, ...NO_PROMPT, ...env }, maxBuffer: 256 * 1024 * 1024 },
+      {
+        cwd,
+        env: { ...process.env, ...NO_PROMPT, ...env },
+        maxBuffer: 256 * 1024 * 1024,
+        ...(timeout ? { timeout } : {}),
+      },
       (error, stdout, stderr) => {
-        if (error) reject(new Error(stderr.trim() || error.message, { cause: error }));
+        if (error?.killed) reject(new Error("git n'a pas répondu à temps.", { cause: error }));
+        else if (error) reject(new Error(stderr.trim() || error.message, { cause: error }));
         else resolve(stdout);
       },
     );
@@ -119,17 +133,39 @@ export async function restoreCheckpoint(dir: string, tree: string): Promise<void
   const rules = (await git(dir, ["ls-tree", "-r", "-z", "--name-only", tree]))
     .split("\0")
     .filter((f) => f === ".gitignore" || f.endsWith("/.gitignore"));
-  if (rules.length) {
-    await withScratchIndex(dir, async (env) => {
+  await withScratchIndex(dir, async (env) => {
+    if (rules.length) {
       await git(dir, ["read-tree", tree], env);
       await git(dir, ["checkout-index", "-f", "--", ...rules], env);
-    });
-  }
+    }
+    // Rules written since go away too, or the files they hide would be left behind.
+    const current = await git(
+      dir,
+      ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ALL_GITIGNORES],
+      env,
+    );
+    for (const file of current.split("\0")) {
+      if (file && !rules.includes(file)) rmSync(path.join(dir, file), { force: true });
+    }
+  });
   await withScratchIndex(dir, async (env) => {
     await git(dir, ["add", "-A"], env);
     await git(dir, ["read-tree", "--reset", "-u", tree], env);
   });
+  // The folder's own staging area is left alone, except for files staged since that are
+  // gone again: they would show as added and deleted at once.
+  const gone = (await git(dir, ["ls-files", "-z", "--deleted"])).split("\0").filter(Boolean);
+  if (!gone.length) return;
+  const committed = new Set(
+    (await git(dir, ["ls-tree", "-r", "-z", "--name-only", "HEAD"])).split("\0"),
+  );
+  const staged = gone.filter((f) => !committed.has(f));
+  for (let i = 0; i < staged.length; i += 100) {
+    await git(dir, ["update-index", "--force-remove", "--", ...staged.slice(i, i + 100)]);
+  }
 }
+
+const ALL_GITIGNORES = ":(glob)**/.gitignore";
 
 export async function dropCheckpoints(dir: string, refs: string[]): Promise<void> {
   for (const ref of refs) await git(dir, ["update-ref", "-d", ref]);
@@ -215,14 +251,15 @@ export async function ship(
   const remotes = (await git(dir, ["remote"])).split("\n").filter(Boolean);
   const remote = remotes.includes("origin") ? "origin" : remotes[0];
   if (!remote) throw new Error("Ce dépôt n'a pas de remote où pousser la branche.");
-  await git(dir, ["push", "-u", remote, options.branch]);
+  await git(dir, ["push", "-u", remote, options.branch], undefined, NETWORK_TIMEOUT_MS);
   const repo = githubRepo(await git(dir, ["remote", "get-url", remote]));
   const result: ShipResult = { ...(commit ? { commit } : {}), prOpened: false };
   if (!options.pr || !repo) return result;
 
   const base = options.baseBranch ?? "main";
   const gh = findOnPath("gh");
-  if (gh) {
+  // A `.cmd` could only run through cmd.exe, which would read the thread's title as a script.
+  if (gh && !/\.(cmd|bat)$/i.test(gh)) {
     const url = await openPullRequest(gh, dir, repo, options.branch, base, options.title);
     if (url) return { ...result, url, prOpened: true };
   }
@@ -241,8 +278,11 @@ async function openPullRequest(
 ): Promise<string | undefined> {
   const run = (args: string[]) =>
     new Promise<string>((resolve, reject) => {
-      execFile(gh, args, { cwd: dir, env: { ...process.env, ...NO_PROMPT } }, (error, stdout) =>
-        error ? reject(error) : resolve(stdout),
+      execFile(
+        gh,
+        args,
+        { cwd: dir, env: { ...process.env, ...NO_PROMPT }, timeout: NETWORK_TIMEOUT_MS },
+        (error, stdout) => (error ? reject(error) : resolve(stdout)),
       );
     });
   const lastUrl = (out: string) => out.match(/https:\/\/\S+/g)?.at(-1);

@@ -60,6 +60,13 @@ const isPermissionRequest = (m: ServerMessage) =>
 
 const kinds = (items: Item[]) => items.map((i) => i.kind);
 
+/** Everything the agent said in the thread's last turn. */
+const lastTurnSaid = (items: Item[]) =>
+  items
+    .slice(items.findLastIndex((i) => i.kind === "user"))
+    .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
+    .join(" ");
+
 describe("Hub with the demo agent", () => {
   it("streams a supervised turn, waits for permission, and persists the timeline", async () => {
     const { hub, store, client, projectId } = setup();
@@ -119,7 +126,55 @@ describe("Hub with the demo agent", () => {
 
     const items = store.listItems(threadId);
     expect(kinds(items)).not.toContain("permission");
-    expect(items.find((i) => i.id === "tool:edit-1")).toMatchObject({ status: "completed" });
+    expect(items.find((i) => i.id.endsWith(":edit-1"))).toMatchObject({ status: "completed" });
+  });
+
+  it("keeps each turn's tool calls, even when the agent numbers them the same way", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+
+    const turns = store
+      .listItems(threadId)
+      .map((i) => i.kind)
+      .join(" ")
+      .split("user");
+    expect(
+      turns.filter((turn) => turn.split(" ").filter((k) => k === "tool").length === 2),
+    ).toHaveLength(2);
+  });
+
+  it("stops a turn cancelled while its agent was still starting", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Stop",
+    });
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+
+    expect(store.getThread(threadId)).toMatchObject({ status: "idle" });
+    expect(store.getThread(threadId)?.error).toBeUndefined();
+    expect(kinds(store.listItems(threadId))).toEqual(["user"]);
+
+    // The thread still works afterwards.
+    hub.send(threadId, "Encore");
+    const client = new TestClient();
+    client.openThreadId = threadId;
+    hub.connect(client);
+    await client.next(isPermissionRequest);
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)?.status).toBe("idle");
   });
 
   it("settles an open permission request as cancelled when the turn is cancelled", async () => {
@@ -250,8 +305,7 @@ describe("Hub with the demo agent", () => {
     restarted.send(threadId, "Deux");
     await restarted.whenIdle(threadId);
 
-    const replies = store.listItems(threadId).filter((i) => i.kind === "agent");
-    expect(replies.at(-1)).toMatchObject({ text: expect.stringContaining("(modèle precis)") });
+    expect(lastTurnSaid(store.listItems(threadId))).toContain("(modèle precis)");
     expect(store.getThread(threadId)?.model).toBe("precis");
   });
 
@@ -437,11 +491,9 @@ describe("Hub with the demo agent", () => {
     await hub.whenIdle(threadId);
 
     expect(store.getSessionId(threadId)).not.toBe(firstSession);
-    expect(store.listItems(threadId).findLast((i) => i.kind === "agent")).toMatchObject({
-      text: expect.stringContaining(
-        "« Deux » (modèle precis). J'ai reçu l'historique, qui commence par « Un ».",
-      ),
-    });
+    expect(lastTurnSaid(store.listItems(threadId))).toContain(
+      "« Deux » (modèle precis). J'ai reçu l'historique, qui commence par « Un ».",
+    );
     // Only the first prompt of the new session carries the history.
     hub.send(threadId, "Trois");
     await hub.whenIdle(threadId);

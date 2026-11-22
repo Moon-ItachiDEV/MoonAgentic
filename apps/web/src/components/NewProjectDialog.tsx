@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { connection } from "../connection.ts";
+import { connection, newId } from "../connection.ts";
 
 export function NewProjectDialog({
   onClose,
@@ -22,7 +22,7 @@ export function NewProjectDialog({
     try {
       const id = await connection.request({
         type: "project.create",
-        requestId: crypto.randomUUID(),
+        requestId: newId(),
         name: derivedName,
         path: path.trim(),
       });

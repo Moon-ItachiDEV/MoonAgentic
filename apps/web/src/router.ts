@@ -4,7 +4,12 @@ export type Route = { name: "home" } | { name: "thread"; threadId: string };
 
 const parse = (pathname: string): Route => {
   const match = /^\/t\/([^/]+)$/.exec(pathname);
-  return match?.[1] ? { name: "thread", threadId: decodeURIComponent(match[1]) } : { name: "home" };
+  try {
+    if (match?.[1]) return { name: "thread", threadId: decodeURIComponent(match[1]) };
+  } catch {
+    // an address no thread can have
+  }
+  return { name: "home" };
 };
 
 const listeners = new Set<() => void>();

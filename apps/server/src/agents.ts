@@ -1,4 +1,4 @@
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,7 +31,8 @@ export function findOnPath(command: string, envPath = process.env.PATH ?? ""): s
       const candidate = path.join(dir, command + ext);
       try {
         accessSync(candidate, constants.X_OK);
-        return candidate;
+        // A folder of that name also passes the access check.
+        if (statSync(candidate).isFile()) return candidate;
       } catch {
         // not here
       }

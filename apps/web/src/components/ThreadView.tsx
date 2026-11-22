@@ -1,7 +1,7 @@
 import type { AgentInfo, Item, Thread, ToolContent } from "@moonagentic/protocol";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { fillComposer } from "../composer-fill.ts";
-import { connection } from "../connection.ts";
+import { connection, newId } from "../connection.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -179,7 +179,7 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
     try {
       await connection.request({
         type: "thread.restore",
-        requestId: crypto.randomUUID(),
+        requestId: newId(),
         threadId: thread.id,
         itemId: item.id,
       });

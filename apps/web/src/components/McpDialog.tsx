@@ -1,6 +1,6 @@
 import type { McpServerInfo } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
-import { connection } from "../connection.ts";
+import { connection, newId } from "../connection.ts";
 import { mcpServerInput } from "../mcp-input.ts";
 
 function ServerRow({ server }: { server: McpServerInfo }) {
@@ -63,7 +63,7 @@ export function McpDialog({ servers, onClose }: { servers: McpServerInfo[]; onCl
     try {
       await connection.request({
         type: "mcp.add",
-        requestId: crypto.randomUUID(),
+        requestId: newId(),
         server: mcpServerInput(name.trim(), target, secrets),
       });
       setName("");

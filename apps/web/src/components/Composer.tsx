@@ -1,7 +1,7 @@
 import type { AgentInfo, Favorites, PermissionMode, Project, Thread } from "@moonagentic/protocol";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { onFillComposer } from "../composer-fill.ts";
-import { connection } from "../connection.ts";
+import { connection, newId } from "../connection.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { ContextGauge } from "./ContextGauge.tsx";
@@ -116,7 +116,7 @@ export function Composer(props: {
     try {
       const id = await connection.request({
         type: "thread.create",
-        requestId: crypto.randomUUID(),
+        requestId: newId(),
         projectId: project.id,
         agentId,
         permissionMode: newMode,
@@ -127,8 +127,9 @@ export function Composer(props: {
       });
       setText("");
       props.onCreated(id);
-    } catch {
-      // the server's message is shown as a notice
+    } catch (e) {
+      // The message stays in the composer, with the reason shown as a notice.
+      connection.notify(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
