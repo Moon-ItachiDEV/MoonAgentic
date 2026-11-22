@@ -734,6 +734,7 @@ export class Hub {
         this.updateThread(threadId, { archived: false });
         return;
       }
+      await this.releaseFolder(threadId);
       await this.forgetSession(threadId);
       const workspace = thread.workspace;
       if (workspace?.base && project && this.isOurWorktree(workspace.path)) {
@@ -763,6 +764,7 @@ export class Hub {
     if (this.turns.has(threadId)) throw new Error("Arrête d'abord l'agent de ce fil.");
     if (this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
     await this.exclusive(threadId, "Attends la fin de la suppression.", async () => {
+      await this.releaseFolder(threadId);
       await this.forgetSession(threadId);
       this.settlePermissions(threadId);
       const project = this.store.getProject(thread.projectId);
@@ -959,6 +961,27 @@ export class Hub {
   }
 
   /** Stops the thread's agent and forgets its session, so the next turn starts a new one. */
+  /**
+   * Stops the agents working in the thread's folder, a team's reviewer and tester, before
+   * the folder goes: Windows will not remove a folder a process works in. They keep their
+   * session, to pick up if the folder comes back.
+   */
+  private async releaseFolder(threadId: string): Promise<void> {
+    const borrowers = this.store.listThreads().filter((t) => t.worksIn === threadId);
+    const busy = borrowers.find((t) => this.turns.has(t.id) || this.busy.has(t.id));
+    if (busy) throw new Error(`« ${busy.title} » travaille dans ce dossier : arrête-le d'abord.`);
+    await Promise.all(
+      borrowers.map(async (t) => {
+        const session = this.sessions.get(t.id);
+        this.sessions.delete(t.id);
+        this.clearIdle(t.id);
+        this.lastUsed.delete(t.id);
+        await session?.then((s) => s.close()).catch(() => undefined);
+        await this.pausing.get(t.id);
+      }),
+    );
+  }
+
   private async forgetSession(threadId: string): Promise<void> {
     const session = this.sessions.get(threadId);
     this.sessions.delete(threadId);
