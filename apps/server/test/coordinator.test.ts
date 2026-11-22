@@ -18,6 +18,10 @@ afterEach(async () => {
 
 const APP_TOKEN = "jeton-de-l-app";
 
+// A thread on its own branch takes seconds to start on a slow machine (Windows makes its
+// worktree first): what is waited for gets that time.
+const soon = <T>(read: () => T) => expect.poll(read, { timeout: 20_000 });
+
 function repoAt(dir: string) {
   mkdirSync(dir);
   const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "pipe" });
@@ -70,7 +74,7 @@ async function coordinated() {
   // that change something only work meanwhile.
   const hold = async () => {
     await hub.handle(client, { type: "thread.send", threadId: coordinatorId, text: "Regarde" });
-    await expect.poll(() => store.getThread(coordinatorId)!.status).toBe("waiting");
+    await soon(() => store.getThread(coordinatorId)!.status).toBe("waiting");
   };
   const release = async () => {
     await hub.cancel(coordinatorId);
@@ -258,7 +262,7 @@ describe("a project's coordinator", () => {
       text: "Corrige la réponse",
       parentId: lead,
     });
-    await expect.poll(() => store.getThread(member)!.status).toBe("waiting");
+    await soon(() => store.getThread(member)!.status).toBe("waiting");
     await say("/fils");
     type Line = { id: string; state: string; waits_on?: string; asks_permission_for?: string[] };
     const listed = (await (await post(tokens[0]!, { tool: "list_threads" })).json()) as {
@@ -273,7 +277,7 @@ describe("a project's coordinator", () => {
     expect(read.result.asks_permission_for).toHaveLength(1);
     await hub.cancel(member);
     await hub.whenIdle(member);
-  });
+  }, 90_000);
 
   it("leaves a message for a thread at work, or cuts in when asked to", async () => {
     const { hub, store, projectId, tokens, post, say, hold } = await coordinated();
@@ -297,7 +301,7 @@ describe("a project's coordinator", () => {
     expect((await message("Et les tests")).result.queued_for).toBeTruthy();
     expect(users()).toEqual(["Corrige la réponse"]);
     await hub.whenIdle(threadId);
-    await expect.poll(users).toEqual(["Corrige la réponse", "Et les tests"]);
+    await soon(users).toEqual(["Corrige la réponse", "Et les tests"]);
 
     // An urgent correction stops the turn under way and takes its place. This thread's
     // agent waits for a permission, so its turn is still under way for sure.
@@ -308,7 +312,7 @@ describe("a project's coordinator", () => {
       permissionMode: "supervised",
       text: "Corrige la réponse",
     });
-    await expect.poll(() => store.getThread(held)!.status).toBe("waiting");
+    await soon(() => store.getThread(held)!.status).toBe("waiting");
     const steer = (mode: string) =>
       post(token, { tool: "message_thread", args: { thread_id: held, text: "Stop", mode } });
     expect((await steer("vite")).status).toBe(400);
@@ -317,10 +321,10 @@ describe("a project's coordinator", () => {
     expect(store.listItems(held).findLast((i) => i.kind === "user")).toMatchObject({
       text: "Stop",
     });
-    await expect.poll(() => store.getThread(held)!.status).toBe("waiting");
+    await soon(() => store.getThread(held)!.status).toBe("waiting");
     await hub.cancel(held);
     await hub.whenIdle(held);
-  });
+  }, 90_000);
 
   it("sends each kind of work where the settings say, and starts the team the user set up", async () => {
     const { hub, store, projectId, coordinatorId, tokens, post, say, hold } = await coordinated();
@@ -424,7 +428,7 @@ describe("a project's coordinator", () => {
     const third = await open("trois");
     expect(third.in_line).toBeTruthy();
     await hub.handle(client, { type: "coordinator.setParallel", parallel: 2 });
-    await expect.poll(() => store.getThread(second.opened.id)!.held).toBeUndefined();
+    await soon(() => store.getThread(second.opened.id)!.held).toBeUndefined();
     expect(store.listItems(second.opened.id)[0]).toMatchObject({
       kind: "user",
       text: expect.stringContaining("Et pense aux tests"),
@@ -432,19 +436,19 @@ describe("a project's coordinator", () => {
     expect(store.getThread(third.opened.id)!.held).toBeTruthy();
 
     // The first one ends: the third starts by itself.
-    await expect.poll(() => store.getThread(first.opened.id)!.status).toBe("waiting");
+    await soon(() => store.getThread(first.opened.id)!.status).toBe("waiting");
     await hub.cancel(first.opened.id);
     await hub.whenIdle(first.opened.id);
-    await expect.poll(() => store.getThread(third.opened.id)!.held).toBeUndefined();
-    await expect.poll(() => store.getThread(second.opened.id)!.status).toBe("waiting");
+    await soon(() => store.getThread(third.opened.id)!.held).toBeUndefined();
+    await soon(() => store.getThread(second.opened.id)!.status).toBe("waiting");
     await hub.cancel(second.opened.id);
     await hub.whenIdle(second.opened.id);
     // Its brief was played once: nothing is left to play when its own turn ends.
     expect(store.listItems(second.opened.id).filter((i) => i.kind === "user")).toHaveLength(1);
-    await expect.poll(() => store.getThread(third.opened.id)!.status).toBe("waiting");
+    await soon(() => store.getThread(third.opened.id)!.status).toBe("waiting");
     await hub.cancel(third.opened.id);
     await hub.whenIdle(third.opened.id);
-  });
+  }, 90_000);
 
   it("gives the place of a team that stops to the next thread in line", async () => {
     const { hub, store, projectId, tokens, post, say, hold } = await coordinated();
@@ -478,9 +482,9 @@ describe("a project's coordinator", () => {
     expect(store.getThread(next)!.held).toBeTruthy();
     // The team's last turn is a member's, or none: the line still moves when it stops.
     await hub.handle(client, { type: "team.stop", threadId: lead });
-    await expect.poll(() => store.getThread(next)!.held).toBeUndefined();
-    await expect.poll(() => store.getThread(next)!.status).toBe("waiting");
+    await soon(() => store.getThread(next)!.held).toBeUndefined();
+    await soon(() => store.getThread(next)!.status).toBe("waiting");
     await hub.cancel(next);
     await hub.whenIdle(next);
-  });
+  }, 90_000);
 });
