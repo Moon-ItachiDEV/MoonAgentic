@@ -310,7 +310,7 @@ svg {
 .home {
   min-height: 100%;
   display: grid;
-  align-content: end;
+  align-content: center;
   justify-items: center;
   text-align: center;
   gap: 14px;
@@ -355,8 +355,9 @@ svg {
   grid-template-columns: minmax(0, 1fr);
   justify-items: center;
 }
+/* As in the mockup: the greeting in the middle, the composer at the bottom. */
 .home-route .dock {
-  padding-bottom: max(18vh, 40px);
+  padding-bottom: max(28px, env(safe-area-inset-bottom));
 }
 .composer {
   width: min(720px, 100%);

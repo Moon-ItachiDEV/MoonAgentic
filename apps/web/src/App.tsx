@@ -51,6 +51,8 @@ export function App() {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
   const route = useRoute();
   const [drawer, setDrawer] = useState(false);
+  /** Bumped to open the planner again on the view just chosen. */
+  const [plannerShown, setPlannerShown] = useState(0);
   const [creatingProject, setCreatingProject] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
@@ -206,6 +208,12 @@ export function App() {
           activeProjectId={project?.id}
           onPlanner={route.name === "planner"}
           onOpenPlanner={() => go({ name: "planner" })}
+          onOpenSchedules={() => {
+            writePref("plannerView", "planifiees");
+            // A planner already open shows that view too.
+            setPlannerShown((n) => n + 1);
+            go({ name: "planner" });
+          }}
           onNewThread={() => go({ name: "home" })}
           onNewProject={() => {
             setDrawer(false);
@@ -330,7 +338,7 @@ export function App() {
         ) : route.name === "planner" ? (
           <Suspense fallback={<div className="view" />}>
             <Planner
-              key={project?.id}
+              key={`${project?.id}:${plannerShown}`}
               project={project}
               plan={state.plan}
               schedules={state.schedules}
