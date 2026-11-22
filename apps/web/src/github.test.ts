@@ -1,6 +1,7 @@
 import type { GithubRepo, GithubStatus } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  canClone,
   filterRepos,
   githubOwner,
   githubStatusText,
@@ -80,5 +81,33 @@ describe("githubOwner", () => {
       "Moon/app",
     ]);
     expect(repoFolderName("https://github.com/Moon-ItachiDEV")).toBe("");
+  });
+});
+
+describe("canClone", () => {
+  it("never clones a profile address, even with a name", () => {
+    expect(canClone("https://github.com/moon", "/home/moon", "")).toBe(false);
+    expect(canClone("https://github.com/moon", "/home/moon", "app")).toBe(false);
+    expect(canClone("http://github.com/moon", "/home/moon", "app")).toBe(false);
+    expect(canClone("https://www.github.com/moon", "/home/moon", "app")).toBe(false);
+    expect(canClone("github.com/moon/", "/home/moon", "app")).toBe(false);
+    expect(canClone("https://github.com/moon?tab=repositories", "/home/moon", "app")).toBe(false);
+    expect(canClone("https://github.com/moon#readme", "/home/moon", "app")).toBe(false);
+    expect(canClone("  https://github.com/Moon-ItachiDEV/  ", "/home/moon", "app")).toBe(false);
+  });
+  it("clones a repository into a parent folder", () => {
+    expect(canClone("moon/app", "/home/moon", "")).toBe(true);
+    expect(canClone("https://github.com/moon/app", "C:\\code", "")).toBe(true);
+    expect(canClone("git@github.com:moon/app.git", "/home/moon", "")).toBe(true);
+    expect(canClone("https://github.com/moon/app/tree/main", "/home/moon", "")).toBe(true);
+    expect(canClone("moon/app", "/home/moon", "autre")).toBe(true);
+  });
+  it("needs a repository, a parent folder, and a folder name", () => {
+    expect(canClone("", "/home/moon", "app")).toBe(false);
+    expect(canClone("  ", "/home/moon", "app")).toBe(false);
+    expect(canClone("moon/app", "", "app")).toBe(false);
+    expect(canClone("moon/app", "  ", "")).toBe(false);
+    expect(canClone("moon/..", "/home/moon", "")).toBe(false);
+    expect(canClone("moon/..", "/home/moon", "   ")).toBe(false);
   });
 });

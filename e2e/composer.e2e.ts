@@ -249,11 +249,16 @@ describe("composer", () => {
     await page.getByRole("textbox", { name: "Dépôt" }).fill("https://github.com/moon");
     await page.getByText("C'est l'adresse du compte @moon").waitFor();
     await expect.poll(() => page.getByRole("button", { name: "Cloner" }).isDisabled()).toBe(true);
+    // A name does not make a profile address clonable.
+    await page.getByRole("textbox", { name: "Nom" }).fill("site");
+    await expect.poll(() => page.getByRole("button", { name: "Cloner" }).isDisabled()).toBe(true);
+    await page.getByRole("textbox", { name: "Nom" }).fill("");
     await list.getByRole("button", { name: /moon\/site/ }).click();
     expect(await page.getByRole("textbox", { name: "Dépôt" }).inputValue()).toBe("moon/site");
     expect(await page.getByRole("textbox", { name: "Nom" }).getAttribute("placeholder")).toBe(
       "site",
     );
+    await expect.poll(() => page.getByRole("button", { name: "Cloner" }).isDisabled()).toBe(false);
     await page.close();
   });
   it("archives a thread, brings it back, deletes it, then removes the project", async () => {
