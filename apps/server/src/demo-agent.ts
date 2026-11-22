@@ -1,5 +1,6 @@
 // A small, free ACP agent for development and tests. It streams text, runs a fake tool,
 // asks permission before a fake edit, and shares a plan, like a real coding agent would.
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -230,8 +231,11 @@ const app = acp
     }
     if (ask.startsWith("Je n'ai pas trouvé ton verdict")) return answer("**VERDICT : OK**");
     // A team's merger cannot settle a conflict, but checks the pieces together.
+    // It gives up on a conflict as an agent might: it aborts the merge.
     if (ask.startsWith("Tu fusionnes le travail d'une équipe")) {
-      return answer("Je ne sais pas régler ce conflit.");
+      const cwd = cwds.get(sessionId);
+      if (cwd) execFileSync("git", ["merge", "--abort"], { cwd, stdio: "ignore" });
+      return answer("Je ne sais pas régler ce conflit : j'ai annulé la fusion.");
     }
     if (ask.startsWith("Toutes les sous-tâches de l'équipe sont fusionnées")) {
       return answer("Les tests passent avec toutes les sous-tâches.\n\nVERDICT : OK");

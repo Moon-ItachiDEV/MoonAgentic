@@ -26,6 +26,7 @@ import type { Agents } from "./agents.ts";
 import {
   branchExists,
   commitAll,
+  containsBranch,
   dropRefs,
   mergeBranch,
   unfinishedMerge,
@@ -183,6 +184,12 @@ export class Hub {
       cancel: (id) => this.cancel(id),
       setTeam: (id, team) => this.updateThread(id, { team }),
       mergeInto: (intoId, fromId, title) => this.mergeInto(intoId, fromId, title),
+      contains: async (intoId, fromId) => {
+        const into = this.store.getThread(intoId)?.workspace;
+        const from = this.store.getThread(fromId)?.workspace;
+        if (!into?.base || !from || !existsSync(into.path)) return false;
+        return containsBranch(into.path, from.branch);
+      },
       unfinishedMerge: async (id) => {
         const workspace = this.store.getThread(id)?.workspace;
         if (!workspace?.base || !existsSync(workspace.path)) return undefined;
@@ -298,6 +305,7 @@ export class Hub {
         return;
       case "team.retry":
         await this.teams.retry(message.threadId, message.index);
+        client.send({ type: "done", requestId: message.requestId });
         return;
       case "thread.setPinned":
         this.requireThread(message.threadId);
@@ -1219,15 +1227,16 @@ export class Hub {
     if (!source?.base || !existsSync(source.path)) {
       throw new Error(`La copie de travail de « ${from.title} » n'est plus là : ramène son fil.`);
     }
-    if (this.turns.has(fromId) || this.turns.has(intoId)) {
-      throw new Error(
-        `L'agent de « ${this.turns.has(fromId) ? from.title : into.title} » travaille encore.`,
-      );
-    }
-    await commitAll(source.path, title);
-    await this.prepareWorkspace(intoId, project);
-    const target = this.store.getThread(intoId)!.workspace!;
-    return mergeBranch(target.path, source.branch, `Fusion : ${title}`);
+    // Neither thread takes a message, a step back, a push or an archive meanwhile.
+    const reason = "Attends la fin de la fusion de l'équipe.";
+    return this.exclusive(fromId, reason, () =>
+      this.exclusive(intoId, reason, async () => {
+        await commitAll(source.path, title);
+        await this.prepareWorkspace(intoId, project);
+        const target = this.store.getThread(intoId)!.workspace!;
+        return mergeBranch(target.path, source.branch, `Fusion : ${title}`);
+      }),
+    );
   }
 
   /** The folder of the thread a reviewer or a tester works in, while it is there. */

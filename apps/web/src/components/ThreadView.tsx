@@ -8,6 +8,7 @@ import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TeamCard } from "./TeamCard.tsx";
+import { TeamStrip } from "./TeamStrip.tsx";
 
 export function ThreadView({
   thread,
@@ -24,6 +25,12 @@ export function ThreadView({
   onOpenThread: (id: string) => void;
 }) {
   const lead = thread.parentId ? threads.find((t) => t.id === thread.parentId) : undefined;
+  // The team's timeline, on the lead's thread and on each of its team's threads.
+  const strip = thread.team
+    ? { lead: thread, team: thread.team }
+    : lead?.team
+      ? { lead, team: lead.team }
+      : undefined;
   const view = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const agent = agents.find((a) => a.id === thread.agentId);
@@ -79,6 +86,17 @@ export function ThreadView({
       }}
     >
       <div className="feed">
+        {strip && (
+          <TeamStrip
+            key={strip.lead.id}
+            lead={strip.lead}
+            team={strip.team}
+            threads={threads}
+            agents={agents}
+            onOpenThread={onOpenThread}
+            defaultOpen={strip.lead.id === thread.id}
+          />
+        )}
         {lead && (
           <button className="team-parent" onClick={() => onOpenThread(lead.id)}>
             Sous-tâche de l'équipe « {lead.title.replace(/^Équipe : /, "")} »

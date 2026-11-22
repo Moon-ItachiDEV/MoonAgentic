@@ -223,7 +223,7 @@ MoonAgentic est construit par jalons successifs :
 - [x] **Avant le jalon 7** : catalogue d’agents sorti de `hub.ts`, agent inactif mis en pause après 10 minutes (sa session reprend au message suivant), 8 agents lancés au plus, texte du flux écrit par lots, fermeture qui attend tout.
 - [x] **Jalon 7a — Équipe** : commande `/equipe`, un chef lit le projet et découpe la tâche, des codeurs font chaque part en même temps sur leur propre branche ; fils des codeurs rangés sous celui du chef, carte de l’équipe et arrêt d’urgence.
 - [x] **Jalon 7b — Relecture et tests** : un relecteur lit les changements de chaque part et un testeur lance les tests dans le dossier du codeur ; ce qu’ils trouvent repart au codeur trois fois au plus, puis le chef réécrit la consigne, puis la part attend l’utilisateur, qui peut la relancer.
-- [x] **Jalon 7c — Fusion et préréglages** : une fois chaque part terminée, leurs branches sont réunies sur un fil « Fusion » à relire et envoyer ; un fusionneur règle les conflits et vérifie l’ensemble, sinon l’utilisateur ; préréglages Équilibrée, Économique, Qualité max et « Neon relit et teste » ; fils de relecture et de tests rangés dans la carte de l’équipe.
+- [x] **Jalon 7c — Fusion et préréglages** : une fois chaque part terminée, leurs branches sont réunies sur un fil « Fusion » à relire et envoyer ; un fusionneur règle les conflits et vérifie l’ensemble, sinon l’utilisateur ; préréglages Équilibrée, Économique, Qualité max et « Neon relit et teste » ; fils de relecture et de tests rangés dans la carte de l’équipe ; frise d’équipe en direct, tirée du vrai déroulé de chaque part.
 - [ ] **Suite** : synchronisation/rebase des branches, et emballage en **application desktop Windows (Electron)** une fois le cœur stabilisé.
 
 ---

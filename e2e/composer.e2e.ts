@@ -280,7 +280,7 @@ describe("composer", () => {
     await shot(page, "c10-equipe-lancer");
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
 
-    const card = page.getByRole("region", { name: "Équipe" });
+    const card = page.getByRole("region", { name: "Équipe", exact: true });
     await card.getByText("Terminé : tout est réuni sur une branche").waitFor({ timeout: 30_000 });
     expect(await card.getByRole("listitem").allTextContents()).toEqual([
       "Corriger answerfusionnéeRelectureTests",
@@ -289,6 +289,15 @@ describe("composer", () => {
     // The coders' and the merge's threads sit under the lead's in the sidebar; the
     // reviewers' and testers' are reached from the card.
     expect(await page.locator(".thr-row.child").count()).toBe(3);
+    // The timeline, drawn from what the team really did: a lane for the lead, each piece
+    // and the merge, ended.
+    const strip = page.getByRole("region", { name: "Frise de l'équipe" });
+    expect(
+      await strip
+        .getByRole("button", { name: /^(Chef|Corriger answer|Documenter answer|Fusion) :/ })
+        .count(),
+    ).toBe(4);
+    await strip.getByText(/^Terminée · /).waitFor();
     await shot(page, "c11-equipe");
     await card.getByRole("button", { name: "Ouvrir la fusion" }).click();
     await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).click();
@@ -310,6 +319,24 @@ describe("composer", () => {
     await shot(page, "c12-equipe-bloquee");
     await card.getByRole("button", { name: "Relancer « Corriger answer »" }).click();
     await card.getByText("L'équipe travaille").or(card.getByText("t'attend")).first().waitFor();
+
+    // Live: supervised coders wait on the user, and the timeline says so as it happens.
+    await composer(page).fill("/equipe Corrige answer");
+    await composer(page).press("Enter");
+    await dialog.getByLabel("Chef", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Codeurs", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Relecteur", { exact: true }).selectOption({ label: "Personne" });
+    await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Personne" });
+    await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Personne" });
+    await dialog
+      .getByLabel("Accès des codeurs")
+      .selectOption({ label: "Ils me demandent avant d'agir" });
+    await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
+    await strip.getByText("2 attendent ton accord").waitFor({ timeout: 30_000 });
+    expect(await strip.getByRole("button", { name: /: attend ton accord$/ }).count()).toBe(2);
+    await shot(page, "c13-frise-en-direct");
+    await card.getByRole("button", { name: "Arrêter l'équipe" }).click();
+    await strip.getByText(/^Arrêtée · /).waitFor();
     await page.close();
   });
 });

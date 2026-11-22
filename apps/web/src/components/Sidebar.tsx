@@ -51,10 +51,11 @@ export function Sidebar(props: {
   }
   const top = live.filter((t) => !(t.parentId && listed.has(t.parentId)));
   // A team's reviewers and testers are reached from its card; they show here only while
-  // open, or while they wait on the user.
+  // open, pinned, or waiting on the user.
   const shown = (t: Thread) =>
     (t.role !== "reviewer" && t.role !== "tester") ||
     t.id === props.activeThreadId ||
+    t.pinned ||
     t.status === "waiting";
   const pinned = top.filter((t) => t.pinned);
   const recent = top.filter((t) => !t.pinned);

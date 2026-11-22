@@ -1,5 +1,7 @@
 import type {
   PermissionMode,
+  TeamEvent,
+  TeamLanePhase,
   ReviewFile,
   Team,
   TeamMember,
@@ -52,6 +54,8 @@ export interface TeamHost {
   mergeInto(intoId: string, fromId: string, message: string): Promise<string[]>;
   /** The files still in conflict while a merge is under way in the thread's folder. */
   unfinishedMerge(threadId: string): Promise<string[] | undefined>;
+  /** Whether the `from` thread's branch is part of the `into` thread's. */
+  contains(intoId: string, fromId: string): Promise<boolean>;
 }
 
 export interface TeamInput {
@@ -281,6 +285,50 @@ const cutShort = (team: Team): Team => {
   return { ...rest, tasks: team.tasks.map((t) => (open(t) ? { ...t, status: "stopped" } : t)) };
 };
 
+/** Events kept per team, the oldest dropped first. */
+const TIMELINE_LIMIT = 600;
+export const LEAD_LANE = -1;
+export const MERGE_LANE = -2;
+
+/** What each lane of the team is doing now. */
+function lanes(team: Team): Map<number, TeamLanePhase> {
+  const now = new Map<number, TeamLanePhase>();
+  now.set(
+    LEAD_LANE,
+    team.phase === "planning"
+      ? "planning"
+      : team.leadTask !== undefined
+        ? "lead"
+        : team.tasks.length === 0 && (team.phase === "failed" || team.phase === "stopped")
+          ? team.phase
+          : "idle",
+  );
+  team.tasks.forEach((t, i) => now.set(i, t.status));
+  if (team.phase === "merging") {
+    now.set(
+      MERGE_LANE,
+      team.mergeStep === -1 ? "checking" : team.mergeStep !== undefined ? "solving" : "merging",
+    );
+  } else if (team.mergeThreadId) {
+    now.set(
+      MERGE_LANE,
+      team.phase === "done" ? "done" : team.phase === "blocked" ? "blocked" : "stopped",
+    );
+  }
+  return now;
+}
+
+/** The team with a timeline event for each lane whose phase changed since the last one. */
+export function recordTimeline(team: Team, at: number): Team {
+  const timeline: TeamEvent[] = [...(team.timeline ?? [])];
+  const last = new Map<number, TeamLanePhase>();
+  for (const event of timeline) last.set(event.lane, event.phase);
+  for (const [lane, phase] of lanes(team)) {
+    if (last.get(lane) !== phase) timeline.push({ at, lane, phase });
+  }
+  return { ...team, timeline: timeline.slice(-TIMELINE_LIMIT) };
+}
+
 const withTask = (team: Team, index: number, task: TeamTask): Team => ({
   ...team,
   tasks: team.tasks.with(index, task),
@@ -303,6 +351,11 @@ export class Teams {
     this.host = host;
   }
 
+  /** Keeps the team, and in its timeline what changed. */
+  private save(leadId: string, team: Team): void {
+    this.host.setTeam(leadId, recordTimeline(team, Date.now()));
+  }
+
   /** Starts the team; returns the lead's thread. */
   start(input: TeamInput): string {
     const team: Team = {
@@ -315,6 +368,7 @@ export class Teams {
       coders: input.coders,
       permissionMode: input.permissionMode,
       tasks: [],
+      timeline: [{ at: Date.now(), lane: LEAD_LANE, phase: "planning" }],
     };
     // Planning only reads: the lead asks before touching anything.
     return this.host.createThread({
@@ -359,7 +413,7 @@ export class Teams {
     if (!active(team)) return;
     const running = team.tasks.flatMap((t) => runningThread(t) ?? []);
     if (team.mergeStep !== undefined && team.mergeThreadId) running.push(team.mergeThreadId);
-    this.host.setTeam(leadId, { ...cutShort(team), phase: "stopped" });
+    this.save(leadId, { ...cutShort(team), phase: "stopped" });
     await Promise.all([this.host.cancel(leadId), ...running.map((id) => this.host.cancel(id))]);
   }
 
@@ -367,7 +421,7 @@ export class Teams {
   recover(): void {
     for (const thread of this.host.threads()) {
       if (!thread.team || !active(thread.team)) continue;
-      this.host.setTeam(thread.id, {
+      this.save(thread.id, {
         ...cutShort(thread.team),
         phase: "stopped",
         error: "Interrompue par l'arrêt de MoonAgentic.",
@@ -485,11 +539,11 @@ export class Teams {
 
   private planned(lead: Thread, team: Team, cancelled: boolean): void {
     if (cancelled) {
-      this.host.setTeam(lead.id, { ...team, phase: "stopped" });
+      this.save(lead.id, { ...team, phase: "stopped" });
       return;
     }
     if (lead.status === "error") {
-      this.host.setTeam(lead.id, {
+      this.save(lead.id, {
         ...team,
         phase: "failed",
         error: `Le chef n'a pas pu faire le plan : ${lead.error ?? "erreur inconnue"}`,
@@ -500,7 +554,7 @@ export class Teams {
     if (!plan) {
       const tries = (team.planTries ?? 0) + 1;
       if (tries > MAX_PLAN_TRIES) {
-        this.host.setTeam(lead.id, {
+        this.save(lead.id, {
           ...team,
           phase: "failed",
           planTries: tries,
@@ -508,7 +562,7 @@ export class Teams {
         });
         return;
       }
-      this.host.setTeam(lead.id, { ...team, planTries: tries });
+      this.save(lead.id, { ...team, planTries: tries });
       this.host.send(
         lead.id,
         'Je n\'ai pas trouvé ton plan. Réponds seulement avec le bloc json demandé : {"tasks": [{"title": "…", "brief": "…"}]}',
@@ -633,7 +687,7 @@ export class Teams {
       const after = this.host.thread(leadId)?.team;
       const latest = after?.tasks[index];
       if (after && latest) {
-        this.host.setTeam(
+        this.save(
           leadId,
           withTask(
             after,
@@ -716,7 +770,7 @@ export class Teams {
     }
     const { leadTask: _old, ...rest } = team;
     const failed = tasks.filter((t) => t.status === "failed").length;
-    this.host.setTeam(lead.id, {
+    this.save(lead.id, {
       ...rest,
       tasks,
       ...(leadTask === undefined ? {} : { leadTask }),
@@ -778,7 +832,12 @@ export class Teams {
           parentId: leadId,
           role: "merger",
         });
-        this.host.setTeam(leadId, { ...state.team, mergeThreadId: into });
+        // A new branch has none of the pieces, even those merged on one since deleted.
+        this.save(leadId, {
+          ...state.team,
+          mergeThreadId: into,
+          tasks: state.team.tasks.map(({ merged: _merged, ...t }) => t),
+        });
       }
       for (;;) {
         state = now();
@@ -791,14 +850,14 @@ export class Teams {
         if (!state) return;
         const { team } = state;
         if (!conflicts.length) {
-          this.host.setTeam(leadId, withTask(team, index, { ...team.tasks[index]!, merged: true }));
+          this.save(leadId, withTask(team, index, { ...team.tasks[index]!, merged: true }));
           continue;
         }
         if (team.merger) {
           this.host.send(into, conflictPrompt(task, conflicts));
-          this.host.setTeam(leadId, { ...team, mergeStep: index });
+          this.save(leadId, { ...team, mergeStep: index });
         } else {
-          this.host.setTeam(leadId, {
+          this.save(leadId, {
             ...team,
             phase: "blocked",
             error: `Conflit en fusionnant « ${task.title} » (${conflicts.join(", ")}) : règle-le dans le fil de fusion et fais le commit, puis relance la fusion.`,
@@ -808,18 +867,18 @@ export class Teams {
       }
       if (state.team.merger) {
         this.host.send(into, mergeCheckPrompt(state.team));
-        this.host.setTeam(leadId, { ...state.team, mergeStep: -1 });
+        this.save(leadId, { ...state.team, mergeStep: -1 });
         return;
       }
       const { error: _error, ...done } = state.team;
-      this.host.setTeam(leadId, { ...done, phase: "done" });
+      this.save(leadId, { ...done, phase: "done" });
     };
     this.track(
       work().catch((error: unknown) => {
         const state = now();
         if (!state) return;
         const { mergeStep: _step, ...rest } = state.team;
-        this.host.setTeam(leadId, {
+        this.save(leadId, {
           ...rest,
           phase: "blocked",
           error: `La fusion s'est arrêtée : ${message(error)}`,
@@ -833,40 +892,60 @@ export class Teams {
     const step = team.mergeStep;
     // A turn of the user's in the merge thread moves nothing.
     if (step === undefined || team.mergeThreadId !== merger.id) return;
-    const { mergeStep: _step, ...rest } = team;
+    const { mergeStep: _step, mergeReasked: _reasked, ...rest } = team;
     if (cancelled) {
-      this.host.setTeam(lead.id, { ...rest, phase: "stopped" });
+      this.save(lead.id, { ...rest, phase: "stopped" });
       return;
     }
     const block = (error: string) =>
-      this.host.setTeam(lead.id, { ...rest, phase: "blocked", error: cut(error) });
+      this.save(lead.id, { ...rest, phase: "blocked", error: cut(error) });
     if (merger.status === "error") {
       block(`Le fusionneur s'est arrêté sur une erreur : ${merger.error ?? "erreur inconnue"}`);
       return;
     }
     if (step === -1) {
       const reply = this.host.lastReply(merger.id);
-      if (readVerdict(reply) === "ok") this.host.setTeam(lead.id, { ...rest, phase: "done" });
+      const verdict = readVerdict(reply);
+      if (verdict === "ok") this.save(lead.id, { ...rest, phase: "done" });
+      else if (verdict === undefined && !team.mergeReasked) {
+        // Asked once again, as the reviewer and the tester are.
+        try {
+          this.host.send(merger.id, VERDICT_AGAIN);
+          this.save(lead.id, { ...team, mergeReasked: true });
+        } catch (error) {
+          block(message(error));
+        }
+      } else if (verdict === undefined) block("Le fusionneur n'a pas donné de verdict.");
       else block(`Le fusionneur signale un problème : ouvre le fil de fusion.\n\n${reply}`);
       return;
     }
     // Still merging, without a step: a stop meanwhile is not undone.
-    this.host.setTeam(lead.id, rest);
+    this.save(lead.id, rest);
+    const piece = team.tasks[step];
     this.track(
-      this.host.unfinishedMerge(merger.id).then(
-        (left) => {
+      (async () => {
+        const left = await this.host.unfinishedMerge(merger.id);
+        // A merge given up (`git merge --abort`) leaves no merge under way either: the
+        // piece counts only once its branch is really part of the merge's.
+        const merged =
+          !left && !!piece?.threadId && (await this.host.contains(merger.id, piece.threadId));
+        return { left, merged };
+      })().then(
+        ({ left, merged }) => {
           const now = this.host.thread(lead.id)?.team;
           if (this.closed || now?.phase !== "merging") return;
           const task = now.tasks[step];
-          if (left !== undefined || !task) {
-            this.host.setTeam(lead.id, {
+          if (!merged || !task) {
+            this.save(lead.id, {
               ...now,
               phase: "blocked",
-              error: `Le fusionneur n'a pas fini de fusionner « ${task?.title ?? "?"} » : règle la fusion dans son fil, puis relance-la.`,
+              error: left
+                ? `Le fusionneur n'a pas fini de fusionner « ${task?.title ?? "?"} » : règle la fusion dans son fil, puis relance-la.`
+                : `La branche de « ${task?.title ?? "?"} » n'a pas été fusionnée (fusion abandonnée ?) : relance la fusion.`,
             });
             return;
           }
-          this.host.setTeam(lead.id, withTask(now, step, { ...task, merged: true }));
+          this.save(lead.id, withTask(now, step, { ...task, merged: true }));
           this.merge(lead.id);
         },
         (error: unknown) => block(`La fusion s'est arrêtée : ${message(error)}`),
@@ -893,7 +972,7 @@ export class Teams {
     const fresh = this.host.thread(lead.id)?.team;
     if (!fresh || active(fresh)) return;
     const { error: _error, mergeStep: _step, ...rest } = fresh;
-    this.host.setTeam(lead.id, { ...rest, phase: "merging" });
+    this.save(lead.id, { ...rest, phase: "merging" });
     this.merge(lead.id);
   }
 }

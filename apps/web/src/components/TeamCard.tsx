@@ -1,6 +1,6 @@
 import type { Team, TeamTask, Thread } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
-import { connection } from "../connection.ts";
+import { connection, newId } from "../connection.ts";
 
 /** Corrections a coder gets before the lead steps in, as the server counts them. */
 const MAX_TRIES = 3;
@@ -95,22 +95,24 @@ export function TeamCard({
     if (!isActive) setStopping(false);
   }, [isActive]);
   const byId = (id: string | undefined) => (id ? threads.find((t) => t.id === id) : undefined);
-  // A piece asked to start again waits for its new state rather than being asked twice.
+  // A piece asked to start again is not asked twice before the server answers.
   const [retrying, setRetrying] = useState<number[]>([]);
-  const states = `${team.phase}:${team.tasks.map((t) => t.status).join()}`;
   const merge = byId(team.mergeThreadId);
   const retryMerge = !isActive && team.phase !== "done" && mergeable(team);
-  useEffect(() => setRetrying([]), [states]);
-  // -1 stands for the merge. A refusal changes nothing, so the button comes back after a while.
+  // -1 stands for the merge. The button waits for the server's answer, not for a guess.
   const retry = (index: number) => {
-    const sent = connection.send({
-      type: "team.retry",
-      threadId: thread.id,
-      ...(index >= 0 ? { index } : {}),
-    });
-    if (!sent) return;
     setRetrying((r) => [...r, index]);
-    setTimeout(() => setRetrying((r) => r.filter((i) => i !== index)), 4000);
+    connection
+      .request({
+        type: "team.retry",
+        requestId: newId(),
+        threadId: thread.id,
+        ...(index >= 0 ? { index } : {}),
+      })
+      .catch((error: unknown) =>
+        connection.notify(error instanceof Error ? error.message : String(error)),
+      )
+      .finally(() => setRetrying((r) => r.filter((i) => i !== index)));
   };
   return (
     <div className="card team-card" role="region" aria-label="Équipe">

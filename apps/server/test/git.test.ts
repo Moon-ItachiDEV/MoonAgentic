@@ -733,27 +733,46 @@ describe("teams", () => {
     const blocked = store.getThread(leadId)!.team!;
     expect(blocked.error).toContain("conflit.txt");
     expect(blocked.tasks.map((t) => t.merged)).toEqual([true, undefined]);
+
+    // A merge thread deleted takes its branch with it: a new one merges every piece again.
+    await hub.deleteThread(blocked.mergeThreadId!);
+    await hub.handle(
+      { send: () => undefined },
+      { type: "team.retry", requestId: "r", threadId: leadId },
+    );
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 })
+      .toBe("blocked");
+    const again = store.getThread(leadId)!.team!;
+    expect(again.mergeThreadId).not.toBe(blocked.mergeThreadId);
+    expect(again.tasks.map((t) => t.merged)).toEqual([true, undefined]);
+    expect(again.error).toContain("conflit.txt");
     await expect(
-      hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId }),
+      hub.handle(
+        { send: () => undefined },
+        { type: "team.retry", requestId: "r", threadId: leadId },
+      ),
     ).rejects.toThrow("conflits dans conflit.txt");
 
     // The user settles it in the merge thread's folder.
-    const dir = store.getThread(blocked.mergeThreadId!)!.workspace!.path;
+    const dir = store.getThread(again.mergeThreadId!)!.workspace!.path;
     writeFileSync(path.join(dir, "conflit.txt"), "A\nB\n");
     git(dir, "add", "conflit.txt");
     await expect(
-      hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId }),
+      hub.handle(
+        { send: () => undefined },
+        { type: "team.retry", requestId: "r", threadId: leadId },
+      ),
     ).rejects.toThrow("commit");
     git(dir, "commit", "-q", "--no-edit");
-    await hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId });
+    await hub.handle(
+      { send: () => undefined },
+      { type: "team.retry", requestId: "r", threadId: leadId },
+    );
     await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
     expect(store.getThread(leadId)!.team!.tasks.every((t) => t.merged)).toBe(true);
     expect(
-      git(
-        repo,
-        "show",
-        `${store.getThread(blocked.mergeThreadId!)!.workspace!.branch}:conflit.txt`,
-      ),
+      git(repo, "show", `${store.getThread(again.mergeThreadId!)!.workspace!.branch}:conflit.txt`),
     ).toBe("A\nB");
   });
 
@@ -764,13 +783,15 @@ describe("teams", () => {
     const merger = store.getThread(clean)!.team!.mergeThreadId!;
     expect(asked(store, merger)).toEqual([expect.stringContaining("Lance les tests du projet")]);
 
-    // The demo merger cannot settle a conflict: the merge then waits on the user.
+    // The demo merger gives up on a conflict and aborts the merge: the piece is not counted
+    // as merged, and the merge waits on the user.
     const clash = team(hub, projectId, "Écris en conflit", "full", { merger: true });
     await expect
       .poll(() => store.getThread(clash)?.team?.phase, { timeout: 30_000 })
       .toBe("blocked");
     const team2 = store.getThread(clash)!.team!;
-    expect(team2.error).toContain("n'a pas fini de fusionner « Écrire B »");
+    expect(team2.error).toContain("« Écrire B » n'a pas été fusionnée");
+    expect(team2.tasks.map((t) => t.merged)).toEqual([true, undefined]);
     expect(team2.mergeStep).toBeUndefined();
     expect(asked(store, team2.mergeThreadId!)[0]).toContain("- conflit.txt");
   });
@@ -826,6 +847,17 @@ describe("teams", () => {
       tester: true,
     });
     await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    // The timeline holds each step as it happened, in order.
+    const timeline = store.getThread(leadId)!.team!.timeline!;
+    expect(timeline.filter((e) => e.lane === 0).map((e) => e.phase)).toEqual([
+      "running",
+      "reviewing",
+      "testing",
+      "done",
+    ]);
+    expect(timeline.filter((e) => e.lane === -1).map((e) => e.phase)).toEqual(["planning", "idle"]);
+    expect(timeline.filter((e) => e.lane === -2).map((e) => e.phase)).toEqual(["merging", "done"]);
+    expect(timeline.map((e) => e.at)).toEqual(timeline.map((e) => e.at).sort((a, b) => a - b));
     for (const task of store.getThread(leadId)!.team!.tasks) {
       expect(task).toMatchObject({ status: "done", reviewThreadId: expect.any(String) });
       const coder = store.getThread(task.threadId!)!;
@@ -898,19 +930,28 @@ describe("teams", () => {
     await hub.deleteThread(gone.threadId!);
     expect(hub.liveAgents).toBe(live - 2);
     expect(store.getThread(gone.reviewThreadId!)).toBeDefined();
-    await hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId, index: 1 });
+    await hub.handle(
+      { send: () => undefined },
+      { type: "team.retry", requestId: "r", threadId: leadId, index: 1 },
+    );
     const again = store.getThread(leadId)!.team!.tasks[1]!;
     expect(again.threadId).toBeDefined();
     expect(again.threadId).not.toBe(gone.threadId);
     expect(again.reviewThreadId).toBeUndefined();
     expect(asked(store, again.threadId!)[0]).toContain("Tu fais partie d'une équipe");
 
-    await hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId, index: 0 });
+    await hub.handle(
+      { send: () => undefined },
+      { type: "team.retry", requestId: "r", threadId: leadId, index: 0 },
+    );
     expect(store.getThread(leadId)!.team).toMatchObject({ phase: "coding" });
     expect(store.getThread(leadId)!.team!.tasks[0]).toMatchObject({ status: "running", tries: 0 });
     expect(asked(store, blocked.tasks[0]!.threadId!).at(-1)).toContain("Reprends ta sous-tâche");
     await expect(
-      hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId, index: 0 }),
+      hub.handle(
+        { send: () => undefined },
+        { type: "team.retry", requestId: "r", threadId: leadId, index: 0 },
+      ),
     ).rejects.toThrow("déjà en cours");
     await expect
       .poll(() => store.getThread(leadId)?.team?.phase, { timeout: 60_000 })

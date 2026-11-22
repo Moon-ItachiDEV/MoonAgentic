@@ -184,6 +184,18 @@ export type PermissionMode = "supervised" | "full";
 
 export type TeamRole = "lead" | "coder" | "reviewer" | "tester" | "merger";
 
+/** What one lane of a team's timeline is doing: the lead's, a piece's, or the merge's. */
+export type TeamLanePhase =
+  TeamTask["status"] | "planning" | "idle" | "merging" | "solving" | "checking";
+
+/** A change in one lane of the team, when it happened: the timeline is drawn from them. */
+export interface TeamEvent {
+  at: number;
+  /** -1 for the lead, -2 for the merge, else the piece's index. */
+  lane: number;
+  phase: TeamLanePhase;
+}
+
 /** One agent and model of a team, by role. */
 export interface TeamMember {
   agentId: AgentId;
@@ -248,6 +260,10 @@ export interface Team {
   mergeThreadId?: string;
   /** What the merger is at: the piece whose conflicts it settles, or -1 for the last check. */
   mergeStep?: number;
+  /** True once the merger was asked again for the verdict its last check left out. */
+  mergeReasked?: boolean;
+  /** Every change of each lane, oldest first, as it really happened. */
+  timeline?: TeamEvent[];
   /** Coders working at once. */
   coders: number;
   permissionMode: PermissionMode;
@@ -503,6 +519,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
    */
   z.object({
     type: z.literal("team.retry"),
+    requestId: id,
     threadId: id,
     index: z.number().int().min(0).max(63).optional(),
   }),

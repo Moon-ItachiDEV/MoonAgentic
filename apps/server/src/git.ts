@@ -439,8 +439,12 @@ export async function mergeBranch(dir: string, branch: string, message: string):
   }
 }
 
-export async function abortMerge(dir: string): Promise<void> {
-  if (await unfinishedMerge(dir)) await git(dir, ["merge", "--abort"]);
+/** Whether `branch` is already part of the folder's branch: merged, not just attempted. */
+export function containsBranch(dir: string, branch: string): Promise<boolean> {
+  return git(dir, ["merge-base", "--is-ancestor", branch, "HEAD"]).then(
+    () => true,
+    () => false,
+  );
 }
 
 export interface ShipResult {

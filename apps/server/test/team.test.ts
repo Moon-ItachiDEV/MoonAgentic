@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { diffText, readBrief, readPlan, readVerdict } from "../src/team.ts";
+import type { Team } from "@moonagentic/protocol";
+import { diffText, readBrief, readPlan, readVerdict, recordTimeline } from "../src/team.ts";
 
 describe("readPlan", () => {
   it("reads the last json block of the lead's reply", () => {
@@ -70,5 +71,43 @@ describe("readVerdict, readBrief and diffText", () => {
     expect(text).toContain("--- big.ts (modified, +1 -1)\n(diff coupé : ouvre le fichier)");
     expect(text).toContain("2 autres fichiers");
     expect(text.length).toBeLessThan(1_000);
+  });
+});
+
+describe("recordTimeline", () => {
+  it("writes down each lane's change once, when it happens", () => {
+    const team = {
+      phase: "planning",
+      task: "t",
+      coder: { agentId: "demo" },
+      coders: 2,
+      permissionMode: "full",
+      tasks: [],
+    } as Team;
+    let t = recordTimeline(team, 1);
+    t = recordTimeline(t, 2);
+    expect(t.timeline).toEqual([{ at: 1, lane: -1, phase: "planning" }]);
+    t = recordTimeline(
+      { ...t, phase: "coding", tasks: [{ title: "A", brief: "a", status: "running" }] },
+      5,
+    );
+    t = recordTimeline({ ...t, tasks: [{ title: "A", brief: "a", status: "reviewing" }] }, 9);
+    t = recordTimeline(
+      {
+        ...t,
+        phase: "merging",
+        mergeThreadId: "m",
+        tasks: [{ title: "A", brief: "a", status: "done" }],
+      },
+      12,
+    );
+    expect(t.timeline).toEqual([
+      { at: 1, lane: -1, phase: "planning" },
+      { at: 5, lane: -1, phase: "idle" },
+      { at: 5, lane: 0, phase: "running" },
+      { at: 9, lane: 0, phase: "reviewing" },
+      { at: 12, lane: 0, phase: "done" },
+      { at: 12, lane: -2, phase: "merging" },
+    ]);
   });
 });
