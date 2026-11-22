@@ -115,7 +115,7 @@ export function SettingsNav(props: {
               {login.slice(0, 2).toUpperCase()}
             </span>
             <span className="set-who">
-              {login}
+              <span className="set-login">{login}</span>
               <small>GitHub</small>
             </span>
           </span>

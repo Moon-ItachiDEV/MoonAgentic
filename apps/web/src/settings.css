@@ -195,9 +195,12 @@
 }
 .set-who {
   min-width: 0;
-  display: grid;
+  display: flex;
+  flex-direction: column;
   font-size: 13.5px;
   line-height: 1.2;
+}
+.set-login {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
