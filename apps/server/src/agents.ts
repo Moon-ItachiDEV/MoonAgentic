@@ -16,6 +16,13 @@ export interface AgentLaunch {
    * their choice, an API key for instance.
    */
   authWhenAsked?: boolean;
+  /**
+   * Gives it an overlapped stdin pipe on Windows. Hermes (Python) reads stdin in a thread and
+   * starts git, which inherits it: on a plain synchronous pipe git hangs and Hermes never
+   * answers. Only for agents that need it, since a native exe reading a synchronous stdin may
+   * not cope with an overlapped one.
+   */
+  overlappedStdin?: boolean;
   /** How the user signs in with the agent's own tool, shown when the agent asks for it. */
   login?: string;
   /** What starts it, as shown in Connexions, when the command alone says little. */
@@ -67,6 +74,7 @@ function nativeAcp(
     login: string;
     authMethodId?: string;
     authWhenAsked?: boolean;
+    overlappedStdin?: boolean;
     /** Where its installer puts it, for when that folder is not on the PATH yet. */
     places?: () => string[];
   },
@@ -186,6 +194,7 @@ const definitions: AgentDefinition[] = [
   nativeAcp({ id: "hermes", name: "Hermes", short: "He" }, ["hermes"], {
     hint: "Installe Hermes Agent avec son extension ACP, puis lance « hermes model » une fois.",
     login: "lance « hermes model »",
+    overlappedStdin: true,
   }),
 ];
 
