@@ -72,7 +72,11 @@ describe("composer commands", () => {
   });
 
   it("matches the start of a name before its middle", () => {
-    expect(matchCommands(list(), "ex").map((c) => c.name)).toEqual(["exporter", "explique"]);
+    expect(matchCommands(list(), "ex").map((c) => c.name)).toEqual([
+      "exporter",
+      "explique",
+      "connexions",
+    ]);
     expect(matchCommands(list(), "pin").map((c) => c.name)).toEqual(["epingler"]);
   });
 

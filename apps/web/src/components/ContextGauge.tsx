@@ -1,5 +1,6 @@
 import type { ContextUsage } from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
+import { money } from "../status.ts";
 
 const tokens = (n: number) =>
   n >= 1_000_000
@@ -65,6 +66,7 @@ export function ContextGauge({
           <span>
             {tokens(usage.used)} sur {tokens(usage.size)} jetons
           </span>
+          {usage.cost && <span>Coût de ce fil : {money(usage.cost)}</span>}
           {action && (
             <button
               className="btn sm"

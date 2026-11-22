@@ -1758,3 +1758,138 @@ kbd {
     display: none;
   }
 }
+
+/* Connexions */
+.dialog.connections,
+.dialog.requests {
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+.dialog h3 {
+  margin: 4px 0 -4px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.cx-list,
+.rq-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.cx-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.cx-tx {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+}
+.cx-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.cx-top .st {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.cx-tx code {
+  font: 12px var(--mono);
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cx-tx small {
+  color: var(--faint);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.cx-tx small.cx-err {
+  color: var(--err);
+}
+.cx-acts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cx-mcp {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* À traiter */
+.rq-row {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.rq-thread {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.rq-thread:hover {
+  color: var(--fg);
+  text-decoration: underline;
+}
+.rq-thread small {
+  color: var(--faint);
+  white-space: nowrap;
+}
+.rq-q {
+  font-size: 13.5px;
+  overflow-wrap: anywhere;
+}
+.dialog .rq-row .row {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+.nav .aux.badge {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  display: inline-grid;
+  place-items: center;
+}
+.side-foot button.st {
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.side-foot button.st:hover {
+  color: var(--fg);
+}

@@ -1,6 +1,6 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
-import { IconCompose, IconFolder, IconPin, IconPlug } from "./icons.tsx";
+import { IconCompose, IconFolder, IconInbox, IconPin, IconPlug } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
 
 function ThreadStatus({ thread }: { thread: Thread }) {
@@ -16,7 +16,8 @@ export function Sidebar(props: {
   activeProjectId: string | undefined;
   onNewThread: () => void;
   onNewProject: () => void;
-  onOpenMcp: () => void;
+  onOpenConnections: () => void;
+  onOpenRequests: () => void;
   onPickProject: (id: string) => void;
   onOpenThread: (id: string) => void;
   onTogglePin: (id: string, pinned: boolean) => void;
@@ -64,10 +65,13 @@ export function Sidebar(props: {
           <IconFolder />
           Nouveau projet
         </button>
-        <button onClick={props.onOpenMcp}>
+        <button onClick={props.onOpenRequests}>
+          <IconInbox />À traiter
+          {state.requests.length > 0 && <span className="aux badge">{state.requests.length}</span>}
+        </button>
+        <button onClick={props.onOpenConnections}>
           <IconPlug />
-          Serveurs MCP
-          <span className="aux">{state.mcpServers.filter((s) => s.enabled).length || ""}</span>
+          Connexions
         </button>
       </nav>
       <div className="side-scroll">
@@ -94,9 +98,9 @@ export function Sidebar(props: {
       </div>
       <div className="side-foot">
         {state.status === "open" ? (
-          <span className={`st ${available ? "ok" : "warn"}`}>
+          <button className={`st ${available ? "ok" : "warn"}`} onClick={props.onOpenConnections}>
             {available} {available > 1 ? "agents prêts" : "agent prêt"}
-          </span>
+          </button>
         ) : (
           <span className="st warn">Reconnexion au serveur…</span>
         )}

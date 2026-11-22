@@ -4,13 +4,16 @@ import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type {
+  AgentCheck,
   AgentCommand,
   AgentInfo,
+  CustomAgentInput,
   AgentSetting,
   ClientMessage,
   Favorites,
   Item,
   McpServerInput,
+  PendingRequest,
   PermissionMode,
   Project,
   ReviewFile,
@@ -19,7 +22,7 @@ import type {
   Thread,
   ToolContent,
 } from "@moonagentic/protocol";
-import type { Agents } from "./agents.ts";
+import type { Agents, CustomAgent } from "./agents.ts";
 import {
   addWorktree,
   branchName,
@@ -42,7 +45,7 @@ import {
 } from "./files.ts";
 import { historyBefore } from "./history.ts";
 import { mcpInfo, type McpServerRecord } from "./mcp.ts";
-import { AgentSession, describe, type ModelOption } from "./session.ts";
+import { AgentSession, describe, type ModelOption, needsSignIn } from "./session.ts";
 import type { Store } from "./store.ts";
 
 export interface Client {
@@ -126,6 +129,7 @@ export class Hub {
     this.agents = agents;
     this.worktreesDir = options.worktreesDir;
     this.homeDir = options.homeDir ?? os.homedir();
+    agents.setCustom(this.customAgents());
     store.recoverAfterRestart();
   }
 
@@ -138,6 +142,7 @@ export class Hub {
   snapshot(): Snapshot {
     return {
       favorites: this.store.getSetting<Favorites>("favorites", {}),
+      requests: this.pendingRequests(),
       mcpServers: this.mcpServers().map(mcpInfo),
       agents: this.agentList(),
       projects: this.store.listProjects().map((p) => this.withGit(p)),
@@ -270,6 +275,14 @@ export class Hub {
       }
       case "agent.discover":
         await this.discover(message.agentId, message.projectId);
+        return;
+      case "agent.addCustom": {
+        const id = this.addCustomAgent(message.agent);
+        client.send({ type: "created", requestId: message.requestId, id });
+        return;
+      }
+      case "agent.removeCustom":
+        this.removeCustomAgent(message.agentId);
         return;
       case "permission.respond":
         this.respondToPermission(message.threadId, message.itemId, message.optionId);
@@ -598,18 +611,19 @@ export class Hub {
    * Starts the agent briefly so the UI can list its models before the first message.
    * A failure is shown with the agent (`modelsError`) rather than thrown, so the picker can offer a retry.
    */
-  discover(agentId: string, projectId: string): Promise<void> {
+  discover(agentId: string, projectId?: string): Promise<void> {
     const running = this.discoveries.get(agentId);
     if (running) return running.done;
-    const project = this.store.getProject(projectId);
-    if (!project) return Promise.reject(new Error("Projet introuvable."));
+    const project = projectId ? this.store.getProject(projectId) : undefined;
+    if (projectId && !project) return Promise.reject(new Error("Projet introuvable."));
     if (this.discoveryErrors.delete(agentId)) {
       this.broadcast({ type: "agents", agents: this.agentList() });
     }
     const stop = new AbortController();
     const done = AgentSession.start({
       launch: this.agents.launch(agentId),
-      cwd: project.path,
+      // Checked from Connexions, before any project: the home folder will do.
+      cwd: project?.path ?? this.homeDir,
       previousSessionId: null,
       signal: AbortSignal.any([stop.signal, AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)]),
       handlers: {
@@ -625,18 +639,95 @@ export class Hub {
     })
       .then(
         (session) => {
+          this.recordCheck(agentId, { ok: true, version: session.agentVersion }, true);
           this.learnCatalog(agentId, session.model, session.settings, session.fresh);
           return session.close();
         },
         (error: unknown) => {
           if (stop.signal.aborted) return;
           this.discoveryErrors.set(agentId, describe(error));
-          this.broadcast({ type: "agents", agents: this.agentList() });
+          this.recordCheck(agentId, { ok: false, error }, true);
         },
       )
       .finally(() => this.discoveries.delete(agentId));
     this.discoveries.set(agentId, { done, stop });
     return done;
+  }
+
+  /** Adds an ACP agent of the user's own, started by `command` with `args`. */
+  addCustomAgent(input: CustomAgentInput): string {
+    const name = input.name.trim();
+    if (this.agents.list().some((a) => a.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`Un agent s'appelle déjà « ${name} ».`);
+    }
+    const id = `custom-${randomUUID().slice(0, 8)}`;
+    this.saveCustomAgents([
+      ...this.customAgents(),
+      { id, name, command: input.command.trim(), args: input.args },
+    ]);
+    return id;
+  }
+
+  /** Removes an agent the user added; its threads can then be handed to another agent. */
+  removeCustomAgent(agentId: string): void {
+    const agents = this.customAgents();
+    if (!agents.some((a) => a.id === agentId))
+      throw new Error("Cet agent n'a pas été ajouté par toi.");
+    this.saveCustomAgents(agents.filter((a) => a.id !== agentId));
+  }
+
+  private customAgents(): CustomAgent[] {
+    return this.store.getSetting<CustomAgent[]>("customAgents", []);
+  }
+
+  private saveCustomAgents(agents: CustomAgent[]): void {
+    this.store.setSetting("customAgents", agents);
+    this.agents.setCustom(agents);
+    this.broadcast({ type: "agents", agents: this.agentList() });
+  }
+
+  /** Remembers whether the agent last started fine, for Connexions. */
+  private recordCheck(
+    agentId: string,
+    result: { ok: true; version: string | undefined } | { ok: false; error: unknown },
+    /** A check the user asked for is always recorded, so its time moves on. */
+    asked = false,
+  ): void {
+    const check: AgentCheck = result.ok
+      ? { at: Date.now(), ok: true, ...(result.version ? { version: result.version } : {}) }
+      : {
+          at: Date.now(),
+          ok: false,
+          error: describe(result.error),
+          ...(needsSignIn(result.error) ? { signInNeeded: true } : {}),
+        };
+    const checks = this.store.getSetting<Record<string, AgentCheck>>("agentChecks", {});
+    const before = checks[agentId];
+    // A thread starting again and again only tells something when the answer changes.
+    if (!asked && before?.ok && check.ok && before.version === check.version) return;
+    this.store.setSetting("agentChecks", { ...checks, [agentId]: check });
+    this.broadcast({ type: "agents", agents: this.agentList() });
+  }
+
+  /** Every permission request still waiting for the user, oldest first. */
+  private pendingRequests(): PendingRequest[] {
+    return [...this.pendingPermissions].flatMap(([itemId, pending]): PendingRequest[] => {
+      const item = this.store.getItem(pending.threadId, itemId);
+      if (item?.kind !== "permission" || item.outcome !== null) return [];
+      return [
+        {
+          threadId: pending.threadId,
+          itemId,
+          title: item.title,
+          options: item.options,
+          at: item.at,
+        },
+      ];
+    });
+  }
+
+  private broadcastRequests(): void {
+    this.broadcast({ type: "requests", requests: this.pendingRequests() });
   }
 
   setPermissionMode(threadId: string, permissionMode: PermissionMode): void {
@@ -653,6 +744,7 @@ export class Hub {
     if (!item.options.some((o) => o.optionId === optionId)) throw new Error("Choix inconnu.");
     this.pendingPermissions.delete(itemId);
     this.putItem(threadId, { ...item, outcome: optionId });
+    this.broadcastRequests();
     if (![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)) {
       this.updateThread(threadId, { status: "running" });
     }
@@ -709,6 +801,7 @@ export class Hub {
       this.updateThread(thread.id, error ? { status: "error", error } : { status: "idle" });
     } catch (error) {
       this.settlePermissions(thread.id);
+      if (needsSignIn(error)) this.recordCheck(thread.agentId, { ok: false, error });
       // Stopping an agent that was still starting is what the user asked for, not a failure.
       if (this.cancelled.has(thread.id)) {
         this.updateThread(thread.id, { status: "idle", error: null });
@@ -846,6 +939,7 @@ export class Hub {
         },
       },
     });
+    this.recordCheck(thread.agentId, { ok: true, version: session.agentVersion });
     try {
       this.learnCatalog(thread.agentId, session.model, session.settings, session.fresh);
       const model = session.model;
@@ -889,9 +983,15 @@ export class Hub {
 
   private agentList(): AgentInfo[] {
     const commands = this.store.getSetting<Record<string, AgentCommand[]>>("agentCommands", {});
+    const checks = this.store.getSetting<Record<string, AgentCheck>>("agentChecks", {});
     return this.agents.list().map((base) => {
       const listed = Object.hasOwn(commands, base.id) ? commands[base.id] : undefined;
-      const agent = listed?.length ? { ...base, commands: listed } : base;
+      const check = Object.hasOwn(checks, base.id) ? checks[base.id] : undefined;
+      const agent = {
+        ...base,
+        ...(listed?.length ? { commands: listed } : {}),
+        ...(check ? { check } : {}),
+      };
       const known = this.store.getAgentModels(agent.id);
       const modelsError = this.discoveryErrors.get(agent.id);
       if (!known) return modelsError ? { ...agent, modelsError } : agent;
@@ -964,9 +1064,14 @@ export class Hub {
         return;
       case "usage_update": {
         if (!(update.size > 0 && update.used >= 0)) return;
+        const cost =
+          update.cost && Number.isFinite(update.cost.amount) && update.cost.currency
+            ? { amount: update.cost.amount, currency: update.cost.currency }
+            : undefined;
+        const usage = { used: update.used, size: update.size, ...(cost ? { cost } : {}) };
         const before = this.store.getThread(threadId)?.usage;
-        if (before?.used === update.used && before.size === update.size) return;
-        this.updateThread(threadId, { usage: { used: update.used, size: update.size } });
+        if (JSON.stringify(before) === JSON.stringify(usage)) return;
+        this.updateThread(threadId, { usage });
         return;
       }
       case "available_commands_update": {
@@ -1049,6 +1154,7 @@ export class Hub {
     this.updateThread(threadId, { status: "waiting" });
     return new Promise((resolve) => {
       this.pendingPermissions.set(id, { threadId, resolve });
+      this.broadcastRequests();
       signal.addEventListener("abort", () => this.settlePermission(id), { once: true });
     });
   }
@@ -1068,6 +1174,7 @@ export class Hub {
     if (item?.kind === "permission")
       this.putItem(pending.threadId, { ...item, outcome: "cancelled" });
     pending.resolve({ outcome: { outcome: "cancelled" } });
+    this.broadcastRequests();
   }
 
   private requireThread(threadId: string): Thread {

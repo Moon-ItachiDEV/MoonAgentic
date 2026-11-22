@@ -32,6 +32,7 @@ afterEach(async () => {
 
 function setup() {
   const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-test-"));
+  mkdirSync(path.join(dir, ".home"));
   const store = new Store(path.join(dir, "state.sqlite"));
   const hub = new Hub(store, new Agents({ demo: true }), {
     worktreesDir: path.join(dir, ".worktrees"),
@@ -49,7 +50,7 @@ function setup() {
 }
 
 /** Makes demo agents started from now on offer their models in another way. */
-function demoModels(style: "legacy" | "none" | "hang" | "fail" | "load" | "resume-fail") {
+function demoModels(style: "legacy" | "none" | "hang" | "fail" | "load" | "resume-fail" | "auth") {
   process.env.MOONAGENTIC_DEMO_MODELS = style;
   cleanups.push(() => {
     delete process.env.MOONAGENTIC_DEMO_MODELS;
@@ -863,5 +864,136 @@ describe("Composer: files, skills, commands, pins and search", () => {
     expect(store.getSessionId(threadId)).toBe(sessionId);
     // The reload replayed where the context stood, so the session went on.
     expect(store.getThread(threadId)?.usage?.used).toBe(99_000 + 24_000);
+  });
+});
+
+describe("Connexions: agents' state, custom agents and pending requests", () => {
+  it("records what a check finds: the agent's version, then a needed sign-in", async () => {
+    const { hub, client } = setup();
+    // Checked from Connexions, before any project is open.
+    await hub.handle(client, { type: "agent.discover", agentId: "demo" });
+    const demo = () => hub.snapshot().agents.find((a) => a.id === "demo");
+    expect(demo()?.check).toMatchObject({ ok: true, version: "moonagentic-demo 0.1.0" });
+    expect(demo()?.command).toBe("agent de démo intégré à MoonAgentic");
+    const first = demo()?.check?.at ?? 0;
+
+    demoModels("auth");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await hub.handle(client, { type: "agent.discover", agentId: "demo" });
+    expect(demo()?.check).toMatchObject({ ok: false, signInNeeded: true });
+    expect(demo()?.check?.at).toBeGreaterThan(first);
+  });
+
+  it("adds and removes an agent of the user's own", async () => {
+    const { hub, client } = setup();
+    const created = client.next((m) => m.type === "created");
+    await hub.handle(client, {
+      type: "agent.addCustom",
+      requestId: "r1",
+      agent: { name: "Mon agent", command: process.execPath, args: ["agent.js"] },
+    });
+    const reply = await created;
+    if (reply.type !== "created") throw new Error("unreachable");
+    const added = hub.snapshot().agents.find((a) => a.id === reply.id);
+    expect(added).toMatchObject({
+      name: "Mon agent",
+      short: "Ma",
+      custom: true,
+      available: true,
+      command: `${process.execPath} agent.js`,
+    });
+    expect(() => hub.addCustomAgent({ name: "mon AGENT", command: "x", args: [] })).toThrow(
+      "s'appelle déjà",
+    );
+    expect(() => hub.removeCustomAgent("demo")).toThrow("pas été ajouté");
+
+    // A command this machine does not have leaves the agent listed, with why it cannot start.
+    const missing = hub.addCustomAgent({
+      name: "Absent",
+      command: "pas-une-commande-xyz",
+      args: [],
+    });
+    expect(hub.snapshot().agents.find((a) => a.id === missing)).toMatchObject({
+      available: false,
+      hint: expect.stringContaining("pas-une-commande-xyz"),
+    });
+
+    await hub.handle(client, { type: "agent.removeCustom", agentId: reply.id });
+    expect(hub.snapshot().agents.some((a) => a.id === reply.id)).toBe(false);
+  });
+
+  it("keeps the user's agents across a restart", async () => {
+    const { hub, store } = setup();
+    const id = hub.addCustomAgent({ name: "Gardé", command: process.execPath, args: [] });
+    await hub.close();
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(os.tmpdir(), "unused-worktrees"),
+    });
+    cleanups.unshift(() => restarted.close());
+    expect(restarted.snapshot().agents.find((a) => a.id === id)?.name).toBe("Gardé");
+  });
+
+  it("lists every request waiting for the user, and drops it once answered", async () => {
+    const { hub, client, projectId } = setup();
+    const listed = client.next((m) => m.type === "requests" && m.requests.length > 0);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+    });
+    const message = await listed;
+    if (message.type !== "requests") throw new Error("unreachable");
+    const [request] = message.requests;
+    expect(request).toMatchObject({ threadId, options: expect.any(Array) });
+    expect(hub.snapshot().requests).toHaveLength(1);
+
+    const emptied = client.next((m) => m.type === "requests" && m.requests.length === 0);
+    await hub.handle(client, {
+      type: "permission.respond",
+      threadId,
+      itemId: request!.itemId,
+      optionId: "allow",
+    });
+    await emptied;
+    await hub.whenIdle(threadId);
+    expect(hub.snapshot().requests).toEqual([]);
+  });
+
+  it("keeps what the session has cost, when the agent says", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)?.usage).toEqual({
+      used: 24_000,
+      size: 200_000,
+      cost: { amount: 0.24, currency: "USD" },
+    });
+  });
+
+  it("hands a thread over from an agent that is no longer there", async () => {
+    const { hub, store, projectId } = setup();
+    const id = hub.addCustomAgent({ name: "Parti", command: process.execPath, args: [] });
+    const threadId = "ancien-fil";
+    store.addThread({
+      id: threadId,
+      projectId,
+      agentId: id,
+      title: "Ancien fil",
+      status: "idle",
+      permissionMode: "full",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+    hub.removeCustomAgent(id);
+    await hub.switchAgent(threadId, "demo");
+    hub.send(threadId, "Reprends");
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)).toMatchObject({ agentId: "demo", status: "idle" });
   });
 });

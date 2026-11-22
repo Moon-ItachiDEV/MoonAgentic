@@ -1,6 +1,7 @@
 import type { Thread } from "@moonagentic/protocol";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Composer } from "./components/Composer.tsx";
+import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Home } from "./components/Home.tsx";
 import {
   IconBranch,
@@ -8,6 +9,7 @@ import {
   IconCompose,
   IconFile,
   IconFolder,
+  IconInbox,
   IconPin,
   IconPlug,
   IconSearch,
@@ -16,6 +18,7 @@ import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
+import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
@@ -31,6 +34,8 @@ export function App() {
   const [drawer, setDrawer] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
+  const [connectionsOpen, setConnectionsOpen] = useState(false);
+  const [requestsOpen, setRequestsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pickedProjectId, setPickedProjectId] = useState(() => readPref("project"));
   const [searchOpen, setSearchOpen] = useState(false);
@@ -82,6 +87,12 @@ export function App() {
       icon: <IconFolder size={15} />,
       run: () => setCreatingProject(true),
     },
+    {
+      label: `À traiter${state.requests.length ? ` (${state.requests.length})` : ""}`,
+      icon: <IconInbox size={15} />,
+      run: () => setRequestsOpen(true),
+    },
+    { label: "Connexions", icon: <IconPlug size={15} />, run: () => setConnectionsOpen(true) },
     { label: "Serveurs MCP", icon: <IconPlug size={15} />, run: () => setMcpOpen(true) },
     ...(thread
       ? [
@@ -106,9 +117,13 @@ export function App() {
           setDrawer(false);
           setCreatingProject(true);
         }}
-        onOpenMcp={() => {
+        onOpenConnections={() => {
           setDrawer(false);
-          setMcpOpen(true);
+          setConnectionsOpen(true);
+        }}
+        onOpenRequests={() => {
+          setDrawer(false);
+          setRequestsOpen(true);
         }}
         onPickProject={(id) => {
           pickProject(id);
@@ -179,6 +194,8 @@ export function App() {
             onCreated={(id) => navigate({ name: "thread", threadId: id })}
             onExport={exportThread}
             onSearch={() => setSearchOpen(true)}
+            onRequests={() => setRequestsOpen(true)}
+            onConnections={() => setConnectionsOpen(true)}
           />
         </div>
       </main>
@@ -198,6 +215,29 @@ export function App() {
           thread={thread}
           review={state.reviews[thread.id]}
           onClose={() => setReviewOpen(false)}
+        />
+      )}
+      {connectionsOpen && (
+        <ConnectionsDialog
+          agents={state.agents}
+          mcpServers={state.mcpServers}
+          onOpenMcp={() => {
+            setConnectionsOpen(false);
+            setMcpOpen(true);
+          }}
+          onClose={() => setConnectionsOpen(false)}
+        />
+      )}
+      {requestsOpen && (
+        <RequestsDialog
+          requests={state.requests}
+          threads={state.threads}
+          onOpenThread={(id, itemId) => {
+            setRequestsOpen(false);
+            focusItem(id, itemId);
+            go({ name: "thread", threadId: id });
+          }}
+          onClose={() => setRequestsOpen(false)}
         />
       )}
       {mcpOpen && <McpDialog servers={state.mcpServers} onClose={() => setMcpOpen(false)} />}
