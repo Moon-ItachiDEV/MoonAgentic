@@ -25,6 +25,7 @@ import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
+import { ProjectPage } from "./components/ProjectPage.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
@@ -81,7 +82,11 @@ export function App() {
 
   const thread: Thread | undefined =
     route.name === "thread" ? state.threads.find((t) => t.id === route.threadId) : undefined;
+  // A project's page shows that project; elsewhere, the open thread's or the one last picked.
+  const routeProject =
+    route.name === "project" ? state.projects.find((p) => p.id === route.projectId) : undefined;
   const project =
+    routeProject ??
     state.projects.find((p) => p.id === (thread?.projectId ?? pickedProjectId)) ??
     state.projects[0];
 
@@ -131,7 +136,7 @@ export function App() {
       action: "Retirer",
       run: async () => {
         await connection.request({ type: "project.remove", requestId: newId(), projectId: id });
-        if (thread?.projectId === id) go({ name: "home" });
+        if (thread?.projectId === id || routeProject?.id === id) go({ name: "home" });
       },
     });
   };
@@ -143,7 +148,7 @@ export function App() {
         },
         { label: "Exporter en Markdown", run: exportThread },
         {
-          label: thread.archived ? "Désarchiver" : "Archiver",
+          label: thread.archived ? "Rouvrir" : "Marquer résolu",
           run: () => setArchived(thread.id, !thread.archived),
         },
         { label: "Supprimer…", danger: true, run: () => askDeleteThread(thread) },
@@ -177,7 +182,9 @@ export function App() {
           },
           { label: "Exporter cette discussion en Markdown", icon: <IconFile />, run: exportThread },
           {
-            label: thread.archived ? "Désarchiver cette discussion" : "Archiver cette discussion",
+            label: thread.archived
+              ? "Rouvrir cette discussion"
+              : "Marquer cette discussion résolue",
             icon: <IconArchive />,
             run: () => setArchived(thread.id, !thread.archived),
           },
@@ -212,6 +219,7 @@ export function App() {
           activeThreadId={thread?.id}
           activeProjectId={project?.id}
           onPlanner={route.name === "planner"}
+          onProject={route.name === "project"}
           onOpenPlanner={() => go({ name: "planner" })}
           onOpenSchedules={() => {
             writePref("plannerView", "planifiees");
@@ -234,10 +242,10 @@ export function App() {
           }}
           onPickProject={(id) => {
             pickProject(id);
-            // On the planner, picking a project shows that project's planner; on the home
-            // page or in a conversation, it only unfolds the project, the drawer left open.
+            // On the planner, picking a project shows that project's planner; anywhere else,
+            // its page, with its conversations grouped by state.
             if (route.name === "planner") go({ name: "planner" });
-            else if (route.name !== "thread" && route.name !== "home") go({ name: "home" });
+            else go({ name: "project", projectId: id });
           }}
           onNewInProject={(id) => {
             pickProject(id);
@@ -268,7 +276,11 @@ export function App() {
             <IconMenu />
           </button>
           <div className="ttl">
-            {route.name === "settings" ? "Réglages" : (thread?.title ?? "")}
+            {route.name === "settings"
+              ? "Réglages"
+              : route.name === "project"
+                ? (routeProject?.name ?? "")
+                : (thread?.title ?? "")}
           </div>
           {state.requests.length > 0 && (
             <button
@@ -340,6 +352,38 @@ export function App() {
               </div>
             </div>
           )
+        ) : route.name === "project" ? (
+          routeProject ? (
+            <ProjectPage
+              // Another project starts afresh: a name being typed never follows to the next.
+              key={routeProject.id}
+              project={routeProject}
+              threads={state.threads}
+              agents={state.agents}
+              ready={state.ready}
+              onOpenThread={(id) => go({ name: "thread", threadId: id })}
+              onNewThread={() => {
+                pickProject(routeProject.id);
+                go({ name: "home" });
+              }}
+              onTogglePin={togglePin}
+              onSetResolved={setArchived}
+              onDeleteThread={askDeleteThread}
+              onOpenPlanner={() => {
+                pickProject(routeProject.id);
+                go({ name: "planner" });
+              }}
+              onRemoveProject={() => askRemoveProject(routeProject.id)}
+            />
+          ) : (
+            <div className="view">
+              <div className="home">
+                <p className="greet-sub">
+                  {state.ready ? "Ce projet n'existe plus." : "Chargement…"}
+                </p>
+              </div>
+            </div>
+          )
         ) : route.name === "planner" ? (
           <Suspense fallback={<div className="view" />}>
             <Planner
@@ -364,9 +408,9 @@ export function App() {
             {thread?.archived ? (
               <div className="archived-bar" role="status">
                 <IconArchive />
-                <span>Cette discussion est archivée.</span>
+                <span>Cette discussion est résolue.</span>
                 <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
-                  Désarchiver
+                  Rouvrir
                 </button>
               </div>
             ) : (

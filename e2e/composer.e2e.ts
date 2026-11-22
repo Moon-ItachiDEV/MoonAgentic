@@ -283,11 +283,11 @@ describe("composer", () => {
     await page.setViewportSize({ width: 1280, height: 820 });
 
     await menu.click();
-    await page.getByRole("menuitem", { name: "Archiver" }).click();
-    await page.getByText("Cette discussion est archivée.").waitFor();
-    await page.getByRole("button", { name: "Archivés (1)" }).click();
+    await page.getByRole("menuitem", { name: "Marquer résolu" }).click();
+    await page.getByText("Cette discussion est résolue.").waitFor();
+    await page.getByRole("button", { name: "Résolus (1)" }).click();
     await shot(page, "c9-archive");
-    await page.getByRole("button", { name: "Désarchiver" }).click();
+    await page.getByRole("button", { name: "Rouvrir" }).click();
     await expect.poll(() => composer(page).count()).toBe(1);
 
     // The same actions from the sidebar, behind « … » on the thread's line.
@@ -312,10 +312,10 @@ describe("composer", () => {
     await page.keyboard.press("Escape");
     await expect.poll(() => page.getByRole("menu", { name: /^Actions de Lis/ }).count()).toBe(0);
     await more.click();
-    await rowMenu.getByRole("menuitem", { name: "Archiver" }).click();
-    await page.getByText("Cette discussion est archivée.").waitFor();
+    await rowMenu.getByRole("menuitem", { name: "Marquer résolu" }).click();
+    await page.getByText("Cette discussion est résolue.").waitFor();
     await more.click();
-    await rowMenu.getByRole("menuitem", { name: "Désarchiver" }).click();
+    await rowMenu.getByRole("menuitem", { name: "Rouvrir" }).click();
     await expect.poll(() => composer(page).count()).toBe(1);
     // On a phone there is no hover: the button is always there, and the menu is a sheet.
     await page.setViewportSize({ width: 390, height: 780 });
@@ -479,6 +479,101 @@ describe("composer", () => {
     await page.close();
   });
 
+  it("shows a project's conversations grouped by state, on a page of its own", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    const inSidebar = page.locator(".thr-row.proj", { hasText: "equipe" }).locator(".thr");
+    await inSidebar.click();
+    await page.getByRole("heading", { name: "equipe" }).waitFor();
+    expect(new URL(page.url()).pathname).toMatch(/^\/p\//);
+
+    // A conversation opened from the page lands in the project, and comes back on its list.
+    await page.getByRole("button", { name: "Fil", exact: true }).click();
+    await pickAgent(page, /Agent de démo/);
+    await page.keyboard.press("Escape");
+    await composer(page).fill("Dis bonjour");
+    await composer(page).press("Enter");
+    // The new thread opens by itself, then back to the project.
+    await page.waitForURL(/\/t\//);
+    await inSidebar.click();
+    await page.getByRole("heading", { name: "equipe" }).waitFor();
+    // Sent, then gone to another page before the thread exists: the user stays where they went.
+    await page.getByRole("button", { name: "Fil", exact: true }).click();
+    await composer(page).fill("Dis au revoir");
+    await composer(page).press("Enter");
+    await inSidebar.click();
+    await page.locator(".pp-row", { hasText: "Dis au revoir" }).waitFor();
+    await page.waitForTimeout(300);
+    expect(new URL(page.url()).pathname).toMatch(/^\/p\//);
+    const group = (name: string) => page.locator(".pp-group", { hasText: name });
+    const fold = (name: string) => page.locator(".pp-gh", { hasText: name });
+    // Its agent asks before changing a file: the thread waits on the user, and says so.
+    const row = group("En attente").locator(".pp-row", { hasText: "Dis bonjour" });
+    await row.waitFor();
+    expect(await row.locator(".pp-line").textContent()).toBe("Attend ta réponse.");
+    // What needs no one is folded until asked.
+    expect(await fold("Inactif").getAttribute("aria-expanded")).toBe("false");
+    await fold("Inactif").click();
+    // A team counts once, as its lead: its coders stay behind it.
+    expect(await page.locator(".pp-row", { hasText: "Dis bonjour" }).count()).toBe(1);
+    expect(await page.locator(".pp-row .pp-agent", { hasText: "Équipe de" }).count()).toBe(
+      await page.locator(".pp-row", { hasText: "Équipe :" }).count(),
+    );
+    if (shots) await page.waitForTimeout(300);
+    await shot(page, "p1-page-projet");
+
+    // Once answered, the thread is at rest, under what its agent really said last.
+    await page
+      .getByRole("button", { name: /À traiter/ })
+      .first()
+      .click();
+    const requests = page.getByRole("dialog", { name: "À traiter" });
+    // Both threads opened here ask the same thing.
+    const allow = requests.getByRole("button", { name: "Autoriser" });
+    await expect.poll(() => allow.count()).toBe(2);
+    await allow.first().click();
+    await expect.poll(() => allow.count()).toBe(1);
+    await allow.first().click();
+    await requests.getByRole("button", { name: "Fermer" }).click();
+    const idle = group("Inactif").locator(".pp-row", { hasText: "Dis bonjour" });
+    await idle.waitFor();
+    await expect.poll(() => idle.locator(".pp-line").textContent()).toContain("C'est fait");
+
+    // Resolved from its menu, it moves to « Résolu »; reopened, it comes back.
+    await idle.getByRole("button", { name: "Actions de Dis bonjour" }).click();
+    await page.getByRole("menuitem", { name: "Marquer résolu" }).click();
+    await fold("Résolu").click();
+    const resolved = group("Résolu").locator(".pp-row", { hasText: "Dis bonjour" });
+    await resolved.waitFor();
+    await shot(page, "p2-resolu");
+    await resolved.getByRole("button", { name: "Actions de Dis bonjour" }).click();
+    await page.getByRole("menuitem", { name: "Rouvrir" }).click();
+    await group("Inactif").locator(".pp-row", { hasText: "Dis bonjour" }).waitFor();
+
+    // The project takes another name in place, for every window.
+    await page.getByRole("button", { name: "Actions du projet" }).click();
+    await page.getByRole("menuitem", { name: "Renommer" }).waitFor();
+    if (shots) await page.waitForTimeout(300);
+    await shot(page, "p3-menu-projet");
+    await page.getByRole("menuitem", { name: "Renommer" }).click();
+    await page.getByLabel("Nom du projet").fill("equipe bis");
+    await page.getByLabel("Nom du projet").press("Enter");
+    await page.getByRole("heading", { name: "equipe bis" }).waitFor();
+    await page.getByRole("button", { name: "Actions du projet" }).click();
+    await page.getByRole("menuitem", { name: "Renommer" }).click();
+    await page.getByLabel("Nom du projet").fill("equipe");
+    await page.getByLabel("Nom du projet").press("Enter");
+    await page.getByRole("heading", { name: "equipe", exact: true }).waitFor();
+
+    // On a phone, nothing spills past the screen.
+    await page.setViewportSize({ width: 390, height: 780 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    if (shots) await page.waitForTimeout(400);
+    await shot(page, "p4-mobile");
+    await page.close();
+  });
   it("plans the project's work: the teams' cards follow their pieces, the user's are theirs to move", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);

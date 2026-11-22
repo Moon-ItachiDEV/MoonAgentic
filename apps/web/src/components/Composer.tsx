@@ -478,6 +478,8 @@ export function Composer(props: {
     const changed = Object.entries(settings).filter(
       ([id, value]) => agent?.settings?.find((s) => s.id === id)?.current !== value,
     );
+    // Where the user was when they sent it: the new thread opens only if they stayed.
+    const from = location.pathname;
     try {
       const id = await connection.request({
         type: "thread.create",
@@ -491,7 +493,9 @@ export function Composer(props: {
         text: value,
       });
       setText("");
-      props.onCreated(id);
+      // Gone to another page while the thread was being made: it is not pulled back from
+      // there. The thread is in the lists, at work.
+      if (location.pathname === from) props.onCreated(id);
     } catch (e) {
       // The message stays in the composer, with the reason shown as a notice.
       connection.notify(e instanceof Error ? e.message : String(e));

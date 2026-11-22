@@ -1,6 +1,7 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
 import { useEffect, useRef, useState } from "react";
+import { waitingCount } from "../project-threads.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { RECENT, recentAlwaysShown } from "../recent.ts";
 import {
@@ -49,6 +50,8 @@ export function Sidebar(props: {
   activeProjectId: string | undefined;
   /** True on the planner's page. */
   onPlanner: boolean;
+  /** True on a project's page. */
+  onProject: boolean;
   onOpenPlanner: () => void;
   /** The planner's « Planifiées » view: the tasks MoonAgentic starts by itself. */
   onOpenSchedules: () => void;
@@ -130,7 +133,11 @@ export function Sidebar(props: {
 
   const scheduled = state.schedules.filter((s) => s.enabled).length;
   const live = state.threads.filter((t) => !t.archived);
-  const archived = state.threads.filter((t) => t.archived);
+  // A resolved team counts once, as its lead: its members are put away with it.
+  const resolvedLeads = new Set(state.threads.filter((t) => t.archived).map((t) => t.id));
+  const archived = state.threads.filter(
+    (t) => t.archived && !(t.parentId && resolvedLeads.has(t.parentId)),
+  );
   const members = membersOf(live);
   const byProject = conversationsByProject(live);
   const active = live.find((t) => t.id === props.activeThreadId);
@@ -263,6 +270,7 @@ export function Sidebar(props: {
     const { always, foldable } = recentAlwaysShown(all, members, props.activeThreadId);
     const more = unfolded.has(`more:${p.id}`);
     const count = byProject.get(p.id)?.length ?? 0;
+    const waiting = waitingCount(live, p.id);
     return [
       <div key={p.id} className={`thr-row proj${open ? " open" : ""}`}>
         <button
@@ -275,7 +283,7 @@ export function Sidebar(props: {
           <IconChevron size={11} />
         </button>
         <button
-          className={`thr${!props.activeThreadId && p.id === props.activeProjectId ? " on" : ""}`}
+          className={`thr${props.onProject && p.id === props.activeProjectId ? " on" : ""}`}
           title={p.path}
           onClick={() => {
             if (!open) setFold(p.id, true);
@@ -283,6 +291,13 @@ export function Sidebar(props: {
           }}
         >
           <span className="t">{p.name}</span>
+          {waiting > 0 && (
+            <span
+              className="dot"
+              title={`${waiting} en attente`}
+              aria-label={`${waiting} en attente`}
+            />
+          )}
           <span className="aux" title={`${count} discussion${count > 1 ? "s" : ""}`}>
             {count || ""}
           </span>
@@ -360,7 +375,7 @@ export function Sidebar(props: {
                 onClick={act(() => props.onSetArchived(menuThread.id, !menuThread.archived))}
               >
                 <IconArchive />
-                {menuThread.archived ? "Désarchiver" : "Archiver"}
+                {menuThread.archived ? "Rouvrir" : "Marquer résolu"}
               </button>
               <button
                 role="menuitem"
@@ -395,7 +410,7 @@ export function Sidebar(props: {
           </button>
         )}
         <button
-          className={!props.activeThreadId && !props.onPlanner ? "on" : ""}
+          className={!props.activeThreadId && !props.onPlanner && !props.onProject ? "on" : ""}
           onClick={props.onNewThread}
         >
           <IconCompose />
@@ -446,7 +461,7 @@ export function Sidebar(props: {
             onClick={() => setShowArchived(!showArchived)}
           >
             <IconArchive size={13} />
-            Archivés ({archived.length})
+            Résolus ({archived.length})
           </button>
         )}
         {showArchived && archived.map((t) => row(t, { key: t.id }))}

@@ -3,6 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
+import { threadPullRequest } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   AgentSetting,
@@ -31,6 +32,7 @@ import {
   containsBranch,
   dropRefs,
   mergeBranch,
+  nothingPast,
   unfinishedMerge,
   ensureWorktree,
   forkPoint,
@@ -61,7 +63,7 @@ import { historyBefore } from "./history.ts";
 import { Planner } from "./planner.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
-import { Teams, teamStatus } from "./team.ts";
+import { shipTarget, Teams, teamStatus } from "./team.ts";
 import { mcpInfo } from "./mcp.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
@@ -108,6 +110,24 @@ export interface HubOptions {
   maxLiveAgents?: number;
   /** Where pull requests are read and merged; the user's own `gh` unless given. */
   pullRequests?: () => PullRequests | undefined;
+  /** How often known pull requests are asked about again; 0 for never. */
+  prWatchMs?: number;
+}
+
+/** A known, open pull request is asked about again this often. */
+const PR_WATCH_MS = 60_000;
+/** Characters kept of what an agent last said, for lists of threads. */
+const SUMMARY_LIMIT = 160;
+
+/** The first lines of a reply as one short line, without Markdown marks. */
+export function summaryOf(reply: string): string {
+  const flat = reply
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/[*`#>]+/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length > SUMMARY_LIMIT ? `${flat.slice(0, SUMMARY_LIMIT - 1).trimEnd()}…` : flat;
 }
 
 const settingValues = (settings: AgentSetting[]) =>
@@ -181,6 +201,9 @@ export class Hub {
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
   private readonly pullRequests: () => PullRequests | undefined;
+  /** True while known pull requests are being asked about, so rounds never pile up. */
+  private watching = false;
+  private readonly prTimer: NodeJS.Timeout | undefined;
 
   constructor(store: Store, agents: Agents, options: HubOptions) {
     this.store = store;
@@ -190,6 +213,11 @@ export class Hub {
     this.maxLiveAgents = Math.max(1, options.maxLiveAgents ?? MAX_LIVE_AGENTS);
     this.homeDir = options.homeDir ?? os.homedir();
     this.pullRequests = options.pullRequests ?? localPullRequests;
+    const watchMs = options.prWatchMs ?? PR_WATCH_MS;
+    if (watchMs > 0) {
+      this.prTimer = setInterval(() => void this.watchPullRequests(), watchMs);
+      this.prTimer.unref();
+    }
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
     this.planner = new Planner(store, (m) => this.broadcast(m));
     this.scheduler = new Scheduler(store, (m) => this.broadcast(m), {
@@ -374,6 +402,13 @@ export class Hub {
         await this.deleteThread(message.threadId);
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "project.rename": {
+        if (!this.store.getProject(message.projectId)) throw new Error("Ce projet n'existe plus.");
+        this.store.renameProject(message.projectId, message.name);
+        const project = this.store.getProject(message.projectId)!;
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
       case "project.remove":
         await this.removeProject(message.projectId);
         client.send({ type: "done", requestId: message.requestId });
@@ -677,6 +712,11 @@ export class Hub {
       this.cancelled.delete(threadId);
       this.flushText(threadId);
       this.leftIdle(threadId);
+      if (!this.closed) {
+        const summary = summaryOf(this.lastReply(threadId));
+        const now = this.store.getThread(threadId);
+        if (summary && now && now.summary !== summary) this.updateThread(threadId, { summary });
+      }
       // Last, so the team can give the thread its next message. A server stopping leaves
       // its teams as they are, for the next start to find them cut short.
       try {
@@ -791,6 +831,14 @@ export class Hub {
         });
       }
       return result;
+    }).then((result) => {
+      // Its pull request shows on the lists at once, without waiting for the next round.
+      if (result.prOpened && !this.closed) {
+        const asked = this.pullRequest(threadId).catch(() => undefined);
+        this.steps.add(asked);
+        void asked.finally(() => this.steps.delete(asked));
+      }
+      return result;
     });
   }
 
@@ -813,7 +861,66 @@ export class Hub {
   /** The pull request of the thread's branch as GitHub describes it now, whoever opened it. */
   async pullRequest(threadId: string): Promise<PullRequestInfo | undefined> {
     const on = await this.branchOnGithub(threadId);
-    return on?.github.find(on.repo, on.branch);
+    const pr = await on?.github.find(on.repo, on.branch);
+    if (on) await this.notePullRequest(threadId, pr);
+    return pr;
+  }
+
+  /**
+   * Keeps what lists of threads show of the pull request. One that has just been merged
+   * resolves its thread, when its folder holds nothing more than what was merged.
+   */
+  private async notePullRequest(threadId: string, info: PullRequestInfo | undefined) {
+    const thread = this.store.getThread(threadId);
+    if (!thread) return;
+    const pr = info && threadPullRequest(info);
+    // A team's pull request is its merge thread's, or its only coder's: the lead shows it,
+    // and is the one resolved, which puts the whole team away.
+    const parent = thread.parentId ? this.store.getThread(thread.parentId) : undefined;
+    const lead = parent?.team && shipTarget(parent.team) === threadId ? parent : undefined;
+    if (lead && JSON.stringify(pr) !== JSON.stringify(lead.pr)) {
+      this.updateThread(lead.id, { pr: pr ?? null });
+    }
+    if (JSON.stringify(pr) === JSON.stringify(thread.pr)) return;
+    // Merged since it was last seen open; or merged before it was ever asked about, when
+    // MoonAgentic opened it itself.
+    const merged =
+      pr?.state === "merged" &&
+      (thread.pr ? thread.pr.state !== "merged" : !!thread.workspace?.prOpened);
+    this.updateThread(threadId, { pr: pr ?? null });
+    if (!merged || !info) return;
+    // A member that is not its team's branch is never resolved on its own.
+    if (thread.parentId && !lead) return;
+    const target = lead ?? thread;
+    if (target.archived || thread.archived) return;
+    const atWork = (id: string) => this.turns.has(id) || this.busy.has(id);
+    if (atWork(threadId) || atWork(target.id) || this.teams.isActive(target.id)) return;
+    const path = thread.workspace?.path;
+    if (!path || !existsSync(path) || !(await nothingPast(path, info.head))) return;
+    await this.setArchived(target.id, true).catch((error) =>
+      console.error("Résolution après merge :", error),
+    );
+  }
+
+  /**
+   * Asks GitHub again about the pull requests already known and not yet closed, one thread
+   * at a time: never about every branch, which would be slow and spend the user's quota.
+   */
+  async watchPullRequests(): Promise<void> {
+    if (this.watching || this.closed) return;
+    this.watching = true;
+    try {
+      for (const thread of this.store.listThreads()) {
+        if (this.closed) return;
+        const known = thread.pr
+          ? thread.pr.state === "open" || thread.pr.state === "draft"
+          : !!thread.workspace?.prOpened;
+        if (!known || thread.archived || !thread.workspace?.base) continue;
+        await this.pullRequest(thread.id).catch(() => undefined);
+      }
+    } finally {
+      this.watching = false;
+    }
   }
 
   /**
@@ -841,7 +948,9 @@ export class Hub {
       throw new Error("La branche a reçu de nouveaux commits : relis l'état avant de merger.");
     if (pr.conflicts) throw new Error("Cette pull request a des conflits avec sa branche de base.");
     await on.github.merge(on.repo, number, head);
-    return on.github.find(on.repo, String(number));
+    const after = await on.github.find(on.repo, String(number));
+    await this.notePullRequest(threadId, after);
+    return after;
   }
 
   /** The pull request at this github.com address, for a link that shows its state. */
@@ -972,7 +1081,7 @@ export class Hub {
     const thread = this.requireThread(threadId);
     if (!!thread.archived === archived) return;
     const project = this.store.getProject(thread.projectId);
-    await this.exclusive(threadId, "Attends la fin de l'archivage.", async () => {
+    await this.exclusive(threadId, "Attends que le fil soit rangé.", async () => {
       if (!archived) {
         // Its folder comes back first: if that fails, the thread stays in the archive as it was.
         if (thread.workspace?.base && project) await this.prepareWorkspace(threadId, project);
@@ -1329,6 +1438,7 @@ export class Hub {
   /** Stops every agent and resolves once their turns have ended. */
   async close(): Promise<void> {
     this.closed = true;
+    clearInterval(this.prTimer);
     this.scheduler.close();
     this.teams.close();
     // A review starting reads the changes first; it must not reach the store once closed.
@@ -1813,7 +1923,7 @@ export class Hub {
   /** A thread that can still change: not put away in the archive. */
   private requireLiveThread(threadId: string): Thread {
     const thread = this.requireThread(threadId);
-    if (thread.archived) throw new Error("Ce fil est archivé : désarchive-le pour continuer.");
+    if (thread.archived) throw new Error("Ce fil est résolu : rouvre-le pour continuer.");
     return thread;
   }
 
