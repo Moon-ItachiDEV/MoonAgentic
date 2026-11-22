@@ -1,6 +1,6 @@
 import type { Team, Thread } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
-import { noticesFor } from "./notices.ts";
+import { noticesFor, settledTags } from "./notices.ts";
 
 const thread = (over: Partial<Thread> = {}): Thread => ({
   id: "t1",
@@ -48,5 +48,16 @@ describe("what is worth a notification", () => {
       [thread({ status: "waiting", team: team("failed") })],
     ).map((n) => n.tag);
     expect(tags).toEqual(["t1:waiting", "t1:team"]);
+  });
+
+  it("takes the notice back once the thread no longer waits", () => {
+    const waiting = thread({ status: "waiting" });
+    expect(settledTags([waiting], [thread({ status: "running" })])).toEqual(["t1:waiting"]);
+    expect(settledTags([waiting], [thread({ status: "waiting", archived: true })])).toEqual([
+      "t1:waiting",
+    ]);
+    expect(settledTags([waiting], [])).toEqual(["t1:waiting"]);
+    expect(settledTags([waiting], [waiting])).toEqual([]);
+    expect(settledTags([thread()], [thread({ status: "idle" })])).toEqual([]);
   });
 });

@@ -70,9 +70,30 @@ const shown = (page: Page) =>
     return list.map((n) => ({ title: n.title, body: n.body, tag: n.tag }));
   });
 
+/**
+ * Whether the page has the user's attention. The test browser gives every page the focus at
+ * once, which no real one does, so each page says for itself whether it is in front.
+ */
+const FOCUS = "window.__inFront = true; document.hasFocus = () => window.__inFront;";
+const inFront = (page: Page, yes: boolean) =>
+  page.evaluate((value) => {
+    (window as unknown as { __inFront: boolean }).__inFront = value;
+  }, yes);
+const waiting = async (page: Page) =>
+  (await shown(page)).filter((n) => n.title === "Attend ta réponse");
+
+async function pickDemoAgent(page: Page) {
+  await page.locator(".agentchip").click();
+  await page.getByRole("button", { name: "Tous", exact: true }).click();
+  await page.getByRole("button", { name: "Options", exact: true }).click();
+  await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
+  await page.keyboard.press("Escape");
+}
+
 describe("browser notifications", () => {
   it("are asked for in the settings, then tell when a thread waits for an answer", async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 820 } });
+    await context.addInitScript(FOCUS);
     const page = await context.newPage();
     const errors: Error[] = [];
     page.on("pageerror", (err) => errors.push(err));
@@ -82,11 +103,7 @@ describe("browser notifications", () => {
     await page.getByRole("button", { name: "Créer" }).click();
     const composer = page.getByRole("combobox", { name: "Message" });
     await expect.poll(() => composer.isEnabled()).toBe(true);
-    await page.locator(".agentchip").click();
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
-    await page.getByRole("button", { name: "Options", exact: true }).click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-    await page.keyboard.press("Escape");
+    await pickDemoAgent(page);
 
     // Off until asked for; the browser's refusal is said, and leaves them off.
     await page.getByRole("button", { name: "Réglages" }).first().click();
@@ -107,17 +124,46 @@ describe("browser notifications", () => {
     await page.getByRole("button", { name: "Envoyée" }).waitFor();
     await expect.poll(async () => (await shown(page)).map((n) => n.title)).toEqual(["MoonAgentic"]);
 
-    // A thread asks for an agreement while the user is elsewhere in the app: one notification.
+    // With MoonAgentic in front of the user, a thread that asks for an agreement shows no
+    // notification, even from another screen of the app: the app itself says it.
     await page.getByRole("button", { name: "Retour" }).click();
     await composer.fill("Corrige la réponse");
     await composer.press("Enter");
     await page.waitForURL(/\/t\//);
     await page.getByRole("button", { name: "Réglages" }).first().click();
-    await expect
-      .poll(async () => (await shown(page)).filter((n) => n.title === "Attend ta réponse"))
-      .toMatchObject([{ body: "Corrige la réponse" }]);
+    await toggle.waitFor();
+    await page.goBack();
+    const allow = page.getByRole("button", { name: "Autoriser" });
+    await allow.waitFor();
+    expect(await waiting(page)).toEqual([]);
+    await allow.click();
+
+    // The user looks elsewhere: the next thread that waits tells them, once.
+    await inFront(page, false);
+    await page.getByRole("button", { name: "Nouvelle discussion" }).first().click();
+    await composer.fill("Corrige encore");
+    await composer.press("Enter");
+    await expect.poll(() => waiting(page)).toMatchObject([{ body: "Corrige encore" }]);
+
+    // Answered in the app, the notification about it goes away by itself.
+    await page.getByRole("button", { name: "Autoriser" }).click();
+    await expect.poll(() => waiting(page)).toEqual([]);
+
+    // A second tab in front of the user keeps the first, in the background, quiet.
+    const other = await context.newPage();
+    await other.goto(new URL("/", url).href);
+    await other.getByRole("button", { name: "Nouvelle discussion" }).first().waitFor();
+    await page.getByRole("button", { name: "Nouvelle discussion" }).first().click();
+    await composer.fill("Corrige une troisième fois");
+    await composer.press("Enter");
+    await page.getByRole("button", { name: "Autoriser" }).waitFor();
+    // Longer than a background tab waits for the answer of one in front.
+    await page.waitForTimeout(600);
+    expect(await waiting(page)).toEqual([]);
+    await other.close();
 
     // Turned off, nothing more is shown; the choice is kept on this device.
+    await page.getByRole("button", { name: "Réglages" }).first().click();
     await toggle.click();
     await expect.poll(() => toggle.getAttribute("aria-checked")).toBe("false");
     await page.reload();

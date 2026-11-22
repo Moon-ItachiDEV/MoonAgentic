@@ -2,7 +2,7 @@
 // thread starts waiting for the user or a team ends, while MoonAgentic stays open in a tab.
 import type { Thread } from "@moonagentic/protocol";
 import { connection } from "./connection.ts";
-import { type Notice, noticesFor } from "./notices.ts";
+import { type Notice, noticesFor, settledTags } from "./notices.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { navigate } from "./router.ts";
 
@@ -75,6 +75,8 @@ export async function showNotice(notice: Notice): Promise<boolean> {
       return true;
     }
     const shown = new Notification(notice.title, options);
+    plain.get(notice.tag)?.close();
+    plain.set(notice.tag, shown);
     shown.onclick = () => {
       shown.close();
       openThread(notice.threadId);
@@ -85,15 +87,71 @@ export async function showNotice(notice: Notice): Promise<boolean> {
   }
 }
 
-/** The thread on screen, which needs no notification while the user looks at it. */
-function watchedThreadId(): string | undefined {
-  if (document.visibilityState !== "visible" || !document.hasFocus()) return undefined;
-  const match = /^\/t\/([^/]+)$/.exec(location.pathname);
+/** Notifications shown without a service worker, kept so they can be closed. */
+const plain = new Map<string, Notification>();
+
+/** Takes back a notification that has nothing left to say, wherever it is shown. */
+async function closeNotice(tag: string): Promise<void> {
+  plain.get(tag)?.close();
+  plain.delete(tag);
   try {
-    return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+    const sw = await registration();
+    for (const shown of (await sw?.getNotifications({ tag })) ?? []) shown.close();
   } catch {
-    return undefined;
+    // nothing to close
   }
+}
+
+/** True while the user has MoonAgentic in front of them in this tab. */
+const inFront = () => document.visibilityState === "visible" && document.hasFocus();
+
+const ASK_MS = 250;
+const HOLD_MS = 3000;
+/** How the tabs of this browser tell each other that one of them is in front of the user. */
+const tabs =
+  typeof BroadcastChannel === "function" ? new BroadcastChannel("moonagentic.notifications") : null;
+
+/** Resolves true when another MoonAgentic tab is in front of the user right now. */
+function anotherTabInFront(): Promise<boolean> {
+  if (!tabs) return Promise.resolve(false);
+  const ask = Math.random().toString(36).slice(2);
+  return new Promise((resolve) => {
+    const done = (answer: boolean) => {
+      tabs.removeEventListener("message", heard);
+      clearTimeout(timer);
+      resolve(answer);
+    };
+    const heard = (event: MessageEvent) => {
+      const data = event.data as { type?: string; ask?: string } | null;
+      if (data?.type === "in-front" && data.ask === ask) done(true);
+    };
+    const timer = setTimeout(() => done(false), ASK_MS);
+    tabs.addEventListener("message", heard);
+    tabs.postMessage({ type: "anyone-in-front", ask });
+  });
+}
+
+/**
+ * Shows a notice unless the user already sees MoonAgentic, in this tab or another: the
+ * sidebar and « À traiter » tell them there. Of several tabs in the background, one shows it.
+ */
+async function notify(notice: Notice): Promise<void> {
+  if (inFront() || (await anotherTabInFront())) return;
+  if (!("locks" in navigator)) {
+    await showNotice(notice);
+    return;
+  }
+  await navigator.locks.request(
+    `moonagentic.notice.${notice.tag}`,
+    { ifAvailable: true },
+    async (lock) => {
+      // Another tab took it: the notice is its to show.
+      if (!lock) return;
+      await showNotice(notice);
+      // Held a moment, so a tab that was slower to hear of the change finds it taken.
+      await new Promise((resolve) => setTimeout(resolve, HOLD_MS));
+    },
+  );
 }
 
 let started = false;
@@ -109,14 +167,22 @@ export function startNotifications(): void {
       openThread(data.threadId);
     }
   });
+  tabs?.addEventListener("message", (event: MessageEvent) => {
+    const data = event.data as { type?: string; ask?: string } | null;
+    if (data?.type === "anyone-in-front" && inFront()) {
+      tabs.postMessage({ type: "in-front", ask: data.ask });
+    }
+  });
   let before: Thread[] | undefined;
   connection.subscribe(() => {
     const state = connection.getState();
     if (!state.ready || state.threads === before) return;
     const notices = before ? noticesFor(before, state.threads) : [];
+    const settled = before ? settledTags(before, state.threads) : [];
     before = state.threads;
-    if (!notices.length || !notificationsOn()) return;
-    const watched = watchedThreadId();
-    for (const notice of notices) if (notice.threadId !== watched) void showNotice(notice);
+    if (!notificationsOn()) return;
+    // An answer given in the app takes the notification about it away.
+    for (const tag of settled) void closeNotice(tag);
+    for (const notice of notices) void notify(notice);
   });
 }

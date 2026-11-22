@@ -28,7 +28,7 @@ export function noticesFor(before: Thread[], after: Thread[]): Notice[] {
     if (!was || thread.archived) continue;
     if (thread.status === "waiting" && was.status !== "waiting") {
       notices.push({
-        tag: `${thread.id}:waiting`,
+        tag: waitingTag(thread.id),
         threadId: thread.id,
         title: "Attend ta réponse",
         body: thread.title,
@@ -41,4 +41,22 @@ export function noticesFor(before: Thread[], after: Thread[]): Notice[] {
     }
   }
   return notices;
+}
+
+/** The tag of the notice that says a thread waits for an answer. */
+export const waitingTag = (threadId: string) => `${threadId}:waiting`;
+
+/**
+ * The notices that no longer hold: a thread that was waiting has been answered, archived or
+ * removed, so the notification about it has nothing left to say.
+ */
+export function settledTags(before: Thread[], after: Thread[]): string[] {
+  const now = new Map(after.map((t) => [t.id, t]));
+  return before
+    .filter((was) => {
+      if (was.status !== "waiting") return false;
+      const thread = now.get(was.id);
+      return !thread || thread.archived || thread.status !== "waiting";
+    })
+    .map((was) => waitingTag(was.id));
 }

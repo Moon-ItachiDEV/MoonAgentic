@@ -128,7 +128,7 @@ function NotificationsRow() {
         ? "Ce navigateur n'en propose pas. Sur iPhone, ajoute d'abord MoonAgentic à l'écran d'accueil."
         : permission === "denied"
           ? "Bloquées par le navigateur pour ce site : autorise-les dans ses réglages, puis réessaie."
-          : "Sur cet appareil, quand un fil attend ta réponse ou qu'une équipe termine ou échoue. Il faut que MoonAgentic reste ouvert dans un onglet, même en arrière-plan.";
+          : "Sur cet appareil, quand un fil attend ta réponse ou qu'une équipe termine ou échoue, sauf si tu as déjà MoonAgentic sous les yeux. Il faut qu'il reste ouvert dans un onglet, même en arrière-plan.";
   return (
     <Row title="Notifications" text={text}>
       <div className="set-notif">
