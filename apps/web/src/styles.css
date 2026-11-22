@@ -1133,6 +1133,82 @@ svg {
   margin-bottom: 2px;
 }
 
+/* Popups open and close as in the mockup: a short fade and rise from where they come from,
+   and the same way back. The slash and @ menus stay instant (Emil Kowalski's rule kept in
+   the mockup: what you type through does not animate). A phone gets a sheet that slides
+   up and back down, see the media query below. */
+.presence {
+  display: contents;
+}
+/* A closing popup and its scrim let clicks through to the page at once. */
+.presence.closing * {
+  pointer-events: none;
+}
+.menu,
+.gauge-pop,
+.dialog {
+  animation: pop 0.14s ease-out;
+}
+.menu {
+  transform-origin: 0 100%;
+}
+.menu.thread-menu {
+  transform-origin: 100% 0;
+}
+.gauge-pop {
+  transform-origin: 100% 100%;
+}
+.menu.suggest {
+  animation: none;
+}
+.scrim,
+.menu-scrim {
+  animation: fade 0.2s ease-out;
+}
+.presence.closing .menu,
+.presence.closing .gauge-pop,
+.presence.closing .dialog {
+  opacity: 0;
+  transform: translateY(6px) scale(0.97);
+  transition:
+    opacity 0.16s ease,
+    transform 0.16s ease;
+}
+.presence.closing .menu.thread-menu {
+  transform: translateY(-6px) scale(0.97);
+}
+/* The thread menu drops down from its button, so it opens downwards too. */
+.menu.thread-menu {
+  animation-name: pop-down;
+}
+.presence.closing .scrim,
+.presence.closing .menu-scrim {
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.97);
+  }
+}
+@keyframes pop-down {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes sheet-up {
+  from {
+    transform: translateY(calc(100% + 16px));
+  }
+}
+
 /* Dialog */
 .scrim {
   position: fixed;
@@ -1532,6 +1608,15 @@ svg {
     max-width: none;
     max-height: 70dvh;
     z-index: 50;
+  }
+  /* The thread menu stays a small drop-down under the header; the slash menu stays instant. */
+  .menu:not(.thread-menu, .suggest) {
+    animation: sheet-up 0.34s var(--ease);
+  }
+  .presence.closing .menu:not(.thread-menu) {
+    opacity: 1;
+    transform: translateY(calc(100% + 16px));
+    transition: transform 0.26s var(--ease);
   }
   /* Catches taps outside the sheet so they never reach the buttons underneath. */
   .menu-scrim {
