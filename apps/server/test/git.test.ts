@@ -20,6 +20,7 @@ import {
   ensureWorktree,
   githubRepo,
   parseDiff,
+  prTitle,
   removeWorktree,
   restoreCheckpoint,
   saveCheckpoint,
@@ -395,6 +396,15 @@ describe("git helpers", () => {
       expect(githubRepo(url)).toBe("moon/app");
     expect(githubRepo("https://gitlab.com/moon/app.git")).toBeUndefined();
     expect(githubRepo("/tmp/remote.git")).toBeUndefined();
+  });
+
+  it("makes a one-line pull request title GitHub takes, from a long task over several lines", () => {
+    expect(prTitle("Corrige  le bug\n\net ajoute un test")).toBe(
+      "Corrige le bug et ajoute un test",
+    );
+    const long = prTitle("mot ".repeat(100));
+    expect(long).toHaveLength(100);
+    expect(long.endsWith("…")).toBe(true);
   });
 
   it("names branches after the thread, readable and safe for git", () => {
@@ -796,6 +806,48 @@ describe("teams", () => {
       phase: "done",
       shipError: expect.stringContaining("remote"),
     });
+  }, 40_000);
+
+  it("waits for the user when asked to, pushes once for two asks at once, and says a cut push", async () => {
+    const { hub, store, remote, projectId } = repository();
+    const leadId = hub.startTeam({
+      projectId,
+      task: "Corrige answer et documente-la",
+      lead: { agentId: "demo" },
+      coder: { agentId: "demo" },
+      coders: 2,
+      permissionMode: "full",
+      autoShip: false,
+    });
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    // Asked not to, the team pushes nothing by itself.
+    await new Promise((r) => setTimeout(r, 300));
+    const branch = store.getThread(store.getThread(leadId)!.team!.mergeThreadId!)!.workspace!
+      .branch;
+    expect(store.getThread(leadId)?.team).not.toHaveProperty("shipping");
+    expect(() => git(remote, "rev-parse", "--verify", branch)).toThrow();
+
+    // Two asks at once make one push, and neither leaves an error behind.
+    const client = { send: () => {} };
+    hub.connect(client);
+    const ask = (requestId: string) =>
+      hub.handle(client, { type: "team.ship", requestId, threadId: leadId });
+    const both = Promise.all([ask("a"), ask("b")]);
+    expect(store.getThread(leadId)?.team?.shipping).toBe(true);
+    await both;
+    const team = store.getThread(leadId)!.team!;
+    expect(team.shipped).toEqual({ opened: false });
+    expect(team).not.toHaveProperty("shipError");
+    expect(team).not.toHaveProperty("shipping");
+    expect(git(remote, "rev-parse", "--verify", branch)).toBeTruthy();
+
+    // A push cut off by a stop is said so after the restart, to be tried again.
+    store.updateThread(leadId, { team: { ...team, shipping: true } });
+    hub.teams.recover();
+    expect(store.getThread(leadId)?.team).toMatchObject({
+      shipError: expect.stringContaining("réessaie"),
+    });
+    expect(store.getThread(leadId)?.team).not.toHaveProperty("shipping");
   }, 40_000);
 
   it("leaves a conflict to the user without a merger, and merges on once it is settled", async () => {

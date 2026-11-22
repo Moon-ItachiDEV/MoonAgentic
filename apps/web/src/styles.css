@@ -2079,6 +2079,25 @@ kbd {
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
 }
+.field.team-ship {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.field.team-ship input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+.field.team-ship span {
+  display: grid;
+  gap: 2px;
+}
+.field.team-ship small {
+  color: var(--muted);
+  font-size: 12px;
+}
 .team-member,
 .team-row {
   display: grid;

@@ -210,7 +210,7 @@ export class Hub {
         if (lead) this.planner.syncTeam(lead);
       },
       mergeInto: (intoId, fromId, title) => this.mergeInto(intoId, fromId, title),
-      ship: (id, message, title) => this.ship(id, message, true, undefined, title),
+      ship: (id, message, title, body) => this.ship(id, message, true, undefined, title, body),
       contains: async (intoId, fromId) => {
         const into = this.store.getThread(intoId)?.workspace;
         const from = this.store.getThread(fromId)?.workspace;
@@ -574,6 +574,7 @@ export class Hub {
     merger?: { agentId: string; model?: string | undefined } | undefined;
     coders: number;
     permissionMode: PermissionMode;
+    autoShip?: boolean | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project) throw new Error("Projet introuvable.");
@@ -738,6 +739,7 @@ export class Hub {
     files?: string[],
     /** The pull request's title; otherwise the thread's. */
     title?: string,
+    body?: string,
   ): Promise<ShipResult> {
     const thread = this.requireLiveThread(threadId);
     const workspace = thread.workspace;
@@ -749,6 +751,7 @@ export class Hub {
         message,
         pr,
         title: title ?? thread.title,
+        ...(body ? { body } : {}),
         ...(files ? { files } : {}),
         ...(workspace.baseBranch ? { baseBranch: workspace.baseBranch } : {}),
       });

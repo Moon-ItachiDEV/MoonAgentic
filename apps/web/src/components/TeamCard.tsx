@@ -90,13 +90,21 @@ function leadState(team: Team): string {
   return n ? `${n} ${plural(n, "sous-tâche", "sous-tâches")}` : "pas de plan";
 }
 
-/** Where the team's pull request is: it is opened by the team itself, once done. */
+/** The branch that holds a finished team's work: the merge's, or its only piece's. */
+const shipTarget = (team: Team) =>
+  team.mergeThreadId ?? (team.tasks.length === 1 ? team.tasks[0]?.threadId : undefined);
+
+/**
+ * Where the team's pull request is. The team opens it by itself once done, unless asked
+ * not to; a team from before, or one asked not to, offers to open it.
+ */
 function shipState(team: Team): { dot: string; text: string } {
+  if (team.shipping) return { dot: "running", text: "en cours" };
   if (team.shipped?.opened) return { dot: "done", text: "ouverte" };
   if (team.shipped) return { dot: "done", text: "branche envoyée" };
   if (team.shipError) return { dot: "blocked", text: "à toi de voir" };
-  if (team.phase === "done") return { dot: "running", text: "en cours" };
-  return { dot: "waiting", text: "à la fin" };
+  if (team.phase === "done") return { dot: "waiting", text: "pas encore ouverte" };
+  return { dot: "waiting", text: team.autoShip === false ? "quand tu veux" : "à la fin" };
 }
 
 /** What the merge is at; before it starts, it waits on the coders. */
@@ -155,6 +163,11 @@ export function TeamCard({
       ? team.error
       : undefined;
   const ship = shipState(team);
+  // Once done, the step stays only if there is a branch to send.
+  const showShip = team.phase !== "done" || !!shipTarget(team);
+  const canShip =
+    team.phase === "done" && !team.shipping && !team.shipped?.opened && !!shipTarget(team);
+  const note = team.shipError ?? team.shipped?.note;
   const [shipping, setShipping] = useState(false);
   const shipAgain = () => {
     setShipping(true);
@@ -309,37 +322,41 @@ export function TeamCard({
             )}
           </li>
         )}
-        <li className={`team-task step ${ship.dot}`} aria-label="Pull request">
-          <span className="dot" aria-hidden />
-          <span className="team-what">
-            <span>Ouvrir la PR</span>
-            <span className="team-who">L'équipe, avec ton compte GitHub</span>
-          </span>
-          <small>{ship.text}</small>
-          {(team.shipped?.url || team.shipError) && (
-            <div className="team-more">
-              {team.shipError && (
-                <div className="team-note">
-                  <Clamp>
-                    <Markdown text={team.shipError} />
-                  </Clamp>
+        {showShip && (
+          <li className={`team-task step ${ship.dot}`} aria-label="Pull request">
+            <span className="dot" aria-hidden />
+            <span className="team-what">
+              <span>Ouvrir la PR</span>
+              <span className="team-who">
+                {team.autoShip === false ? "Toi" : "L'équipe"}, avec ton compte GitHub
+              </span>
+            </span>
+            <small>{ship.text}</small>
+            {(team.shipped?.url || note || canShip) && (
+              <div className="team-more">
+                {note && (
+                  <div className="team-note">
+                    <Clamp>
+                      <Markdown text={note} />
+                    </Clamp>
+                  </div>
+                )}
+                <div className="team-links">
+                  {team.shipped?.url && (
+                    <a className="lnk sm" href={team.shipped.url} target="_blank" rel="noreferrer">
+                      {team.shipped.opened ? "Voir la PR" : "Créer la PR sur GitHub"}
+                    </a>
+                  )}
+                  {canShip && (
+                    <button className="btn sm" disabled={shipping} onClick={shipAgain}>
+                      {team.shipError || team.shipped ? "Réessayer" : "Ouvrir la PR"}
+                    </button>
+                  )}
                 </div>
-              )}
-              <div className="team-links">
-                {team.shipped?.url && (
-                  <a className="lnk sm" href={team.shipped.url} target="_blank" rel="noreferrer">
-                    {team.shipped.opened ? "Voir la PR" : "Créer la PR sur GitHub"}
-                  </a>
-                )}
-                {team.shipError && (
-                  <button className="btn sm" disabled={shipping} onClick={shipAgain}>
-                    Réessayer
-                  </button>
-                )}
               </div>
-            </div>
-          )}
-        </li>
+            )}
+          </li>
+        )}
       </ul>
       {error && !(hasMerge && mergeBlocked) && (
         <div className="team-note">

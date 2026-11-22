@@ -330,6 +330,11 @@ describe("composer", () => {
     await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Agent de démo" });
     await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Agent de démo" });
     await shot(page, "c10-equipe-lancer");
+    // The team opens its pull request at the end unless told not to.
+    const autoShip = dialog.getByLabel(/Ouvrir la PR à la fin/);
+    expect(await autoShip.isChecked()).toBe(true);
+    await autoShip.scrollIntoViewIfNeeded();
+    await shot(page, "c10c-equipe-pr");
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
     // Every role is on the timeline from the start, the agent and model of each said.
     const strip = page.getByRole("region", { name: "Frise de l'équipe" });

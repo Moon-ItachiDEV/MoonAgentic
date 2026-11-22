@@ -54,7 +54,7 @@ export interface TeamHost {
    */
   mergeInto(intoId: string, fromId: string, message: string): Promise<string[]>;
   /** Commits what is left, pushes the thread's branch and opens its pull request. */
-  ship(threadId: string, message: string, title: string): Promise<ShipResult>;
+  ship(threadId: string, message: string, title: string, body: string): Promise<ShipResult>;
   /** The files still in conflict while a merge is under way in the thread's folder. */
   unfinishedMerge(threadId: string): Promise<string[] | undefined>;
   /** Whether the `from` thread's branch is part of the `into` thread's. */
@@ -71,6 +71,8 @@ export interface TeamInput {
   merger?: TeamMember | undefined;
   coders: number;
   permissionMode: PermissionMode;
+  /** Opens the pull request by itself once done; true when left out. */
+  autoShip?: boolean | undefined;
 }
 
 const planPrompt = (task: string, coders: number) =>
@@ -270,6 +272,21 @@ const working = (t: TeamTask) =>
   t.status === "lead";
 const open = (t: TeamTask) => t.status === "waiting" || working(t);
 const cut = (text: string) => (text.length > NOTE_LIMIT ? `${text.slice(0, NOTE_LIMIT)}…` : text);
+/** The branch that holds a finished team's work: the merge's, or its only piece's. */
+export const shipTarget = (team: Team): string | undefined =>
+  team.mergeThreadId ?? (team.tasks.length === 1 ? team.tasks[0]?.threadId : undefined);
+
+/** The pull request's description: the task as asked, and its pieces. */
+const prBody = (team: Team) =>
+  [
+    team.task,
+    "",
+    "## Sous-tâches",
+    ...team.tasks.map((t) => `- ${t.title}`),
+    "",
+    "Ouverte par l'équipe MoonAgentic, après relecture et tests de chaque sous-tâche.",
+  ].join("\n");
+
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** The thread a piece's agent works in at this point, if any. */
@@ -414,6 +431,8 @@ export class Teams {
   private closed = false;
   /** Checks being started, which read the changes first. */
   private readonly starting = new Set<Promise<void>>();
+  /** The push under way for each team, by its lead. */
+  private readonly shipping = new Map<string, Promise<void>>();
 
   constructor(host: TeamHost) {
     this.host = host;
@@ -424,36 +443,52 @@ export class Teams {
     const before = this.host.thread(leadId)?.team?.phase;
     this.host.setTeam(leadId, recordTimeline(team, Date.now()));
     // Done, the team ends the way a cloud agent does: with its pull request open.
-    if (team.phase === "done" && before !== "done") void this.ship(leadId);
+    if (team.phase === "done" && before !== "done" && team.autoShip !== false && shipTarget(team))
+      this.ship(leadId).catch(() => {});
   }
 
   /**
    * Pushes the branch that holds the team's work, the merge's or its only piece's, and
-   * opens its pull request with the user's \`gh\`. What went wrong is kept on the team.
+   * opens its pull request with the user's `gh`. One push at a time per team: a second ask
+   * meanwhile waits on the first. What went wrong is kept on the team.
    */
   ship(leadId: string): Promise<void> {
+    const pending = this.shipping.get(leadId);
+    if (pending) return pending;
     const team = this.host.thread(leadId)?.team;
     if (!team || team.phase !== "done") {
       return Promise.reject(new Error("L'équipe n'a pas fini : rien à envoyer pour l'instant."));
     }
-    const target =
-      team.mergeThreadId ?? (team.tasks.length === 1 ? team.tasks[0]?.threadId : undefined);
-    if (!target) return Promise.resolve();
-    const work = this.host.ship(target, team.task, team.task).then(
-      (result) => {
-        const now = this.host.thread(leadId)?.team;
-        if (!now) return;
-        const { shipError: _error, ...rest } = now;
-        this.host.setTeam(leadId, {
-          ...rest,
-          shipped: { ...(result.url ? { url: result.url } : {}), opened: result.prOpened },
-        });
-      },
-      (error: unknown) => {
-        const now = this.host.thread(leadId)?.team;
-        if (now) this.host.setTeam(leadId, { ...now, shipError: cut(message(error)) });
-      },
-    );
+    const target = shipTarget(team);
+    if (!target) {
+      return Promise.reject(
+        new Error("Rien à envoyer : cette équipe n'a pas de branche qui réunit son travail."),
+      );
+    }
+    const { shipError: _error, ...fresh } = team;
+    this.host.setTeam(leadId, { ...fresh, shipping: true });
+    const settle = (change: (team: Team) => Team) => {
+      const now = this.host.thread(leadId)?.team;
+      if (!now) return;
+      const { shipping: _shipping, shipError: _old, ...rest } = now;
+      this.host.setTeam(leadId, change(rest));
+    };
+    const work = this.host
+      .ship(target, team.task, team.task, prBody(team))
+      .then(
+        (result) =>
+          settle((rest) => ({
+            ...rest,
+            shipped: {
+              ...(result.url ? { url: result.url } : {}),
+              opened: result.prOpened,
+              ...(result.prError ? { note: cut(result.prError) } : {}),
+            },
+          })),
+        (error: unknown) => settle((rest) => ({ ...rest, shipError: cut(message(error)) })),
+      )
+      .finally(() => this.shipping.delete(leadId));
+    this.shipping.set(leadId, work);
     this.track(work);
     return work;
   }
@@ -476,6 +511,7 @@ export class Teams {
       ...(input.merger ? { merger: input.merger } : {}),
       coders: input.coders,
       permissionMode: input.permissionMode,
+      ...(input.autoShip === false ? { autoShip: false } : {}),
       tasks: [],
       timeline: [{ at: Date.now(), lane: LEAD_LANE, phase: "planning" }],
     };
@@ -529,6 +565,14 @@ export class Teams {
   /** A team cut short by a stop of the server is marked so, with what was done kept. */
   recover(): void {
     for (const thread of this.host.threads()) {
+      // A push the stop cut off is said so, to be tried again.
+      if (thread.team?.shipping) {
+        const { shipping: _shipping, ...rest } = thread.team;
+        this.host.setTeam(thread.id, {
+          ...rest,
+          shipError: "L'envoi a été coupé par l'arrêt de MoonAgentic : réessaie.",
+        });
+      }
       if (!thread.team || !active(thread.team)) continue;
       this.save(thread.id, {
         ...cutShort(thread.team),
