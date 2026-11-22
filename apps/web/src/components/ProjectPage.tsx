@@ -42,7 +42,15 @@ export function ProjectPage(props: {
   onDeleteThread: (thread: Thread) => void;
   onOpenPlanner: () => void;
   onRemoveProject: () => void;
+  /** Beside the coordinator's conversation: the list alone, without the project's heading. */
+  panel?: boolean;
+  /** Given while the project has no coordinator yet: starts one with this agent. */
+  onStartCoordinator?: ((agentId: string) => Promise<void>) | undefined;
 }) {
+  const ready = props.agents.filter((a) => a.available);
+  const [coordAgent, setCoordAgent] = useState<string>();
+  const [coordError, setCoordError] = useState<string>();
+  const picked = ready.find((a) => a.id === coordAgent) ?? ready[0];
   // The name being typed, while the project is renamed in place.
   const [renaming, setRenaming] = useState<string | null>(null);
   const rename = () => {
@@ -64,7 +72,7 @@ export function ProjectPage(props: {
   const members = membersByLead(props.threads);
 
   return (
-    <div className="view">
+    <div className={props.panel ? "pp-panel" : "view"}>
       <div className="proj-page">
         <div className="pp-head">
           <div>
@@ -109,6 +117,51 @@ export function ProjectPage(props: {
             />
           </div>
         </div>
+        {props.onStartCoordinator && props.ready && (
+          <div className="pp-coord">
+            <div className="pp-coord-t">Coordinateur du projet</div>
+            <p>
+              Un agent à qui parler de tout le projet : il répond aux questions rapides et ouvre un
+              fil sur sa propre branche pour un bug ou une fonctionnalité. Tu peux toujours ouvrir
+              un fil toi-même avec « Fil ».
+            </p>
+            {picked ? (
+              <div className="pp-coord-go">
+                <select
+                  aria-label="Agent du coordinateur"
+                  value={picked.id}
+                  onChange={(e) => setCoordAgent(e.target.value)}
+                >
+                  {ready.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="btn sm pri"
+                  onClick={() => {
+                    setCoordError(undefined);
+                    props
+                      .onStartCoordinator?.(picked.id)
+                      .catch((error: unknown) =>
+                        setCoordError(error instanceof Error ? error.message : String(error)),
+                      );
+                  }}
+                >
+                  Activer le coordinateur
+                </button>
+              </div>
+            ) : (
+              <p className="pp-coord-none">Aucun agent n'est prêt : vois « Connexions ».</p>
+            )}
+            {coordError && (
+              <p className="pp-coord-none" role="alert">
+                {coordError}
+              </p>
+            )}
+          </div>
+        )}
         {props.ready && total === 0 && (
           <p className="pp-empty">
             Aucune discussion dans ce projet. Écris ci-dessous pour ouvrir la première.

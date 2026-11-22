@@ -1,5 +1,5 @@
 import type { Schedule, Thread } from "@moonagentic/protocol";
-import { lazy, Suspense, useEffect, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Composer } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
@@ -27,6 +27,7 @@ import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { ProjectPage } from "./components/ProjectPage.tsx";
+import { coordinatorOf, listedThreads } from "./project-threads.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
@@ -48,6 +49,18 @@ const SettingsNav = lazy(() =>
 const SettingsPage = lazy(() =>
   import("./components/Settings.tsx").then((m) => ({ default: m.SettingsPage })),
 );
+
+/** Wide enough for a project's threads beside its coordinator's conversation. */
+const WIDE = "(min-width: 1180px)";
+const wideQuery = typeof matchMedia === "function" ? matchMedia(WIDE) : undefined;
+const useWide = () =>
+  useSyncExternalStore(
+    (changed) => {
+      wideQuery?.addEventListener("change", changed);
+      return () => wideQuery?.removeEventListener("change", changed);
+    },
+    () => wideQuery?.matches ?? true,
+  );
 
 export function App() {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
@@ -85,6 +98,32 @@ export function App() {
     return () => document.removeEventListener("keydown", open);
   }, []);
 
+  const wide = useWide();
+  /** On a narrow screen, what the project's page shows: the coordinator or the threads. */
+  const [projectTab, setProjectTab] = useState<"chat" | "threads">("chat");
+  // Lists show every thread but the coordinators.
+  const listed = useMemo(() => ({ ...state, threads: listedThreads(state.threads) }), [state]);
+  // A coordinator lives on its project's page: its own address, reached from a notification
+  // or an old link, leads there, and « back » does not come here again.
+  const strayProjectId =
+    route.name === "thread"
+      ? state.threads.find((t) => t.id === route.threadId && t.kind === "coordinator")?.projectId
+      : undefined;
+  useEffect(() => {
+    if (!strayProjectId) return;
+    setProjectTab("chat");
+    navigate({ name: "project", projectId: strayProjectId }, { replace: true });
+  }, [strayProjectId]);
+  // Another project's page starts on its coordinator, not on the tab left open before.
+  const pageProjectId = route.name === "project" ? route.projectId : undefined;
+  // Coming back to the same project from one of its threads keeps the tab.
+  const lastPage = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!pageProjectId) return;
+    if (lastPage.current && lastPage.current !== pageProjectId) setProjectTab("chat");
+    lastPage.current = pageProjectId;
+  }, [pageProjectId]);
+
   if (state.status === "unauthorized") return <Unauthorized />;
 
   const thread: Thread | undefined =
@@ -97,6 +136,10 @@ export function App() {
     state.projects.find((p) => p.id === (thread?.projectId ?? pickedProjectId)) ??
     state.projects[0];
 
+  // On a project's page, the conversation is its coordinator's, once it has one.
+  const coordinator = routeProject ? coordinatorOf(state.threads, routeProject.id) : undefined;
+  /** The thread the composer writes to. */
+  const spoken = thread ?? coordinator;
   const pickProject = (id: string) => {
     setPickedProjectId(id);
     writePref("project", id);
@@ -106,12 +149,20 @@ export function App() {
     setReviewOpen(false);
     navigate(next);
   };
+  /** Opens a thread where it lives: a coordinator on its project's page. */
+  const openThread = (id: string) => {
+    const target = state.threads.find((t) => t.id === id);
+    if (target?.kind === "coordinator") {
+      setProjectTab("chat");
+      go({ name: "project", projectId: target.projectId });
+    } else go({ name: "thread", threadId: id });
+  };
   const togglePin = (id: string, pinned: boolean) =>
     connection.send({ type: "thread.setPinned", threadId: id, pinned });
   const exportThread = () => {
-    const items = thread && state.items[thread.id];
-    if (!thread || !items) return;
-    downloadMarkdown(exportFileName(thread.title), threadMarkdown(thread, items, state.agents));
+    const items = spoken && state.items[spoken.id];
+    if (!spoken || !items) return;
+    downloadMarkdown(exportFileName(spoken.title), threadMarkdown(spoken, items, state.agents));
   };
   const setArchived = (id: string, archived: boolean) =>
     connection.send({ type: "thread.setArchived", threadId: id, archived });
@@ -222,7 +273,7 @@ export function App() {
         </Suspense>
       ) : (
         <Sidebar
-          state={state}
+          state={listed}
           activeThreadId={thread?.id}
           activeProjectId={project?.id}
           onPlanner={route.name === "planner"}
@@ -372,27 +423,85 @@ export function App() {
           )
         ) : route.name === "project" ? (
           routeProject ? (
-            <ProjectPage
-              // Another project starts afresh: a name being typed never follows to the next.
-              key={routeProject.id}
-              project={routeProject}
-              threads={state.threads}
-              agents={state.agents}
-              ready={state.ready}
-              onOpenThread={(id) => go({ name: "thread", threadId: id })}
-              onNewThread={() => {
-                pickProject(routeProject.id);
-                go({ name: "home" });
-              }}
-              onTogglePin={togglePin}
-              onSetResolved={setArchived}
-              onDeleteThread={askDeleteThread}
-              onOpenPlanner={() => {
-                pickProject(routeProject.id);
-                go({ name: "planner" });
-              }}
-              onRemoveProject={() => askRemoveProject(routeProject.id)}
-            />
+            (() => {
+              const page = (panel: boolean) => (
+                <ProjectPage
+                  // Another project starts afresh: a name being typed never follows to the next.
+                  key={routeProject.id}
+                  panel={panel}
+                  project={routeProject}
+                  threads={state.threads}
+                  agents={state.agents}
+                  ready={state.ready}
+                  onOpenThread={(id) => go({ name: "thread", threadId: id })}
+                  onNewThread={() => {
+                    pickProject(routeProject.id);
+                    go({ name: "home" });
+                  }}
+                  onTogglePin={togglePin}
+                  onSetResolved={setArchived}
+                  onDeleteThread={askDeleteThread}
+                  onOpenPlanner={() => {
+                    pickProject(routeProject.id);
+                    go({ name: "planner" });
+                  }}
+                  onRemoveProject={() => askRemoveProject(routeProject.id)}
+                  onStartCoordinator={
+                    coordinator
+                      ? undefined
+                      : async (agentId) => {
+                          await connection.request({
+                            type: "coordinator.open",
+                            requestId: newId(),
+                            projectId: routeProject.id,
+                            agentId,
+                          });
+                        }
+                  }
+                />
+              );
+              if (!coordinator) return page(false);
+              const chat = (
+                <ThreadView
+                  key={coordinator.id}
+                  thread={coordinator}
+                  items={state.items[coordinator.id]}
+                  agents={state.agents}
+                  threads={state.threads}
+                  onOpenThread={(id) => go({ name: "thread", threadId: id })}
+                />
+              );
+              // Wide enough: the conversation, the threads beside it. Else one at a time.
+              if (wide) {
+                return (
+                  <div className="pp-split">
+                    {chat}
+                    {page(true)}
+                  </div>
+                );
+              }
+              return (
+                <div className="pp-stack">
+                  <div className="pp-tabs" role="tablist" aria-label="Page du projet">
+                    <button
+                      role="tab"
+                      aria-selected={projectTab === "chat"}
+                      onClick={() => setProjectTab("chat")}
+                    >
+                      Coordinateur
+                    </button>
+                    <button
+                      role="tab"
+                      aria-selected={projectTab === "threads"}
+                      onClick={() => setProjectTab("threads")}
+                    >
+                      Fils
+                    </button>
+                  </div>
+                  {projectTab === "chat" ? chat : page(false)}
+                </div>
+              );
+            })()
           ) : (
             <div className="view">
               <div className="home">
@@ -421,38 +530,41 @@ export function App() {
         ) : (
           <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
         )}
-        {route.name !== "settings" && route.name !== "planner" && (
-          <div className="dock">
-            {thread?.archived ? (
-              <div className="archived-bar" role="status">
-                <IconArchive />
-                <span>Cette discussion est résolue.</span>
-                <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
-                  Rouvrir
-                </button>
-              </div>
-            ) : (
-              <Composer
-                key={thread?.id ?? "new"}
-                agents={state.agents}
-                favorites={state.favorites}
-                thread={thread}
-                project={project}
-                onNewProject={() => setCreatingProject(true)}
-                onCreated={(id) => navigate({ name: "thread", threadId: id })}
-                onExport={exportThread}
-                onSearch={() => setSearchOpen(true)}
-                onRequests={() => setRequestsOpen(true)}
-                onConnections={() => setConnectionsOpen(true)}
-                onArchive={() => thread && setArchived(thread.id, true)}
-                onDelete={() => thread && askDeleteThread(thread)}
-                onTeam={(task) => setTeamTask(task)}
-                onSchedule={(text) => setScheduling({ text })}
-                onSettings={() => go({ name: "settings", section: "general" })}
-              />
-            )}
-          </div>
-        )}
+        {route.name !== "settings" &&
+          route.name !== "planner" &&
+          // Under the « Fils » tab the coordinator's conversation is out of sight: so is its composer.
+          !(coordinator && !wide && projectTab === "threads") && (
+            <div className={`dock${coordinator && wide ? " beside-threads" : ""}`}>
+              {thread?.archived ? (
+                <div className="archived-bar" role="status">
+                  <IconArchive />
+                  <span>Cette discussion est résolue.</span>
+                  <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
+                    Rouvrir
+                  </button>
+                </div>
+              ) : (
+                <Composer
+                  key={spoken?.id ?? "new"}
+                  agents={state.agents}
+                  favorites={state.favorites}
+                  thread={spoken}
+                  project={project}
+                  onNewProject={() => setCreatingProject(true)}
+                  onCreated={(id) => navigate({ name: "thread", threadId: id })}
+                  onExport={exportThread}
+                  onSearch={() => setSearchOpen(true)}
+                  onRequests={() => setRequestsOpen(true)}
+                  onConnections={() => setConnectionsOpen(true)}
+                  onArchive={() => spoken && setArchived(spoken.id, true)}
+                  onDelete={() => spoken && askDeleteThread(spoken)}
+                  onTeam={(task) => setTeamTask(task)}
+                  onSchedule={(text) => setScheduling({ text })}
+                  onSettings={() => go({ name: "settings", section: "general" })}
+                />
+              )}
+            </div>
+          )}
       </main>
       {reviewOpen && thread?.workspace && !thread.archived && (
         <ReviewPanel
@@ -521,7 +633,7 @@ export function App() {
           onOpenThread={(id, itemId) => {
             setRequestsOpen(false);
             focusItem(id, itemId);
-            go({ name: "thread", threadId: id });
+            openThread(id);
           }}
           onClose={() => setRequestsOpen(false)}
         />
@@ -534,12 +646,12 @@ export function App() {
       </Presence>
       {searchOpen && (
         <QuickSearch
-          state={state}
+          state={listed}
           actions={quickActions}
           onClose={() => setSearchOpen(false)}
           onOpenThread={(id, itemId) => {
             if (itemId) focusItem(id, itemId);
-            go({ name: "thread", threadId: id });
+            openThread(id);
           }}
           onPickProject={(id) => {
             pickProject(id);
