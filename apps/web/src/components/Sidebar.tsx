@@ -14,18 +14,19 @@ import {
 } from "../sidebar-tree.ts";
 import {
   IconArchive,
-  IconBoard,
   IconChevron,
   IconClock,
   IconClose,
   IconCompose,
   IconFolder,
+  IconList,
   IconGear,
   IconMore,
   IconPin,
   IconPlug,
   IconPlus,
   IconSearch,
+  IconSidebar,
   IconShield,
 } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
@@ -71,6 +72,8 @@ export function Sidebar(props: {
   onRemoveProject: (id: string) => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
+  /** Folds the side bar away, on a computer. */
+  onCollapse: () => void;
 }) {
   const { state } = props;
   const available = state.agents.filter((a) => a.available).length;
@@ -399,7 +402,15 @@ export function Sidebar(props: {
           } MCP`}
           onClick={props.onOpenConnections}
         >
-          <IconPlug size={17} />
+          <IconPlug size={16} />
+        </button>
+        <button
+          className="ib side-fold"
+          aria-label="Masquer la barre latérale"
+          title="Masquer la barre latérale"
+          onClick={props.onCollapse}
+        >
+          <IconSidebar />
         </button>
       </div>
       <nav className="nav">
@@ -409,10 +420,7 @@ export function Sidebar(props: {
             <span className="aux badge">{state.requests.length}</span>
           </button>
         )}
-        <button
-          className={!props.activeThreadId && !props.onPlanner && !props.onProject ? "on" : ""}
-          onClick={props.onNewThread}
-        >
+        <button onClick={props.onNewThread}>
           <IconCompose />
           Nouvelle discussion
         </button>
@@ -430,7 +438,7 @@ export function Sidebar(props: {
           aria-current={props.onPlanner ? "page" : undefined}
           onClick={props.onOpenPlanner}
         >
-          <IconBoard />
+          <IconList />
           Planner
         </button>
       </nav>

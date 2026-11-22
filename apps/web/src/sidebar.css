@@ -283,3 +283,92 @@
     transform: translateY(-100%);
   }
 }
+
+/* Measured on the mockup (1440 px): 40 px rows, 14.5 px text in full ink, 12 px between
+   icon and text, a 19 px wordmark, two 28 px buttons at the top. */
+.brand {
+  gap: 9px;
+  font-size: 19px;
+  letter-spacing: -0.045em;
+}
+.brand b {
+  font-weight: 650;
+  letter-spacing: -0.05em;
+}
+.brand svg {
+  width: 26px;
+  height: 26px;
+}
+.side-top {
+  gap: 2px;
+}
+.side-top .brand {
+  margin-right: auto;
+}
+.side-top .ib {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+.nav {
+  gap: 0;
+}
+.nav button,
+.thr {
+  gap: 12px;
+  border-radius: 10px;
+  font-size: 14.5px;
+  color: var(--fg);
+}
+.nav button {
+  height: 40px;
+}
+.thr {
+  min-height: 40px;
+}
+.nav button svg {
+  color: var(--muted);
+}
+.nav button.inbrow svg {
+  color: var(--muted);
+}
+.nav .aux.badge {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+  font-size: 11.5px;
+}
+.side-foot .set-gear {
+  width: 34px;
+  height: 34px;
+}
+.side-search {
+  height: 36px;
+  font-size: 13px;
+  gap: 6px;
+  padding: 0 6px 0 10px;
+}
+
+/* Folded side bar, on a computer: the conversation takes the whole width. */
+.open-side {
+  flex: none;
+}
+@media (min-width: 861px) {
+  .app.side-off {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app.side-off > .side {
+    display: none;
+  }
+}
+/* With the Code panel docked on the right, it keeps its column. */
+@media (min-width: 1181px) {
+  .app.side-off.reviewing {
+    grid-template-columns: minmax(0, 1fr) minmax(440px, 46%);
+  }
+}
+@media (max-width: 860px) {
+  .side-fold,
+  .open-side {
+    display: none;
+  }
+}
