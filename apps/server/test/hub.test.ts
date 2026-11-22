@@ -1058,13 +1058,14 @@ describe("agents left alone", () => {
     const second = await start("Deux");
     expect(hub.liveAgents).toBe(2);
     const third = await start("Trois");
-    expect(hub.liveAgents).toBe(2);
+    // The one paused counts until its process is gone.
+    await expect.poll(() => hub.liveAgents).toBe(2);
 
     // The first, left alone longest, was the one stopped: it comes back on its next message.
     hub.send(first, "Encore");
     await hub.whenIdle(first);
     expect(store.getThread(first)).toMatchObject({ status: "idle" });
-    expect(hub.liveAgents).toBe(2);
+    await expect.poll(() => hub.liveAgents).toBe(2);
     for (const id of [second, third]) expect(store.getThread(id)?.status).toBe("idle");
   });
 });

@@ -227,6 +227,7 @@ export class AgentCatalog {
     if (!agents.some((a) => a.id === agentId))
       throw new Error("Cet agent n'a pas été ajouté par toi.");
     this.discoveries.get(agentId)?.stop.abort();
+    this.discoveryErrors.delete(agentId);
     this.saveCustomAgents(agents.filter((a) => a.id !== agentId));
   }
 

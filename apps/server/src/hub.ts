@@ -151,6 +151,8 @@ export class Hub {
   /** Agents being stopped for a pause: the thread's next agent starts once they are gone. */
   private readonly pausing = new Map<string, Promise<void>>();
   private readonly idleMs: number;
+  private useSeq = 0;
+  private closed = false;
   private readonly maxLiveAgents: number;
 
   /** The user's home folder, where agents keep their personal skills. */
@@ -752,7 +754,8 @@ export class Hub {
 
   /** How many agents run for threads right now, starting ones included. */
   get liveAgents(): number {
-    return this.sessions.size;
+    // Those being paused still run until their process is gone.
+    return this.sessions.size + this.pausing.size;
   }
 
   /** Whether the thread's agent has nothing under way and can be stopped. */
@@ -774,11 +777,12 @@ export class Hub {
   /** A turn has ended: the agent waits, and is stopped if nothing comes. */
   private leftIdle(threadId: string): void {
     this.clearIdle(threadId);
-    if (!this.sessions.has(threadId)) {
+    if (this.closed || !this.sessions.has(threadId)) {
       this.lastUsed.delete(threadId);
       return;
     }
-    this.lastUsed.set(threadId, Date.now());
+    // A counter rather than the time: two turns ending in the same millisecond keep an order.
+    this.lastUsed.set(threadId, ++this.useSeq);
     const timer = setTimeout(() => {
       this.idleTimers.delete(threadId);
       this.pause(threadId);
@@ -851,6 +855,8 @@ export class Hub {
     this.clearIdle(threadId);
     this.lastUsed.delete(threadId);
     await session?.then((s) => s.close()).catch(() => undefined);
+    // An agent being paused is gone too before its files change (Windows holds them open).
+    await this.pausing.get(threadId);
     this.store.setSessionId(threadId, null);
   }
 
@@ -921,6 +927,7 @@ export class Hub {
 
   /** Stops every agent and resolves once their turns have ended. */
   async close(): Promise<void> {
+    this.closed = true;
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
     await this.recovered;
@@ -941,6 +948,10 @@ export class Hub {
     );
     await Promise.all(this.turns.values());
     await Promise.all([...this.steps].map((step) => step.catch(() => undefined)));
+    // A turn that ended meanwhile armed no timer (closed), but leaves nothing behind either.
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
+    this.lastUsed.clear();
     // Text an agent sent after its turn ended is still written down.
     for (const threadId of this.drafts.keys()) this.flushText(threadId);
   }
@@ -1106,6 +1117,9 @@ export class Hub {
         onExit: (reason) => {
           if (!owns()) return;
           this.sessions.delete(thread.id);
+          // An idle agent that quits on its own leaves no timer or place in the queue.
+          this.clearIdle(thread.id);
+          this.lastUsed.delete(thread.id);
           this.settlePermissions(thread.id);
           if (reason && this.turns.has(thread.id)) {
             this.updateThread(thread.id, { status: "error", error: reason });
@@ -1265,7 +1279,8 @@ export class Hub {
 
   /** The thread's timeline, streamed text included. */
   private items(threadId: string): Item[] {
-    this.flushText(threadId);
+    // Written down, but kept open: the agent may still be adding to it.
+    this.flushText(threadId, false);
     return this.store.listItems(threadId);
   }
 
