@@ -90,6 +90,8 @@ describe("due days", () => {
   it("reads back the day it was given", () => {
     expect(dueDay(dayToDue("2026-11-30")!)).toBe("2026-11-30");
     expect(dayToDue("demain")).toBeNull();
+    // The year as it is being typed in a date field.
+    expect(dayToDue("0002-12-01")).toBeNull();
     expect(dueDay(undefined)).toBe("");
   });
 

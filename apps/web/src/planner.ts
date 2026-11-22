@@ -99,10 +99,14 @@ export function dueDay(due: number | undefined): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** A date field's day as a due date: noon, so that no time zone moves it to the day before. */
+/**
+ * A date field's day as a due date: noon, so that no time zone moves it to the day before.
+ * Null for what is not a day, or not one yet.
+ */
 export function dayToDue(day: string): number | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day);
-  if (!match) return null;
+  // A year being typed (« 0002 ») is not a day yet.
+  if (!match || Number(match[1]) < 1970) return null;
   return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12).getTime();
 }
 
