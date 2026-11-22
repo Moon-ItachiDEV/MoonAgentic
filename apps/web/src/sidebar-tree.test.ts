@@ -46,10 +46,10 @@ describe("conversationsByProject", () => {
 });
 
 describe("projectOpen", () => {
-  it("unfolds the only project, keeps the user's choice, and always shows the open thread", () => {
-    expect(projectOpen(undefined, true, false)).toBe(true);
-    expect(projectOpen(undefined, false, false)).toBe(false);
-    expect(projectOpen(false, true, false)).toBe(false);
-    expect(projectOpen(false, true, true)).toBe(true);
+  it("unfolds the only project, and keeps the user's choice", () => {
+    expect(projectOpen(undefined, true)).toBe(true);
+    expect(projectOpen(undefined, false)).toBe(false);
+    expect(projectOpen(false, true)).toBe(false);
+    expect(projectOpen(true, false)).toBe(true);
   });
 });

@@ -45,12 +45,8 @@ export function conversationsByProject(threads: Thread[]): Map<string, Thread[]>
 
 /**
  * Whether a project is unfolded: as the user left it, else when it is the only one (the
- * sidebar would look empty otherwise), and always while the open thread is in it.
+ * sidebar would look empty otherwise). Opening a thread unfolds its project once.
  */
-export function projectOpen(
-  saved: boolean | undefined,
-  onlyProject: boolean,
-  holdsActive: boolean,
-): boolean {
-  return holdsActive || (saved ?? onlyProject);
+export function projectOpen(saved: boolean | undefined, onlyProject: boolean): boolean {
+  return saved ?? onlyProject;
 }

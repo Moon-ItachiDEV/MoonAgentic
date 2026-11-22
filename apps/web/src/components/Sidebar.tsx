@@ -1,6 +1,6 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { readPref, writePref } from "../prefs.ts";
 import { RECENT, recentAlwaysShown } from "../recent.ts";
 import {
@@ -87,6 +87,19 @@ export function Sidebar(props: {
   const active = live.find((t) => t.id === props.activeThreadId);
   const activeLead =
     active?.parentId && members.has(active.parentId) ? active.parentId : active?.id;
+  // Opening a thread unfolds its project and its team, once: a chevron folds them again.
+  const activeProject = active?.projectId;
+  useEffect(() => {
+    if (activeProject && folds[activeProject] === false) setFold(activeProject, true);
+    // Its members may come later, as a team starts: the lead is unfolded beforehand.
+    if (activeLead) {
+      setUnfolded(
+        (now) => new Set([...now, ...["", "pin:", "recent:"].map((k) => k + activeLead)]),
+      );
+    }
+    // Only when the open thread changes, not on every fold.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject, activeLead]);
   const known = new Set(state.projects.map((p) => p.id));
   const pinned = [...byProject.values()].flat().filter((t) => t.pinned);
   // Across projects, only when there are several; a thread whose project is gone too.
@@ -99,7 +112,7 @@ export function Sidebar(props: {
   // A team on one line, its members folded under it unless asked or one of them is open.
   const tree = (t: Thread, prefix: string) => {
     const team = members.get(t.id) ?? [];
-    const open = team.length > 0 && (unfolded.has(`${prefix}${t.id}`) || activeLead === t.id);
+    const open = team.length > 0 && unfolded.has(`${prefix}${t.id}`);
     return [
       row(t, {
         status: lineStatus(t, open ? [] : team),
@@ -154,8 +167,9 @@ export function Sidebar(props: {
   );
 
   const project = (p: State["projects"][number]) => {
-    const all = (byProject.get(p.id) ?? []).filter((t) => !t.pinned);
-    const open = projectOpen(folds[p.id], state.projects.length === 1, active?.projectId === p.id);
+    // Pinned ones too: « Épinglés » is a shortcut, the project still holds them.
+    const all = byProject.get(p.id) ?? [];
+    const open = projectOpen(folds[p.id], state.projects.length === 1);
     const { always, foldable } = recentAlwaysShown(all, members, props.activeThreadId);
     const more = unfolded.has(`more:${p.id}`);
     const count = byProject.get(p.id)?.length ?? 0;
