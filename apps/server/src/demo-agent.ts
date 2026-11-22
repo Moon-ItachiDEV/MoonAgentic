@@ -89,6 +89,8 @@ const app = acp
     };
   })
   .onRequest("session/new", ({ params, client }) => {
+    // Stands for an agent whose user has not signed in with its own tool yet.
+    if (modelStyle === "auth") throw acp.RequestError.authRequired();
     const sessionId = randomUUID();
     mcpNames.set(
       sessionId,
@@ -187,13 +189,20 @@ const app = acp
     };
 
     if (ask.includes("boom")) throw new Error("Le démo a planté exprès.");
-    const usage = async (tokens: number) => {
+    const usage = async (tokens: number, priced = true) => {
       used.set(sessionId, tokens);
-      await update({ sessionUpdate: "usage_update", used: tokens, size: CONTEXT_SIZE });
+      // Priced like a real agent, which says what the session has cost so far.
+      await update({
+        sessionUpdate: "usage_update",
+        used: tokens,
+        size: CONTEXT_SIZE,
+        ...(priced ? { cost: { amount: tokens / 100_000, currency: "USD" } } : {}),
+      });
     };
     if (ask.trim() === "/compact") {
       await say("Contexte compacté.", "agent_message_chunk");
-      await usage(3_000);
+      // Only the tokens this time, as some agents do.
+      await usage(3_000, false);
       return { stopReason: "end_turn" };
     }
     await usage((used.get(sessionId) ?? 0) + 24_000);

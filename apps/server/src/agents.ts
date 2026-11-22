@@ -1,8 +1,9 @@
-import { accessSync, constants, statSync } from "node:fs";
+import { accessSync, constants, readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { AgentInfo } from "@moonagentic/protocol";
+import type { AgentInfo, CustomAgentInput } from "@moonagentic/protocol";
 
 export interface AgentLaunch {
   command: string;
@@ -11,6 +12,13 @@ export interface AgentLaunch {
   authMethodId?: string;
   /** How the user signs in with the agent's own tool, shown when the agent asks for it. */
   login?: string;
+  /** What starts it, as shown in Connexions, when the command alone says little. */
+  label?: string;
+}
+
+/** An agent the user added, as kept in the settings. */
+export interface CustomAgent extends CustomAgentInput {
+  id: string;
 }
 
 interface AgentDefinition {
@@ -21,6 +29,7 @@ interface AgentDefinition {
   preferredModel?: RegExp;
   /** Returns how to start the agent, or a hint explaining what is missing. */
   resolve(): AgentLaunch | { hint: string };
+  custom?: boolean;
 }
 
 export function findOnPath(command: string, envPath = process.env.PATH ?? ""): string | undefined {
@@ -61,9 +70,58 @@ function nativeAcp(
 
 /** Runs an ACP adapter published on npm with this Node, from its package's entry file. */
 function nodeAdapter(pkg: string): AgentLaunch {
-  const main = path.join(path.dirname(require.resolve(`${pkg}/package.json`)), "dist/index.js");
-  return { command: process.execPath, args: [main] };
+  const manifest = require.resolve(`${pkg}/package.json`);
+  const main = path.join(path.dirname(manifest), "dist/index.js");
+  let version = "";
+  try {
+    version = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: string }).version ?? "";
+  } catch {
+    // shown without its version
+  }
+  return { command: process.execPath, args: [main], label: `${pkg} ${version}`.trim() };
 }
+
+/**
+ * Finds a command given by name (on the PATH) or by path, `~` standing for the home folder.
+ * On Windows, `.exe`, `.cmd` and `.bat` may be left out, as on the PATH.
+ */
+export function findCommand(command: string, home = os.homedir()): string | undefined {
+  const named = /^~(?=$|[\\/])/.test(command) ? path.join(home, command.slice(1)) : command;
+  if (!/[\\/]/.test(named)) return findOnPath(named);
+  const extensions = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+  for (const ext of extensions) {
+    try {
+      accessSync(named + ext, constants.X_OK);
+      if (statSync(named + ext).isFile()) return named + ext;
+    } catch {
+      // not this one
+    }
+  }
+  return undefined;
+}
+
+/** Two letters for an agent's badge, from its name. */
+export function shortName(name: string): string {
+  const words = name.trim().split(/\s+/);
+  const letters =
+    words.length > 1
+      ? `${words[0]?.[0] ?? ""}${words[1]?.[0] ?? ""}`
+      : (words[0] ?? "").slice(0, 2);
+  return letters ? letters[0]!.toUpperCase() + letters.slice(1).toLowerCase() : "?";
+}
+
+const customDefinition = (agent: CustomAgent): AgentDefinition => ({
+  id: agent.id,
+  name: agent.name,
+  short: shortName(agent.name),
+  custom: true,
+  resolve: () => {
+    const command = findCommand(agent.command);
+    return command
+      ? { command, args: agent.args }
+      : { hint: `Commande introuvable sur cette machine : ${agent.command}` };
+  },
+});
 
 const definitions: AgentDefinition[] = [
   {
@@ -111,6 +169,7 @@ const demoAgent = (id: string, name: string, short: string): AgentDefinition => 
   resolve: () => ({
     command: process.execPath,
     args: [fileURLToPath(new URL("./demo-agent.ts", import.meta.url))],
+    label: "agent de démo intégré à MoonAgentic",
   }),
 });
 
@@ -121,21 +180,41 @@ const demoAgents = [
 ];
 
 export class Agents {
-  private readonly all: AgentDefinition[];
+  private readonly builtIn: AgentDefinition[];
+  private all: AgentDefinition[];
 
   constructor(options: { demo: boolean }) {
-    this.all = options.demo ? [...definitions, ...demoAgents] : definitions;
+    this.builtIn = options.demo ? [...definitions, ...demoAgents] : definitions;
+    this.all = this.builtIn;
+  }
+
+  /** Replaces the agents the user added. */
+  setCustom(agents: CustomAgent[]): void {
+    this.all = [...this.builtIn, ...agents.map(customDefinition)];
   }
 
   list(): AgentInfo[] {
     return this.all.map((agent) => {
       const launch = agent.resolve();
+      if ("hint" in launch) {
+        return {
+          id: agent.id,
+          name: agent.name,
+          short: agent.short,
+          available: false,
+          hint: launch.hint,
+          ...(agent.custom ? { custom: true } : {}),
+        };
+      }
+      const command = launch.label ?? [launch.command, ...launch.args].join(" ");
       return {
         id: agent.id,
         name: agent.name,
         short: agent.short,
-        available: !("hint" in launch),
-        ...("hint" in launch ? { hint: launch.hint } : {}),
+        available: true,
+        command,
+        ...(launch.login ? { login: launch.login } : {}),
+        ...(agent.custom ? { custom: true } : {}),
       };
     });
   }

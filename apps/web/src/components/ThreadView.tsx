@@ -125,7 +125,7 @@ function FeedItem({
     case "user":
       return <UserMessage item={item} thread={thread} />;
     case "handoff": {
-      const name = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
+      const name = (id: string) => agents.find((a) => a.id === id)?.name ?? "Agent retiré";
       return (
         <div className="handoff">
           <AgentBadge agent={agents.find((a) => a.id === item.to)} small />
@@ -139,7 +139,7 @@ function FeedItem({
           {showBy && (
             <div className="by">
               <AgentBadge agent={agent} small />
-              {agent?.name ?? thread.agentId}
+              {agent?.name ?? "Agent retiré"}
             </div>
           )}
           <Markdown text={item.text} />

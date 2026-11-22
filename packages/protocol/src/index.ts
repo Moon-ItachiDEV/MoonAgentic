@@ -31,6 +31,40 @@ export interface AgentInfo {
   settings?: AgentSetting[];
   /** The `/` commands the agent listed the last time one of its sessions started. */
   commands?: AgentCommand[];
+  /** The program that starts it, once found on this machine. */
+  command?: string;
+  /** How to sign in with the agent's own tool, outside MoonAgentic. */
+  login?: string;
+  /** Added by the user in Connexions rather than built in. */
+  custom?: boolean;
+  /** What the last check found: the agent answered and opened a session, or why not. */
+  check?: AgentCheck;
+}
+
+export interface AgentCheck {
+  at: number;
+  ok: boolean;
+  /** The agent's own name and version, as it gave them when it started. */
+  version?: string;
+  /** True when the agent said it needs the user to sign in first. */
+  signInNeeded?: boolean;
+  error?: string;
+}
+
+/** An ACP agent the user added: a command that speaks ACP on its standard input and output. */
+export interface CustomAgentInput {
+  name: string;
+  command: string;
+  args: string[];
+}
+
+/** A permission request waiting for an answer, in any thread. */
+export interface PendingRequest {
+  threadId: string;
+  itemId: string;
+  title: string;
+  options: PermissionOption[];
+  at: number;
 }
 
 /** A `/` command the agent offers, sent to it as the start of a message. */
@@ -82,6 +116,8 @@ export interface AgentSetting {
 export interface ContextUsage {
   used: number;
   size: number;
+  /** What the session has cost so far, when the agent says. */
+  cost?: { amount: number; currency: string };
 }
 
 /**
@@ -223,6 +259,7 @@ export type Favorites = Record<AgentId, string[]>;
 
 export interface Snapshot {
   favorites: Favorites;
+  requests: PendingRequest[];
   mcpServers: McpServerInfo[];
   agents: AgentInfo[];
   projects: Project[];
@@ -233,6 +270,8 @@ export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "agents"; agents: AgentInfo[] }
   | { type: "favorites"; favorites: Favorites }
+  /** Every permission request still waiting, after one is added or answered. */
+  | { type: "requests"; requests: PendingRequest[] }
   | { type: "mcpServers"; servers: McpServerInfo[] }
   | { type: "project"; project: Project }
   | { type: "thread"; thread: Thread }
@@ -375,8 +414,21 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("mcp.add"), requestId: id, server: McpServerInput }),
   z.object({ type: z.literal("mcp.setEnabled"), id, enabled: z.boolean() }),
   z.object({ type: z.literal("mcp.remove"), id }),
-  /** Starts the agent briefly to learn which models it offers. */
-  z.object({ type: z.literal("agent.discover"), agentId: id, projectId: id }),
+  /**
+   * Starts the agent briefly to learn which models it offers, and whether it is ready.
+   * Without a project, it starts in the user's home folder.
+   */
+  z.object({ type: z.literal("agent.discover"), agentId: id, projectId: id.optional() }),
+  z.object({
+    type: z.literal("agent.addCustom"),
+    requestId: id,
+    agent: z.object({
+      name: z.string().trim().min(1).max(60),
+      command: z.string().trim().min(1).max(4096),
+      args: z.array(z.string().max(4096)).max(50),
+    }),
+  }),
+  z.object({ type: z.literal("agent.removeCustom"), agentId: id }),
   z.object({
     type: z.literal("permission.respond"),
     threadId: id,

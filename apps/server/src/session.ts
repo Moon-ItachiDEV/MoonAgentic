@@ -144,7 +144,12 @@ function settingsOf(state: SessionState): AgentSetting[] {
 const STDERR_TAIL = 4000;
 const KILL_GRACE_MS = 3000;
 /** ACP's "Authentication required" error code. */
-const AUTH_REQUIRED = -32000;
+export const AUTH_REQUIRED = -32000;
+
+/** True when starting the agent failed because the user must sign in first. */
+export const needsSignIn = (error: unknown): boolean =>
+  (error as { cause?: { code?: unknown } } | null)?.cause?.code === AUTH_REQUIRED ||
+  (error as { code?: unknown } | null)?.code === AUTH_REQUIRED;
 
 /** One agent process and its ACP session, owned by one thread. */
 export class AgentSession {
@@ -155,6 +160,8 @@ export class AgentSession {
   readonly cwd: string;
   /** What a message may carry besides text, as the agent told when it started. */
   readonly promptCapabilities: acp.PromptCapabilities;
+  /** The agent's name and version, as it gave them when it started. */
+  readonly agentVersion: string | undefined;
   private readonly connection: acp.ClientConnection;
   private readonly kill: () => Promise<void>;
   private readonly state: SessionState;
@@ -167,11 +174,13 @@ export class AgentSession {
     fresh: boolean;
     cwd: string;
     promptCapabilities: acp.PromptCapabilities;
+    agentVersion: string | undefined;
   }) {
     this.sessionId = options.sessionId;
     this.fresh = options.fresh;
     this.cwd = options.cwd;
     this.promptCapabilities = options.promptCapabilities;
+    this.agentVersion = options.agentVersion;
     this.connection = options.connection;
     this.kill = options.kill;
     this.state = options.state;
@@ -398,6 +407,9 @@ export class AgentSession {
         fresh,
         cwd,
         promptCapabilities: caps?.promptCapabilities ?? {},
+        agentVersion: init.agentInfo
+          ? `${init.agentInfo.title ?? init.agentInfo.name} ${init.agentInfo.version}`.trim()
+          : undefined,
       });
     };
 

@@ -3,6 +3,7 @@ import type {
   Favorites,
   Item,
   McpServerInfo,
+  PendingRequest,
   Project,
   ReviewFile,
   ServerMessage,
@@ -25,6 +26,8 @@ export interface State {
   ready: boolean;
   agents: AgentInfo[];
   favorites: Favorites;
+  /** Permission requests waiting in every thread. */
+  requests: PendingRequest[];
   mcpServers: McpServerInfo[];
   projects: Project[];
   threads: Thread[];
@@ -43,6 +46,8 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, agents: message.agents };
     case "favorites":
       return { ...state, favorites: message.favorites };
+    case "requests":
+      return { ...state, requests: message.requests };
     case "mcpServers":
       return { ...state, mcpServers: message.servers };
     case "review":
@@ -106,6 +111,7 @@ export const initialState: State = {
   ready: false,
   agents: [],
   favorites: {},
+  requests: [],
   mcpServers: [],
   projects: [],
   threads: [],

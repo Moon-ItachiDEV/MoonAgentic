@@ -55,6 +55,10 @@ export function Composer(props: {
   onExport: () => void;
   /** Opens the quick search. */
   onSearch: () => void;
+  /** Opens what the agents wait for. */
+  onRequests: () => void;
+  /** Opens the agents' connections. */
+  onConnections: () => void;
 }) {
   const { agents, thread, project } = props;
   const [text, setText] = useState("");
@@ -283,6 +287,12 @@ export function Composer(props: {
       case "search":
         props.onSearch();
         return;
+      case "requests":
+        props.onRequests();
+        return;
+      case "connections":
+        props.onConnections();
+        return;
     }
   };
 
@@ -459,11 +469,14 @@ export function Composer(props: {
       <div className="cbar">
         <button
           className="agentchip"
-          disabled={!agent?.available || (!!thread && running)}
+          // In a thread whose agent is gone, the picker is how it goes to another one.
+          disabled={thread ? running : !agent?.available}
           title={
             thread && running
               ? "L'agent et ses réglages se changent entre deux réponses"
-              : undefined
+              : thread && !agent?.available
+                ? "Cet agent n'est plus disponible : choisis-en un autre pour continuer"
+                : undefined
           }
           aria-haspopup="menu"
           aria-expanded={pickerOpen}
@@ -471,7 +484,7 @@ export function Composer(props: {
         >
           <AgentBadge agent={agent} />
           <span className="lbl">
-            {agent?.name ?? "Aucun agent installé"}
+            {agent?.name ?? (thread ? "Agent retiré" : "Aucun agent installé")}
             {modeName && <span className="sep"> · </span>}
             {modeName && <span className="mode">{modeName}</span>}
             {modelName && <span className="sep"> · </span>}

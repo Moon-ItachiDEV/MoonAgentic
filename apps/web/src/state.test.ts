@@ -18,7 +18,14 @@ describe("client state", () => {
   it("takes the snapshot, then keeps the newest thread first", () => {
     let state = reduce(initialState, {
       type: "snapshot",
-      snapshot: { favorites: {}, mcpServers: [], agents: [], projects: [], threads: [thread("a")] },
+      snapshot: {
+        favorites: {},
+        requests: [],
+        mcpServers: [],
+        agents: [],
+        projects: [],
+        threads: [thread("a")],
+      },
     });
     expect(state.ready).toBe(true);
     state = reduce(state, { type: "thread", thread: thread("b") });

@@ -57,12 +57,19 @@ Les agents de code modernes (**Claude Code**, **Codex**, **Antigravity**, **Curs
 
 ### Composer : `/` commandes, `@` fichiers, `$` skills, épingles et Ctrl K
 
-- **`/` commandes** : tape `/` en début de message pour voir toutes les commandes, avec qui les propose. Celles de MoonAgentic agissent sur l’app (`/plan`, `/agent`, `/modeles`, `/epingler`, `/exporter`, `/chercher`), celles du projet viennent de `.moonagentic/commands/<nom>.md` (le texte du fichier, `$ARGUMENTS` prenant ce qui suit la commande), celles de l’agent sont celles qu’il annonce par ACP (`/compact`, `/init`…), et `/review`, `/test`, `/init` sont des messages tout prêts.
+- **`/` commandes** : tape `/` en début de message pour voir toutes les commandes, avec qui les propose. Celles de MoonAgentic agissent sur l’app (`/plan`, `/agent`, `/modeles`, `/epingler`, `/exporter`, `/chercher`, `/demandes`, `/connexions`), celles du projet viennent de `.moonagentic/commands/<nom>.md` (le texte du fichier, `$ARGUMENTS` prenant ce qui suit la commande), celles de l’agent sont celles qu’il annonce par ACP (`/compact`, `/init`…), et `/review`, `/test`, `/init` sont des messages tout prêts.
 - **Règle de priorité visible** : quand deux commandes portent le même nom, l’ordre est MoonAgentic (actions), puis le projet, puis l’agent, puis les messages tout prêts. La ligne gagnante indique « remplace celle de … ».
 - **`@` fichiers** : cherche dans les fichiers du dossier du fil (worktree compris, fichiers ignorés exclus) et les joint au message. L’agent reçoit le contenu des petits fichiers texte s’il accepte le contexte intégré (`embeddedContext`), un lien `file://` sinon. Aucun chemin ne peut sortir du dossier, liens symboliques compris.
 - **`$` skills** : appelle un skill (`SKILL.md`) trouvé dans `.claude/skills`, `.agents/skills` ou `.codex/skills`, du projet ou de ton dossier personnel. Son fichier est joint au message, donc ça marche avec tous les agents.
 - **Fils épinglés** : épingle un fil depuis la barre latérale, `/epingler` ou Ctrl K ; il reste en haut, sur tous tes appareils.
 - **Recherche rapide (Ctrl K / ⌘ K)** : fils, projets, actions et texte des messages de tous les fils. Choisir un message ouvre son fil et le montre.
+
+### Connexions et demandes en attente
+
+- **Écran Connexions** : chaque agent avec son état (prêt, pas installé, connexion requise, erreur au démarrage), la commande qui le lance, la version qu’il annonce et quand il a été vérifié. **Vérifier** le démarre un instant pour s’en assurer. Les agents passent toujours par leur propre outil et ta propre connexion : MoonAgentic ne voit ni ne garde aucun mot de passe ni jeton.
+- **Tes propres agents** : ajoute n’importe quel agent qui parle ACP en donnant son nom et la commande qui le lance (`mon-agent acp`), retire-le quand tu veux. Un fil dont l’agent n’est plus là peut passer à un autre agent depuis le composer.
+- **À traiter** : toutes les demandes d’accord des agents, tous fils confondus, avec leur nombre dans la barre latérale. Tu réponds sans ouvrir le fil, ou tu l’ouvres d’un clic (`/demandes`, Ctrl K).
+- **Coût par fil** : quand l’agent le donne (`usage_update.cost`), la jauge de contexte affiche ce que le fil a coûté.
 
 ### Espace git par fil (worktrees, revue, PR & checkpoints)
 
@@ -206,6 +213,7 @@ MoonAgentic est construit par jalons successifs :
 - [x] **Jalon 3 — MCP & espace git par fil** : serveurs MCP centralisés (secrets locaux), worktrees par fil, panneau _« À revoir »_, commit, push, PR (`gh` / GitHub _compare_), CI Windows.
 - [x] **Jalon 4 — Pilotage du fil** : mode et raisonnement de l’agent, jauge de contexte et `/compact`, checkpoints _« Revenir ici »_, changement d’agent en cours de fil avec relais d’historique.
 - [x] **Jalon 5 — Commandes et composer** : commandes `/` (MoonAgentic, projet, agent), mentions `@` de fichiers, skills `$`, fils épinglés, recherche Ctrl K, export Markdown, choix des fichiers à l’envoi, premier test de bout en bout dans un vrai navigateur.
+- [x] **Jalon 6a — Connexions** : état de chaque agent (version, connexion requise), agents ACP ajoutés par l’utilisateur, pile « À traiter » de toutes les demandes d’accord, coût par fil, relais depuis un agent devenu indisponible.
 - [ ] **Suite** : archivage des fils avec nettoyage des worktrees, synchronisation/rebase des branches, et emballage en **application desktop Windows (Electron)** une fois le cœur stabilisé.
 
 ---

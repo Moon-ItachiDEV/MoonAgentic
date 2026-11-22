@@ -3,7 +3,8 @@
 import type { AgentCommand, AgentInfo, AgentSetting, ProjectCommand } from "@moonagentic/protocol";
 
 /** Things MoonAgentic does itself rather than send to the agent. */
-export type AppAction = "plan" | "agent" | "models" | "pin" | "export" | "search";
+export type AppAction =
+  "plan" | "agent" | "models" | "pin" | "export" | "search" | "requests" | "connections";
 
 /**
  * Where a command comes from, in priority order when two share a name: MoonAgentic's own
@@ -87,6 +88,8 @@ export function composerCommands(options: {
     add("exporter", "Exporter cette discussion en Markdown", "export");
   }
   add("chercher", "Chercher dans les fils et les messages (Ctrl K)", "search");
+  add("demandes", "Voir ce que les agents attendent de toi", "requests");
+  add("connexions", "Voir l'état des agents et les serveurs MCP", "connections");
 
   const all: ComposerCommand[] = [
     ...app,

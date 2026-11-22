@@ -92,7 +92,7 @@ describe("composer", () => {
     await expect.poll(() => page.locator(".agentchip").textContent()).toContain("Agent de démo");
 
     // `/` lists MoonAgentic's ready-made messages and the project's commands.
-    await composer(page).fill("/de");
+    await composer(page).fill("/dep");
     await expect.poll(() => options(page).first().textContent()).toContain("/deploy");
     await shot(page, "c1-commandes");
     await composer(page).press("Escape");
@@ -145,6 +145,48 @@ describe("composer", () => {
     await page.keyboard.press("ArrowDown");
     await page.getByRole("option", { name: /Pièces jointes/ }).click();
     await expect.poll(() => page.url()).toMatch(/\/t\//);
+    await page.close();
+  });
+
+  it("shows each agent's state, adds an agent, and answers a request from À traiter", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    await page.getByRole("button", { name: "Connexions" }).click();
+    const dialog = page.getByRole("dialog", { name: "Connexions" });
+    const demo = dialog.locator(".cx-row", { hasText: "Agent de démo" }).first();
+    await demo.getByRole("button", { name: "Vérifier" }).click();
+    await expect.poll(() => demo.locator(".st").textContent()).toBe("Prêt");
+    await demo.getByText("Version : moonagentic-demo 0.1.0").waitFor();
+
+    // An agent of the user's own whose command this machine lacks says so.
+    await dialog.getByRole("button", { name: "Ajouter un agent" }).click();
+    await dialog.getByLabel("Nom").fill("Mon agent");
+    await dialog.getByLabel("Commande qui le lance en mode ACP").fill("pas-une-commande-e2e acp");
+    await dialog.getByRole("button", { name: "Ajouter", exact: true }).click();
+    const mine = dialog.locator(".cx-row", { hasText: "Mon agent" });
+    await mine.getByText("Commande introuvable sur cette machine : pas-une-commande-e2e").waitFor();
+    await shot(page, "c7-connexions");
+    await mine.getByRole("button", { name: "Retirer Mon agent" }).click();
+    await mine.getByRole("button", { name: "Confirmer le retrait de Mon agent" }).click();
+    await expect.poll(() => mine.count()).toBe(0);
+    await dialog.getByRole("button", { name: "Fermer" }).click();
+
+    // A supervised turn waits for the user, who answers from À traiter.
+    await page.locator(".agentchip").click();
+    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
+    await page.keyboard.press("Escape");
+    await composer(page).fill("Corrige la réponse");
+    await composer(page).press("Enter");
+    const inbox = page.getByRole("button", { name: /À traiter/ });
+    await expect.poll(() => inbox.textContent()).toContain("1");
+    await inbox.click();
+    const requests = page.getByRole("dialog", { name: "À traiter" });
+    await requests.getByText("Modifier src/app.ts").waitFor();
+    await shot(page, "c8-a-traiter");
+    await requests.getByRole("button", { name: "Autoriser" }).click();
+    await requests.getByText("Aucun agent n'attend ta réponse.").waitFor();
+    await requests.getByRole("button", { name: "Fermer" }).click();
+    await page.getByText("C'est fait, la réponse vaut 42.").last().waitFor();
     await page.close();
   });
 
