@@ -121,6 +121,11 @@ export const IconSearch = ({ size = 16 }: P) => (
     <path d="m20 20-4.2-4.2" />
   </svg>
 );
+export const IconCode = ({ size = 15 }: P) => (
+  <svg {...base(size)}>
+    <path d="m8 7-5 5 5 5M16 7l5 5-5 5" />
+  </svg>
+);
 export const IconFile = ({ size = 15 }: P) => (
   <svg {...base(size)}>
     <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
