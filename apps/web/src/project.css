@@ -200,3 +200,141 @@
   background: var(--surface);
   color: var(--fg);
 }
+
+/* With a coordinator: its conversation, and the project's threads beside it. */
+.pp-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  min-height: 0;
+  overflow: hidden;
+}
+.pp-split > .view {
+  min-width: 0;
+}
+.pp-panel {
+  border-left: 1px solid var(--line);
+  overflow: auto;
+  min-height: 0;
+  padding: 0 16px;
+}
+.pp-panel .proj-page {
+  padding-top: 14px;
+}
+.pp-panel .pp-title {
+  font: 600 14px/1.3 var(--sans);
+  letter-spacing: 0;
+}
+.pp-panel .pp-path {
+  display: none;
+}
+.pp-tabs {
+  display: flex;
+  gap: 3px;
+  margin: 8px 16px 0;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--card);
+}
+.pp-tabs button {
+  flex: 1;
+  padding: 6px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.pp-tabs button[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--fg);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.pp-coord {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 14px 16px;
+  margin-bottom: 8px;
+}
+.pp-coord-t {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+.pp-coord p {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0 0;
+}
+.pp-coord-go {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.pp-coord-go select {
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+  min-width: 0;
+}
+/* The thread a coordinator opened, in its conversation: a link to it, with its state now. */
+.opened-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 10px 12px;
+}
+.oc-ic {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--muted);
+}
+.oc-text {
+  min-width: 0;
+  flex: 1;
+}
+.oc-t {
+  font-weight: 550;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oc-s {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 7px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.oc-state::before {
+  content: "· ";
+}
+.opened-card[data-group="waiting"] .oc-state {
+  color: var(--warn);
+}
+.opened-card[data-group="running"] .oc-state {
+  color: var(--accent);
+}
+/* The composer stays under the conversation, not under the threads beside it. */
+.dock.beside-threads {
+  padding-right: 396px;
+}
+/* On a narrow screen: the two tabs, then the one that is shown. */
+.pp-stack {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}

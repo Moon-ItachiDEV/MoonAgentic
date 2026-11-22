@@ -318,6 +318,13 @@ export interface Thread {
   summary?: string;
   /** Set when the thread works on its own branch rather than in the project folder. */
   workspace?: Workspace;
+  /**
+   * A project's coordinator: the one conversation the user talks to about the whole
+   * project. It answers, or opens a thread for the work. Kept out of lists of threads.
+   */
+  kind?: "coordinator";
+  /** The coordinator's thread, for a thread it opened. */
+  openedBy?: string;
   /** The team lead's thread, for a coder's thread. */
   parentId?: string;
   /** The thread's part in a team. */
@@ -494,6 +501,8 @@ export type Item =
       at: number;
     }
   | { id: string; kind: "plan"; entries: PlanEntry[]; at: number }
+  /** The coordinator opened a thread for a piece of work: a link to it, where it did. */
+  | { id: string; kind: "opened"; threadId: string; title: string; at: number }
   /** The thread went from one agent to another; agent items before it are `from`'s. */
   | { id: string; kind: "handoff"; from: AgentId; to: AgentId; at: number };
 
@@ -685,6 +694,17 @@ export const ClientMessage = z.discriminatedUnion("type", [
     /** Gives the thread its own branch and worktree, when the project is a git repository. */
     isolated: z.boolean().optional(),
     text,
+  }),
+  /**
+   * Opens the project's coordinator, made with this agent the first time. Answers
+   * `created` with its thread.
+   */
+  z.object({
+    type: z.literal("coordinator.open"),
+    requestId: id,
+    projectId: id,
+    agentId: id,
+    model: id.optional(),
   }),
   z.object({ type: z.literal("workspace.review"), threadId: id }),
   z.object({

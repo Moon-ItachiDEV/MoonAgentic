@@ -27,7 +27,7 @@ export function groupThreads(
   projectId: string,
 ): { group: ThreadGroup; threads: Thread[] }[] {
   const mine = threads
-    .filter((t) => t.projectId === projectId && !t.parentId)
+    .filter((t) => t.projectId === projectId && !t.parentId && t.kind !== "coordinator")
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const members = membersByLead(threads);
   return THREAD_GROUPS.map((group) => ({
@@ -113,3 +113,13 @@ export function shortAgo(at: number, now: number): string {
   const hours = Math.floor(minutes / 60);
   return hours < 24 ? `${hours} h` : `${Math.floor(hours / 24)} j`;
 }
+
+/** The project's coordinator, once it has one. */
+export const coordinatorOf = (threads: Thread[], projectId: string): Thread | undefined =>
+  threads.find((t) => t.projectId === projectId && t.kind === "coordinator");
+
+/** The threads lists show: every one but the coordinators, which live on their project's page. */
+export const listedThreads = (threads: Thread[]): Thread[] =>
+  threads.some((t) => t.kind === "coordinator")
+    ? threads.filter((t) => t.kind !== "coordinator")
+    : threads;

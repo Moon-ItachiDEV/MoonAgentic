@@ -1,11 +1,18 @@
-import type { AgentInfo, Item, Thread, ToolContent } from "@moonagentic/protocol";
+import {
+  threadGroup,
+  type AgentInfo,
+  type Item,
+  type Thread,
+  type ToolContent,
+} from "@moonagentic/protocol";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { messageTokens } from "../commands.ts";
 import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
-import { IconAlert, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
+import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
+import { GROUP_LABEL } from "../project-threads.ts";
 import { Clamp } from "./Clamp.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TeamCard } from "./TeamCard.tsx";
@@ -115,6 +122,8 @@ export function ThreadView({
           openQuestion={openQuestion}
           live={working && i > lastUser}
           clamp={clamp}
+          threads={threads}
+          onOpenThread={onOpenThread}
         />
       </div>
     );
@@ -215,7 +224,11 @@ function FeedItem({
   openQuestion,
   live,
   clamp,
+  threads,
+  onOpenThread,
 }: {
+  threads: Thread[];
+  onOpenThread: (id: string) => void;
   item: Item;
   thread: Thread;
   agents: AgentInfo[];
@@ -231,6 +244,37 @@ function FeedItem({
   switch (item.kind) {
     case "user":
       return <UserMessage item={item} thread={thread} />;
+    case "opened": {
+      // The thread as it is now, not as it was when it was opened.
+      const opened = threads.find((t) => t.id === item.threadId);
+      const members = threads.filter((t) => t.parentId === item.threadId);
+      return (
+        <div className="opened-card" data-group={opened && threadGroup(opened, members)}>
+          <span className="oc-ic" aria-hidden>
+            <IconBranch />
+          </span>
+          <div className="oc-text">
+            <div className="oc-t">Fil ouvert : {opened?.title ?? item.title}</div>
+            <div className="oc-s">
+              {opened ? (
+                <>
+                  <AgentBadge agent={agents.find((a) => a.id === opened.agentId)} small />
+                  <span>{opened.model ?? agents.find((a) => a.id === opened.agentId)?.name}</span>
+                  <span className="oc-state">{GROUP_LABEL[threadGroup(opened, members)]}</span>
+                </>
+              ) : (
+                "Ce fil a été supprimé."
+              )}
+            </div>
+          </div>
+          {opened && (
+            <button className="btn sm" onClick={() => onOpenThread(opened.id)}>
+              Ouvrir
+            </button>
+          )}
+        </div>
+      );
+    }
     case "handoff": {
       const name = (id: string) => agents.find((a) => a.id === id)?.name ?? "Agent retiré";
       return (
