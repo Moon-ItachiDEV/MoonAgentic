@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { IconPlus } from "./icons.tsx";
+import { IconBranch, IconCheck, IconPlus } from "./icons.tsx";
 import { Presence } from "./Presence.tsx";
 
 const ITEMS = [
@@ -15,6 +15,8 @@ export function PlusMenu(props: {
   inThread: boolean;
   onToggle: (open: boolean) => void;
   onPick: (insert: string) => void;
+  /** For a new thread in a git project: whether the agent works on its own branch. */
+  branch?: { on: boolean; onToggle: () => void };
 }) {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -52,6 +54,27 @@ export function PlusMenu(props: {
               <span className="tx">{item.label}</span>
             </button>
           ))}
+          {props.branch && (
+            <>
+              <div className="menu-sep" role="separator" />
+              <button
+                role="menuitemcheckbox"
+                aria-checked={props.branch.on}
+                title="L'agent travaille sur sa propre branche, dans une copie à part du projet"
+                onClick={props.branch.onToggle}
+              >
+                <span className="plus-k">
+                  <IconBranch size={13} />
+                </span>
+                <span className="tx">Branche à part</span>
+                {props.branch.on && (
+                  <span className="plus-on">
+                    <IconCheck />
+                  </span>
+                )}
+              </button>
+            </>
+          )}
         </div>
       </Presence>
     </div>

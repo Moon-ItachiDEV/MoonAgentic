@@ -10,6 +10,7 @@ import "./sidebar.css";
 import "./github.css";
 import "./remote.css";
 import "./pull-request.css";
+import "./composer.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
