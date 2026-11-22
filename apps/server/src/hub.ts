@@ -4,13 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import type {
-  AgentCheck,
-  AgentCommand,
-  AgentInfo,
   CustomAgentInput,
   AgentSetting,
   ClientMessage,
-  Favorites,
   Item,
   McpServerInput,
   PendingRequest,
@@ -23,7 +19,7 @@ import type {
   ToolContent,
   Workspace,
 } from "@moonagentic/protocol";
-import type { Agents, CustomAgent } from "./agents.ts";
+import type { Agents } from "./agents.ts";
 import {
   branchExists,
   dropRefs,
@@ -49,9 +45,10 @@ import {
   promptLinks,
   searchFiles,
 } from "./files.ts";
+import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { historyBefore } from "./history.ts";
-import { mcpInfo, type McpServerRecord } from "./mcp.ts";
-import { AgentSession, describe, type ModelOption, needsSignIn } from "./session.ts";
+import { mcpInfo } from "./mcp.ts";
+import { AgentSession, describe, needsSignIn } from "./session.ts";
 import type { Store } from "./store.ts";
 
 export interface Client {
@@ -61,6 +58,10 @@ export interface Client {
 }
 
 type ToolItem = Extract<Item, { kind: "tool" }>;
+type TextItem = Extract<Item, { kind: "agent" | "thought" }>;
+
+/** How often streamed text is written down; viewers get each piece at once. */
+const TEXT_FLUSH_MS = 250;
 
 const titleFrom = (text: string) => {
   const line = text.trim().split("\n")[0] ?? "";
@@ -76,16 +77,20 @@ const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolCon
     return [];
   });
 
-const DISCOVERY_TIMEOUT_MS = 30_000;
 /** How long an agent may take to open its session before the turn gives up. */
 const START_TIMEOUT_MS = 120_000;
+/** An agent with nothing to do is stopped after this long; its session resumes next time. */
+const IDLE_MS = 10 * 60_000;
+/** Agents kept running at once; past it, the one left alone longest is stopped first. */
+const MAX_LIVE_AGENTS = 8;
 
-const agentCommands = (update: acp.AvailableCommandsUpdate): AgentCommand[] =>
-  update.availableCommands.slice(0, 200).map((c) => ({
-    name: c.name.replace(/^\//, ""),
-    description: c.description,
-    ...(c.input && "hint" in c.input && c.input.hint ? { hint: c.input.hint } : {}),
-  }));
+export interface HubOptions {
+  /** Where threads with their own branch get their worktree. */
+  worktreesDir: string;
+  homeDir?: string;
+  idleMs?: number;
+  maxLiveAgents?: number;
+}
 
 const settingValues = (settings: AgentSetting[]) =>
   settings.length ? Object.fromEntries(settings.map((s) => [s.id, s.current])) : undefined;
@@ -116,9 +121,6 @@ export class Hub {
   private readonly starting = new Map<string, AbortController>();
   /** Steps under way (a push, a step back, a hand-off), awaited before the server stops. */
   private readonly steps = new Set<Promise<unknown>>();
-  private readonly discoveries = new Map<string, { done: Promise<void>; stop: AbortController }>();
-  /** Why listing an agent's models failed, until a retry succeeds. */
-  private readonly discoveryErrors = new Map<string, string>();
   /** Identifies the running turn, so a turn's plan and text stay separate from the next. */
   private readonly turnIds = new Map<string, string>();
   private readonly pendingPermissions = new Map<
@@ -137,19 +139,39 @@ export class Hub {
   private readonly gitProjects = new Map<string, boolean>();
   /** Projects being removed, which take no new thread meanwhile. */
   private readonly removingProjects = new Set<string>();
+  /** The text each thread's agent is streaming, ahead of what is written down. */
+  private readonly drafts = new Map<
+    string,
+    { item: TextItem; dirty: boolean; timer?: NodeJS.Timeout }
+  >();
+  /** Stops each idle agent when its time is up. */
+  private readonly idleTimers = new Map<string, NodeJS.Timeout>();
+  /** When each running agent last finished a turn, to stop the one left alone longest. */
+  private readonly lastUsed = new Map<string, number>();
+  /** Agents being stopped for a pause: the thread's next agent starts once they are gone. */
+  private readonly pausing = new Map<string, Promise<void>>();
+  private readonly idleMs: number;
+  private useSeq = 0;
+  private closed = false;
+  private readonly maxLiveAgents: number;
 
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
 
-  constructor(store: Store, agents: Agents, options: { worktreesDir: string; homeDir?: string }) {
+  constructor(store: Store, agents: Agents, options: HubOptions) {
     this.store = store;
     this.agents = agents;
     this.worktreesDir = options.worktreesDir;
+    this.idleMs = options.idleMs ?? IDLE_MS;
+    this.maxLiveAgents = Math.max(1, options.maxLiveAgents ?? MAX_LIVE_AGENTS);
     this.homeDir = options.homeDir ?? os.homedir();
-    agents.setCustom(this.customAgents());
+    this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
     store.recoverAfterRestart();
     this.recovered = this.finishRestores();
   }
+
+  /** The agents, their models and checks, the MCP servers and the favorites. */
+  readonly catalog: AgentCatalog;
 
   /** Resolves once the steps back that a stop interrupted are finished. */
   readonly recovered: Promise<void>;
@@ -162,10 +184,10 @@ export class Hub {
 
   snapshot(): Snapshot {
     return {
-      favorites: this.store.getSetting<Favorites>("favorites", {}),
+      favorites: this.catalog.favorites(),
       requests: this.pendingRequests(),
-      mcpServers: this.mcpServers().map(mcpInfo),
-      agents: this.agentList(),
+      mcpServers: this.catalog.mcpServers().map(mcpInfo),
+      agents: this.catalog.list(),
       projects: this.store.listProjects().map((p) => this.withGit(p)),
       threads: this.store.listThreads(),
     };
@@ -182,7 +204,7 @@ export class Hub {
         const id = this.createThread(message);
         client.openThreadId = id;
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.store.listItems(id) });
+        client.send({ type: "items", threadId: id, items: this.items(id) });
         return;
       }
       case "thread.open":
@@ -190,7 +212,7 @@ export class Hub {
         client.send({
           type: "items",
           threadId: message.threadId,
-          items: this.store.listItems(message.threadId),
+          items: this.items(message.threadId),
         });
         return;
       case "thread.send":
@@ -250,26 +272,22 @@ export class Hub {
         client.send({
           type: "searched",
           requestId: message.requestId,
-          hits: this.store.searchItems(message.query),
+          hits: (this.flushAll(), this.store.searchItems(message.query)),
         });
         return;
       case "favorites.toggle":
-        this.toggleFavorite(message.agentId, message.model, message.starred);
+        this.catalog.toggleFavorite(message.agentId, message.model, message.starred);
         return;
       case "mcp.add": {
-        const id = this.addMcpServer(message.server);
+        const id = this.catalog.addMcpServer(message.server);
         client.send({ type: "created", requestId: message.requestId, id });
         return;
       }
       case "mcp.setEnabled":
-        if (!this.mcpServers().some((s) => s.id === message.id)) return;
-        this.updateMcpServers((servers) =>
-          servers.map((s) => (s.id === message.id ? { ...s, enabled: message.enabled } : s)),
-        );
+        this.catalog.setMcpEnabled(message.id, message.enabled);
         return;
       case "mcp.remove":
-        if (!this.mcpServers().some((s) => s.id === message.id)) return;
-        this.updateMcpServers((servers) => servers.filter((s) => s.id !== message.id));
+        this.catalog.removeMcpServer(message.id);
         return;
       case "workspace.review":
         // The panel waits for this reply, so a failure is sent to it rather than thrown.
@@ -309,12 +327,12 @@ export class Hub {
         await this.discover(message.agentId, message.projectId);
         return;
       case "agent.addCustom": {
-        const id = this.addCustomAgent(message.agent);
+        const id = this.catalog.addCustomAgent(message.agent);
         client.send({ type: "created", requestId: message.requestId, id });
         return;
       }
       case "agent.removeCustom":
-        this.removeCustomAgent(message.agentId);
+        this.catalog.removeCustomAgent(message.agentId);
         return;
       case "permission.respond":
         this.respondToPermission(message.threadId, message.itemId, message.optionId);
@@ -389,10 +407,13 @@ export class Hub {
     this.updateThread(threadId, { status: "running", error: null });
     this.turnIds.set(threadId, randomUUID());
     this.cancelled.delete(threadId);
+    this.clearIdle(threadId);
     const turn = this.runTurn(thread, text, itemId).finally(() => {
       this.turns.delete(threadId);
       this.turnIds.delete(threadId);
       this.cancelled.delete(threadId);
+      this.flushText(threadId);
+      this.leftIdle(threadId);
     });
     this.turns.set(threadId, turn);
   }
@@ -426,7 +447,7 @@ export class Hub {
       if (session?.model) {
         await session.setModel(model);
         // A new model can bring other effort levels, for the picker too.
-        this.learnCatalog(thread.agentId, session.model, session.settings, false);
+        this.catalog.learn(thread.agentId, session.model, session.settings, false);
       }
       const settings = session && settingValues(session.settings);
       this.updateThread(threadId, {
@@ -448,7 +469,7 @@ export class Hub {
       if (!setting?.choices.some((c) => c.id === value)) throw new Error("Réglage inconnu.");
       if (session) {
         await session.setSetting(settingId, value);
-        this.learnCatalog(thread.agentId, session.model, session.settings, false);
+        this.catalog.learn(thread.agentId, session.model, session.settings, false);
       }
       // One change can move others, so a running agent's own values win.
       const settings = (session && settingValues(session.settings)) ?? {
@@ -457,17 +478,6 @@ export class Hub {
       };
       this.updateThread(threadId, { settings });
     });
-  }
-
-  toggleFavorite(agentId: string, model: string, starred: boolean): void {
-    if (!this.agents.list().some((a) => a.id === agentId))
-      throw new Error(`Agent inconnu : ${agentId}`);
-    const favorites = this.store.getSetting<Favorites>("favorites", {});
-    const current = Object.hasOwn(favorites, agentId) ? (favorites[agentId] ?? []) : [];
-    const next = current.filter((m) => m !== model);
-    favorites[agentId] = starred ? [...next, model] : next;
-    this.store.setSetting("favorites", favorites);
-    this.broadcast({ type: "favorites", favorites });
   }
 
   /** The thread's changes since its branch started, for review before shipping. */
@@ -563,6 +573,7 @@ export class Hub {
     workspace: Workspace,
     { itemId, tree }: PendingRestore,
   ): Promise<void> {
+    this.flushText(threadId);
     await restoreCheckpoint(workspace.path, tree);
     // The messages, the thread and the note of the step back change together, or not at all.
     const { removed, thread } = this.store.transaction(() => {
@@ -590,7 +601,7 @@ export class Hub {
     this.sendToViewers(threadId, {
       type: "items",
       threadId,
-      items: this.store.listItems(threadId),
+      items: this.items(threadId),
     });
     // A ref left behind only keeps an old tree alive, so failing here is harmless.
     await dropCheckpoints(
@@ -653,6 +664,8 @@ export class Hub {
         await dropRefs(project.path, `refs/moonagentic/${threadId}/`).catch(() => undefined);
       }
       this.setPendingRestore(threadId, undefined);
+      clearTimeout(this.drafts.get(threadId)?.timer);
+      this.drafts.delete(threadId);
       this.store.deleteThread(threadId);
       this.broadcast({ type: "threadRemoved", threadId });
     });
@@ -716,13 +729,14 @@ export class Hub {
         error: null,
       });
       // Switching again before any message only changes where the last hand-off leads.
+      this.flushText(threadId);
       const last = this.store.lastItem(threadId);
       if (last?.kind === "handoff" && last.from === agentId) {
         this.store.removeItemsFrom(threadId, last.id);
         this.sendToViewers(threadId, {
           type: "items",
           threadId,
-          items: this.store.listItems(threadId),
+          items: this.items(threadId),
         });
       } else if (last?.kind === "handoff") {
         this.putItem(threadId, { ...last, to: agentId });
@@ -736,6 +750,86 @@ export class Hub {
         });
       }
     });
+  }
+
+  /** How many agents run for threads right now, starting ones included. */
+  get liveAgents(): number {
+    // Those being paused still run until their process is gone.
+    return this.sessions.size + this.pausing.size;
+  }
+
+  /** Whether the thread's agent has nothing under way and can be stopped. */
+  private canPause(threadId: string): boolean {
+    return (
+      this.sessions.has(threadId) &&
+      !this.turns.has(threadId) &&
+      !this.busy.has(threadId) &&
+      !this.starting.has(threadId) &&
+      ![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)
+    );
+  }
+
+  private clearIdle(threadId: string): void {
+    clearTimeout(this.idleTimers.get(threadId));
+    this.idleTimers.delete(threadId);
+  }
+
+  /** A turn has ended: the agent waits, and is stopped if nothing comes. */
+  private leftIdle(threadId: string): void {
+    this.clearIdle(threadId);
+    if (this.closed || !this.sessions.has(threadId)) {
+      this.lastUsed.delete(threadId);
+      return;
+    }
+    // A counter rather than the time: two turns ending in the same millisecond keep an order.
+    this.lastUsed.set(threadId, ++this.useSeq);
+    const timer = setTimeout(() => {
+      this.idleTimers.delete(threadId);
+      this.pause(threadId);
+    }, this.idleMs);
+    timer.unref();
+    this.idleTimers.set(threadId, timer);
+  }
+
+  /**
+   * Stops the thread's agent but keeps its session: the next message resumes it, or gives a
+   * new one the conversation so far.
+   */
+  private pause(threadId: string): void {
+    const session = this.sessions.get(threadId);
+    if (!session || !this.canPause(threadId)) {
+      // Busy right now: tried again once it has been left alone as long again.
+      if (session && !this.turns.has(threadId)) this.leftIdle(threadId);
+      return;
+    }
+    // A message sent meanwhile is not refused: its agent starts once this one is gone.
+    this.sessions.delete(threadId);
+    this.lastUsed.delete(threadId);
+    this.clearIdle(threadId);
+    const closing: Promise<void> = session
+      .then((s) => s.close())
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.pausing.get(threadId) === closing) this.pausing.delete(threadId);
+        this.steps.delete(closing);
+      });
+    this.pausing.set(threadId, closing);
+    this.steps.add(closing);
+  }
+
+  /** Before an agent starts, stops the ones left alone longest while too many run. */
+  private makeRoom(threadId: string): void {
+    let live = this.sessions.size;
+    if (live < this.maxLiveAgents) return;
+    const idle = [...this.lastUsed]
+      .filter(([id]) => id !== threadId && this.canPause(id))
+      .sort((a, b) => a[1] - b[1]);
+    for (const [id] of idle) {
+      if (live < this.maxLiveAgents) break;
+      // The agent leaves the count at once; its process stops in the background.
+      this.pause(id);
+      live -= 1;
+    }
   }
 
   /** Runs a step that no turn and no other such step may overlap. */
@@ -758,141 +852,12 @@ export class Hub {
   private async forgetSession(threadId: string): Promise<void> {
     const session = this.sessions.get(threadId);
     this.sessions.delete(threadId);
+    this.clearIdle(threadId);
+    this.lastUsed.delete(threadId);
     await session?.then((s) => s.close()).catch(() => undefined);
+    // An agent being paused is gone too before its files change (Windows holds them open).
+    await this.pausing.get(threadId);
     this.store.setSessionId(threadId, null);
-  }
-
-  /** Registers an MCP server for every agent session started from now on. */
-  addMcpServer(input: McpServerInput): string {
-    const key = input.name.trim().toLowerCase();
-    if (this.mcpServers().some((s) => s.name.trim().toLowerCase() === key)) {
-      throw new Error(`Un serveur MCP s'appelle déjà « ${input.name} ».`);
-    }
-    const id = randomUUID();
-    this.updateMcpServers((servers) => [...servers, { ...input, id, enabled: true }]);
-    return id;
-  }
-
-  private mcpServers(): McpServerRecord[] {
-    return this.store.getSetting<McpServerRecord[]>("mcpServers", []);
-  }
-
-  private updateMcpServers(change: (servers: McpServerRecord[]) => McpServerRecord[]): void {
-    const servers = change(this.mcpServers());
-    this.store.setSetting("mcpServers", servers);
-    this.broadcast({ type: "mcpServers", servers: servers.map(mcpInfo) });
-  }
-
-  /**
-   * Starts the agent briefly so the UI can list its models before the first message.
-   * A failure is shown with the agent (`modelsError`) rather than thrown, so the picker can offer a retry.
-   */
-  discover(agentId: string, projectId?: string): Promise<void> {
-    const running = this.discoveries.get(agentId);
-    if (running) return running.done;
-    const project = projectId ? this.store.getProject(projectId) : undefined;
-    if (projectId && !project) return Promise.reject(new Error("Projet introuvable."));
-    if (this.discoveryErrors.delete(agentId)) {
-      this.broadcast({ type: "agents", agents: this.agentList() });
-    }
-    let launch;
-    try {
-      launch = this.agents.launch(agentId);
-    } catch (error) {
-      // Gone from this machine since the list was sent: said with the agent, like a failure.
-      this.discoveryErrors.set(agentId, describe(error));
-      this.recordCheck(agentId, { ok: false, error }, true);
-      return Promise.resolve();
-    }
-    const stop = new AbortController();
-    const done = AgentSession.start({
-      launch,
-      // Checked from Connexions, before any project: the home folder will do.
-      cwd: project?.path ?? this.homeDir,
-      previousSessionId: null,
-      signal: AbortSignal.any([stop.signal, AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)]),
-      handlers: {
-        // Its commands too, so a new thread can offer them before its agent starts.
-        onUpdate: (update) => {
-          if (update.sessionUpdate === "available_commands_update") {
-            this.rememberCommands(agentId, agentCommands(update));
-          }
-        },
-        requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
-        onExit: () => undefined,
-      },
-    })
-      .then(
-        (session) => {
-          this.recordCheck(agentId, { ok: true, version: session.agentVersion }, true);
-          this.learnCatalog(agentId, session.model, session.settings, session.fresh);
-          return session.close();
-        },
-        (error: unknown) => {
-          if (stop.signal.aborted) return;
-          this.discoveryErrors.set(agentId, describe(error));
-          this.recordCheck(agentId, { ok: false, error }, true);
-        },
-      )
-      .finally(() => this.discoveries.delete(agentId));
-    this.discoveries.set(agentId, { done, stop });
-    return done;
-  }
-
-  /** Adds an ACP agent of the user's own, started by `command` with `args`. */
-  addCustomAgent(input: CustomAgentInput): string {
-    const name = input.name.trim();
-    if (this.agents.list().some((a) => a.name.toLowerCase() === name.toLowerCase())) {
-      throw new Error(`Un agent s'appelle déjà « ${name} ».`);
-    }
-    const id = `custom-${randomUUID().slice(0, 8)}`;
-    this.saveCustomAgents([
-      ...this.customAgents(),
-      { id, name, command: input.command.trim(), args: input.args },
-    ]);
-    return id;
-  }
-
-  /** Removes an agent the user added; its threads can then be handed to another agent. */
-  removeCustomAgent(agentId: string): void {
-    const agents = this.customAgents();
-    if (!agents.some((a) => a.id === agentId))
-      throw new Error("Cet agent n'a pas été ajouté par toi.");
-    this.discoveries.get(agentId)?.stop.abort();
-    this.saveCustomAgents(agents.filter((a) => a.id !== agentId));
-  }
-
-  private customAgents(): CustomAgent[] {
-    return this.store.getSetting<CustomAgent[]>("customAgents", []);
-  }
-
-  private saveCustomAgents(agents: CustomAgent[]): void {
-    this.store.setSetting("customAgents", agents);
-    this.agents.setCustom(agents);
-    this.broadcast({ type: "agents", agents: this.agentList() });
-  }
-
-  /** Remembers whether the agent last started fine, for Connexions. */
-  private recordCheck(
-    agentId: string,
-    result: { ok: true; version: string | undefined } | { ok: false; error: unknown },
-    /** A check the user asked for is always recorded, so its time moves on. */
-    asked = false,
-  ): void {
-    const check: AgentCheck = result.ok
-      ? { at: Date.now(), ok: true, ...(result.version ? { version: result.version } : {}) }
-      : {
-          at: Date.now(),
-          ok: false,
-          error: describe(result.error),
-          ...(needsSignIn(result.error) ? { signInNeeded: true } : {}),
-        };
-    const checks = this.store.getSetting<Record<string, AgentCheck>>("agentChecks", {});
-    const before = checks[agentId];
-    // A thread starting again and again only tells something when the answer changes.
-    if (!asked && before?.ok && check.ok && before.version === check.version) return;
-    this.store.setSetting("agentChecks", { ...checks, [agentId]: check });
-    this.broadcast({ type: "agents", agents: this.agentList() });
   }
 
   /** Every permission request still waiting for the user, oldest first. */
@@ -937,14 +902,39 @@ export class Hub {
     pending.resolve({ outcome: { outcome: "selected", optionId } });
   }
 
+  /** Lists the agent's models before its first thread, from the project's folder if given. */
+  discover(agentId: string, projectId?: string): Promise<void> {
+    const project = projectId ? this.store.getProject(projectId) : undefined;
+    if (projectId && !project) return Promise.reject(new Error("Projet introuvable."));
+    return this.catalog.discover(agentId, project?.path);
+  }
+
+  addCustomAgent(input: CustomAgentInput): string {
+    return this.catalog.addCustomAgent(input);
+  }
+
+  removeCustomAgent(agentId: string): void {
+    this.catalog.removeCustomAgent(agentId);
+  }
+
+  addMcpServer(input: McpServerInput): string {
+    return this.catalog.addMcpServer(input);
+  }
+
+  toggleFavorite(agentId: string, model: string, starred: boolean): void {
+    this.catalog.toggleFavorite(agentId, model, starred);
+  }
+
   /** Stops every agent and resolves once their turns have ended. */
   async close(): Promise<void> {
+    this.closed = true;
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
+    await this.recovered;
     for (const threadId of new Set([...this.pendingPermissions.values()].map((p) => p.threadId))) {
       this.settlePermissions(threadId);
     }
-    const discoveries = [...this.discoveries.values()];
-    for (const d of discoveries) d.stop.abort();
-    await Promise.all(discoveries.map((d) => d.done.catch(() => undefined)));
+    await this.catalog.close();
     // An agent still starting is stopped now rather than waited for, and its turn ends
     // as stopped, not as failed.
     for (const [threadId, stop] of this.starting) {
@@ -958,6 +948,12 @@ export class Hub {
     );
     await Promise.all(this.turns.values());
     await Promise.all([...this.steps].map((step) => step.catch(() => undefined)));
+    // A turn that ended meanwhile armed no timer (closed), but leaves nothing behind either.
+    for (const timer of this.idleTimers.values()) clearTimeout(timer);
+    this.idleTimers.clear();
+    this.lastUsed.clear();
+    // Text an agent sent after its turn ended is still written down.
+    for (const threadId of this.drafts.keys()) this.flushText(threadId);
   }
 
   private async runTurn(thread: Thread, text: string, itemId: string): Promise<void> {
@@ -973,7 +969,7 @@ export class Hub {
       // the agent could not resume its earlier session.
       const history =
         !continuing && session.fresh
-          ? historyBefore(this.store.listItems(thread.id), itemId, this.agentName)
+          ? historyBefore(this.items(thread.id), itemId, this.catalog.name)
           : undefined;
       const stopReason = await session.prompt(text, history, this.linksFor(session, text));
       const error =
@@ -987,7 +983,7 @@ export class Hub {
       this.updateThread(thread.id, error ? { status: "error", error } : { status: "idle" });
     } catch (error) {
       this.settlePermissions(thread.id);
-      if (needsSignIn(error)) this.recordCheck(thread.agentId, { ok: false, error });
+      if (needsSignIn(error)) this.catalog.recordCheck(thread.agentId, { ok: false, error });
       // Stopping an agent that was still starting is what the user asked for, not a failure.
       if (this.cancelled.has(thread.id)) {
         this.updateThread(thread.id, { status: "idle", error: null });
@@ -1025,29 +1021,29 @@ export class Hub {
     return workspace?.base && existsSync(workspace.path) ? workFolder(workspace) : project.path;
   }
 
-  private rememberCommands(agentId: string, commands: AgentCommand[]): void {
-    const known = this.store.getSetting<Record<string, AgentCommand[]>>("agentCommands", {});
-    if (JSON.stringify(known[agentId] ?? []) === JSON.stringify(commands)) return;
-    this.store.setSetting("agentCommands", { ...known, [agentId]: commands });
-    this.broadcast({ type: "agents", agents: this.agentList() });
-  }
-
   private session(thread: Thread): Promise<AgentSession> {
     const existing = this.sessions.get(thread.id);
     if (existing) return existing;
     const project = this.store.getProject(thread.projectId);
     if (!project) return Promise.reject(new Error("Projet introuvable."));
+    this.makeRoom(thread.id);
     const stop = new AbortController();
     this.starting.set(thread.id, stop);
-    const started = this.prepareWorkspace(thread.id, project)
-      .then((cwd) => this.startSession(thread, cwd, stop.signal))
+    // Only the session it started may take itself out: one paused earlier may exit late.
+    const owns = () => this.sessions.get(thread.id) === started;
+    const paused = this.pausing.get(thread.id) ?? Promise.resolve();
+    const started: Promise<AgentSession> = paused
+      .then(() => this.prepareWorkspace(thread.id, project))
+      .then((cwd) => this.startSession(thread, cwd, stop.signal, owns))
       .finally(() => {
         if (this.starting.get(thread.id) === stop) this.starting.delete(thread.id);
       });
     this.sessions.set(thread.id, started);
     started.then(
       (s) => this.store.setSessionId(thread.id, s.sessionId),
-      () => this.sessions.delete(thread.id),
+      () => {
+        if (owns()) this.sessions.delete(thread.id);
+      },
     );
     return started;
   }
@@ -1104,6 +1100,8 @@ export class Hub {
     thread: Thread,
     cwd: string,
     stop: AbortSignal,
+    /** Whether this start is still the thread's current agent. */
+    owns: () => boolean,
   ): Promise<AgentSession> {
     // Until the thread's own model and settings are applied, the agent's are not news.
     let ready = false;
@@ -1111,13 +1109,17 @@ export class Hub {
       launch: this.agents.launch(thread.agentId),
       cwd,
       previousSessionId: this.store.getSessionId(thread.id),
-      mcpServers: this.mcpServers(),
+      mcpServers: this.catalog.mcpServers(),
       signal: AbortSignal.any([stop, AbortSignal.timeout(START_TIMEOUT_MS)]),
       handlers: {
         onUpdate: (update) => this.applyUpdate(thread.id, update),
         requestPermission: (request, signal) => this.requestPermission(thread.id, request, signal),
         onExit: (reason) => {
+          if (!owns()) return;
           this.sessions.delete(thread.id);
+          // An idle agent that quits on its own leaves no timer or place in the queue.
+          this.clearIdle(thread.id);
+          this.lastUsed.delete(thread.id);
           this.settlePermissions(thread.id);
           if (reason && this.turns.has(thread.id)) {
             this.updateThread(thread.id, { status: "error", error: reason });
@@ -1125,7 +1127,7 @@ export class Hub {
         },
         onConfig: ({ model, settings }) => {
           if (!ready) return;
-          this.learnCatalog(thread.agentId, model, settings, false);
+          this.catalog.learn(thread.agentId, model, settings, false);
           const current = this.store.getThread(thread.id);
           if (model && model.current !== current?.model) {
             this.updateThread(thread.id, { model: model.current });
@@ -1137,15 +1139,15 @@ export class Hub {
         },
       },
     });
-    this.recordCheck(thread.agentId, { ok: true, version: session.agentVersion });
+    this.catalog.recordCheck(thread.agentId, { ok: true, version: session.agentVersion });
     try {
-      this.learnCatalog(thread.agentId, session.model, session.settings, session.fresh);
+      this.catalog.learn(thread.agentId, session.model, session.settings, session.fresh);
       const model = session.model;
       if (model) {
         // A continued session already runs the model it was left on.
         const wanted =
           this.store.getThread(thread.id)?.model ??
-          (session.fresh ? this.defaultModel(thread.agentId) : undefined);
+          (session.fresh ? this.catalog.defaultModel(thread.agentId) : undefined);
         if (wanted && wanted !== model.current && model.choices.some((c) => c.id === wanted)) {
           await session.setModel(wanted);
         }
@@ -1153,7 +1155,7 @@ export class Hub {
       }
       // After the model, which can change the effort levels on offer.
       await this.applySettings(thread.id, session);
-      this.learnCatalog(thread.agentId, session.model, session.settings, false);
+      this.catalog.learn(thread.agentId, session.model, session.settings, false);
     } catch (error) {
       // An agent that started but could not be set up is stopped, not left running unseen.
       await session.close();
@@ -1174,74 +1176,6 @@ export class Hub {
     }
     const values = settingValues(session.settings);
     if (values) this.updateThread(threadId, { settings: values });
-  }
-
-  private readonly agentName = (agentId: string) =>
-    this.agents.list().find((a) => a.id === agentId)?.name ?? agentId;
-
-  private agentList(): AgentInfo[] {
-    const commands = this.store.getSetting<Record<string, AgentCommand[]>>("agentCommands", {});
-    const checks = this.store.getSetting<Record<string, AgentCheck>>("agentChecks", {});
-    return this.agents.list().map((base) => {
-      const listed = Object.hasOwn(commands, base.id) ? commands[base.id] : undefined;
-      const check = Object.hasOwn(checks, base.id) ? checks[base.id] : undefined;
-      const agent = {
-        ...base,
-        ...(listed?.length ? { commands: listed } : {}),
-        ...(check ? { check } : {}),
-      };
-      const known = this.store.getAgentModels(agent.id);
-      const modelsError = this.discoveryErrors.get(agent.id);
-      if (!known) return modelsError ? { ...agent, modelsError } : agent;
-      const defaultModel = this.defaultModel(agent.id);
-      return {
-        ...agent,
-        models: known.models,
-        ...(defaultModel ? { defaultModel } : {}),
-        // An empty list says the agent has none; a missing one, from an older cache, is unknown.
-        ...(known.settings ? { settings: known.settings } : {}),
-      };
-    });
-  }
-
-  private defaultModel(agentId: string): string | undefined {
-    const known = this.store.getAgentModels(agentId);
-    if (!known) return undefined;
-    const preferred = this.agents.preferredModel(agentId);
-    const match =
-      preferred && known.models.find((m) => preferred.test(m.name) || preferred.test(m.id));
-    return match?.id ?? known.current;
-  }
-
-  /**
-   * Remembers the models and settings an agent offers, so new threads can offer them before
-   * starting it. Only a fresh session tells the agent's own defaults, or that it offers no
-   * model choice, which is remembered too so the UI stops asking.
-   */
-  private learnCatalog(
-    agentId: string,
-    model: ModelOption | undefined,
-    settings: AgentSetting[],
-    fresh: boolean,
-  ): void {
-    const before = this.store.getAgentModels(agentId);
-    if (!fresh && !model && (!before || !settings.length)) return;
-    const keep = !fresh && before;
-    const next = {
-      models: model ? model.choices : keep ? before.models : [],
-      current: model ? (keep ? before.current : model.current) : keep ? before.current : "",
-      // A continued session that leaves its settings out does not take them away.
-      settings:
-        keep && !settings.length
-          ? (before.settings ?? [])
-          : settings.map((s) => ({
-              ...s,
-              current: (keep && before.settings?.find((b) => b.id === s.id)?.current) || s.current,
-            })),
-    };
-    if (JSON.stringify(before) === JSON.stringify(next)) return;
-    this.store.setAgentModels(agentId, next);
-    this.broadcast({ type: "agents", agents: this.agentList() });
   }
 
   private applyUpdate(threadId: string, update: acp.SessionUpdate): void {
@@ -1287,7 +1221,7 @@ export class Hub {
         ) {
           this.updateThread(threadId, { canCompact, commands });
         }
-        this.rememberCommands(thread.agentId, commands);
+        this.catalog.rememberCommands(thread.agentId, commands);
         return;
       }
       case "plan":
@@ -1303,14 +1237,51 @@ export class Hub {
     }
   }
 
-  private appendText(threadId: string, kind: "agent" | "thought", text: string): void {
-    const last = this.store.lastItem(threadId);
-    if (last && last.kind === kind) {
-      this.store.putItem(threadId, { ...last, text: last.text + text });
-      this.sendToViewers(threadId, { type: "append", threadId, itemId: last.id, text });
-      return;
+  /**
+   * Adds streamed text to the agent's last message or thought. Viewers get it at once; the
+   * database gets it in batches, and whenever anything reads the timeline or another item
+   * comes.
+   */
+  private appendText(threadId: string, kind: TextItem["kind"], text: string): void {
+    let draft = this.drafts.get(threadId);
+    if (draft?.item.kind !== kind) {
+      this.flushText(threadId);
+      const last = this.store.lastItem(threadId);
+      if (last?.kind !== kind) {
+        const item: TextItem = { id: `${kind}:${randomUUID()}`, kind, text, at: Date.now() };
+        this.putItem(threadId, item);
+        this.drafts.set(threadId, { item, dirty: false });
+        return;
+      }
+      draft = { item: last, dirty: false };
+      this.drafts.set(threadId, draft);
     }
-    this.putItem(threadId, { id: `${kind}:${randomUUID()}`, kind, text, at: Date.now() });
+    draft.item = { ...draft.item, text: draft.item.text + text };
+    draft.dirty = true;
+    this.sendToViewers(threadId, { type: "append", threadId, itemId: draft.item.id, text });
+    draft.timer ??= setTimeout(() => this.flushText(threadId, false), TEXT_FLUSH_MS);
+  }
+
+  /** Writes down the thread's streamed text; `end` also closes it, so the next text starts anew. */
+  private flushText(threadId: string, end = true): void {
+    const draft = this.drafts.get(threadId);
+    if (!draft) return;
+    clearTimeout(draft.timer);
+    draft.timer = undefined;
+    if (draft.dirty && this.store.getThread(threadId)) this.store.putItem(threadId, draft.item);
+    draft.dirty = false;
+    if (end) this.drafts.delete(threadId);
+  }
+
+  private flushAll(): void {
+    for (const threadId of this.drafts.keys()) this.flushText(threadId, false);
+  }
+
+  /** The thread's timeline, streamed text included. */
+  private items(threadId: string): Item[] {
+    // Written down, but kept open: the agent may still be adding to it.
+    this.flushText(threadId, false);
+    return this.store.listItems(threadId);
   }
 
   private upsertTool(threadId: string, update: acp.ToolCall | acp.ToolCallUpdate): void {
@@ -1393,6 +1364,8 @@ export class Hub {
   }
 
   private putItem(threadId: string, item: Item): void {
+    // Another item ends the text being streamed, which keeps its place before it.
+    if (this.drafts.get(threadId)?.item.id !== item.id) this.flushText(threadId);
     this.store.putItem(threadId, item);
     this.sendToViewers(threadId, { type: "item", threadId, item });
   }

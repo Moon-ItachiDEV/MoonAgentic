@@ -196,13 +196,14 @@ flowchart TB
 | `packages/protocol`          | Types partagés et schémas Zod (`ClientMessage`, `ServerMessage`, `Snapshot`, `Thread`, `Item`…).          |
 | `apps/server/src/bin.ts`     | Point d’entrée CLI, préparation du dossier de données privé, arrêt propre des agents.                     |
 | `apps/server/src/http.ts`    | Serveur HTTP (fichiers statiques, `/api/auth`), WebSocket `/ws`, décodage Zod et corrélation de requêtes. |
-| `apps/server/src/hub.ts`     | Orchestration des projets, fils, tours, verrous exclusifs, permissions, favoris, MCP, git et relais.      |
+| `apps/server/src/hub.ts`     | Orchestration des projets, fils, tours, verrous exclusifs, permissions, git, relais et agents en pause.   |
+| `apps/server/src/catalog.ts` | Catalogue des agents : vérifications, modèles et réglages connus, agents ajoutés, MCP, favoris.           |
 | `apps/server/src/session.ts` | Client ACP unique (`initialize`, `authenticate`, `session/*`, `configOptions`, `modes`, `usage_update`).  |
 | `apps/server/src/agents.ts`  | Résolution des adaptateurs npm inclus et des CLI ACP natives sur le `PATH`.                               |
 | `apps/server/src/git.ts`     | Worktrees, revue de diff sur index jetable, checkpoints `refs/moonagentic/*`, commit, push et PR (`gh`).  |
 | `apps/server/src/history.ts` | Construction de l’historique récent transmis lors d’un changement d’agent ou d’une nouvelle session.      |
 | `apps/server/src/mcp.ts`     | Projection sans secret (`mcpInfo`) et conversion vers le format ACP (`acpMcpServers`).                    |
-| `apps/server/src/store.ts`   | Persistance SQLite (`node:sqlite`, mode WAL) et migrations additives automatiques.                        |
+| `apps/server/src/store.ts`   | Persistance SQLite (`node:sqlite`, mode WAL), requêtes préparées une fois, migrations versionnées.        |
 | `apps/web`                   | Interface React 19 / Vite (sidebar, composer, sélecteur, panneau de revue, dialogue MCP, jauge).          |
 
 ---
@@ -218,6 +219,7 @@ MoonAgentic est construit par jalons successifs :
 - [x] **Jalon 5 — Commandes et composer** : commandes `/` (MoonAgentic, projet, agent), mentions `@` de fichiers, skills `$`, fils épinglés, recherche Ctrl K, export Markdown, choix des fichiers à l’envoi, premier test de bout en bout dans un vrai navigateur.
 - [x] **Jalon 6a — Connexions** : état de chaque agent (version, connexion requise), agents ACP ajoutés par l’utilisateur, pile « À traiter » de toutes les demandes d’accord, coût par fil, relais depuis un agent devenu indisponible.
 - [x] **Jalon 6b — Archives et base** : archivage et suppression des fils et des projets avec nettoyage des worktrees, schéma SQLite versionné avec migrations et sauvegarde automatique avant chaque migration, projets dans un sous-dossier d’un dépôt, reprise après un arrêt en plein travail.
+- [x] **Avant le jalon 7** : catalogue d’agents sorti de `hub.ts`, agent inactif mis en pause après 10 minutes (sa session reprend au message suivant), 8 agents lancés au plus, texte du flux écrit par lots, fermeture qui attend tout.
 - [ ] **Suite** : synchronisation/rebase des branches, et emballage en **application desktop Windows (Electron)** une fois le cœur stabilisé.
 
 ---
