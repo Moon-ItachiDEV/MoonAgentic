@@ -151,6 +151,14 @@ export function ThreadView({
             defaultOpen={strip.lead.id === thread.id}
           />
         )}
+        {thread.team && (
+          <TeamCard
+            thread={thread}
+            team={thread.team}
+            threads={threads}
+            onOpenThread={onOpenThread}
+          />
+        )}
         {lead && (
           <button className="team-parent" onClick={() => onOpenThread(lead.id)}>
             Sous-tâche de l'équipe « {lead.title.replace(/^Équipe : /, "")} »
@@ -181,15 +189,6 @@ export function ThreadView({
                 return renderItem(block.index, block.clamp, showBy);
               })
             : items.map((_, i) => renderItem(i)))}
-        {thread.team && (
-          <TeamCard
-            thread={thread}
-            team={thread.team}
-            threads={threads}
-            agents={agents}
-            onOpenThread={onOpenThread}
-          />
-        )}
         {thread.status === "running" && (
           <div className="working">
             <span className="spin" />
