@@ -40,6 +40,7 @@ import {
   isGitRepo,
   restoreCheckpoint,
   reviewChanges,
+  samePath,
   saveCheckpoint,
   ship,
   type ShipResult,
@@ -259,7 +260,13 @@ export class Hub {
       case "project.clone": {
         const { dest, name, existing } = await cloneGithubRepo(message);
         const known = existing
-          ? this.store.listProjects().find((p) => path.resolve(p.path) === path.resolve(dest))
+          ? this.store.listProjects().find((p) => {
+              try {
+                return samePath(p.path, dest);
+              } catch {
+                return false; // a project whose folder is gone
+              }
+            })
           : undefined;
         const id = known?.id ?? this.createProject(name, dest);
         client.send({ type: "created", requestId: message.requestId, id });

@@ -3,7 +3,14 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { cloneGithubRepo, cloneInto, expandHome, parseGithubRepo } from "../src/github.ts";
+import {
+  cloneGithubRepo,
+  cloneInto,
+  expandHome,
+  findGh,
+  ghCredentialArgs,
+  parseGithubRepo,
+} from "../src/github.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -135,5 +142,17 @@ describe("cloneGithubRepo", () => {
     repoWithCommit(dest);
     git(dest, "remote", "add", "origin", "https://github.com/someone/else.git");
     await expect(cloneGithubRepo({ repo: "me/app", parent: dir })).rejects.toThrow(/existe déjà/);
+  });
+});
+
+describe("ghCredentialArgs", () => {
+  // Git for Windows sets Git Credential Manager for everyone: gh must still come after it.
+  it.skipIf(!findGh())("lends gh even when git has a helper of its own", () => {
+    const args = ghCredentialArgs();
+    expect(args[0]).toBe("-c");
+    expect(args[1]).toMatch(
+      /^credential\.https:\/\/github\.com\.helper=!'[^']+' auth git-credential$/,
+    );
+    expect(args[1]).not.toContain("\\");
   });
 });

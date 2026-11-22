@@ -29,6 +29,9 @@
   font-weight: 500;
 }
 .dialog p.np-gh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   margin: 0;
   padding: 10px 12px;
   border-radius: 10px;
@@ -90,4 +93,7 @@
   padding: 8px 9px;
   font-size: 13px;
   color: var(--muted);
+}
+.np-gh .btn {
+  flex: none;
 }

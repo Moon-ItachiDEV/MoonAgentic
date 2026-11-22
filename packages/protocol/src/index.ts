@@ -412,8 +412,8 @@ export interface GithubStatus {
   /** The account `gh` is signed in to, when it is. */
   login?: string;
   /**
-   * How git proves who it is to github.com when it pushes: its own credential helper (such
-   * as Git Credential Manager), or `gh` lent for each clone and push, or nothing.
+   * How git proves who it is to github.com when it pushes: `gh` lent for each clone and push
+   * (after git's own helpers), or only its own credential helper, or nothing.
    */
   gitAuth: "helper" | "gh" | "none";
   /** Why `gh` could not tell who is signed in, in its own words. */

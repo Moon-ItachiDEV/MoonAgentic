@@ -118,7 +118,7 @@ async function isWorktreeRoot(dir: string): Promise<boolean> {
  * (`C:\Users\RUNNER~1\…`, as the temp folder often is) where git gives the long one: only
  * the system's own `realpath` turns one into the other, and Windows paths ignore case.
  */
-function samePath(a: string, b: string): boolean {
+export function samePath(a: string, b: string): boolean {
   const [x, y] = [realpathSync.native(a), realpathSync.native(b)];
   return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
@@ -503,7 +503,7 @@ export async function ship(
   // Without a credential helper of its own, git signs in through the user's `gh`.
   await git(
     dir,
-    [...(await ghCredentialArgs()), "push", "-u", remote, options.branch],
+    [...ghCredentialArgs(), "push", "-u", remote, options.branch],
     undefined,
     NETWORK_TIMEOUT_MS,
   );

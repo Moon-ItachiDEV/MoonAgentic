@@ -80,17 +80,17 @@ export async function githubStatus(): Promise<GithubStatus> {
     git,
     gh: !!gh,
     ...account,
-    gitAuth: helper ? "helper" : account.login ? "gh" : "none",
+    gitAuth: account.login ? "gh" : helper ? "helper" : "none",
   };
 }
 
 /**
  * Options that let one git command sign in to github.com through the user's `gh`, the way
- * `gh auth setup-git` would, without changing their git settings. Empty when git has its own
- * credential helper, when `gh` is missing, or when its path could not be quoted safely.
+ * `gh auth setup-git` would, without changing their git settings. Git asks its own helpers
+ * first (Git for Windows sets Git Credential Manager for every user): `gh` is only asked
+ * when they have nothing. Empty when `gh` is missing or its path could not be quoted safely.
  */
-export async function ghCredentialArgs(): Promise<string[]> {
-  if (await gitHasHelper()) return [];
+export function ghCredentialArgs(): string[] {
   const gh = findGh();
   if (!gh || gh.includes("'")) return [];
   // git runs a `!` helper through a shell, which wants forward slashes, even on Windows.
@@ -182,11 +182,7 @@ export async function cloneGithubRepo(input: {
   const dest = path.join(expandHome(input.parent), name);
   // Already cloned there: it simply becomes the project.
   if (await isCloneOf(dest, repo)) return { dest, name, existing: true };
-  await cloneInto(
-    `https://github.com/${repo.owner}/${repo.name}.git`,
-    dest,
-    await ghCredentialArgs(),
-  );
+  await cloneInto(`https://github.com/${repo.owner}/${repo.name}.git`, dest, ghCredentialArgs());
   return { dest, name };
 }
 

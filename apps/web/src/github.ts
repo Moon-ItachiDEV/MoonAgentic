@@ -14,10 +14,7 @@ export function githubStatusText(status: GithubStatus): {
     return {
       tone: "ok",
       label: `Connecté : @${status.login}`,
-      detail:
-        status.gitAuth === "helper"
-          ? "git pousse avec ses propres identifiants, gh ouvre les pull requests."
-          : "git pousse et gh ouvre les pull requests avec ce compte.",
+      detail: "git pousse et gh ouvre les pull requests avec ce compte.",
     };
   }
   if (status.gitAuth === "helper") {

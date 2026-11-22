@@ -27,7 +27,13 @@ function useGithub(active: boolean) {
       live = false;
     };
   }, [active, status]);
-  return { status, repos, error };
+  /** Asks again, after the user signed in to `gh` with the dialog open. */
+  const recheck = () => {
+    setError(null);
+    setRepos(null);
+    setStatus(null);
+  };
+  return { status, repos, error, recheck };
 }
 
 export function NewProjectDialog({
@@ -149,7 +155,12 @@ export function NewProjectDialog({
             </p>
             {status && !github.status?.login && (
               <p className={`np-gh ${status.tone}`}>
-                <b>{status.label}.</b> {status.detail} Un dépôt public se clone quand même.
+                <span>
+                  <b>{status.label}.</b> {status.detail} Un dépôt public se clone quand même.
+                </span>
+                <button type="button" className="btn sm" disabled={busy} onClick={github.recheck}>
+                  Vérifier
+                </button>
               </p>
             )}
             <label className="field">
