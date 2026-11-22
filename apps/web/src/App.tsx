@@ -24,6 +24,7 @@ import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
+import { ProjectRequests, projectRequests } from "./components/ProjectRequests.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { ProjectPage } from "./components/ProjectPage.tsx";
@@ -545,24 +546,36 @@ export function App() {
                   </button>
                 </div>
               ) : (
-                <Composer
-                  key={spoken?.id ?? "new"}
-                  agents={state.agents}
-                  favorites={state.favorites}
-                  thread={spoken}
-                  project={project}
-                  onNewProject={() => setCreatingProject(true)}
-                  onCreated={(id) => navigate({ name: "thread", threadId: id })}
-                  onExport={exportThread}
-                  onSearch={() => setSearchOpen(true)}
-                  onRequests={() => setRequestsOpen(true)}
-                  onConnections={() => setConnectionsOpen(true)}
-                  onArchive={() => spoken && setArchived(spoken.id, true)}
-                  onDelete={() => spoken && askDeleteThread(spoken)}
-                  onTeam={(task) => setTeamTask(task)}
-                  onSchedule={(text) => setScheduling({ text })}
-                  onSettings={() => go({ name: "settings", section: "general" })}
-                />
+                <>
+                  {coordinator && routeProject && (
+                    <ProjectRequests
+                      requests={projectRequests(state.requests, state.threads, routeProject.id)}
+                      threads={state.threads}
+                      onOpenThread={(id, itemId) => {
+                        focusItem(id, itemId);
+                        openThread(id);
+                      }}
+                    />
+                  )}
+                  <Composer
+                    key={spoken?.id ?? "new"}
+                    agents={state.agents}
+                    favorites={state.favorites}
+                    thread={spoken}
+                    project={project}
+                    onNewProject={() => setCreatingProject(true)}
+                    onCreated={(id) => navigate({ name: "thread", threadId: id })}
+                    onExport={exportThread}
+                    onSearch={() => setSearchOpen(true)}
+                    onRequests={() => setRequestsOpen(true)}
+                    onConnections={() => setConnectionsOpen(true)}
+                    onArchive={() => spoken && setArchived(spoken.id, true)}
+                    onDelete={() => spoken && askDeleteThread(spoken)}
+                    onTeam={(task) => setTeamTask(task)}
+                    onSchedule={(text) => setScheduling({ text })}
+                    onSettings={() => go({ name: "settings", section: "general" })}
+                  />
+                </>
               )}
             </div>
           )}

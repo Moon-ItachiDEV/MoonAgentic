@@ -581,6 +581,10 @@ describe("composer", () => {
     const beside = page.locator(".pp-panel .pp-row", { hasText: "Export Safari" });
     await beside.waitFor();
     await expect.poll(() => card.locator(".oc-state").textContent()).toBe("En attente");
+    // What the new thread waits for is asked above the coordinator's composer, to the user.
+    const ask = page.locator(".pp-ask", { hasText: "Export Safari" });
+    await ask.waitFor();
+    expect(await ask.getByRole("button").count()).toBeGreaterThan(1);
     // The coordinator is no thread of the lists: not in the sidebar, not among the project's.
     expect(await page.locator(".side .thr", { hasText: "Coordinateur" }).count()).toBe(0);
     expect(await page.locator(".pp-row", { hasText: "Coordinateur" }).count()).toBe(0);
