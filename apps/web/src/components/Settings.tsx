@@ -5,7 +5,17 @@ import { readPref, writePref } from "../prefs.ts";
 import type { SettingsSection } from "../router.ts";
 import { readTheme, setTheme, type Theme } from "../theme.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
-import { IconBack, IconFolder, IconGear, IconPlug, IconShield, IconStar, IconX } from "./icons.tsx";
+import {
+  IconBack,
+  IconFolder,
+  IconGear,
+  IconPlug,
+  IconShield,
+  IconStar,
+  IconWifi,
+  IconX,
+} from "./icons.tsx";
+import { RemoteAccess } from "./RemoteAccess.tsx";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
   { id: "general", label: "Général", icon: <IconGear size={15} /> },
@@ -13,6 +23,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
   { id: "agents", label: "Agents", icon: <IconShield size={15} /> },
   { id: "models", label: "Modèles", icon: <IconStar size={15} /> },
   { id: "mcp", label: "Serveurs MCP", icon: <IconPlug size={15} /> },
+  { id: "remote", label: "Accès distant", icon: <IconWifi size={15} /> },
 ];
 
 /** The sidebar while in the settings: back to the app, then one entry per section. */
@@ -298,6 +309,9 @@ export function SettingsPage(props: {
           </button>
         </>
       );
+      break;
+    case "remote":
+      body = <RemoteAccess />;
       break;
   }
 

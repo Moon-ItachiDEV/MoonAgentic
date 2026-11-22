@@ -100,6 +100,12 @@ export const IconPlug = ({ size = 16 }: P) => (
     <path d="M12 17v5" />
   </svg>
 );
+export const IconWifi = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <path d="M2.5 9a14 14 0 0 1 19 0M6 12.7a9 9 0 0 1 12 0M9.3 16.3a4 4 0 0 1 5.4 0" />
+    <path d="M12 20h.01" />
+  </svg>
+);
 export const IconBranch = ({ size = 15 }: P) => (
   <svg {...base(size)}>
     <circle cx="6" cy="5" r="2" />
