@@ -1320,7 +1320,10 @@ export class Hub {
    * ones included, are kept in git. Bringing it back puts the worktree and the files back.
    */
   async setArchived(threadId: string, archived: boolean): Promise<void> {
-    this.requireThread(threadId);
+    if (archived && this.requireThread(threadId).kind === "coordinator")
+      throw new Error(
+        "Le coordinateur ne se résout pas : supprime sa conversation pour repartir de zéro.",
+      );
     if (archived && this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
     // A team goes to the archive whole, and comes back whole: never its lead alone.
     const members = this.teamMembers(threadId);

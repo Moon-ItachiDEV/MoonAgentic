@@ -251,7 +251,8 @@ const app = acp
       });
     };
     // As a coordinator's agent does: a real call to MoonAgentic's own tools.
-    const opening = ask.match(/^\/ouvre (.+)$/);
+    // Its part, given before the message, comes in the same text: the message is the end.
+    const opening = ask.match(/(?:^|\n)\/ouvre (.+)$/);
     if (opening) {
       const said = await callMoonAgentic(sessionId, "open_thread", {
         title: opening[1],
@@ -264,7 +265,7 @@ const app = acp
       );
       return { stopReason: "end_turn" };
     }
-    if (ask.trim() === "/fils") {
+    if (/(?:^|\n)\/fils$/.test(ask.trim())) {
       const said = await callMoonAgentic(sessionId, "list_threads", {});
       let count: number | undefined;
       try {

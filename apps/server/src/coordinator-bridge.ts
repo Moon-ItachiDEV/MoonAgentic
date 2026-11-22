@@ -91,4 +91,4 @@ lines.on("line", (line) => {
       refuse(id, -32601, `Méthode inconnue : ${message.method}`);
   }
 });
-lines.on("close", () => void Promise.allSettled([...pending]).then(() => process.exit(0)));
+lines.on("close", () => void Promise.allSettled(pending).then(() => process.exit(0)));

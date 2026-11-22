@@ -86,13 +86,12 @@ describe("a project's coordinator", () => {
   });
 
   it("opens a thread on its own branch through MoonAgentic's tools, as its agent asks", async () => {
-    const { hub, store, projectId, coordinatorId, say } = await coordinated();
+    const { store, projectId, coordinatorId, say } = await coordinated();
     expect(await say("/ouvre Export Safari")).toBe("J'ai ouvert le fil « Export Safari ».");
     const opened = store.listThreads().find((t) => t.openedBy === coordinatorId)!;
     expect(opened).toMatchObject({ projectId, title: "Export Safari", agentId: "demo" });
     expect(opened.workspace?.branch).toBeTruthy();
     // The thread got the brief, and the coordinator's conversation links to it.
-    await hub.whenIdle(opened.id);
     expect(store.listItems(opened.id)[0]).toMatchObject({
       kind: "user",
       text: "Corrige : Export Safari",
