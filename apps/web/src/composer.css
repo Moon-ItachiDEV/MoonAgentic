@@ -1,0 +1,316 @@
+/* The composer as in the mockup: 600 px wide, two rows on a computer, one line on a phone
+   until it is used, a microphone and a voice button. Values measured on the mockup. */
+
+.composer {
+  width: min(600px, 100%);
+}
+.composer textarea {
+  font-size: 14.5px;
+}
+.composer textarea[hidden] {
+  display: none;
+}
+.cbar {
+  padding: 2px 6px 6px;
+}
+.plus-btn,
+.mic-btn,
+.send {
+  width: 30px;
+  height: 30px;
+}
+.send {
+  margin-left: 2px;
+  transition:
+    transform 0.12s,
+    width 0.24s cubic-bezier(0.23, 1, 0.32, 1),
+    background-color 0.15s,
+    opacity 0.12s;
+}
+
+/* The microphone: its capsule fills with the real level of the voice. */
+.mic-btn {
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--muted);
+  flex: none;
+  transition:
+    background-color 0.18s,
+    color 0.18s,
+    transform 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+}
+.mic-btn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.mic-btn:active {
+  transform: scale(0.9);
+}
+.mic .mic-fill {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transform: scaleY(0);
+}
+.vx-on .mic-btn {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.vx-on .mic .mic-fill {
+  transform: scaleY(var(--lv, 0));
+  transition: transform 0.1s linear;
+}
+
+/* Five bars: still at rest, they follow the voice while it is heard. */
+.vw {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 14px;
+  flex: none;
+}
+.vw i {
+  display: block;
+  width: 1.6px;
+  border-radius: 2px;
+  background: currentColor;
+}
+.vw i:nth-child(1),
+.vw i:nth-child(5) {
+  height: 3px;
+}
+.vw i:nth-child(2) {
+  height: 8px;
+}
+.vw i:nth-child(3) {
+  height: 13px;
+}
+.vw i:nth-child(4) {
+  height: 7px;
+}
+.send.vox {
+  width: 92px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: var(--accent);
+  color: #fff;
+}
+.send.vox .vw {
+  transform: scaleY(calc(0.3 + var(--lv, 0) * 0.9));
+  transition: transform 0.08s linear;
+}
+.vx-sq {
+  width: 9px;
+  height: 9px;
+  border-radius: 2.5px;
+  background: #fff;
+  flex: none;
+}
+.vx-t {
+  font-size: 11.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* While dictating: the words heard, a cancel button and the voice's level. */
+.composer.vx-on {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line2));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) calc(8% + var(--lv, 0) * 20%), transparent),
+    0 10px 28px -18px rgba(0, 0, 0, 0.22);
+}
+.vxp {
+  padding: 11px 14px 2px;
+  display: grid;
+  gap: 8px;
+  animation: vxp-in 0.22s cubic-bezier(0.23, 1, 0.32, 1);
+}
+.vxp-t {
+  font-size: 15px;
+  line-height: 1.45;
+  min-height: 22px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.vxp-typed {
+  color: var(--muted);
+}
+.vxp-ph {
+  color: var(--faint);
+}
+.vxp-cur {
+  color: var(--accent);
+}
+.vxp-w {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+}
+.vxp-x {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: var(--card);
+  flex: none;
+}
+.vxp-x:hover {
+  color: var(--fg);
+}
+.vxp-level {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+.vxp-level i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transform-origin: 0 50%;
+  transform: scaleX(var(--lv, 0));
+  transition: transform 0.08s linear;
+}
+@keyframes vxp-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+/* « Branche à part » lives in the « + » menu; this mark only says it is on. */
+.perm.branch.mark {
+  flex: none;
+  width: 26px;
+  padding: 0;
+  justify-content: center;
+}
+.menu-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line);
+}
+.plus-on {
+  margin-left: auto;
+  color: var(--accent);
+  display: grid;
+}
+
+/* Clicking in the composer lights its edge, as in the mockup; only while it has the focus. */
+@property --ga {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.composer::before,
+.composer::after {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--ga),
+    transparent 0deg 205deg,
+    color-mix(in srgb, var(--accent) 35%, transparent) 240deg,
+    var(--accent) 275deg,
+    #c792ea 305deg,
+    #e5779a 330deg,
+    var(--warn) 350deg,
+    transparent 360deg
+  );
+  mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+  animation: glow-spin 4.2s linear infinite paused;
+  z-index: 0;
+}
+.composer::after {
+  inset: -3px;
+  padding: 3px;
+  filter: blur(7px);
+}
+.composer:focus-within::before {
+  opacity: 1;
+  animation-play-state: running;
+}
+.composer:focus-within::after {
+  opacity: 0.45;
+  animation-play-state: running;
+}
+.composer.vx-on::before,
+.composer.vx-on::after {
+  opacity: 0;
+}
+@keyframes glow-spin {
+  to {
+    --ga: 360deg;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer::before,
+  .composer::after {
+    animation: none;
+  }
+}
+
+/* A phone: one line (+, text, microphone, voice) until the composer is used. */
+@media (max-width: 860px) {
+  .composer:not(.open) {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 6px;
+  }
+  .composer:not(.open) .cbar {
+    display: contents;
+  }
+  .composer:not(.open) .plus {
+    order: 1;
+  }
+  .composer:not(.open) textarea {
+    order: 2;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    height: 34px !important;
+    padding: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .composer:not(.open) .mic-btn {
+    order: 3;
+  }
+  .composer:not(.open) .send {
+    order: 4;
+    width: 34px;
+    height: 34px;
+  }
+  .composer:not(.open) :is(.agentchip, .grow, .perm, .gauge-wrap) {
+    display: none;
+  }
+  .composer.open .cbar {
+    animation: cbar-in 0.2s cubic-bezier(0.23, 1, 0.32, 1);
+  }
+  .composer:not(.open) .mic-btn {
+    width: 28px;
+    height: 28px;
+  }
+}
+@keyframes cbar-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
