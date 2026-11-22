@@ -1,23 +1,29 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
 import { useState } from "react";
+import { readPref, writePref } from "../prefs.ts";
+import { recentAlwaysShown } from "../recent.ts";
 import {
   IconArchive,
   IconBoard,
+  IconChevron,
   IconClose,
   IconCompose,
   IconFolder,
   IconGear,
-  IconInbox,
   IconPin,
   IconPlug,
+  IconSearch,
+  IconShield,
 } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
 
 function ThreadStatus({ thread }: { thread: Thread }) {
   if (thread.status === "running") return <span className="spin" aria-label="En cours" />;
-  if (thread.status === "waiting") return <span className="dot" aria-label="Attend ta réponse" />;
-  if (thread.status === "error") return <span className="dot err" aria-label="Erreur" />;
+  if (thread.status === "waiting")
+    return <span className="dot" title="Attend ta réponse" aria-label="Attend ta réponse" />;
+  if (thread.status === "error")
+    return <span className="dot err" title="Erreur" aria-label="Erreur" />;
   return null;
 }
 
@@ -37,6 +43,7 @@ export function Sidebar(props: {
   onTogglePin: (id: string, pinned: boolean) => void;
   onRemoveProject: (id: string) => void;
   onOpenSettings: () => void;
+  onOpenSearch: () => void;
 }) {
   const { state } = props;
   const available = state.agents.filter((a) => a.available).length;
@@ -45,6 +52,8 @@ export function Sidebar(props: {
     countByProject.set(t.projectId, (countByProject.get(t.projectId) ?? 0) + 1);
 
   const [showArchived, setShowArchived] = useState(false);
+  const [showAll, setShowAll] = useState(false);
+  const [projectsOpen, setProjectsOpen] = useState(() => readPref("projectsOpen") !== "false");
   const live = state.threads.filter((t) => !t.archived);
   const archived = state.threads.filter((t) => t.archived);
   // A coder's thread sits under its lead's, wherever the lead is listed.
@@ -65,6 +74,8 @@ export function Sidebar(props: {
     t.status === "waiting";
   const pinned = top.filter((t) => t.pinned);
   const recent = top.filter((t) => !t.pinned);
+  const { always, foldable } = recentAlwaysShown(recent, childrenOf, props.activeThreadId);
+  const recentShown = showAll ? recent : always;
   // Coders in the order the lead handed out their pieces.
   const tree = (t: Thread) => [
     row(t),
@@ -100,8 +111,24 @@ export function Sidebar(props: {
     <aside className="side">
       <div className="side-top">
         <Wordmark />
+        <button
+          className={`ib side-plug${state.ready && state.status === "open" && !available ? " warn" : ""}`}
+          aria-label="Connexions"
+          title={`Connexions : ${available} ${available > 1 ? "agents prêts" : "agent prêt"} · ${
+            state.mcpServers.filter((m) => m.enabled).length
+          } MCP`}
+          onClick={props.onOpenConnections}
+        >
+          <IconPlug size={17} />
+        </button>
       </div>
       <nav className="nav">
+        {state.requests.length > 0 && (
+          <button className="inbrow" onClick={props.onOpenRequests}>
+            <IconShield />À traiter
+            <span className="aux badge">{state.requests.length}</span>
+          </button>
+        )}
         <button
           className={!props.activeThreadId && !props.onPlanner ? "on" : ""}
           onClick={props.onNewThread}
@@ -121,21 +148,23 @@ export function Sidebar(props: {
           <IconBoard />
           Planner
         </button>
-        <button onClick={props.onOpenRequests}>
-          <IconInbox />À traiter
-          {state.requests.length > 0 && <span className="aux badge">{state.requests.length}</span>}
-        </button>
-        <button onClick={props.onOpenConnections}>
-          <IconPlug />
-          Connexions
-        </button>
       </nav>
       <div className="side-scroll">
-        <div className="sec-h">Projets</div>
-        {state.ready && state.projects.length === 0 && (
+        <button
+          className={`sec-h fold${projectsOpen ? "" : " shut"}`}
+          aria-expanded={projectsOpen}
+          onClick={() => {
+            setProjectsOpen(!projectsOpen);
+            writePref("projectsOpen", String(!projectsOpen));
+          }}
+        >
+          <span>Projets</span>
+          <IconChevron size={13} />
+        </button>
+        {projectsOpen && state.ready && state.projects.length === 0 && (
           <div className="empty-note">Aucun projet pour l'instant.</div>
         )}
-        {state.projects.map((p) => (
+        {(projectsOpen ? state.projects : []).map((p) => (
           <div key={p.id} className="thr-row proj">
             <button
               className={`thr${!props.activeThreadId && p.id === props.activeProjectId ? " on" : ""}`}
@@ -159,7 +188,12 @@ export function Sidebar(props: {
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
         {pinned.flatMap(tree)}
         {recent.length > 0 && <div className="sec-h">Récents</div>}
-        {recent.flatMap(tree)}
+        {recentShown.flatMap(tree)}
+        {foldable > 0 && (
+          <button className="more" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>
+            {showAll ? "Voir moins" : `Voir plus (${foldable})`}
+          </button>
+        )}
         {archived.length > 0 && (
           <button
             className="sec-h arch-toggle"
@@ -172,6 +206,7 @@ export function Sidebar(props: {
         )}
         {showArchived && archived.map((t) => row(t))}
       </div>
+      {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}
       <div className="side-foot">
         <button
           className="ib set-gear"
@@ -181,13 +216,11 @@ export function Sidebar(props: {
         >
           <IconGear size={17} />
         </button>
-        {state.status === "open" ? (
-          <button className={`st ${available ? "ok" : "warn"}`} onClick={props.onOpenConnections}>
-            {available} {available > 1 ? "agents prêts" : "agent prêt"}
-          </button>
-        ) : (
-          <span className="st warn">Reconnexion au serveur…</span>
-        )}
+        <button className="side-search" onClick={props.onOpenSearch}>
+          <IconSearch size={15} />
+          <span>Rechercher</span>
+          <kbd>Ctrl K</kbd>
+        </button>
       </div>
     </aside>
   );
