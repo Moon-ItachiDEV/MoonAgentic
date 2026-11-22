@@ -1,5 +1,5 @@
 import { chmodSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import type {
   AgentSetting,
   Item,
@@ -198,6 +198,18 @@ export class Store {
     migrate(this.db, file);
   }
 
+  private readonly statements = new Map<string, StatementSync>();
+
+  /** Each query is prepared once, then reused: a streamed reply writes many times a second. */
+  private sql(query: string): StatementSync {
+    let statement = this.statements.get(query);
+    if (!statement) {
+      statement = this.db.prepare(query);
+      this.statements.set(query, statement);
+    }
+    return statement;
+  }
+
   /** Runs `work` as one write: all of it lands, or none of it. */
   transaction<T>(work: () => T): T {
     if (this.db.isTransaction) return work();
@@ -213,43 +225,37 @@ export class Store {
   }
 
   getSetting<T>(key: string, fallback: T): T {
-    const row = this.db.prepare(`SELECT value FROM settings WHERE key = ?`).get(key) as
+    const row = this.sql(`SELECT value FROM settings WHERE key = ?`).get(key) as
       { value: string } | undefined;
     return row ? (JSON.parse(row.value) as T) : fallback;
   }
 
   setSetting(key: string, value: unknown): void {
-    this.db
-      .prepare(
-        `INSERT INTO settings (key, value) VALUES (?, ?)
+    this.sql(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
          ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
-      )
-      .run(key, JSON.stringify(value));
+    ).run(key, JSON.stringify(value));
   }
 
   getAgentModels(agentId: string): AgentModels | undefined {
-    const row = this.db.prepare(`SELECT data FROM agent_models WHERE agent_id = ?`).get(agentId) as
+    const row = this.sql(`SELECT data FROM agent_models WHERE agent_id = ?`).get(agentId) as
       { data: string } | undefined;
     return row && (JSON.parse(row.data) as AgentModels);
   }
 
   setAgentModels(agentId: string, models: AgentModels): void {
-    this.db
-      .prepare(
-        `INSERT INTO agent_models (agent_id, data) VALUES (?, ?)
+    this.sql(
+      `INSERT INTO agent_models (agent_id, data) VALUES (?, ?)
          ON CONFLICT (agent_id) DO UPDATE SET data = excluded.data`,
-      )
-      .run(agentId, JSON.stringify(models));
+    ).run(agentId, JSON.stringify(models));
   }
 
   /** Work that was in flight when the server stopped cannot resume, so settle it. */
   recoverAfterRestart(): void {
     this.db.exec(`UPDATE threads SET status = 'idle' WHERE status IN ('running', 'waiting')`);
-    const pending = this.db
-      .prepare(
-        `SELECT thread_id, data FROM items WHERE json_extract(data, '$.kind') = 'permission'`,
-      )
-      .all() as { thread_id: string; data: string }[];
+    const pending = this.sql(
+      `SELECT thread_id, data FROM items WHERE json_extract(data, '$.kind') = 'permission'`,
+    ).all() as { thread_id: string; data: string }[];
     for (const row of pending) {
       const item = JSON.parse(row.data) as Item;
       if (item.kind === "permission" && item.outcome === null) {
@@ -259,57 +265,56 @@ export class Store {
   }
 
   listProjects(): Project[] {
-    const rows = this.db
-      .prepare(`SELECT id, name, path, created_at FROM projects ORDER BY created_at`)
-      .all() as { id: string; name: string; path: string; created_at: number }[];
+    const rows = this.sql(
+      `SELECT id, name, path, created_at FROM projects ORDER BY created_at`,
+    ).all() as { id: string; name: string; path: string; created_at: number }[];
     return rows.map((r) => ({ id: r.id, name: r.name, path: r.path, createdAt: r.created_at }));
   }
 
   getProject(id: string): Project | undefined {
-    const r = this.db
-      .prepare(`SELECT id, name, path, created_at FROM projects WHERE id = ?`)
-      .get(id) as { id: string; name: string; path: string; created_at: number } | undefined;
+    const r = this.sql(`SELECT id, name, path, created_at FROM projects WHERE id = ?`).get(id) as
+      { id: string; name: string; path: string; created_at: number } | undefined;
     return r && { id: r.id, name: r.name, path: r.path, createdAt: r.created_at };
   }
 
   addProject(project: Project): void {
-    this.db
-      .prepare(`INSERT INTO projects (id, name, path, created_at) VALUES (?, ?, ?, ?)`)
-      .run(project.id, project.name, project.path, project.createdAt);
+    this.sql(`INSERT INTO projects (id, name, path, created_at) VALUES (?, ?, ?, ?)`).run(
+      project.id,
+      project.name,
+      project.path,
+      project.createdAt,
+    );
   }
 
   listThreads(): Thread[] {
-    const rows = this.db
-      .prepare(`SELECT * FROM threads ORDER BY updated_at DESC`)
-      .all() as unknown as ThreadRow[];
+    const rows = this.sql(
+      `SELECT * FROM threads ORDER BY updated_at DESC`,
+    ).all() as unknown as ThreadRow[];
     return rows.map(toThread);
   }
 
   getThread(id: string): Thread | undefined {
-    const row = this.db.prepare(`SELECT * FROM threads WHERE id = ?`).get(id) as
-      ThreadRow | undefined;
+    const row = this.sql(`SELECT * FROM threads WHERE id = ?`).get(id) as ThreadRow | undefined;
     return row && toThread(row);
   }
 
   addThread(thread: Thread): void {
-    this.db
-      .prepare(
-        `INSERT INTO threads (id, project_id, title, agent_id, status, permission_mode, model, workspace, extra, error, created_at, updated_at)
+    this.sql(
+      `INSERT INTO threads (id, project_id, title, agent_id, status, permission_mode, model, workspace, extra, error, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
-      )
-      .run(
-        thread.id,
-        thread.projectId,
-        thread.title,
-        thread.agentId,
-        thread.status,
-        thread.permissionMode,
-        thread.model ?? null,
-        thread.workspace ? JSON.stringify(thread.workspace) : null,
-        extraOf(thread),
-        thread.createdAt,
-        thread.updatedAt,
-      );
+    ).run(
+      thread.id,
+      thread.projectId,
+      thread.title,
+      thread.agentId,
+      thread.status,
+      thread.permissionMode,
+      thread.model ?? null,
+      thread.workspace ? JSON.stringify(thread.workspace) : null,
+      extraOf(thread),
+      thread.createdAt,
+      thread.updatedAt,
+    );
   }
 
   updateThread(
@@ -340,81 +345,76 @@ export class Store {
     const active = patch.status !== undefined || patch.title !== undefined;
     const next = { ...current, ...patch, updatedAt: active ? Date.now() : current.updatedAt };
     const error = patch.error === undefined ? (current.error ?? null) : patch.error;
-    this.db
-      .prepare(
-        `UPDATE threads SET status = ?, agent_id = ?, permission_mode = ?, title = ?, model = ?, workspace = ?, extra = ?, error = ?, updated_at = ? WHERE id = ?`,
-      )
-      .run(
-        next.status,
-        next.agentId,
-        next.permissionMode,
-        next.title,
-        next.model ?? null,
-        next.workspace ? JSON.stringify(next.workspace) : null,
-        extraOf(next),
-        error,
-        next.updatedAt,
-        id,
-      );
+    this.sql(
+      `UPDATE threads SET status = ?, agent_id = ?, permission_mode = ?, title = ?, model = ?, workspace = ?, extra = ?, error = ?, updated_at = ? WHERE id = ?`,
+    ).run(
+      next.status,
+      next.agentId,
+      next.permissionMode,
+      next.title,
+      next.model ?? null,
+      next.workspace ? JSON.stringify(next.workspace) : null,
+      extraOf(next),
+      error,
+      next.updatedAt,
+      id,
+    );
     return this.getThread(id)!;
   }
 
   getSessionId(threadId: string): string | null {
-    const row = this.db.prepare(`SELECT acp_session_id FROM threads WHERE id = ?`).get(threadId) as
+    const row = this.sql(`SELECT acp_session_id FROM threads WHERE id = ?`).get(threadId) as
       { acp_session_id: string | null } | undefined;
     return row?.acp_session_id ?? null;
   }
 
   /** Null forgets the agent's session, so the thread's next turn starts a new one. */
   setSessionId(threadId: string, sessionId: string | null): void {
-    this.db.prepare(`UPDATE threads SET acp_session_id = ? WHERE id = ?`).run(sessionId, threadId);
+    this.sql(`UPDATE threads SET acp_session_id = ? WHERE id = ?`).run(sessionId, threadId);
   }
 
   listItems(threadId: string): Item[] {
-    const rows = this.db
-      .prepare(`SELECT data FROM items WHERE thread_id = ? ORDER BY seq`)
-      .all(threadId) as { data: string }[];
+    const rows = this.sql(`SELECT data FROM items WHERE thread_id = ? ORDER BY seq`).all(
+      threadId,
+    ) as { data: string }[];
     return rows.map((r) => JSON.parse(r.data) as Item);
   }
 
   getItem(threadId: string, id: string): Item | undefined {
-    const row = this.db
-      .prepare(`SELECT data FROM items WHERE thread_id = ? AND id = ?`)
-      .get(threadId, id) as { data: string } | undefined;
+    const row = this.sql(`SELECT data FROM items WHERE thread_id = ? AND id = ?`).get(
+      threadId,
+      id,
+    ) as { data: string } | undefined;
     return row && (JSON.parse(row.data) as Item);
   }
 
   lastItem(threadId: string): Item | undefined {
-    const row = this.db
-      .prepare(`SELECT data FROM items WHERE thread_id = ? ORDER BY seq DESC LIMIT 1`)
-      .get(threadId) as { data: string } | undefined;
+    const row = this.sql(
+      `SELECT data FROM items WHERE thread_id = ? ORDER BY seq DESC LIMIT 1`,
+    ).get(threadId) as { data: string } | undefined;
     return row && (JSON.parse(row.data) as Item);
   }
 
   /** Inserts the item at the end of the timeline, or replaces it in place. */
   putItem(threadId: string, item: Item): void {
-    this.db
-      .prepare(
-        `INSERT INTO items (thread_id, id, seq, data)
+    this.sql(
+      `INSERT INTO items (thread_id, id, seq, data)
          VALUES (?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM items WHERE thread_id = ?), ?)
          ON CONFLICT (thread_id, id) DO UPDATE SET data = excluded.data`,
-      )
-      .run(threadId, item.id, threadId, JSON.stringify(item));
+    ).run(threadId, item.id, threadId, JSON.stringify(item));
   }
 
   /** Messages from the user or an agent that contain `query`, newest first. */
   searchItems(query: string, limit = 30): SearchHit[] {
     const pattern = `%${fold(query).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-    const rows = this.db
-      .prepare(
-        `SELECT items.thread_id, items.id, items.data FROM items
+    const rows = this.sql(
+      `SELECT items.thread_id, items.id, items.data FROM items
          JOIN threads ON threads.id = items.thread_id
          WHERE json_extract(items.data, '$.kind') IN ('user', 'agent')
            AND moon_fold(json_extract(items.data, '$.text')) LIKE ? ESCAPE '\\'
          ORDER BY threads.updated_at DESC, items.seq DESC
          LIMIT ?`,
-      )
-      .all(pattern, limit) as { thread_id: string; id: string; data: string }[];
+    ).all(pattern, limit) as { thread_id: string; id: string; data: string }[];
     return rows.flatMap((row): SearchHit[] => {
       const item = JSON.parse(row.data) as Item;
       if (item.kind !== "user" && item.kind !== "agent") return [];
@@ -432,22 +432,24 @@ export class Store {
   /** Removes the item and every item after it; returns what was removed. */
   /** Deletes the thread and its timeline. */
   deleteThread(id: string): void {
-    this.db.prepare(`DELETE FROM threads WHERE id = ?`).run(id);
+    this.sql(`DELETE FROM threads WHERE id = ?`).run(id);
   }
 
   /** Deletes the project, its threads and their timelines. */
   deleteProject(id: string): void {
-    this.db.prepare(`DELETE FROM projects WHERE id = ?`).run(id);
+    this.sql(`DELETE FROM projects WHERE id = ?`).run(id);
   }
 
   removeItemsFrom(threadId: string, id: string): Item[] {
     const from = `(SELECT seq FROM items WHERE thread_id = ? AND id = ?)`;
-    const removed = this.db
-      .prepare(`SELECT data FROM items WHERE thread_id = ? AND seq >= ${from} ORDER BY seq`)
-      .all(threadId, threadId, id) as { data: string }[];
-    this.db
-      .prepare(`DELETE FROM items WHERE thread_id = ? AND seq >= ${from}`)
-      .run(threadId, threadId, id);
+    const removed = this.sql(
+      `SELECT data FROM items WHERE thread_id = ? AND seq >= ${from} ORDER BY seq`,
+    ).all(threadId, threadId, id) as { data: string }[];
+    this.sql(`DELETE FROM items WHERE thread_id = ? AND seq >= ${from}`).run(
+      threadId,
+      threadId,
+      id,
+    );
     return removed.map((r) => JSON.parse(r.data) as Item);
   }
 

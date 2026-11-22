@@ -1,0 +1,295 @@
+import { randomUUID } from "node:crypto";
+import type * as acp from "@agentclientprotocol/sdk";
+import type {
+  AgentCheck,
+  AgentCommand,
+  AgentInfo,
+  AgentSetting,
+  CustomAgentInput,
+  Favorites,
+  McpServerInput,
+  ServerMessage,
+} from "@moonagentic/protocol";
+import type { Agents, CustomAgent } from "./agents.ts";
+import { mcpInfo, type McpServerRecord } from "./mcp.ts";
+import { AgentSession, describe, type ModelOption, needsSignIn } from "./session.ts";
+import type { Store } from "./store.ts";
+
+const DISCOVERY_TIMEOUT_MS = 30_000;
+
+export const agentCommands = (update: acp.AvailableCommandsUpdate): AgentCommand[] =>
+  update.availableCommands.slice(0, 200).map((c) => ({
+    name: c.name.replace(/^\//, ""),
+    description: c.description,
+    ...(c.input && "hint" in c.input && c.input.hint ? { hint: c.input.hint } : {}),
+  }));
+
+/**
+ * What MoonAgentic knows of the agents, apart from any thread: which are installed and
+ * signed in, their models, settings and commands, the ones the user added, the MCP servers
+ * given to each, and the favorite models.
+ */
+export class AgentCatalog {
+  private readonly discoveries = new Map<string, { done: Promise<void>; stop: AbortController }>();
+  /** Why listing an agent's models failed, until a retry succeeds. */
+  private readonly discoveryErrors = new Map<string, string>();
+
+  private readonly store: Store;
+  private readonly agents: Agents;
+  private readonly broadcast: (message: ServerMessage) => void;
+  /** Where an agent checked from Connexions, before any project, is started. */
+  private readonly homeDir: string;
+
+  constructor(
+    store: Store,
+    agents: Agents,
+    broadcast: (message: ServerMessage) => void,
+    homeDir: string,
+  ) {
+    this.store = store;
+    this.agents = agents;
+    this.broadcast = broadcast;
+    this.homeDir = homeDir;
+    agents.setCustom(this.customAgents());
+  }
+
+  readonly name = (agentId: string) =>
+    this.agents.list().find((a) => a.id === agentId)?.name ?? agentId;
+
+  list(): AgentInfo[] {
+    const commands = this.store.getSetting<Record<string, AgentCommand[]>>("agentCommands", {});
+    const checks = this.store.getSetting<Record<string, AgentCheck>>("agentChecks", {});
+    return this.agents.list().map((base) => {
+      const listed = Object.hasOwn(commands, base.id) ? commands[base.id] : undefined;
+      const check = Object.hasOwn(checks, base.id) ? checks[base.id] : undefined;
+      const agent = {
+        ...base,
+        ...(listed?.length ? { commands: listed } : {}),
+        ...(check ? { check } : {}),
+      };
+      const known = this.store.getAgentModels(agent.id);
+      const modelsError = this.discoveryErrors.get(agent.id);
+      if (!known) return modelsError ? { ...agent, modelsError } : agent;
+      const defaultModel = this.defaultModel(agent.id);
+      return {
+        ...agent,
+        models: known.models,
+        ...(defaultModel ? { defaultModel } : {}),
+        // An empty list says the agent has none; a missing one, from an older cache, is unknown.
+        ...(known.settings ? { settings: known.settings } : {}),
+      };
+    });
+  }
+
+  private broadcastAgents(): void {
+    this.broadcast({ type: "agents", agents: this.list() });
+  }
+
+  defaultModel(agentId: string): string | undefined {
+    const known = this.store.getAgentModels(agentId);
+    if (!known) return undefined;
+    const preferred = this.agents.preferredModel(agentId);
+    const match =
+      preferred && known.models.find((m) => preferred.test(m.name) || preferred.test(m.id));
+    return match?.id ?? known.current;
+  }
+
+  /**
+   * Remembers the models and settings an agent offers, so new threads can offer them before
+   * starting it. Only a fresh session tells the agent's own defaults, or that it offers no
+   * model choice, which is remembered too so the UI stops asking.
+   */
+  learn(
+    agentId: string,
+    model: ModelOption | undefined,
+    settings: AgentSetting[],
+    fresh: boolean,
+  ): void {
+    const before = this.store.getAgentModels(agentId);
+    if (!fresh && !model && (!before || !settings.length)) return;
+    const keep = !fresh && before;
+    const next = {
+      models: model ? model.choices : keep ? before.models : [],
+      current: model ? (keep ? before.current : model.current) : keep ? before.current : "",
+      // A continued session that leaves its settings out does not take them away.
+      settings:
+        keep && !settings.length
+          ? (before.settings ?? [])
+          : settings.map((s) => ({
+              ...s,
+              current: (keep && before.settings?.find((b) => b.id === s.id)?.current) || s.current,
+            })),
+    };
+    if (JSON.stringify(before) === JSON.stringify(next)) return;
+    this.store.setAgentModels(agentId, next);
+    this.broadcastAgents();
+  }
+
+  rememberCommands(agentId: string, commands: AgentCommand[]): void {
+    const known = this.store.getSetting<Record<string, AgentCommand[]>>("agentCommands", {});
+    if (JSON.stringify(known[agentId] ?? []) === JSON.stringify(commands)) return;
+    this.store.setSetting("agentCommands", { ...known, [agentId]: commands });
+    this.broadcastAgents();
+  }
+
+  /** Remembers whether the agent last started fine, for Connexions. */
+  recordCheck(
+    agentId: string,
+    result: { ok: true; version: string | undefined } | { ok: false; error: unknown },
+    /** A check the user asked for is always recorded, so its time moves on. */
+    asked = false,
+  ): void {
+    const check: AgentCheck = result.ok
+      ? { at: Date.now(), ok: true, ...(result.version ? { version: result.version } : {}) }
+      : {
+          at: Date.now(),
+          ok: false,
+          error: describe(result.error),
+          ...(needsSignIn(result.error) ? { signInNeeded: true } : {}),
+        };
+    const checks = this.store.getSetting<Record<string, AgentCheck>>("agentChecks", {});
+    const before = checks[agentId];
+    // A thread starting again and again only tells something when the answer changes.
+    if (!asked && before?.ok && check.ok && before.version === check.version) return;
+    this.store.setSetting("agentChecks", { ...checks, [agentId]: check });
+    this.broadcastAgents();
+  }
+
+  /**
+   * Starts the agent briefly so the UI can list its models before the first message.
+   * A failure is shown with the agent (`modelsError`) rather than thrown, so the picker can offer a retry.
+   */
+  discover(agentId: string, cwd?: string): Promise<void> {
+    const running = this.discoveries.get(agentId);
+    if (running) return running.done;
+    if (this.discoveryErrors.delete(agentId)) this.broadcastAgents();
+    let launch;
+    try {
+      launch = this.agents.launch(agentId);
+    } catch (error) {
+      // Gone from this machine since the list was sent: said with the agent, like a failure.
+      this.discoveryErrors.set(agentId, describe(error));
+      this.recordCheck(agentId, { ok: false, error }, true);
+      return Promise.resolve();
+    }
+    const stop = new AbortController();
+    const done = AgentSession.start({
+      launch,
+      // Checked from Connexions, before any project: the home folder will do.
+      cwd: cwd ?? this.homeDir,
+      previousSessionId: null,
+      signal: AbortSignal.any([stop.signal, AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)]),
+      handlers: {
+        // Its commands too, so a new thread can offer them before its agent starts.
+        onUpdate: (update) => {
+          if (update.sessionUpdate === "available_commands_update") {
+            this.rememberCommands(agentId, agentCommands(update));
+          }
+        },
+        requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+        onExit: () => undefined,
+      },
+    })
+      .then(
+        (session) => {
+          this.recordCheck(agentId, { ok: true, version: session.agentVersion }, true);
+          this.learn(agentId, session.model, session.settings, session.fresh);
+          return session.close();
+        },
+        (error: unknown) => {
+          if (stop.signal.aborted) return;
+          this.discoveryErrors.set(agentId, describe(error));
+          this.recordCheck(agentId, { ok: false, error }, true);
+        },
+      )
+      .finally(() => this.discoveries.delete(agentId));
+    this.discoveries.set(agentId, { done, stop });
+    return done;
+  }
+
+  /** Adds an ACP agent of the user's own, started by `command` with `args`. */
+  addCustomAgent(input: CustomAgentInput): string {
+    const name = input.name.trim();
+    if (this.agents.list().some((a) => a.name.toLowerCase() === name.toLowerCase())) {
+      throw new Error(`Un agent s'appelle déjà « ${name} ».`);
+    }
+    const id = `custom-${randomUUID().slice(0, 8)}`;
+    this.saveCustomAgents([
+      ...this.customAgents(),
+      { id, name, command: input.command.trim(), args: input.args },
+    ]);
+    return id;
+  }
+
+  /** Removes an agent the user added; its threads can then be handed to another agent. */
+  removeCustomAgent(agentId: string): void {
+    const agents = this.customAgents();
+    if (!agents.some((a) => a.id === agentId))
+      throw new Error("Cet agent n'a pas été ajouté par toi.");
+    this.discoveries.get(agentId)?.stop.abort();
+    this.saveCustomAgents(agents.filter((a) => a.id !== agentId));
+  }
+
+  private customAgents(): CustomAgent[] {
+    return this.store.getSetting<CustomAgent[]>("customAgents", []);
+  }
+
+  private saveCustomAgents(agents: CustomAgent[]): void {
+    this.store.setSetting("customAgents", agents);
+    this.agents.setCustom(agents);
+    this.broadcastAgents();
+  }
+
+  favorites(): Favorites {
+    return this.store.getSetting<Favorites>("favorites", {});
+  }
+
+  toggleFavorite(agentId: string, model: string, starred: boolean): void {
+    if (!this.agents.list().some((a) => a.id === agentId))
+      throw new Error(`Agent inconnu : ${agentId}`);
+    const favorites = this.favorites();
+    const current = Object.hasOwn(favorites, agentId) ? (favorites[agentId] ?? []) : [];
+    const next = current.filter((m) => m !== model);
+    favorites[agentId] = starred ? [...next, model] : next;
+    this.store.setSetting("favorites", favorites);
+    this.broadcast({ type: "favorites", favorites });
+  }
+
+  mcpServers(): McpServerRecord[] {
+    return this.store.getSetting<McpServerRecord[]>("mcpServers", []);
+  }
+
+  /** Registers an MCP server for every agent session started from now on. */
+  addMcpServer(input: McpServerInput): string {
+    const key = input.name.trim().toLowerCase();
+    if (this.mcpServers().some((s) => s.name.trim().toLowerCase() === key)) {
+      throw new Error(`Un serveur MCP s'appelle déjà « ${input.name} ».`);
+    }
+    const id = randomUUID();
+    this.updateMcpServers((servers) => [...servers, { ...input, id, enabled: true }]);
+    return id;
+  }
+
+  setMcpEnabled(id: string, enabled: boolean): void {
+    if (!this.mcpServers().some((s) => s.id === id)) return;
+    this.updateMcpServers((servers) => servers.map((s) => (s.id === id ? { ...s, enabled } : s)));
+  }
+
+  removeMcpServer(id: string): void {
+    if (!this.mcpServers().some((s) => s.id === id)) return;
+    this.updateMcpServers((servers) => servers.filter((s) => s.id !== id));
+  }
+
+  private updateMcpServers(change: (servers: McpServerRecord[]) => McpServerRecord[]): void {
+    const servers = change(this.mcpServers());
+    this.store.setSetting("mcpServers", servers);
+    this.broadcast({ type: "mcpServers", servers: servers.map(mcpInfo) });
+  }
+
+  /** Stops the agents started only to be checked, and resolves once they are gone. */
+  async close(): Promise<void> {
+    const discoveries = [...this.discoveries.values()];
+    for (const d of discoveries) d.stop.abort();
+    await Promise.all(discoveries.map((d) => d.done.catch(() => undefined)));
+  }
+}
