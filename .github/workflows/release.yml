@@ -1,14 +1,7 @@
 name: Release
 
+# MoonAgentic: manual only until release infrastructure exists (upstream ran on tags and a schedule).
 on:
-  push:
-    tags:
-      - "v*.*.*"
-      - "!v*-nightly.*"
-      - "!v*-preview.*"
-  schedule:
-    # Avoid minute zero, when GitHub scheduled jobs are busiest.
-    - cron: "8,38 * * * *"
   workflow_dispatch:
     inputs:
       channel:
