@@ -8,6 +8,7 @@ import {
   conversationsByProject,
   lineStatus,
   projectOpen,
+  teamOpen,
   type LineStatus,
 } from "../sidebar-tree.ts";
 import {
@@ -26,6 +27,8 @@ import {
   IconShield,
 } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
+
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
 function ThreadStatus({ status }: { status: LineStatus }) {
   if (status === "running") return <span className="spin" aria-label="En cours" />;
@@ -91,15 +94,32 @@ export function Sidebar(props: {
   const active = live.find((t) => t.id === props.activeThreadId);
   const activeLead =
     active?.parentId && members.has(active.parentId) ? active.parentId : active?.id;
-  // Opening a thread unfolds its project and its team, once: a chevron folds them again.
+  // Keys of the currently open team that the user folded during this visit; reset when
+  // moving to another team, so visited teams fold back automatically on leave.
+  const [foldedActive, setFoldedActive] = useState<{
+    lead: string | undefined;
+    keys: ReadonlySet<string>;
+  }>({ lead: undefined, keys: new Set() });
+  const foldedForLead = foldedActive.lead === activeLead ? foldedActive.keys : EMPTY_KEYS;
+  const toggleTeam = (key: string, isActive: boolean) => {
+    if (!isActive) return toggle(key);
+    const next = new Set(foldedForLead);
+    if (next.delete(key)) {
+      setFoldedActive({ lead: activeLead, keys: next });
+      return;
+    }
+    next.add(key);
+    setFoldedActive({ lead: activeLead, keys: next });
+    if (unfolded.has(key)) toggle(key);
+  };
+  // Opening a thread unfolds its project once, even when multi-project defaults it folded.
   const activeProject = active?.projectId;
   useEffect(() => {
-    if (activeProject && folds[activeProject] === false) setFold(activeProject, true);
-    // Its members may come later, as a team starts: the lead is unfolded beforehand.
-    if (activeLead) {
-      setUnfolded(
-        (now) => new Set([...now, ...["", "pin:", "recent:"].map((k) => k + activeLead)]),
-      );
+    setFoldedActive((prev) =>
+      prev.keys.size === 0 ? prev : { lead: activeLead, keys: new Set() },
+    );
+    if (activeProject && !projectOpen(folds[activeProject], state.projects.length === 1)) {
+      setFold(activeProject, true);
     }
     // Only when the open thread changes, not on every fold.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -116,12 +136,14 @@ export function Sidebar(props: {
   // A team on one line, its members folded under it unless asked or one of them is open.
   const tree = (t: Thread, prefix: string) => {
     const team = members.get(t.id) ?? [];
-    const open = team.length > 0 && unfolded.has(`${prefix}${t.id}`);
+    const key = `${prefix}${t.id}`;
+    const isActive = activeLead === t.id;
+    const open = team.length > 0 && teamOpen(key, isActive, unfolded, foldedForLead);
     return [
       row(t, {
         status: lineStatus(t, open ? [] : team),
-        team: team.length ? { open, toggle: () => toggle(`${prefix}${t.id}`) } : undefined,
-        key: `${prefix}${t.id}`,
+        team: team.length ? { open, toggle: () => toggleTeam(key, isActive) } : undefined,
+        key,
       }),
       ...(open ? team.map((c) => row(c, { child: true, key: `${prefix}${c.id}` })) : []),
     ];
