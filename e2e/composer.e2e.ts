@@ -92,6 +92,14 @@ const shot = async (page: Page, name: string) => {
 };
 
 const composer = (page: Page) => page.getByRole("combobox", { name: "Message" });
+/** Picks an agent from the model sheet: « Tous », then « Options ». */
+async function pickAgent(page: Page, name: RegExp) {
+  await page.locator(".agentchip").click();
+  await page.getByRole("button", { name: "Tous", exact: true }).click();
+  await page.getByRole("button", { name: "Options", exact: true }).click();
+  await page.getByRole("menuitemradio", { name }).click();
+}
+
 const options = (page: Page) => page.locator("#composer-suggest [role=option]");
 
 describe("composer", () => {
@@ -105,8 +113,7 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Créer" }).click();
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
     // The demo agent, not a real one that may be installed on this machine.
-    await page.locator(".agentchip").click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
+    await pickAgent(page, /Agent de démo/);
     await page.keyboard.press("Escape");
     await expect.poll(() => page.locator(".agentchip").textContent()).toContain("Agent de démo");
 
@@ -191,8 +198,7 @@ describe("composer", () => {
     await dialog.getByRole("button", { name: "Fermer" }).click();
 
     // A supervised turn waits for the user, who answers from À traiter.
-    await page.locator(".agentchip").click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
+    await pickAgent(page, /Agent de démo/);
     await page.keyboard.press("Escape");
     await composer(page).fill("Corrige la réponse");
     await composer(page).press("Enter");
@@ -281,21 +287,37 @@ describe("composer", () => {
     // The demo agent for every role, not a real one that may be installed on this machine.
     await dialog.getByLabel("Chef", { exact: true }).selectOption({ label: "Agent de démo" });
     await dialog.getByLabel("Codeurs", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Relecteur", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Agent de démo" });
     await shot(page, "c10-equipe-lancer");
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
 
     const card = page.getByRole("region", { name: "Équipe" });
     await card.getByText("Terminé : chaque sous-tâche").waitFor({ timeout: 30_000 });
     expect(await card.getByRole("listitem").allTextContents()).toEqual([
-      "Corriger answerterminée",
-      "Documenter answerterminée",
+      "Corriger answerterminéeRelectureTests",
+      "Documenter answerterminéeRelectureTests",
     ]);
-    // The coders' threads sit under the lead's in the sidebar.
-    expect(await page.locator(".thr-row.child").count()).toBe(2);
+    // The coders', reviewers' and testers' threads sit under the lead's in the sidebar.
+    expect(await page.locator(".thr-row.child").count()).toBe(6);
     await shot(page, "c11-equipe");
 
     await card.getByRole("button", { name: "Documenter answer" }).click();
     await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).waitFor();
+
+    // A piece the reviewer keeps refusing goes back three times, then to the lead, then to the user.
+    await composer(page).fill("/equipe Corrige answer, à toujours refuser");
+    await composer(page).press("Enter");
+    await dialog.getByLabel("Chef", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Codeurs", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Relecteur", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Personne" });
+    await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
+    await card.getByText("2 sous-tâches t'attendent").waitFor({ timeout: 60_000 });
+    await card.getByText("Il manque une vérification").first().waitFor();
+    await shot(page, "c12-equipe-bloquee");
+    await card.getByRole("button", { name: "Relancer « Corriger answer »" }).click();
+    await card.getByText("L'équipe travaille").or(card.getByText("t'attend")).first().waitFor();
     await page.close();
   });
 });
