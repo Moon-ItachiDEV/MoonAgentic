@@ -14,6 +14,7 @@ import {
   IconArchive,
   IconBoard,
   IconChevron,
+  IconClock,
   IconClose,
   IconCompose,
   IconFolder,
@@ -41,6 +42,8 @@ export function Sidebar(props: {
   /** True on the planner's page. */
   onPlanner: boolean;
   onOpenPlanner: () => void;
+  /** The planner's « Planifiées » view: the tasks MoonAgentic starts by itself. */
+  onOpenSchedules: () => void;
   onNewThread: () => void;
   onNewProject: () => void;
   onOpenConnections: () => void;
@@ -80,6 +83,7 @@ export function Sidebar(props: {
     setUnfolded(next);
   };
 
+  const scheduled = state.schedules.filter((s) => s.enabled).length;
   const live = state.threads.filter((t) => !t.archived);
   const archived = state.threads.filter((t) => t.archived);
   const members = membersOf(live);
@@ -275,6 +279,11 @@ export function Sidebar(props: {
         <button onClick={props.onNewProject}>
           <IconFolder />
           Nouveau projet
+        </button>
+        <button onClick={props.onOpenSchedules}>
+          <IconClock />
+          Tâches planifiées
+          {scheduled > 0 && <span className="aux">{scheduled}</span>}
         </button>
         <button
           className={props.onPlanner ? "on" : ""}
