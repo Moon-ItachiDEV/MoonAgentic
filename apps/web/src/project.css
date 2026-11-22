@@ -342,7 +342,7 @@
 /* What the project's threads wait for, above the coordinator's composer. */
 .pp-asks {
   list-style: none;
-  width: min(720px, 100%);
+  width: min(600px, 100%);
   margin: 0 auto 8px;
   padding: 0;
   display: grid;

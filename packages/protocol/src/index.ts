@@ -407,7 +407,13 @@ export function threadGroup(thread: Thread, members: readonly Thread[] = []): Th
     members.some((m) => m.status === "waiting" && !m.archived)
   )
     return "waiting";
-  if (thread.status === "running" || (thread.team && TEAM_AT_WORK.includes(thread.team.phase)))
+  // One waiting in line behind its coordinator starts by itself: it stays in sight with the
+  // threads at work, not folded away with the idle ones.
+  if (
+    thread.status === "running" ||
+    !!thread.held ||
+    (thread.team && TEAM_AT_WORK.includes(thread.team.phase))
+  )
     return "running";
   if (thread.status === "error" || thread.team?.phase === "failed") return "waiting";
   const pr = thread.pr;

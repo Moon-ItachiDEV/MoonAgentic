@@ -325,6 +325,9 @@ export class Hub {
         this.updateThread(id, { team });
         const lead = this.store.getThread(id);
         if (lead) this.planner.syncTeam(lead);
+        // A team that stops working frees its place: its last turn was a member's, which
+        // no coordinator opened, so the line is looked at from here.
+        if (lead?.openedBy && !this.closed) this.drainLine(lead.openedBy);
       },
       mergeInto: (intoId, fromId, title) => this.mergeInto(intoId, fromId, title),
       ship: (id, message, title, body) => this.ship(id, message, true, undefined, title, body),
@@ -477,13 +480,14 @@ export class Hub {
       case "thread.send": {
         // Written to by hand, a thread waiting in line starts now, its brief first.
         const held = this.store.getThread(message.threadId)?.held;
-        if (held) this.updateThread(message.threadId, { held: null });
         this.send(
           message.threadId,
           held ? `${held}\n\n${message.text}` : message.text,
           this.leadContext(message.threadId) ??
             this.coordinatorContext(message.threadId, message.text),
         );
+        // Only once it is sent: a refusal keeps the brief where it was.
+        if (held) this.updateThread(message.threadId, { held: null });
         return;
       }
       case "coordinator.open": {
@@ -561,6 +565,10 @@ export class Hub {
           ...this.coordinatorSettings(),
           parallel: message.parallel,
         });
+        // More places: the threads already in line take them now.
+        for (const t of this.store.listThreads()) {
+          if (t.kind === "coordinator") this.drainLine(t.id);
+        }
         return;
       case "team.start": {
         const id = this.startTeam(message);
@@ -969,10 +977,12 @@ export class Hub {
       if (this.atWork(coordinatorId) >= this.parallel()) return;
       const brief = next.held!;
       try {
-        this.updateThread(next.id, { held: null });
         this.sendFromCoordinator(next.id, brief);
-      } catch (error) {
-        this.updateThread(next.id, { status: "error", error: describe(error) });
+        this.updateThread(next.id, { held: null });
+      } catch {
+        // Busy for a moment, with a step back or a change of setting: it keeps its place
+        // and its brief, and is tried again when the next place frees.
+        continue;
       }
     }
   }
@@ -1210,6 +1220,11 @@ export class Hub {
         if (!(MESSAGE_MODES as readonly string[]).includes(mode))
           throw new Error(`« mode » doit être l'un de : ${MESSAGE_MODES.join(", ")}.`);
         if (thread.archived) throw new Error("Ce fil est résolu : l'utilisateur doit le rouvrir.");
+        // In line, it has not started: the message joins its brief, and its place is kept.
+        if (thread.held) {
+          this.updateThread(thread.id, { held: `${thread.held}\n\n${text}` });
+          return { queued_for: thread.title, delivered: "au démarrage du fil en file" };
+        }
         if (!this.turns.has(thread.id)) {
           this.sendFromCoordinator(thread.id, text);
           return { sent_to: thread.title };
