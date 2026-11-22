@@ -20,11 +20,26 @@ import {
   triggerAt,
 } from "../commands.ts";
 import { onFillComposer } from "../composer-fill.ts";
+import {
+  type Dictation,
+  type Heard,
+  dictationSupported,
+  joinDictation,
+  startDictation,
+} from "../dictation.ts";
 import { connection, newId } from "../connection.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { ContextGauge } from "./ContextGauge.tsx";
-import { IconArrowUp, IconBranch, IconShield, IconStop } from "./icons.tsx";
+import {
+  IconArrowUp,
+  IconBranch,
+  IconClose,
+  IconMic,
+  IconShield,
+  IconStop,
+  IconWave,
+} from "./icons.tsx";
 import { Presence } from "./Presence.tsx";
 import { Picker } from "./Picker.tsx";
 import { PlusMenu } from "./PlusMenu.tsx";
@@ -109,6 +124,15 @@ export function Composer(props: {
   /** The caret to restore once a picked suggestion is in the text. */
   const nextCaret = useRef<number | null>(null);
   const narrow = useNarrow();
+  /** Dictation under way: what was typed before it, and what was heard since. */
+  const [voice, setVoice] = useState<{ typed: string; heard: Heard; started: number } | null>(null);
+  const voiceRef = useRef(voice);
+  voiceRef.current = voice;
+  const dictation = useRef<Dictation | undefined>(undefined);
+  const [, tick] = useState(0);
+  const [focused, setFocused] = useState(false);
+  /** A press that started inside the composer, so a blur it causes does not fold it. */
+  const pressedInside = useRef(false);
 
   const agentId =
     thread?.agentId ??
@@ -182,6 +206,52 @@ export function Composer(props: {
   );
 
   const canSend = text.trim().length > 0 && !busy && !running && !!agent?.available && !!project;
+  const canDictate = !!project && dictationSupported();
+
+  const startVoice = () => {
+    if (!canDictate || voiceRef.current) return;
+    setPlusOpen(false);
+    setMenu(false);
+    const typed = text;
+    const started = startDictation({
+      onHeard: (heard) => setVoice((v) => v && { ...v, heard }),
+      onLevel: (level) => root.current?.style.setProperty("--lv", level.toFixed(2)),
+      onEnd: (kept, heard, error) => {
+        dictation.current = undefined;
+        root.current?.style.removeProperty("--lv");
+        setVoice(null);
+        if (error) connection.notify(error);
+        if (kept) {
+          const value = joinDictation(typed, heard);
+          putText(value, value.length);
+        } else input.current?.focus();
+      },
+    });
+    if (!started) return;
+    dictation.current = started;
+    setVoice({ typed, heard: { final: "", interim: "" }, started: Date.now() });
+  };
+  const stopVoice = () => dictation.current?.stop();
+  const cancelVoice = () => dictation.current?.cancel();
+
+  // The timer on the button, and Escape to drop what was said.
+  useEffect(() => {
+    if (!voice) return;
+    const timer = setInterval(() => tick((n) => n + 1), 1000);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      cancelVoice();
+    };
+    document.addEventListener("keydown", escape, true);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("keydown", escape, true);
+    };
+  }, [!!voice]);
+  // Leaving the thread or the page stops listening.
+  useEffect(() => () => dictation.current?.cancel(), [thread?.id]);
 
   // The skills and project commands of the folder the thread works in.
   const projectId = project?.id;
@@ -408,6 +478,8 @@ export function Composer(props: {
     const changed = Object.entries(settings).filter(
       ([id, value]) => agent?.settings?.find((s) => s.id === id)?.current !== value,
     );
+    // Where the user was when they sent it: the new thread opens only if they stayed.
+    const from = location.pathname;
     try {
       const id = await connection.request({
         type: "thread.create",
@@ -421,7 +493,9 @@ export function Composer(props: {
         text: value,
       });
       setText("");
-      props.onCreated(id);
+      // Gone to another page while the thread was being made: it is not pulled back from
+      // there. The thread is in the lists, at work.
+      if (location.pathname === from) props.onCreated(id);
     } catch (e) {
       // The message stays in the composer, with the reason shown as a notice.
       connection.notify(e instanceof Error ? e.message : String(e));
@@ -461,10 +535,60 @@ export function Composer(props: {
       ? `Répondre à ${agent?.name ?? "l'agent"}…${hints}`
       : `Demande n'importe quoi à tes agents…${hints}`;
 
+  // On a phone the composer is one line until it is used, as in the mockup.
+  const open = focused || !!text || !!voice || plusOpen || pickerOpen || suggesting;
+  const seconds = voice ? Math.floor((Date.now() - voice.started) / 1000) : 0;
+  const heardText = voice ? `${voice.heard.final} ` : "";
+
   return (
-    <div className="composer" ref={root}>
+    <div
+      className={`composer${open ? " open" : ""}${voice ? " vx-on" : ""}`}
+      ref={root}
+      onFocus={() => setFocused(true)}
+      onPointerDownCapture={() => {
+        pressedInside.current = true;
+      }}
+      onBlur={(e) => {
+        const box = e.currentTarget;
+        if (box.contains(e.relatedTarget as Node | null)) return;
+        // Safari gives no `relatedTarget` when a button is touched: wait for the click to
+        // land before folding the composer, then fold only if the focus really left it.
+        if (pressedInside.current) {
+          setTimeout(() => {
+            pressedInside.current = false;
+            if (!box.contains(document.activeElement)) setFocused(false);
+          }, 300);
+          return;
+        }
+        setFocused(false);
+      }}
+    >
+      {voice && (
+        <div className="vxp">
+          <div className="vxp-t" aria-live="polite">
+            {voice.heard.final || voice.heard.interim ? (
+              <>
+                {voice.typed && <span className="vxp-typed">{voice.typed} </span>}
+                {voice.heard.final && heardText}
+                <span className="vxp-cur">{voice.heard.interim}</span>
+              </>
+            ) : (
+              <span className="vxp-ph">Je t'écoute…</span>
+            )}
+          </div>
+          <div className="vxp-w">
+            <button className="vxp-x" aria-label="Annuler la dictée" onClick={cancelVoice}>
+              <IconClose />
+            </button>
+            <span className="vxp-level" aria-hidden>
+              <i />
+            </span>
+          </div>
+        </div>
+      )}
       <textarea
         ref={input}
+        hidden={!!voice}
         rows={1}
         value={text}
         placeholder={placeholder}
@@ -522,6 +646,17 @@ export function Composer(props: {
       <div className="cbar">
         <PlusMenu
           open={plusOpen}
+          branch={
+            !thread && project?.git
+              ? {
+                  on: isolated,
+                  onToggle: () => {
+                    setIsolated(!isolated);
+                    writePref("isolated", String(!isolated));
+                  },
+                }
+              : undefined
+          }
           disabled={!project}
           inThread={!!thread}
           onToggle={(open) => {
@@ -571,23 +706,17 @@ export function Composer(props: {
           </span>
         </button>
         <span className="grow" />
-        {!thread && project?.git && (
+        {!thread && project?.git && isolated && (
           <button
-            className={`perm branch${isolated ? " on" : ""}`}
-            aria-pressed={isolated}
-            aria-label={isolated ? "Branche à part" : "Dans le dossier du projet"}
-            title={
-              isolated
-                ? "L'agent travaille sur sa propre branche, dans une copie à part du projet"
-                : "L'agent travaille directement dans le dossier du projet"
-            }
+            className="perm branch on mark"
+            aria-label="Branche à part"
+            title="Branche à part : l'agent travaille sur sa propre branche, dans une copie du projet. Change-le dans le menu +."
             onClick={() => {
-              setIsolated(!isolated);
-              writePref("isolated", String(!isolated));
+              setPlusOpen(true);
+              setMenu(false);
             }}
           >
-            <IconBranch />
-            <span className="lbl">{isolated ? "Branche à part" : "Dans le dossier"}</span>
+            <IconBranch size={13} />
           </button>
         )}
         <button
@@ -621,7 +750,26 @@ export function Composer(props: {
             }
           />
         )}
-        {running ? (
+        {canDictate && (
+          <button
+            className="mic-btn"
+            aria-label={voice ? "Arrêter la dictée" : "Dicter"}
+            title={voice ? "Arrêter la dictée" : "Dicter"}
+            aria-pressed={!!voice}
+            onClick={() => (voice ? stopVoice() : startVoice())}
+          >
+            <IconMic />
+          </button>
+        )}
+        {voice ? (
+          <button className="send vox" aria-label="Terminer la dictée" onClick={stopVoice}>
+            <span className="vx-sq" />
+            <IconWave />
+            <span className="vx-t">
+              {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+            </span>
+          </button>
+        ) : running ? (
           <button
             className="send stop"
             aria-label="Arrêter"
@@ -630,6 +778,10 @@ export function Composer(props: {
             }
           >
             <IconStop />
+          </button>
+        ) : !text.trim() && canDictate ? (
+          <button className="send" aria-label="Mode vocal" title="Mode vocal" onClick={startVoice}>
+            <IconWave />
           </button>
         ) : (
           <button
