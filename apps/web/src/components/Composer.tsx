@@ -63,6 +63,8 @@ export function Composer(props: {
   onArchive: () => void;
   /** Asks before deleting the thread. */
   onDelete: () => void;
+  /** Opens the team launcher on the project, with the task typed so far. */
+  onTeam: (task: string) => void;
 }) {
   const { agents, thread, project } = props;
   const [text, setText] = useState("");
@@ -261,7 +263,7 @@ export function Composer(props: {
   };
 
   /** Runs one of MoonAgentic's own commands. */
-  const runAction = (action: AppAction) => {
+  const runAction = (action: AppAction, rest = "") => {
     switch (action) {
       case "plan":
       case "agent": {
@@ -303,6 +305,14 @@ export function Composer(props: {
       case "delete":
         props.onDelete();
         return;
+      case "team":
+        if (!project) {
+          connection.notify("Choisis d'abord un projet.");
+          return;
+        }
+        props.onTeam(rest);
+        putText("", 0);
+        return;
     }
   };
 
@@ -318,7 +328,7 @@ export function Composer(props: {
     const rest = text.slice(trigger.end).trim();
     if (command.action) {
       putText(rest, rest.length);
-      runAction(command.action);
+      runAction(command.action, rest);
     } else if (command.template && !(command.template.includes("$ARGUMENTS") && !rest)) {
       const filled = fillTemplate(command.template, rest);
       putText(filled, filled.length);
@@ -352,7 +362,7 @@ export function Composer(props: {
     const submission = resolveSubmission(typed, commands);
     if (submission.kind === "action") {
       putText(submission.rest, submission.rest.length);
-      runAction(submission.action);
+      runAction(submission.action, submission.rest);
       return;
     }
     if (!canSend || !agentId || !project) return;

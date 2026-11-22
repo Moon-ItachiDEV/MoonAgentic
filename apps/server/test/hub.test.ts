@@ -1099,3 +1099,19 @@ describe("streamed text", () => {
     expect(said).toContain("42");
   });
 });
+
+describe("teams outside git", () => {
+  it("refuses a team in a folder that is not a git repository", () => {
+    const { hub, projectId } = setup();
+    expect(() =>
+      hub.startTeam({
+        projectId,
+        task: "Corrige",
+        lead: { agentId: "demo" },
+        coder: { agentId: "demo" },
+        coders: 2,
+        permissionMode: "full",
+      }),
+    ).toThrow("dépôt git");
+  });
+});

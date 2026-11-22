@@ -47,6 +47,7 @@ import {
 } from "./files.ts";
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { historyBefore } from "./history.ts";
+import { Teams } from "./team.ts";
 import { mcpInfo } from "./mcp.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import type { Store } from "./store.ts";
@@ -104,6 +105,8 @@ const archiveRef = (threadId: string) => `refs/moonagentic/${threadId}/archive`;
 /** The folder the agent works in: the worktree, or the project's folder inside it. */
 const workFolder = (workspace: Workspace) =>
   workspace.subdir ? path.join(workspace.path, workspace.subdir) : workspace.path;
+
+const TEAM_AT_WORK = "Cette équipe travaille encore : arrête-la d'abord.";
 
 /** A step back under way, kept until it is done so a stop in the middle is finished later. */
 type PendingRestore = { itemId: string; tree: string };
@@ -164,12 +167,31 @@ export class Hub {
     this.maxLiveAgents = Math.max(1, options.maxLiveAgents ?? MAX_LIVE_AGENTS);
     this.homeDir = options.homeDir ?? os.homedir();
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
+    this.teams = new Teams({
+      thread: (id) => this.store.getThread(id),
+      threads: () => this.store.listThreads(),
+      createThread: (input) => this.createThread(input),
+      send: (id, text) => this.send(id, text),
+      cancel: (id) => this.cancel(id),
+      setTeam: (id, team) => this.updateThread(id, { team }),
+      lastReply: (id) => {
+        const items = this.items(id);
+        return items
+          .slice(items.findLastIndex((i) => i.kind === "user") + 1)
+          .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
+          .join("\n");
+      },
+    });
     store.recoverAfterRestart();
+    this.teams.recover();
     this.recovered = this.finishRestores();
   }
 
   /** The agents, their models and checks, the MCP servers and the favorites. */
   readonly catalog: AgentCatalog;
+  /** Teams of agents, each run from its lead's thread. */
+  readonly teams: Teams;
+  private closing = false;
 
   /** Resolves once the steps back that a stop interrupted are finished. */
   readonly recovered: Promise<void>;
@@ -245,6 +267,16 @@ export class Hub {
       case "project.remove":
         await this.removeProject(message.projectId);
         client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "team.start": {
+        const id = this.startTeam(message);
+        client.openThreadId = id;
+        client.send({ type: "created", requestId: message.requestId, id });
+        client.send({ type: "items", threadId: id, items: this.items(id) });
+        return;
+      }
+      case "team.stop":
+        await this.teams.stop(message.threadId);
         return;
       case "thread.setPinned":
         this.requireThread(message.threadId);
@@ -361,13 +393,17 @@ export class Hub {
     settings?: Record<string, string> | undefined;
     isolated?: boolean | undefined;
     text: string;
+    /** Otherwise taken from the first line of the text. */
+    title?: string | undefined;
+    parentId?: string | undefined;
+    role?: "lead" | "coder" | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
     this.agents.launch(input.agentId);
     const now = Date.now();
     const id = randomUUID();
-    const title = titleFrom(input.text);
+    const title = titleFrom(input.title ?? input.text);
     // The worktree itself is made when the agent first starts, so creating stays instant.
     const workspace =
       input.isolated && this.withGit(project).git
@@ -384,6 +420,8 @@ export class Hub {
       ...(input.model ? { model: input.model } : {}),
       ...(input.settings ? { settings: input.settings } : {}),
       ...(workspace ? { workspace } : {}),
+      ...(input.parentId ? { parentId: input.parentId } : {}),
+      ...(input.role ? { role: input.role } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -391,6 +429,38 @@ export class Hub {
     this.broadcast({ type: "thread", thread });
     this.send(thread.id, input.text);
     return thread.id;
+  }
+
+  /** Starts a team on the task; returns its lead's thread. */
+  startTeam(input: {
+    projectId: string;
+    task: string;
+    lead: { agentId: string; model?: string | undefined };
+    coder: { agentId: string; model?: string | undefined };
+    coders: number;
+    permissionMode: PermissionMode;
+  }): string {
+    const project = this.store.getProject(input.projectId);
+    if (!project) throw new Error("Projet introuvable.");
+    // Coders work at once: each needs its own branch, or they would write over each other.
+    if (!this.withGit(project).git) {
+      throw new Error(
+        "Une équipe a besoin d'un dépôt git : chaque codeur y travaille sur sa branche.",
+      );
+    }
+    // Checked before anything starts, so a missing agent fails the whole team at once.
+    this.agents.launch(input.coder.agentId);
+    return this.teams.start({
+      ...input,
+      lead: {
+        agentId: input.lead.agentId,
+        ...(input.lead.model ? { model: input.lead.model } : {}),
+      },
+      coder: {
+        agentId: input.coder.agentId,
+        ...(input.coder.model ? { model: input.coder.model } : {}),
+      },
+    });
   }
 
   send(threadId: string, text: string): void {
@@ -407,11 +477,19 @@ export class Hub {
     this.cancelled.delete(threadId);
     this.clearIdle(threadId);
     const turn = this.runTurn(thread, text, itemId).finally(() => {
+      const cancelled = this.cancelled.has(threadId);
       this.turns.delete(threadId);
       this.turnIds.delete(threadId);
       this.cancelled.delete(threadId);
       this.flushText(threadId);
       this.leftIdle(threadId);
+      // Last, so the team can give the thread its next message. A server stopping leaves
+      // its teams as they are, for the next start to find them cut short.
+      try {
+        if (!this.closing) this.teams.turnEnded(threadId, cancelled);
+      } catch (error) {
+        console.error("Équipe :", error);
+      }
     });
     this.turns.set(threadId, turn);
   }
@@ -617,6 +695,7 @@ export class Hub {
   async setArchived(threadId: string, archived: boolean): Promise<void> {
     const thread = this.requireThread(threadId);
     if (!!thread.archived === archived) return;
+    if (archived && this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
     const project = this.store.getProject(thread.projectId);
     await this.exclusive(threadId, "Attends la fin de l'archivage.", async () => {
       if (!archived) {
@@ -652,6 +731,7 @@ export class Hub {
   async deleteThread(threadId: string): Promise<void> {
     const thread = this.requireThread(threadId);
     if (this.turns.has(threadId)) throw new Error("Arrête d'abord l'agent de ce fil.");
+    if (this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
     await this.exclusive(threadId, "Attends la fin de la suppression.", async () => {
       await this.forgetSession(threadId);
       this.settlePermissions(threadId);
@@ -921,6 +1001,7 @@ export class Hub {
 
   /** Stops every agent and resolves once their turns have ended. */
   async close(): Promise<void> {
+    this.closing = true;
     for (const timer of this.idleTimers.values()) clearTimeout(timer);
     this.idleTimers.clear();
     await this.recovered;

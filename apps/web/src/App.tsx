@@ -25,6 +25,7 @@ import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
+import { TeamDialog } from "./components/TeamDialog.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { connection, newId } from "./connection.ts";
 import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
@@ -44,6 +45,7 @@ export function App() {
   const [pickedProjectId, setPickedProjectId] = useState(() => readPref("project"));
   const [searchOpen, setSearchOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
+  const [teamTask, setTeamTask] = useState<string | null>(null);
 
   // Ctrl K (⌘ K on a Mac) opens the quick search from anywhere, even while typing.
   useEffect(() => {
@@ -235,7 +237,13 @@ export function App() {
         </header>
         {route.name === "thread" ? (
           thread ? (
-            <ThreadView thread={thread} items={state.items[thread.id]} agents={state.agents} />
+            <ThreadView
+              thread={thread}
+              items={state.items[thread.id]}
+              agents={state.agents}
+              threads={state.threads}
+              onOpenThread={(id) => navigate({ name: "thread", threadId: id })}
+            />
           ) : (
             <div className="view">
               <div className="home">
@@ -270,10 +278,23 @@ export function App() {
               onConnections={() => setConnectionsOpen(true)}
               onArchive={() => thread && setArchived(thread.id, true)}
               onDelete={() => thread && askDeleteThread(thread)}
+              onTeam={(task) => setTeamTask(task)}
             />
           )}
         </div>
       </main>
+      {teamTask !== null && project && (
+        <TeamDialog
+          project={project}
+          agents={state.agents}
+          task={teamTask}
+          onClose={() => setTeamTask(null)}
+          onStarted={(id) => {
+            setTeamTask(null);
+            navigate({ name: "thread", threadId: id });
+          }}
+        />
+      )}
       {creatingProject && (
         <NewProjectDialog
           onClose={() => setCreatingProject(false)}

@@ -206,6 +206,28 @@ const app = acp
       return { stopReason: "end_turn" };
     }
     await usage((used.get(sessionId) ?? 0) + 24_000);
+    if (ask.startsWith("Je n'ai pas trouvé ton plan")) {
+      await say("Toujours pas de plan.", "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
+    // As a team lead, it splits the work into two pieces, the way MoonAgentic asks.
+    if (ask.includes("tu es le chef d'une équipe") || ask.includes("Tu es le chef d'une équipe")) {
+      if (ask.includes("sans plan")) {
+        await say("Je préfère ne pas faire de plan.", "agent_message_chunk");
+        return { stopReason: "end_turn" };
+      }
+      const plan = {
+        tasks: [
+          { title: "Corriger answer", brief: "Passe answer à 42 dans src/app.ts." },
+          { title: "Documenter answer", brief: "Ajoute une ligne sur answer dans le README." },
+        ],
+      };
+      await say(
+        "Voici le plan.\n\n```json\n" + JSON.stringify(plan) + "\n```",
+        "agent_message_chunk",
+      );
+      return { stopReason: "end_turn" };
+    }
     if (modes.get(sessionId) === "plan") {
       await say(
         `Mode plan (modèle ${models.get(sessionId) ?? "rapide"}, effort ${efforts.get(sessionId) ?? "moyen"}) : ` +

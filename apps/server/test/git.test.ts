@@ -620,3 +620,98 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     expect(store.getThread(other)).toBeUndefined();
   });
 });
+
+describe("teams", () => {
+  const team = (
+    hub: Hub,
+    projectId: string,
+    task: string,
+    permissionMode: "full" | "supervised" = "full",
+  ) =>
+    hub.startTeam({
+      projectId,
+      task,
+      lead: { agentId: "demo" },
+      coder: { agentId: "demo" },
+      coders: 2,
+      permissionMode,
+    });
+
+  it("has the lead split the task, then coders do the pieces at once, each on its own branch", async () => {
+    const { hub, store, projectId } = repository();
+    const leadId = team(hub, projectId, "Corrige answer et documente-la");
+    expect(store.getThread(leadId)).toMatchObject({
+      role: "lead",
+      title: expect.stringContaining("Équipe"),
+    });
+
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    const { tasks } = store.getThread(leadId)!.team!;
+    expect(tasks.map((t) => [t.title, t.status])).toEqual([
+      ["Corriger answer", "done"],
+      ["Documenter answer", "done"],
+    ]);
+    const coders = tasks.map((t) => store.getThread(t.threadId!)!);
+    for (const coder of coders) {
+      expect(coder).toMatchObject({ role: "coder", parentId: leadId, status: "idle" });
+      expect(coder.workspace?.base).toBeDefined();
+    }
+    expect(new Set(coders.map((c) => c.workspace!.branch)).size).toBe(2);
+    // The coder got its own piece of work, not the whole plan.
+    const asked = store.listItems(coders[1]!.id).find((i) => i.kind === "user");
+    expect(asked?.kind === "user" && asked.text).toContain("Ajoute une ligne sur answer");
+  });
+
+  it("asks the lead again for a plan it cannot read, then gives up", async () => {
+    const { hub, store, projectId } = repository();
+    const leadId = team(hub, projectId, "Fais-le sans plan");
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 })
+      .toBe("failed");
+    expect(store.getThread(leadId)?.team).toMatchObject({ planTries: 3, tasks: [] });
+    expect(store.listItems(leadId).filter((i) => i.kind === "user")).toHaveLength(3);
+  });
+
+  it("stops the team with every coder at work, and refuses to put it away meanwhile", async () => {
+    const { hub, store, projectId } = repository();
+    // Supervised coders wait on their first permission request.
+    const leadId = team(hub, projectId, "Corrige answer", "supervised");
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.tasks.filter((t) => t.threadId).length, {
+        timeout: 30_000,
+      })
+      .toBe(2);
+    await expect(hub.deleteThread(leadId)).rejects.toThrow("équipe");
+    await expect(hub.setArchived(leadId, true)).rejects.toThrow("équipe");
+
+    await hub.teams.stop(leadId);
+    const stopped = store.getThread(leadId)!.team!;
+    expect(stopped.phase).toBe("stopped");
+    for (const t of stopped.tasks) {
+      await hub.whenIdle(t.threadId!);
+      expect(store.getThread(t.threadId!)?.status).toBe("idle");
+    }
+    expect(store.getThread(leadId)!.team!.tasks.map((t) => t.status)).toEqual([
+      "stopped",
+      "stopped",
+    ]);
+    await hub.deleteThread(leadId);
+  });
+
+  it("marks a team cut short by a stop of the server, keeping what was done", async () => {
+    const { hub, store, root, projectId } = repository();
+    const leadId = team(hub, projectId, "Corrige answer", "supervised");
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 })
+      .toBe("coding");
+    await hub.close();
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+    });
+    cleanups.unshift(() => restarted.close());
+    expect(store.getThread(leadId)?.team).toMatchObject({
+      phase: "stopped",
+      error: expect.stringContaining("arrêt"),
+    });
+  });
+});

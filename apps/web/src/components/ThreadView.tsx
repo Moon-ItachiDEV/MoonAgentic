@@ -7,16 +7,23 @@ import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { TeamCard } from "./TeamCard.tsx";
 
 export function ThreadView({
   thread,
   items,
   agents,
+  threads,
+  onOpenThread,
 }: {
   thread: Thread;
   items: Item[] | undefined;
   agents: AgentInfo[];
+  /** Every thread, for a team's progress and a coder's lead. */
+  threads: Thread[];
+  onOpenThread: (id: string) => void;
 }) {
+  const lead = thread.parentId ? threads.find((t) => t.id === thread.parentId) : undefined;
   const view = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const agent = agents.find((a) => a.id === thread.agentId);
@@ -72,6 +79,11 @@ export function ThreadView({
       }}
     >
       <div className="feed">
+        {lead && (
+          <button className="team-parent" onClick={() => onOpenThread(lead.id)}>
+            Sous-tâche de l'équipe « {lead.title.replace(/^Équipe : /, "")} »
+          </button>
+        )}
         {items?.map((item, i) => (
           <div key={item.id} className="item" data-item={item.id}>
             <FeedItem
@@ -83,6 +95,14 @@ export function ThreadView({
             />
           </div>
         ))}
+        {thread.team && (
+          <TeamCard
+            thread={thread}
+            team={thread.team}
+            threads={threads}
+            onOpenThread={onOpenThread}
+          />
+        )}
         {thread.status === "running" && (
           <div className="working">
             <span className="spin" />

@@ -182,6 +182,38 @@ export type ThreadStatus = "idle" | "running" | "waiting" | "error";
 
 export type PermissionMode = "supervised" | "full";
 
+/** One agent and model of a team, by role. */
+export interface TeamMember {
+  agentId: AgentId;
+  model?: string;
+}
+
+export type TeamPhase = "planning" | "coding" | "done" | "failed" | "stopped";
+
+/** A piece of the team's work, given by the lead to one coder. */
+export interface TeamTask {
+  title: string;
+  brief: string;
+  status: "waiting" | "running" | "done" | "failed" | "stopped";
+  /** The coder's own thread, once it has started. */
+  threadId?: string;
+}
+
+/** What a team, run from its lead's thread, is doing. The server keeps it. */
+export interface Team {
+  phase: TeamPhase;
+  /** The task as the user gave it. */
+  task: string;
+  coder: TeamMember;
+  /** Coders working at once. */
+  coders: number;
+  permissionMode: PermissionMode;
+  tasks: TeamTask[];
+  /** Times the lead was asked again for a plan it could not be read from. */
+  planTries?: number;
+  error?: string;
+}
+
 export interface Thread {
   id: string;
   projectId: string;
@@ -205,6 +237,12 @@ export interface Thread {
   archived?: boolean;
   /** Set when the thread works on its own branch rather than in the project folder. */
   workspace?: Workspace;
+  /** The team lead's thread, for a coder's thread. */
+  parentId?: string;
+  /** The thread's part in a team. */
+  role?: "lead" | "coder";
+  /** The team this thread leads. */
+  team?: Team;
   /** Set when the last turn ended with an error. */
   error?: string;
   createdAt: number;
@@ -396,6 +434,19 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread.setModel"), threadId: id, model: id }),
   z.object({ type: z.literal("thread.setSetting"), threadId: id, settingId: id, value: id }),
   z.object({ type: z.literal("thread.setPinned"), threadId: id, pinned: z.boolean() }),
+  /** Gives a task to a team: a lead splits it, coders do the pieces at once, each on a branch. */
+  z.object({
+    type: z.literal("team.start"),
+    requestId: id,
+    projectId: id,
+    task: text,
+    lead: z.object({ agentId: id, model: id.optional() }),
+    coder: z.object({ agentId: id, model: id.optional() }),
+    coders: z.number().int().min(1).max(4),
+    permissionMode: z.enum(["supervised", "full"]),
+  }),
+  /** Stops the team, its lead and every coder at work. */
+  z.object({ type: z.literal("team.stop"), threadId: id }),
   z.object({ type: z.literal("thread.setArchived"), threadId: id, archived: z.boolean() }),
   z.object({ type: z.literal("thread.delete"), requestId: id, threadId: id }),
   z.object({ type: z.literal("project.remove"), requestId: id, projectId: id }),
