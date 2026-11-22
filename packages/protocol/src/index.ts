@@ -403,6 +403,33 @@ export type ItemKind = Item["kind"];
 /** Favorite model ids per agent, shared by every device. */
 export type Favorites = Record<AgentId, string[]>;
 
+/** What MoonAgentic sees of GitHub through the user's own `git` and `gh`; it keeps no token. */
+export interface GithubStatus {
+  /** `git` is installed. */
+  git: boolean;
+  /** GitHub CLI (`gh`) is installed. */
+  gh: boolean;
+  /** The account `gh` is signed in to, when it is. */
+  login?: string;
+  /**
+   * How git proves who it is to github.com when it pushes: its own credential helper (such
+   * as Git Credential Manager), or `gh` lent for each clone and push, or nothing.
+   */
+  gitAuth: "helper" | "gh" | "none";
+  /** Why `gh` could not tell who is signed in, in its own words. */
+  error?: string;
+}
+
+/** A repository the user can reach on GitHub. */
+export interface GithubRepo {
+  /** `owner/name`. */
+  fullName: string;
+  description?: string;
+  private: boolean;
+  /** Its last push, as a timestamp. */
+  pushedAt?: number;
+}
+
 export interface Snapshot {
   favorites: Favorites;
   requests: PendingRequest[];
@@ -454,6 +481,8 @@ export type ServerMessage =
       url?: string;
       prOpened: boolean;
     }
+  | { type: "github"; requestId: string; status: GithubStatus }
+  | { type: "githubRepos"; requestId: string; repos: GithubRepo[] }
   /** Reply to a create request, so the client can navigate to what it made. */
   | { type: "created"; requestId: string; id: string }
   /** Reply to a request that makes nothing new, once it succeeded. */
@@ -639,6 +668,21 @@ export const ClientMessage = z.discriminatedUnion("type", [
     }),
   }),
   z.object({ type: z.literal("agent.removeCustom"), agentId: id }),
+  /** Asks what `git` and `gh` know of GitHub on the machine running MoonAgentic. */
+  z.object({ type: z.literal("github.status"), requestId: id }),
+  /** Lists the repositories the signed-in `gh` account can reach, last pushed first. */
+  z.object({ type: z.literal("github.repos"), requestId: id }),
+  /**
+   * Clones a GitHub repository into a new folder, `parent/name`, and makes it a project.
+   * `repo` is `owner/name` or its address on github.com.
+   */
+  z.object({
+    type: z.literal("project.clone"),
+    requestId: id,
+    repo: z.string().trim().min(3).max(500),
+    parent: z.string().trim().min(1).max(4096),
+    name: z.string().trim().min(1).max(120).optional(),
+  }),
   z.object({
     type: z.literal("permission.respond"),
     threadId: id,
