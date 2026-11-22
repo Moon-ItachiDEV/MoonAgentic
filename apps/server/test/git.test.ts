@@ -188,16 +188,6 @@ describe("thread workspaces", () => {
     expect(store.listItems(threadId).findLast((i) => i.kind === "agent")).toMatchObject({
       text: expect.stringContaining("J'ai reçu l'historique, qui commence par « Un »."),
     });
-    // A message without its own branch has nothing to go back to.
-    const direct = hub.createThread({
-      projectId,
-      agentId: "demo",
-      permissionMode: "full",
-      text: "x",
-    });
-    await hub.whenIdle(direct);
-    const first = store.listItems(direct)[0]!;
-    await expect(hub.restore(direct, first.id)).rejects.toThrow("pas de point de retour");
   });
 
   it("works in the project folder when asked, or when the folder is not in git", async () => {
@@ -230,6 +220,9 @@ describe("thread workspaces", () => {
     hub.createProject("empty", empty);
     expect(hub.snapshot().projects.find((p) => p.name === "empty")?.git).toBeUndefined();
     await expect(hub.ship(direct, "x", false)).rejects.toThrow("sans branche");
+    // Nor a way back to an earlier message.
+    const first = store.listItems(direct)[0]!;
+    await expect(hub.restore(direct, first.id)).rejects.toThrow("pas de point de retour");
     expect(existsSync(path.join(root, "worktrees"))).toBe(false);
   });
 });
