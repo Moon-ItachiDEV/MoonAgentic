@@ -4,9 +4,10 @@ import { describe, expect, it } from "vitest";
 import { AGENT_LOGOS, agentLogo } from "./agent-logos.ts";
 
 describe("agent logos", () => {
-  it("only Cursor has an official logo, the others keep their letters", () => {
+  it("Cursor and Hermes have an official logo, the others keep their letters", () => {
     expect(agentLogo("cursor")).toBe("/agents/cursor.svg");
-    for (const id of ["claude", "codex", "antigravity", "hermes", "demo", undefined]) {
+    expect(agentLogo("hermes")).toBe("/agents/hermes.png");
+    for (const id of ["claude", "codex", "antigravity", "demo", undefined]) {
       expect(agentLogo(id)).toBeUndefined();
     }
   });
