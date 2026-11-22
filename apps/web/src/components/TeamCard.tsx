@@ -120,7 +120,7 @@ export function TeamCard({
   const showShip = !!team.shipped?.url || canShip;
   // While it works, the timeline says it all: only the way to stop it stays.
   const say = isActive ? undefined : headline(team);
-  const note = mergeBlocked ? undefined : (shipNote ?? (error && noteText(error)));
+  const note = shipNote ?? (error && noteText(error));
   if (!isActive && !again.length && !showMerge && !retryMerge && !showShip && !note) {
     return say ? (
       <div className="team-acts" role="region" aria-label="Équipe">
@@ -141,10 +141,12 @@ export function TeamCard({
           const coder = byId(task.threadId);
           return (
             <span key={i} className="team-acts-piece">
-              {coder && (
+              {coder ? (
                 <button className="lnk sm" onClick={() => onOpenThread(coder.id)}>
                   {task.title}
                 </button>
+              ) : (
+                <span>{task.title}</span>
               )}
               <button
                 className="btn sm"
