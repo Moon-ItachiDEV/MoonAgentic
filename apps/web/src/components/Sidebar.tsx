@@ -1,6 +1,6 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { readPref, writePref } from "../prefs.ts";
 import { RECENT, recentAlwaysShown } from "../recent.ts";
 import {
@@ -18,6 +18,7 @@ import {
   IconCompose,
   IconFolder,
   IconGear,
+  IconMore,
   IconPin,
   IconPlug,
   IconPlus,
@@ -25,6 +26,10 @@ import {
   IconShield,
 } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
+import { Presence } from "./Presence.tsx";
+
+/** A menu this tall always fits: it opens upwards when the row is that close to the bottom. */
+const MENU_ROOM = 150;
 
 function ThreadStatus({ status }: { status: LineStatus }) {
   if (status === "running") return <span className="spin" aria-label="En cours" />;
@@ -51,6 +56,9 @@ export function Sidebar(props: {
   onNewInProject: (id: string) => void;
   onOpenThread: (id: string) => void;
   onTogglePin: (id: string, pinned: boolean) => void;
+  onSetArchived: (id: string, archived: boolean) => void;
+  /** Asks before deleting the thread. */
+  onDeleteThread: (thread: Thread) => void;
   onRemoveProject: (id: string) => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
@@ -78,6 +86,34 @@ export function Sidebar(props: {
     const next = new Set(unfolded);
     if (!next.delete(key)) next.add(key);
     setUnfolded(next);
+  };
+
+  // The row whose « … » menu is open, and where its button is on screen.
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number; up: boolean } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuThread = state.threads.find((t) => t.id === menu?.id);
+  const menuOpen = !!menu && !!menuThread;
+  useEffect(() => {
+    if (!menuOpen) return;
+    const away = (event: PointerEvent) => {
+      const target = event.target as Element;
+      // Its own button closes it by itself.
+      if (!menuRef.current?.contains(target) && !target.closest(".thr-row .acts")) setMenu(null);
+    };
+    const escape = (event: KeyboardEvent) => event.key === "Escape" && setMenu(null);
+    const moved = () => setMenu(null);
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", escape);
+    window.addEventListener("resize", moved);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", moved);
+    };
+  }, [menuOpen]);
+  const act = (run: () => void) => () => {
+    setMenu(null);
+    run();
   };
 
   const live = state.threads.filter((t) => !t.archived);
@@ -133,7 +169,7 @@ export function Sidebar(props: {
   ) => (
     <div
       key={opts.key}
-      className={`thr-row${t.pinned ? " pinned" : ""}${opts.child ? " child" : ""}${opts.team ? " lead" : ""}`}
+      className={`thr-row has-more${t.pinned ? " pinned" : ""}${opts.child ? " child" : ""}${opts.team ? " lead" : ""}${menu?.id === t.id ? " menu-open" : ""}`}
     >
       {opts.team && (
         <button
@@ -152,17 +188,33 @@ export function Sidebar(props: {
         <span className="t">{t.title}</span>
         <ThreadStatus status={opts.status ?? lineStatus(t)} />
       </button>
-      {!t.archived && (
+      {/* A pinned thread keeps its pin in sight; the rest is behind « … ». */}
+      {!t.archived && t.pinned && (
         <button
           className="pin"
-          aria-pressed={!!t.pinned}
-          aria-label={t.pinned ? `Désépingler ${t.title}` : `Épingler ${t.title}`}
-          title={t.pinned ? "Désépingler" : "Épingler"}
-          onClick={() => props.onTogglePin(t.id, !t.pinned)}
+          aria-pressed
+          aria-label={`Désépingler ${t.title}`}
+          title="Désépingler"
+          onClick={() => props.onTogglePin(t.id, false)}
         >
-          <IconPin filled={!!t.pinned} />
+          <IconPin filled />
         </button>
       )}
+      <button
+        className="pin acts"
+        aria-label={`Actions de ${t.title}`}
+        title="Actions"
+        aria-haspopup="menu"
+        aria-expanded={menu?.id === t.id}
+        onClick={(e) => {
+          if (menu?.id === t.id) return setMenu(null);
+          const box = e.currentTarget.getBoundingClientRect();
+          const up = box.bottom + MENU_ROOM > window.innerHeight;
+          setMenu({ id: t.id, x: box.right, y: up ? box.top - 4 : box.bottom + 4, up });
+        }}
+      >
+        <IconMore size={15} />
+      </button>
     </div>
   );
 
@@ -244,7 +296,46 @@ export function Sidebar(props: {
   };
 
   return (
-    <aside className="side">
+    <aside className="side" onScrollCapture={() => menu && setMenu(null)}>
+      <Presence show={menuOpen}>
+        {menu && menuThread && (
+          <>
+            <div className="menu-scrim" onClick={() => setMenu(null)} />
+            <div
+              ref={menuRef}
+              className={`menu row-menu${menu.up ? " up" : ""}`}
+              role="menu"
+              aria-label={`Actions de ${menuThread.title}`}
+              style={{ "--x": `${menu.x}px`, "--y": `${menu.y}px` } as React.CSSProperties}
+            >
+              {!menuThread.archived && (
+                <button
+                  role="menuitem"
+                  onClick={act(() => props.onTogglePin(menuThread.id, !menuThread.pinned))}
+                >
+                  <IconPin filled={!!menuThread.pinned} />
+                  {menuThread.pinned ? "Désépingler" : "Épingler"}
+                </button>
+              )}
+              <button
+                role="menuitem"
+                onClick={act(() => props.onSetArchived(menuThread.id, !menuThread.archived))}
+              >
+                <IconArchive />
+                {menuThread.archived ? "Désarchiver" : "Archiver"}
+              </button>
+              <button
+                role="menuitem"
+                className="danger"
+                onClick={act(() => props.onDeleteThread(menuThread))}
+              >
+                <IconClose />
+                Supprimer…
+              </button>
+            </div>
+          </>
+        )}
+      </Presence>
       <div className="side-top">
         <Wordmark />
         <button

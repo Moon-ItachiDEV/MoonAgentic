@@ -232,6 +232,11 @@ export function App() {
           }}
           onOpenThread={(id) => go({ name: "thread", threadId: id })}
           onTogglePin={togglePin}
+          onSetArchived={setArchived}
+          onDeleteThread={(t) => {
+            setDrawer(false);
+            askDeleteThread(t);
+          }}
           onRemoveProject={(id) => {
             setDrawer(false);
             askRemoveProject(id);

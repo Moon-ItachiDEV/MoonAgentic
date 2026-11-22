@@ -221,3 +221,65 @@
     display: none;
   }
 }
+
+/* « … » on each thread: pin, archive, delete. A pinned thread keeps its pin beside it. */
+.thr-row.has-more.pinned .thr {
+  padding-right: 60px;
+}
+.thr-row.has-more.pinned .pin:not(.acts) {
+  right: 30px;
+}
+.thr-row .pin.acts {
+  color: var(--faint);
+}
+.thr-row.menu-open .pin.acts {
+  opacity: 1;
+  background: var(--hover);
+  color: var(--fg);
+}
+@media (hover: hover) {
+  .thr-row.pinned .pin.acts {
+    opacity: 0;
+  }
+  .thr-row.pinned:hover .pin.acts,
+  .thr-row.pinned .pin.acts:focus-visible,
+  .thr-row.pinned.menu-open .pin.acts {
+    opacity: 1;
+  }
+}
+.menu.row-menu button.danger {
+  color: var(--err);
+}
+.menu.row-menu button svg {
+  flex: none;
+  color: var(--muted);
+}
+.menu.row-menu button.danger svg {
+  color: inherit;
+}
+@media (min-width: 861px) {
+  /* Fixed to the screen, so the sidebar's own scrolling never cuts it. */
+  .menu.row-menu {
+    position: fixed;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    top: var(--y);
+    left: max(8px, calc(var(--x) - 200px));
+    width: 200px;
+    min-width: 0;
+    z-index: 60;
+    transform-origin: 100% 0;
+    animation-name: pop-down;
+  }
+  .menu.row-menu.up {
+    transform: translateY(-100%);
+    animation: fade 0.12s ease-out;
+  }
+  .presence.closing .menu.row-menu {
+    transform: translateY(-6px) scale(0.97);
+  }
+  .presence.closing .menu.row-menu.up {
+    transform: translateY(-100%);
+  }
+}
