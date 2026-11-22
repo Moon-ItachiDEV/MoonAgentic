@@ -1,11 +1,13 @@
 import type { Schedule } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  firstMoment,
   fromField,
   momentLabel,
   nextHour,
   repeatLabel,
   scheduleState,
+  titleFromText,
   toField,
 } from "./schedule.ts";
 
@@ -65,5 +67,36 @@ describe("planned tasks", () => {
     expect(
       scheduleState(schedule({ repeat: "once", enabled: false, lastAt: at(23, 9), runs: 1 }), now),
     ).toEqual({ tone: "done", label: "Lancée aujourd'hui à 09:00" });
+  });
+
+  it("never shows as done a one-time task that did not start", () => {
+    const failed = schedule({
+      repeat: "once",
+      enabled: false,
+      lastAt: at(23, 9),
+      lastError: "Agent inconnu : demo",
+    });
+    expect(scheduleState(failed, at(23, 12))).toEqual({
+      tone: "off",
+      label: "Non lancée aujourd'hui à 09:00",
+    });
+  });
+
+  it("opens a paused task that repeats on its own time, not on the next hour", () => {
+    const now = at(23, 14, 20);
+    const paused = schedule({ enabled: false, nextAt: at(24) });
+    expect(toField(firstMoment(paused, now))).toBe("2026-11-24T09:00");
+    expect(toField(firstMoment(schedule(), now))).toBe("2026-11-24T09:00");
+    // A new task, and a one-time task that is over, are offered the next full hour.
+    expect(toField(firstMoment(undefined, now))).toBe("2026-11-23T15:00");
+    const over = schedule({ repeat: "once", enabled: false, nextAt: at(22), lastAt: at(22) });
+    expect(toField(firstMoment(over, now))).toBe("2026-11-23T15:00");
+    // A one-time task still waiting keeps its time.
+    expect(toField(firstMoment(schedule({ repeat: "once" }), now))).toBe("2026-11-24T09:00");
+  });
+
+  it("names a task after its first line", () => {
+    expect(titleFromText("  Lance les tests\net corrige")).toBe("Lance les tests");
+    expect(titleFromText("x".repeat(100))).toHaveLength(80);
   });
 });

@@ -31,6 +31,22 @@ export function fromField(value: string): number | null {
   return new Date(year, month - 1, day, hour, minute).getTime();
 }
 
+/** The name a task takes from its text when it is given none: its first line. */
+export function titleFromText(text: string): string {
+  const line = text.trim().split("\n")[0]!.trim();
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+}
+
+/**
+ * The moment the dialog opens on: the next full hour for a new task, or for a one-time
+ * task that is over; a task that repeats keeps its own time, paused or not.
+ */
+export function firstMoment(schedule: Schedule | undefined, now: number): number {
+  return !schedule || (!schedule.enabled && schedule.repeat === "once")
+    ? nextHour(now)
+    : schedule.nextAt;
+}
+
 /** What a new task is offered: the next full hour. */
 export function nextHour(now: number): number {
   const d = new Date(now);
@@ -91,7 +107,10 @@ export function scheduleState(
     return { tone: "on", label: `Prochain lancement ${momentLabel(schedule.nextAt, now)}` };
   }
   if (schedule.repeat === "once" && schedule.lastAt) {
-    return { tone: "done", label: `Lancée ${momentLabel(schedule.lastAt, now)}` };
+    // Its only time came and it did not start: never shown as done.
+    return schedule.lastError
+      ? { tone: "off", label: `Non lancée ${momentLabel(schedule.lastAt, now)}` }
+      : { tone: "done", label: `Lancée ${momentLabel(schedule.lastAt, now)}` };
   }
   return { tone: "off", label: "En pause" };
 }

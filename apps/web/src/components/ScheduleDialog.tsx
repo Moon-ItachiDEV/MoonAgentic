@@ -8,7 +8,7 @@ import type {
 import { useEffect, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { readPref } from "../prefs.ts";
-import { fromField, nextHour, REPEATS, toField } from "../schedule.ts";
+import { firstMoment, fromField, REPEATS, titleFromText, toField } from "../schedule.ts";
 
 /**
  * Plans a task for later, or changes one already planned. At its time the server starts a
@@ -34,9 +34,7 @@ export function ScheduleDialog({
   const ready = agents.filter((a) => a.available);
   const [text, setText] = useState(schedule?.text ?? initialText);
   const [title, setTitle] = useState(schedule?.title ?? "");
-  const [firstWhen] = useState(() =>
-    toField(schedule?.enabled ? schedule.nextAt : nextHour(Date.now())),
-  );
+  const [firstWhen] = useState(() => toField(firstMoment(schedule, Date.now())));
   const [when, setWhen] = useState(firstWhen);
   const [repeat, setRepeat] = useState<ScheduleRepeat>(schedule?.repeat ?? "once");
   const [agentId, setAgentId] = useState(() => {
@@ -81,7 +79,8 @@ export function ScheduleDialog({
           requestId: newId(),
           id: schedule.id,
           text: text.trim(),
-          ...(title.trim() ? { title: title.trim() } : {}),
+          // Left empty, the name is taken from the task again.
+          title: title.trim() || titleFromText(text),
           ...(moved ? { at, repeat } : {}),
         });
       } else {

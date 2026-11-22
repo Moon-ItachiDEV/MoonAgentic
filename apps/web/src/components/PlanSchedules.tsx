@@ -61,6 +61,13 @@ export function PlanSchedules({
         const state = scheduleState(s, now);
         const last = threads.find((t) => t.id === s.lastThreadId);
         const agent = agents.find((a) => a.id === s.agentId);
+        // What the thread of its last run is really doing now.
+        const live =
+          last?.status === "running"
+            ? ", en cours"
+            : last?.status === "waiting"
+              ? ", attend ton accord"
+              : "";
         return (
           <article key={s.id} className={`pl-sch-row ${state.tone}`} role="listitem">
             <div className="pl-sch-tx">
@@ -72,11 +79,12 @@ export function PlanSchedules({
               <p className="pl-sch-state">
                 <i />
                 {state.label}
+                {state.tone === "done" ? live : ""}
               </p>
               {s.lastAt !== undefined && state.tone !== "done" && (
                 <p>
                   Dernier lancement {momentLabel(s.lastAt, now)}
-                  {last?.status === "running" ? ", en cours" : ""}
+                  {live}
                   {s.runs > 1 ? ` · ${s.runs} lancements` : ""}
                 </p>
               )}

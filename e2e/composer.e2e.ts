@@ -513,6 +513,12 @@ describe("composer", () => {
     // Paused, it no longer has a next time; changed, it keeps what was not touched.
     await row("Résumé du matin").getByRole("switch").click();
     await row("Résumé du matin").getByText("En pause").waitFor();
+    // Paused, it still opens on its own time, and stays paused when only its text changes.
+    await row("Résumé du matin").getByRole("button", { name: "Modifier" }).click();
+    const paused = page.getByRole("dialog", { name: "Modifier la tâche planifiée" });
+    expect(await paused.getByLabel("Quand").inputValue()).toBe(field(tomorrow));
+    await paused.getByRole("button", { name: "Enregistrer" }).click();
+    await row("Résumé du matin").getByText("En pause").waitFor();
     await row("Résumé du matin").getByRole("switch").click();
     await row("Résumé du matin").getByText("Prochain lancement demain à 09:00").waitFor();
     await row("Résumé du matin").getByRole("button", { name: "Modifier" }).click();
