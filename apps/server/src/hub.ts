@@ -20,6 +20,9 @@ import type {
   Snapshot,
   Team,
   TeamMember,
+  TeamSetup,
+  CoordinatorSettings,
+  WorkKind,
   TeamRole,
   Thread,
   ToolContent,
@@ -138,7 +141,7 @@ const withOrigin = (brief: string, asked: string | undefined) =>
     : brief;
 
 /** The coordinator's tools that change something: only while it answers the user. */
-const WRITES = new Set(["open_thread", "message_thread", "resolve_thread"]);
+const WRITES = new Set(["open_thread", "start_team", "message_thread", "resolve_thread"]);
 /** A permission asked for one of MoonAgentic's own tools, as agents name the tools of an MCP server. */
 const OWN_TOOL = new RegExp(
   `^mcp__moonagentic__(${COORDINATOR_TOOLS.map((t) => t.name).join("|")})$`,
@@ -153,6 +156,7 @@ export const coordinatorPrompt = (project: string) =>
 Ce que tu fais :
 - Une question rapide ou un point d'avancement : tu réponds toi-même, en quelques phrases. Pour l'avancement, lis l'état réel avec list_threads, puis read_thread si on te demande le détail d'un fil. N'invente jamais un état.
 - Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne complète, car l'agent du fil ne voit pas cette conversation.
+- Une tâche trop grosse pour un seul fil, avec plusieurs morceaux indépendants, ou quand l'utilisateur demande une équipe : start_team.
 - Un sujet qui a déjà son fil : tu le relances avec message_thread plutôt que d'en ouvrir un second. Si son agent travaille, ton message attend la fin de son tour ; mode steer seulement pour une correction urgente, car il coupe le travail en cours.
 - resolve_thread seulement quand l'utilisateur dit que le sujet est clos.
 
@@ -361,6 +365,7 @@ export class Hub {
 
   snapshot(): Snapshot {
     return {
+      coordinator: this.coordinatorSettings(),
       favorites: this.catalog.favorites(),
       requests: this.pendingRequests(),
       mcpServers: this.catalog.mcpServers().map(mcpInfo),
@@ -493,8 +498,37 @@ export class Hub {
         await this.removeProject(message.projectId);
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "coordinator.setRoute": {
+        const settings = this.coordinatorSettings();
+        const routes = { ...settings.routes };
+        delete routes[message.kind];
+        if (message.agentId) {
+          // Refused now rather than at the first thread a coordinator opens with it.
+          this.agents.launch(message.agentId);
+          routes[message.kind] = {
+            agentId: message.agentId,
+            ...(message.model ? { model: message.model } : {}),
+          };
+        }
+        this.setCoordinatorSettings({ ...settings, routes });
+        return;
+      }
       case "team.start": {
         const id = this.startTeam(message);
+        // Kept as the team a coordinator starts when it is asked for one.
+        this.setCoordinatorSettings({
+          ...this.coordinatorSettings(),
+          team: {
+            lead: message.lead,
+            coder: message.coder,
+            ...(message.reviewer ? { reviewer: message.reviewer } : {}),
+            ...(message.tester ? { tester: message.tester } : {}),
+            ...(message.merger ? { merger: message.merger } : {}),
+            coders: message.coders,
+            permissionMode: message.permissionMode,
+            ...(message.autoShip === false ? { autoShip: false } : {}),
+          } as TeamSetup,
+        });
         client.openThreadId = id;
         client.send({ type: "created", requestId: message.requestId, id });
         client.send({ type: "items", threadId: id, items: this.items(id) });
@@ -724,6 +758,8 @@ export class Hub {
     coders: number;
     permissionMode: PermissionMode;
     autoShip?: boolean | undefined;
+    openedBy?: string | undefined;
+    taskKey?: string | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project) throw new Error("Projet introuvable.");
@@ -746,6 +782,16 @@ export class Hub {
       tester: input.tester && member(input.tester),
       merger: input.merger && member(input.merger),
     });
+  }
+
+  /** How coordinators route work, as set in the settings. */
+  coordinatorSettings(): CoordinatorSettings {
+    return this.store.getSetting<CoordinatorSettings>("coordinator", { routes: {} });
+  }
+
+  private setCoordinatorSettings(settings: CoordinatorSettings): void {
+    this.store.setSetting("coordinator", settings);
+    this.broadcast({ type: "coordinatorSettings", settings });
   }
 
   /** The project's coordinator, made with this agent when the project has none yet. */
@@ -977,9 +1023,19 @@ export class Hub {
           throw new Error(
             `Tu as déjà ouvert ${opened} fils pour ce message : demande à l'utilisateur avant d'en ouvrir d'autres.`,
           );
-        const agentId = str("agent", 200) ?? coordinator.agentId;
+        // Asked by name, else where the settings send this kind of work, else its own agent.
+        const route = kind ? this.coordinatorSettings().routes[kind as WorkKind] : undefined;
+        const asked = str("agent", 200);
+        const agentId = asked ?? route?.agentId ?? coordinator.agentId;
         const model =
-          str("model", 200) ?? (agentId === coordinator.agentId ? coordinator.model : undefined);
+          str("model", 200) ??
+          (asked
+            ? asked === coordinator.agentId
+              ? coordinator.model
+              : undefined
+            : route
+              ? route.model
+              : coordinator.model);
         const id = this.createThread({
           projectId: scope.projectId,
           agentId,
@@ -988,6 +1044,40 @@ export class Hub {
           isolated: true,
           title,
           text: withOrigin(brief, this.lastAsked.get(coordinator.id)),
+          openedBy: coordinator.id,
+          taskKey,
+        });
+        this.openedThisTurn.set(coordinator.id, opened + 1);
+        this.putItem(coordinator.id, {
+          id: `opened:${id}`,
+          kind: "opened",
+          threadId: id,
+          title: this.requireThread(id).title,
+          at: Date.now(),
+        });
+        return { opened: this.threadForCoordinator(this.requireThread(id)) };
+      }
+      case "start_team": {
+        const taskKey = need("task_key", 80).toLowerCase();
+        const task = need("task", 20_000);
+        const known = mine().find(
+          (t) => t.openedBy === coordinator.id && t.taskKey === taskKey && !t.archived,
+        );
+        if (known) return { already_open: true, opened: this.threadForCoordinator(known) };
+        const setup = this.coordinatorSettings().team;
+        if (!setup)
+          throw new Error(
+            "Aucune équipe n'est réglée : l'utilisateur doit en lancer une lui-même une première fois (commande /equipe), elle servira ensuite de modèle. Dis-le-lui, ou ouvre un fil simple avec open_thread.",
+          );
+        const opened = this.openedThisTurn.get(coordinator.id) ?? 0;
+        if (opened >= MAX_OPENED_PER_TURN)
+          throw new Error(
+            `Tu as déjà ouvert ${opened} fils pour ce message : demande à l'utilisateur avant d'en ouvrir d'autres.`,
+          );
+        const id = this.startTeam({
+          ...setup,
+          projectId: scope.projectId,
+          task: withOrigin(task, this.lastAsked.get(coordinator.id)),
           openedBy: coordinator.id,
           taskKey,
         });

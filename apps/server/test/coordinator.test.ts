@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
-import { COORDINATOR_PATH, COORDINATOR_TOOLS } from "../src/coordinator-tools.ts";
+import { WORK_KINDS } from "@moonagentic/protocol";
+import { COORDINATOR_PATH, COORDINATOR_TOOLS, THREAD_KINDS } from "../src/coordinator-tools.ts";
 import { createHttpServer } from "../src/http.ts";
 import { type Client, Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
@@ -177,6 +178,7 @@ describe("a project's coordinator", () => {
       "list_threads",
       "read_thread",
       "open_thread",
+      "start_team",
       "message_thread",
       "resolve_thread",
     ]);
@@ -314,5 +316,65 @@ describe("a project's coordinator", () => {
     await expect.poll(() => store.getThread(held)!.status).toBe("waiting");
     await hub.cancel(held);
     await hub.whenIdle(held);
+  });
+
+  it("sends each kind of work where the settings say, and starts the team the user set up", async () => {
+    const { hub, store, projectId, coordinatorId, tokens, post, say, hold } = await coordinated();
+    const client: Client = { send: () => undefined };
+    expect(THREAD_KINDS).toEqual(WORK_KINDS);
+    await hub.handle(client, {
+      type: "coordinator.setRoute",
+      kind: "bug",
+      agentId: "demo",
+      model: "precis",
+    });
+    expect(hub.snapshot().coordinator.routes).toEqual({
+      bug: { agentId: "demo", model: "precis" },
+    });
+    await say("/fils");
+    await hold();
+    const call = async (tool: string, args: unknown) =>
+      (await (await post(tokens[0]!, { tool, args })).json()) as {
+        result?: { opened: { id: string }; already_open?: boolean };
+        error?: string;
+      };
+    const bug = await call("open_thread", { task_key: "b", title: "Bug", brief: "B", kind: "bug" });
+    expect(store.getThread(bug.result!.opened.id)).toMatchObject({ model: "precis" });
+    // A kind with no route keeps the coordinator's own agent.
+    const other = await call("open_thread", {
+      task_key: "t",
+      title: "T",
+      brief: "B",
+      kind: "tests",
+    });
+    expect(store.getThread(other.result!.opened.id)).toMatchObject({ agentId: "demo" });
+
+    // No team was ever set up: it says so rather than making one up.
+    expect((await call("start_team", { task_key: "gros", task: "Refais tout" })).error).toContain(
+      "Aucune équipe",
+    );
+    const member = { agentId: "demo" };
+    await hub.handle(client, {
+      type: "team.start",
+      requestId: "r",
+      projectId,
+      task: "À la main",
+      lead: member,
+      coder: member,
+      coders: 2,
+      permissionMode: "full",
+    });
+    expect(hub.snapshot().coordinator.team).toMatchObject({ coders: 2, permissionMode: "full" });
+    const team = await call("start_team", { task_key: "gros", task: "Refais tout" });
+    const lead = store.getThread(team.result!.opened.id)!;
+    expect(lead).toMatchObject({ role: "lead", openedBy: coordinatorId, taskKey: "gros" });
+    expect(lead.team).toMatchObject({ coders: 2, permissionMode: "full" });
+    expect(lead.team!.task).toContain("Refais tout");
+    expect(
+      (await call("start_team", { task_key: "gros", task: "Refais tout" })).result,
+    ).toMatchObject({ already_open: true });
+    for (const t of store.listThreads().filter((t) => t.role === "lead")) {
+      await hub.handle(client, { type: "team.stop", threadId: t.id });
+    }
   });
 });

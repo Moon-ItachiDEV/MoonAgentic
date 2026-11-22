@@ -576,7 +576,32 @@ export interface GithubRepo {
   pushedAt?: number;
 }
 
+/** The kinds of work a coordinator opens a thread for. */
+export const WORK_KINDS = ["question", "bug", "fonctionnalite", "relecture", "tests"] as const;
+export type WorkKind = (typeof WORK_KINDS)[number];
+
+/** A team as the user last set one up: what a coordinator starts when asked for a team. */
+export interface TeamSetup {
+  lead: TeamMember;
+  coder: TeamMember;
+  reviewer?: TeamMember;
+  tester?: TeamMember;
+  merger?: TeamMember;
+  coders: number;
+  permissionMode: PermissionMode;
+  autoShip?: boolean;
+}
+
+/** How coordinators route work: an agent and model for each kind, and the team to start. */
+export interface CoordinatorSettings {
+  /** A kind left out goes to the coordinator's own agent. */
+  routes: Partial<Record<WorkKind, TeamMember>>;
+  /** Kept from the last team the user started by hand. */
+  team?: TeamSetup;
+}
+
 export interface Snapshot {
+  coordinator: CoordinatorSettings;
   favorites: Favorites;
   requests: PendingRequest[];
   mcpServers: McpServerInfo[];
@@ -591,6 +616,7 @@ export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "agents"; agents: AgentInfo[] }
   | { type: "favorites"; favorites: Favorites }
+  | { type: "coordinatorSettings"; settings: CoordinatorSettings }
   /** Every permission request still waiting, after one is added or answered. */
   | { type: "requests"; requests: PendingRequest[] }
   | { type: "mcpServers"; servers: McpServerInfo[] }
@@ -706,6 +732,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
     requestId: id,
     projectId: id,
     agentId: id,
+    model: id.optional(),
+  }),
+  /** Sends a kind of work to an agent and model; without an agent, back to the coordinator's own. */
+  z.object({
+    type: z.literal("coordinator.setRoute"),
+    kind: z.enum(WORK_KINDS),
+    agentId: id.optional(),
     model: id.optional(),
   }),
   z.object({ type: z.literal("workspace.review"), threadId: id }),
