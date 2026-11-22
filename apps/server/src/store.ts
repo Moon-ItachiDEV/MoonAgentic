@@ -52,6 +52,7 @@ type ThreadExtra = Pick<
   | "kind"
   | "openedBy"
   | "taskKey"
+  | "held"
   | "parentId"
   | "role"
   | "worksIn"
@@ -71,6 +72,7 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.kind ? { kind: thread.kind } : {}),
     ...(thread.openedBy ? { openedBy: thread.openedBy } : {}),
     ...(thread.taskKey ? { taskKey: thread.taskKey } : {}),
+    ...(thread.held ? { held: thread.held } : {}),
     ...(thread.parentId ? { parentId: thread.parentId } : {}),
     ...(thread.role ? { role: thread.role } : {}),
     ...(thread.worksIn ? { worksIn: thread.worksIn } : {}),
@@ -392,6 +394,7 @@ export class Store {
         | "summary"
       >
     > & {
+      held?: string | null;
       error?: string | null;
       pr?: Thread["pr"] | null;
     },
@@ -400,12 +403,14 @@ export class Store {
     if (!current) throw new Error(`Unknown thread ${id}`);
     // Only activity moves a thread up the sidebar, not a settings change.
     const active = patch.status !== undefined || patch.title !== undefined;
-    const { pr, error: _error, ...rest } = patch;
+    const { pr, held, error: _error, ...rest } = patch;
     const next: Thread = {
       ...current,
       ...rest,
       updatedAt: active ? Date.now() : current.updatedAt,
     };
+    if (held === null) delete next.held;
+    else if (held) next.held = held;
     if (pr === null) delete next.pr;
     else if (pr) next.pr = pr;
     const error = patch.error === undefined ? (current.error ?? null) : patch.error;

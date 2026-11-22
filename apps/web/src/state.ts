@@ -1,4 +1,5 @@
 import type {
+  CoordinatorSettings,
   AgentInfo,
   Favorites,
   Item,
@@ -28,6 +29,7 @@ export interface State {
   ready: boolean;
   agents: AgentInfo[];
   favorites: Favorites;
+  coordinator: CoordinatorSettings;
   /** Permission requests waiting in every thread. */
   requests: PendingRequest[];
   mcpServers: McpServerInfo[];
@@ -52,6 +54,8 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, agents: message.agents };
     case "favorites":
       return { ...state, favorites: message.favorites };
+    case "coordinatorSettings":
+      return { ...state, coordinator: message.settings };
     case "requests":
       return { ...state, requests: message.requests };
     case "mcpServers":
@@ -154,6 +158,7 @@ export const initialState: State = {
   ready: false,
   agents: [],
   favorites: {},
+  coordinator: { routes: {} },
   requests: [],
   mcpServers: [],
   projects: [],

@@ -583,6 +583,10 @@ describe("composer", () => {
     const beside = page.locator(".pp-panel .pp-row", { hasText: "Export Safari" });
     await beside.waitFor();
     await expect.poll(() => card.locator(".oc-state").textContent()).toBe("En attente");
+    // What the new thread waits for is asked above the coordinator's composer, to the user.
+    const ask = page.locator(".pp-ask", { hasText: "Export Safari" });
+    await ask.waitFor();
+    expect(await ask.getByRole("button").count()).toBeGreaterThan(1);
     // The coordinator is no thread of the lists: not in the sidebar, not among the project's.
     expect(await page.locator(".side .thr", { hasText: "Coordinateur" }).count()).toBe(0);
     expect(await page.locator(".pp-row", { hasText: "Coordinateur" }).count()).toBe(0);
@@ -621,6 +625,19 @@ describe("composer", () => {
     );
     if (shots) await page.waitForTimeout(400);
     await shot(page, "p4-mobile");
+
+    // In the settings, each kind of work is sent to an agent; the server keeps the choice.
+    await page.setViewportSize({ width: 1280, height: 820 });
+    await page.evaluate(() => {
+      history.pushState(null, "", "/reglages/coordinator");
+      dispatchEvent(new PopStateEvent("popstate"));
+    });
+    await page.getByLabel("Agent pour Bug").selectOption({ label: "Agent de démo" });
+    await page.getByLabel("Modèle pour Bug").selectOption({ label: "Démo précis" });
+    await page.reload();
+    await expect.poll(() => page.getByLabel("Modèle pour Bug").inputValue()).toBe("precis");
+    expect(await page.getByLabel("Agent pour Tests").inputValue()).toBe("");
+    await shot(page, "p8-reglages-coordinateur");
     await page.close();
   });
   it("plans the project's work: the teams' cards follow their pieces, the user's are theirs to move", async () => {

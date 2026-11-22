@@ -260,7 +260,9 @@ function FeedItem({
                 <>
                   <AgentBadge agent={agents.find((a) => a.id === opened.agentId)} small />
                   <span>{opened.model ?? agents.find((a) => a.id === opened.agentId)?.name}</span>
-                  <span className="oc-state">{GROUP_LABEL[threadGroup(opened, members)]}</span>
+                  <span className="oc-state">
+                    {opened.held ? "En file" : GROUP_LABEL[threadGroup(opened, members)]}
+                  </span>
                 </>
               ) : (
                 "Ce fil a été supprimé."
@@ -425,6 +427,7 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
 
   return (
     <div className="u-wrap">
+      {item.from === "coordinator" && <div className="u-from">Coordinateur</div>}
       <div className="u">
         {messageTokens(item.text).map((part, i) =>
           part.kind ? (

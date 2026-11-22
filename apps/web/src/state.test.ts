@@ -43,6 +43,7 @@ describe("client state", () => {
     let state = reduce(initialState, {
       type: "snapshot",
       snapshot: {
+        coordinator: { routes: {} },
         favorites: {},
         requests: [],
         mcpServers: [],
@@ -66,6 +67,7 @@ describe("client state", () => {
     let state = reduce(initialState, {
       type: "snapshot",
       snapshot: {
+        coordinator: { routes: {} },
         favorites: {},
         requests: [],
         mcpServers: [],
