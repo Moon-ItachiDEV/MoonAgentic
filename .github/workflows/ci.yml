@@ -71,12 +71,14 @@ jobs:
       - name: Install Chromium
         if: matrix.suite == 'server'
         run: node apps/server/node_modules/playwright-core/cli.js install --with-deps --only-shell chromium
+      # GitHub runners have 4 vCPUs; four suites at once starved the ssh launcher tests
+      # (a 30s real-shell spawn timed out), so packages run two at a time.
       - name: Test
         env:
           SUITE: ${{ matrix.suite }}
         run: |
           case "$SUITE" in
-            packages) vp run --parallel --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test ;;
+            packages) vp run --parallel --concurrency-limit 2 --filter '!t3' --filter '!@t3tools/monorepo' --filter '!@t3tools/web' test ;;
             web) vp run --filter @t3tools/web test ;;
             server) vp run --filter t3 test ;;
           esac
