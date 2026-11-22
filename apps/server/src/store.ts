@@ -6,6 +6,7 @@ import type {
   Project,
   Thread,
   ThreadStatus,
+  Workspace,
 } from "@moonagentic/protocol";
 
 export interface AgentModels {
@@ -23,6 +24,7 @@ interface ThreadRow {
   permission_mode: PermissionMode;
   error: string | null;
   model: string | null;
+  workspace: string | null;
   acp_session_id: string | null;
   created_at: number;
   updated_at: number;
@@ -36,6 +38,7 @@ const toThread = (row: ThreadRow): Thread => ({
   status: row.status,
   permissionMode: row.permission_mode,
   ...(row.model ? { model: row.model } : {}),
+  ...(row.workspace ? { workspace: JSON.parse(row.workspace) as Workspace } : {}),
   ...(row.error ? { error: row.error } : {}),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
@@ -88,6 +91,9 @@ export class Store {
     const threadColumns = this.db.prepare(`PRAGMA table_info(threads)`).all() as { name: string }[];
     if (!threadColumns.some((c) => c.name === "model")) {
       this.db.exec(`ALTER TABLE threads ADD COLUMN model TEXT`);
+    }
+    if (!threadColumns.some((c) => c.name === "workspace")) {
+      this.db.exec(`ALTER TABLE threads ADD COLUMN workspace TEXT`);
     }
   }
 
@@ -173,8 +179,8 @@ export class Store {
   addThread(thread: Thread): void {
     this.db
       .prepare(
-        `INSERT INTO threads (id, project_id, title, agent_id, status, permission_mode, model, error, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+        `INSERT INTO threads (id, project_id, title, agent_id, status, permission_mode, model, workspace, error, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       )
       .run(
         thread.id,
@@ -184,6 +190,7 @@ export class Store {
         thread.status,
         thread.permissionMode,
         thread.model ?? null,
+        thread.workspace ? JSON.stringify(thread.workspace) : null,
         thread.createdAt,
         thread.updatedAt,
       );
@@ -191,7 +198,7 @@ export class Store {
 
   updateThread(
     id: string,
-    patch: Partial<Pick<Thread, "status" | "permissionMode" | "title" | "model">> & {
+    patch: Partial<Pick<Thread, "status" | "permissionMode" | "title" | "model" | "workspace">> & {
       error?: string | null;
     },
   ): Thread {
@@ -203,13 +210,14 @@ export class Store {
     const error = patch.error === undefined ? (current.error ?? null) : patch.error;
     this.db
       .prepare(
-        `UPDATE threads SET status = ?, permission_mode = ?, title = ?, model = ?, error = ?, updated_at = ? WHERE id = ?`,
+        `UPDATE threads SET status = ?, permission_mode = ?, title = ?, model = ?, workspace = ?, error = ?, updated_at = ? WHERE id = ?`,
       )
       .run(
         next.status,
         next.permissionMode,
         next.title,
         next.model ?? null,
+        next.workspace ? JSON.stringify(next.workspace) : null,
         error,
         next.updatedAt,
         id,

@@ -33,7 +33,9 @@ const token = readFileSync(tokenFile, "utf8").trim();
 
 const webDir = fileURLToPath(new URL("../../web/dist", import.meta.url));
 const store = new Store(path.join(dataDir, "state.sqlite"));
-const hub = new Hub(store, new Agents({ demo: values.dev || values.demo }));
+const hub = new Hub(store, new Agents({ demo: values.dev || values.demo }), {
+  worktreesDir: path.join(dataDir, "worktrees"),
+});
 const server = createHttpServer({
   hub,
   token,

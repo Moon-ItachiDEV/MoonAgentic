@@ -78,3 +78,12 @@ export const IconPlug = ({ size = 16 }: P) => (
     <path d="M12 17v5" />
   </svg>
 );
+export const IconBranch = ({ size = 15 }: P) => (
+  <svg {...base(size)}>
+    <circle cx="6" cy="5" r="2" />
+    <circle cx="6" cy="19" r="2" />
+    <circle cx="18" cy="7" r="2" />
+    <path d="M6 7v10" />
+    <path d="M18 9c0 5-6 4-11.5 8.5" />
+  </svg>
+);

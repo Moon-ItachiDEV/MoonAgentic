@@ -4,6 +4,7 @@ import type {
   Favorites,
   Item,
   McpServerInfo,
+  ReviewFile,
   Project,
   ServerMessage,
   Thread,
@@ -21,6 +22,8 @@ export interface State {
   projects: Project[];
   threads: Thread[];
   items: Record<string, Item[]>;
+  /** The last review fetched for each thread with its own branch. */
+  reviews: Record<string, ReviewFile[]>;
   notice: string | null;
 }
 
@@ -57,6 +60,8 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, favorites: message.favorites };
     case "mcpServers":
       return { ...state, mcpServers: message.servers };
+    case "review":
+      return { ...state, reviews: { ...state.reviews, [message.threadId]: message.files } };
     case "project":
       return { ...state, projects: upsert(state.projects, message.project) };
     case "thread":
@@ -84,6 +89,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "error":
       return message.requestId ? state : { ...state, notice: message.message };
     case "created":
+    case "shipped":
       return state;
   }
 }
@@ -108,6 +114,7 @@ export class Connection {
     projects: [],
     threads: [],
     items: {},
+    reviews: {},
     notice: null,
   };
   private readonly listeners = new Set<() => void>();
@@ -133,7 +140,7 @@ export class Connection {
     this.set({ ...this.state, notice: null });
   }
 
-  /** Sends a create request and resolves with the id the server assigned. */
+  /** Sends a request and resolves with what the server made: an id, or a link for a push. */
   request(message: Extract<ClientMessage, { requestId: string }>): Promise<string> {
     return new Promise((resolve, reject) => {
       this.pending.set(message.requestId, { resolve, reject });
@@ -168,6 +175,8 @@ export class Connection {
     socket.onmessage = (event) => {
       const message = JSON.parse(String(event.data)) as ServerMessage;
       if (message.type === "created") this.pending.get(message.requestId)?.resolve(message.id);
+      if (message.type === "shipped")
+        this.pending.get(message.requestId)?.resolve(message.url ?? "");
       if (message.type === "error" && message.requestId) {
         this.pending.get(message.requestId)?.reject(new Error(message.message));
       }

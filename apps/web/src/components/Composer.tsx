@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { connection } from "../connection.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
-import { IconArrowUp, IconShield, IconStop } from "./icons.tsx";
+import { IconArrowUp, IconBranch, IconShield, IconStop } from "./icons.tsx";
 import { Picker } from "./Picker.tsx";
 
 export function Composer(props: {
@@ -22,6 +22,7 @@ export function Composer(props: {
   const [newMode, setNewMode] = useState<PermissionMode>(() =>
     readPref("permissionMode") === "full" ? "full" : "supervised",
   );
+  const [isolated, setIsolated] = useState(() => readPref("isolated") !== "false");
   const input = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const [modelPicks, setModelPicks] = useState<Record<string, string>>({});
@@ -87,6 +88,7 @@ export function Composer(props: {
         agentId,
         permissionMode: newMode,
         ...(model ? { model } : {}),
+        ...(project.git ? { isolated } : {}),
         text: value,
       });
       setText("");
@@ -152,6 +154,25 @@ export function Composer(props: {
           </span>
         </button>
         <span className="grow" />
+        {!thread && project?.git && (
+          <button
+            className={`perm branch${isolated ? " on" : ""}`}
+            aria-pressed={isolated}
+            aria-label={isolated ? "Branche à part" : "Dans le dossier du projet"}
+            title={
+              isolated
+                ? "L'agent travaille sur sa propre branche, dans une copie à part du projet"
+                : "L'agent travaille directement dans le dossier du projet"
+            }
+            onClick={() => {
+              setIsolated(!isolated);
+              writePref("isolated", String(!isolated));
+            }}
+          >
+            <IconBranch />
+            <span className="lbl">{isolated ? "Branche à part" : "Dans le dossier"}</span>
+          </button>
+        )}
         <button
           className={`perm${mode === "full" ? " full" : ""}`}
           onClick={toggleMode}

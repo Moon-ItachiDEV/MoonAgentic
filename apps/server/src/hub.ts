@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -10,12 +10,15 @@ import type {
   Item,
   McpServerInput,
   PermissionMode,
+  Project,
+  ReviewFile,
   ServerMessage,
   Snapshot,
   Thread,
   ToolContent,
 } from "@moonagentic/protocol";
 import type { Agents } from "./agents.ts";
+import { addWorktree, branchName, isGitRepo, reviewChanges, ship, type ShipResult } from "./git.ts";
 import { mcpInfo, type McpServerRecord } from "./mcp.ts";
 import { AgentSession, describe, type ModelOption, modelOption } from "./session.ts";
 import type { Store } from "./store.ts";
@@ -61,9 +64,15 @@ export class Hub {
     { threadId: string; resolve: (r: acp.RequestPermissionResponse) => void }
   >();
 
-  constructor(store: Store, agents: Agents) {
+  /** Where threads with their own branch get their worktree. */
+  private readonly worktreesDir: string;
+  /** Whether each project's folder is in a git repository, checked once. */
+  private readonly gitProjects = new Map<string, boolean>();
+
+  constructor(store: Store, agents: Agents, options: { worktreesDir: string }) {
     this.store = store;
     this.agents = agents;
+    this.worktreesDir = options.worktreesDir;
     store.recoverAfterRestart();
   }
 
@@ -78,7 +87,7 @@ export class Hub {
       favorites: this.store.getSetting<Favorites>("favorites", {}),
       mcpServers: this.mcpServers().map(mcpInfo),
       agents: this.agentList(),
-      projects: this.store.listProjects(),
+      projects: this.store.listProjects().map((p) => this.withGit(p)),
       threads: this.store.listThreads(),
     };
   }
@@ -135,6 +144,23 @@ export class Hub {
         if (!this.mcpServers().some((s) => s.id === message.id)) return;
         this.updateMcpServers((servers) => servers.filter((s) => s.id !== message.id));
         return;
+      case "workspace.review":
+        client.send({
+          type: "review",
+          threadId: message.threadId,
+          files: await this.review(message.threadId),
+        });
+        return;
+      case "workspace.ship": {
+        const result = await this.ship(message.threadId, message.message, message.pr);
+        client.send({
+          type: "shipped",
+          requestId: message.requestId,
+          threadId: message.threadId,
+          ...result,
+        });
+        return;
+      }
       case "agent.discover":
         await this.discover(message.agentId, message.projectId);
         return;
@@ -155,7 +181,7 @@ export class Hub {
     if (!isDirectory) throw new Error(`Ce dossier n'existe pas sur cette machine : ${resolved}`);
     const project = { id: randomUUID(), name, path: resolved, createdAt: Date.now() };
     this.store.addProject(project);
-    this.broadcast({ type: "project", project });
+    this.broadcast({ type: "project", project: this.withGit(project) });
     return project.id;
   }
 
@@ -164,19 +190,29 @@ export class Hub {
     agentId: string;
     permissionMode: PermissionMode;
     model?: string | undefined;
+    isolated?: boolean | undefined;
     text: string;
   }): string {
-    if (!this.store.getProject(input.projectId)) throw new Error("Projet introuvable.");
+    const project = this.store.getProject(input.projectId);
+    if (!project) throw new Error("Projet introuvable.");
     this.agents.launch(input.agentId);
     const now = Date.now();
+    const id = randomUUID();
+    const title = titleFrom(input.text);
+    // The worktree itself is made when the agent first starts, so creating stays instant.
+    const workspace =
+      input.isolated && this.withGit(project).git
+        ? { branch: branchName(title, id), path: path.join(this.worktreesDir, id) }
+        : undefined;
     const thread: Thread = {
-      id: randomUUID(),
+      id,
       projectId: input.projectId,
-      title: titleFrom(input.text),
+      title,
       agentId: input.agentId,
       status: "idle",
       permissionMode: input.permissionMode,
       ...(input.model ? { model: input.model } : {}),
+      ...(workspace ? { workspace } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -232,6 +268,35 @@ export class Hub {
     favorites[agentId] = starred ? [...next, model] : next;
     this.store.setSetting("favorites", favorites);
     this.broadcast({ type: "favorites", favorites });
+  }
+
+  /** The thread's changes since its branch started, for review before shipping. */
+  async review(threadId: string): Promise<ReviewFile[]> {
+    const workspace = this.requireThread(threadId).workspace;
+    if (!workspace?.base) return [];
+    return reviewChanges(workspace.path, workspace.base);
+  }
+
+  /** Commits the thread's changes, pushes its branch and opens a pull request if asked. */
+  async ship(threadId: string, message: string, pr: boolean): Promise<ShipResult> {
+    const thread = this.requireThread(threadId);
+    const workspace = thread.workspace;
+    if (!workspace?.base)
+      throw new Error("Ce fil travaille dans le dossier du projet, sans branche à lui.");
+    if (this.turns.has(threadId)) throw new Error("Attends la fin de la réponse de l'agent.");
+    const result = await ship(workspace.path, {
+      branch: workspace.branch,
+      message,
+      pr,
+      title: thread.title,
+      ...(workspace.baseBranch ? { baseBranch: workspace.baseBranch } : {}),
+    });
+    if (result.url) {
+      this.updateThread(threadId, {
+        workspace: { ...workspace, prUrl: result.url, prOpened: result.prOpened },
+      });
+    }
+    return result;
   }
 
   /** Registers an MCP server for every agent session started from now on. */
@@ -356,13 +421,38 @@ export class Hub {
     if (existing) return existing;
     const project = this.store.getProject(thread.projectId);
     if (!project) return Promise.reject(new Error("Projet introuvable."));
-    const started = this.startSession(thread, project.path);
+    const started = this.prepareWorkspace(thread.id, project).then((cwd) =>
+      this.startSession(thread, cwd),
+    );
     this.sessions.set(thread.id, started);
     started.then(
       (s) => this.store.setSessionId(thread.id, s.sessionId),
       () => this.sessions.delete(thread.id),
     );
     return started;
+  }
+
+  /** Makes the thread's worktree on first use; returns the folder the agent works in. */
+  private async prepareWorkspace(threadId: string, project: Project): Promise<string> {
+    const workspace = this.store.getThread(threadId)?.workspace;
+    if (!workspace) return project.path;
+    if (!existsSync(workspace.path)) {
+      if (workspace.base) {
+        throw new Error(`La copie de travail de ce fil a disparu : ${workspace.path}`);
+      }
+      const made = await addWorktree(project.path, workspace.path, workspace.branch);
+      this.updateThread(threadId, { workspace: { ...workspace, ...made } });
+    }
+    return workspace.path;
+  }
+
+  private withGit(project: Project): Project {
+    let git = this.gitProjects.get(project.id);
+    if (git === undefined) {
+      git = isGitRepo(project.path);
+      this.gitProjects.set(project.id, git);
+    }
+    return git ? { ...project, git } : project;
   }
 
   private async startSession(thread: Thread, cwd: string): Promise<AgentSession> {
