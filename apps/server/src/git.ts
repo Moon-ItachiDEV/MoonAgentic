@@ -150,6 +150,17 @@ export async function removeWorktree(repoDir: string, worktree: string): Promise
   if (existsSync(worktree)) {
     await git(repoDir, ["worktree", "remove", "--force", worktree]).catch(() => undefined);
   }
+  // Git can fail, or the project's folder be gone: the folder goes anyway, and if even that
+  // fails (a file held open on Windows), the caller hears it rather than leaving it behind.
+  if (existsSync(worktree)) {
+    try {
+      rmSync(worktree, { recursive: true, force: true, maxRetries: 3 });
+    } catch (error) {
+      throw new Error(
+        `Impossible de supprimer la copie de travail ${worktree} : ${error instanceof Error ? error.message : String(error)}. Ferme ce qui l'utilise puis réessaie.`,
+      );
+    }
+  }
   await git(repoDir, ["worktree", "prune"]).catch(() => undefined);
 }
 

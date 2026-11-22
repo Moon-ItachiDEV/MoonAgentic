@@ -542,4 +542,81 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     ).toEqual(["Un"]);
     expect(store.getSetting("pendingRestores", {})).toEqual({});
   });
+
+  it("forgets a step back that failed, so a restart never replays it", async () => {
+    const { hub, store, root, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+    const second = store.listItems(threadId).filter((i) => i.kind === "user")[1]!;
+    if (second.kind !== "user") throw new Error("no user item");
+    // A point of return git no longer has: going back to it fails.
+    store.putItem(threadId, { ...second, checkpoint: "0".repeat(40) });
+
+    await expect(hub.restore(threadId, second.id)).rejects.toThrow();
+    expect(store.getSetting("pendingRestores", {})).toEqual({});
+    hub.send(threadId, "Trois");
+    await hub.whenIdle(threadId);
+    await hub.close();
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+    });
+    cleanups.unshift(() => restarted.close());
+    await restarted.recovered;
+    expect(
+      store
+        .listItems(threadId)
+        .filter((i) => i.kind === "user")
+        .map((i) => i.text),
+    ).toEqual(["Un", "Deux", "Trois"]);
+  });
+
+  it("changes nothing on an archived thread, and keeps it archived if it cannot come back", async () => {
+    const { hub, store, repo, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    const first = store.listItems(threadId).find((i) => i.kind === "user")!;
+    await hub.setArchived(threadId, true);
+
+    await expect(hub.review(threadId)).rejects.toThrow("archivé");
+    await expect(hub.ship(threadId, "msg", false)).rejects.toThrow("archivé");
+    await expect(hub.restore(threadId, first.id)).rejects.toThrow("archivé");
+    await expect(hub.setModel(threadId, "x")).rejects.toThrow("archivé");
+    await expect(hub.setSetting(threadId, "mode", "x")).rejects.toThrow("archivé");
+    await expect(hub.switchAgent(threadId, "other")).rejects.toThrow("archivé");
+
+    // The project's folder has moved: the worktree cannot be made again.
+    renameSync(repo, `${repo}-ailleurs`);
+    await expect(hub.setArchived(threadId, false)).rejects.toThrow();
+    expect(store.getThread(threadId)).toMatchObject({ archived: true });
+    expect(store.getThread(threadId)?.workspace?.archivedTree).toBeDefined();
+
+    renameSync(`${repo}-ailleurs`, repo);
+    await hub.setArchived(threadId, false);
+    expect(store.getThread(threadId)?.archived).toBeUndefined();
+  });
+
+  it("removes a project's worktrees even when its folder is gone", async () => {
+    const { hub, store, repo, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    const dir = store.getThread(threadId)!.workspace!.path;
+    rmSync(repo, { recursive: true, force: true });
+
+    await hub.removeProject(projectId);
+    expect(existsSync(dir)).toBe(false);
+    expect(store.getProject(projectId)).toBeUndefined();
+  });
+
+  it("takes no new thread or message in a project while it is being removed", async () => {
+    const { hub, store, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    const other = await isolatedThread(hub, projectId, "Autre");
+    const removing = hub.removeProject(projectId);
+    expect(() =>
+      hub.createThread({ projectId, agentId: "demo", permissionMode: "full", text: "Non" }),
+    ).toThrow("Projet introuvable");
+    expect(() => hub.send(other, "Non")).toThrow();
+    await removing;
+    expect(store.getThread(threadId)).toBeUndefined();
+    expect(store.getThread(other)).toBeUndefined();
+  });
 });

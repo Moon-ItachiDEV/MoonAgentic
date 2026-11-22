@@ -397,8 +397,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread.setSetting"), threadId: id, settingId: id, value: id }),
   z.object({ type: z.literal("thread.setPinned"), threadId: id, pinned: z.boolean() }),
   z.object({ type: z.literal("thread.setArchived"), threadId: id, archived: z.boolean() }),
-  z.object({ type: z.literal("thread.delete"), threadId: id }),
-  z.object({ type: z.literal("project.remove"), projectId: id }),
+  z.object({ type: z.literal("thread.delete"), requestId: id, threadId: id }),
+  z.object({ type: z.literal("project.remove"), requestId: id, projectId: id }),
   /** Looks for project files to mention with `@`, in the thread's folder when given. */
   z.object({
     type: z.literal("files.search"),

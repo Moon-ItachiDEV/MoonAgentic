@@ -1,4 +1,4 @@
-import { readdirSync, mkdtempSync, rmSync } from "node:fs";
+import { readdirSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import os from "node:os";
 import path from "node:path";
@@ -52,6 +52,10 @@ describe("database schema versions", () => {
 
     const backups = readdirSync(dir).filter((f) => f.endsWith(".bak"));
     expect(backups).toHaveLength(1);
+    // It holds what the database holds, secrets included: its owner alone reads it.
+    if (process.platform !== "win32") {
+      expect(statSync(path.join(dir, backups[0]!)).mode & 0o777).toBe(0o600);
+    }
     const backup = new DatabaseSync(path.join(dir, backups[0]!));
     expect(version(backup)).toBe(0);
     expect(backup.prepare(`SELECT name FROM projects`).all()).toEqual([{ name: "ancien" }]);

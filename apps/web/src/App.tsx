@@ -26,7 +26,7 @@ import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
-import { connection } from "./connection.ts";
+import { connection, newId } from "./connection.ts";
 import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
 import { focusItem } from "./focus.ts";
 import { readPref, writePref } from "./prefs.ts";
@@ -81,9 +81,6 @@ export function App() {
     if (!thread || !items) return;
     downloadMarkdown(exportFileName(thread.title), threadMarkdown(thread, items, state.agents));
   };
-  const sendOrFail = (message: Parameters<typeof connection.send>[0]) => {
-    if (!connection.send(message)) throw new Error("Pas de connexion au serveur MoonAgentic.");
-  };
   const setArchived = (id: string, archived: boolean) =>
     connection.send({ type: "thread.setArchived", threadId: id, archived });
   const askDeleteThread = (t: Thread) =>
@@ -93,8 +90,9 @@ export function App() {
         ? `« ${t.title} » et sa copie de travail seront supprimées. Sa branche ${t.workspace.branch} reste dans le dépôt, avec ses commits.`
         : `« ${t.title} » sera supprimée, avec tous ses messages.`,
       action: "Supprimer",
-      run: () => {
-        sendOrFail({ type: "thread.delete", threadId: t.id });
+      // The box stays open, and says why, until the server has really deleted it.
+      run: async () => {
+        await connection.request({ type: "thread.delete", requestId: newId(), threadId: t.id });
         if (thread?.id === t.id) go({ name: "home" });
       },
     });
@@ -106,8 +104,8 @@ export function App() {
       title: "Retirer ce projet ?",
       text: `« ${p.name} » quitte MoonAgentic${count ? `, avec ses ${count} discussion${count > 1 ? "s" : ""} et leurs copies de travail` : ""}. Le dossier ${p.path} et ses branches restent intacts.`,
       action: "Retirer",
-      run: () => {
-        sendOrFail({ type: "project.remove", projectId: id });
+      run: async () => {
+        await connection.request({ type: "project.remove", requestId: newId(), projectId: id });
         if (thread?.projectId === id) go({ name: "home" });
       },
     });
@@ -211,7 +209,7 @@ export function App() {
           >
             <IconSearch />
           </button>
-          {thread?.workspace && (
+          {thread?.workspace && !thread.archived && (
             <button
               className="review-btn"
               aria-label="À revoir"
@@ -286,7 +284,7 @@ export function App() {
           }}
         />
       )}
-      {reviewOpen && thread?.workspace && (
+      {reviewOpen && thread?.workspace && !thread.archived && (
         <ReviewPanel
           key={thread.id}
           thread={thread}

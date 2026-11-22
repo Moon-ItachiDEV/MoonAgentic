@@ -18,11 +18,13 @@ export function ConfirmDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // While it runs, the box stays: closing it would hide whether it worked.
+  const close = () => !busy && onClose();
   useEffect(() => {
-    const escape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    const escape = (event: KeyboardEvent) => event.key === "Escape" && !busy && onClose();
     document.addEventListener("keydown", escape);
     return () => document.removeEventListener("keydown", escape);
-  }, [onClose]);
+  }, [onClose, busy]);
 
   const go = async () => {
     setBusy(true);
@@ -37,13 +39,13 @@ export function ConfirmDialog({
   };
 
   return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <div className="dialog" role="alertdialog" aria-modal aria-labelledby="cf-title">
         <h2 id="cf-title">{confirm.title}</h2>
         <p>{confirm.text}</p>
         {error && <p className="error">{error}</p>}
         <div className="row">
-          <button className="btn quiet" onClick={onClose}>
+          <button className="btn quiet" disabled={busy} onClick={close}>
             Annuler
           </button>
           <button className="btn danger" autoFocus disabled={busy} onClick={() => void go()}>

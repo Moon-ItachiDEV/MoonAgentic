@@ -1,3 +1,4 @@
+import { chmodSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type {
   AgentSetting,
@@ -168,6 +169,8 @@ export function migrate(
   if (tables.n > 0 && file !== ":memory:") {
     const backup = `${file}.v${version}-${Date.now()}.bak`;
     db.exec(`VACUUM INTO '${backup.replaceAll("'", "''")}'`);
+    // The copy holds what the database holds, MCP secrets included: only its owner reads it.
+    if (process.platform !== "win32") chmodSync(backup, 0o600);
   }
   for (let step = version; step < migrations.length; step++) {
     db.exec("BEGIN IMMEDIATE");
@@ -193,6 +196,20 @@ export class Store {
     );
     this.db.exec(`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`);
     migrate(this.db, file);
+  }
+
+  /** Runs `work` as one write: all of it lands, or none of it. */
+  transaction<T>(work: () => T): T {
+    if (this.db.isTransaction) return work();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = work();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   getSetting<T>(key: string, fallback: T): T {

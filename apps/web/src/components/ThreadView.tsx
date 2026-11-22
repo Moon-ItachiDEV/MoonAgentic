@@ -193,7 +193,7 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const idle = thread.status === "idle" || thread.status === "error";
-  const canRestore = !!item.checkpoint && !!thread.workspace && idle;
+  const canRestore = !!item.checkpoint && !!thread.workspace && !thread.archived && idle;
   // A turn started meanwhile closes the confirmation for good.
   if (confirming && !canRestore) setConfirming(false);
 

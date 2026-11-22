@@ -135,6 +135,8 @@ export class Hub {
   private readonly busy = new Map<string, string>();
   /** Whether each project's folder is in a git repository, checked once. */
   private readonly gitProjects = new Map<string, boolean>();
+  /** Projects being removed, which take no new thread meanwhile. */
+  private readonly removingProjects = new Set<string>();
 
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
@@ -218,9 +220,11 @@ export class Hub {
         return;
       case "thread.delete":
         await this.deleteThread(message.threadId);
+        client.send({ type: "done", requestId: message.requestId });
         return;
       case "project.remove":
         await this.removeProject(message.projectId);
+        client.send({ type: "done", requestId: message.requestId });
         return;
       case "thread.setPinned":
         this.requireThread(message.threadId);
@@ -343,7 +347,7 @@ export class Hub {
     text: string;
   }): string {
     const project = this.store.getProject(input.projectId);
-    if (!project) throw new Error("Projet introuvable.");
+    if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
     this.agents.launch(input.agentId);
     const now = Date.now();
     const id = randomUUID();
@@ -374,11 +378,12 @@ export class Hub {
   }
 
   send(threadId: string, text: string): void {
-    const thread = this.requireThread(threadId);
-    if (thread.archived) throw new Error("Ce fil est archivé : désarchive-le pour continuer.");
+    const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
     const busy = this.busy.get(threadId);
     if (busy) throw new Error(busy);
+    // A step back left over from a failure must never replay over the turns that follow.
+    if (this.pendingRestores()[threadId]) this.setPendingRestore(threadId, undefined);
     const itemId = `user:${randomUUID()}`;
     this.putItem(threadId, { id: itemId, kind: "user", text, at: Date.now() });
     this.updateThread(threadId, { status: "running", error: null });
@@ -409,7 +414,7 @@ export class Hub {
 
   /** Switches the thread's model between turns: now if its agent is running, otherwise when it next starts. */
   async setModel(threadId: string, model: string): Promise<void> {
-    const thread = this.requireThread(threadId);
+    const thread = this.requireLiveThread(threadId);
     // Many agents mishandle a settings change in the middle of a prompt.
     if (this.turns.has(threadId))
       throw new Error("Attends la fin de la réponse pour changer de modèle.");
@@ -433,7 +438,7 @@ export class Hub {
 
   /** Changes one of the agent's settings, such as its mode, between turns. */
   async setSetting(threadId: string, settingId: string, value: string): Promise<void> {
-    const thread = this.requireThread(threadId);
+    const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId))
       throw new Error("Attends la fin de la réponse pour changer ce réglage.");
     await this.exclusive(threadId, "Attends la fin du changement de réglage.", async () => {
@@ -467,7 +472,7 @@ export class Hub {
 
   /** The thread's changes since its branch started, for review before shipping. */
   async review(threadId: string): Promise<{ files: ReviewFile[]; omitted?: number }> {
-    const workspace = this.requireThread(threadId).workspace;
+    const workspace = this.requireLiveThread(threadId).workspace;
     if (!workspace?.base) return { files: [] };
     return reviewChanges(workspace.path, workspace.base);
   }
@@ -482,7 +487,7 @@ export class Hub {
     pr: boolean,
     files?: string[],
   ): Promise<ShipResult> {
-    const thread = this.requireThread(threadId);
+    const thread = this.requireLiveThread(threadId);
     const workspace = thread.workspace;
     if (!workspace?.base)
       throw new Error("Ce fil travaille dans le dossier du projet, sans branche à lui.");
@@ -510,7 +515,7 @@ export class Hub {
    * message and everything after it. The agent then starts over from what is left.
    */
   async restore(threadId: string, itemId: string): Promise<void> {
-    const workspace = this.requireThread(threadId).workspace;
+    const workspace = this.requireLiveThread(threadId).workspace;
     const item = this.store.getItem(threadId, itemId);
     const tree = item?.kind === "user" ? item.checkpoint : undefined;
     if (!workspace || !tree) throw new Error("Ce message n'a pas de point de retour.");
@@ -520,7 +525,13 @@ export class Hub {
       // Files and messages go back together: written down first, a step back that a stop
       // cuts in half is finished when the server starts again.
       this.setPendingRestore(threadId, { itemId, tree });
-      await this.finishRestore(threadId, workspace, { itemId, tree });
+      try {
+        await this.finishRestore(threadId, workspace, { itemId, tree });
+      } catch (error) {
+        // A failure the user sees is theirs to retry: it is not replayed at the next start.
+        this.setPendingRestore(threadId, undefined);
+        throw error;
+      }
     });
   }
 
@@ -553,23 +564,29 @@ export class Hub {
     { itemId, tree }: PendingRestore,
   ): Promise<void> {
     await restoreCheckpoint(workspace.path, tree);
-    const removed = this.store.removeItemsFrom(threadId, itemId);
-    // Going back before a hand-off goes back to the agent of that time, on its defaults.
-    const handoff = removed.find((i) => i.kind === "handoff");
-    this.updateThread(threadId, {
-      status: "idle",
-      usage: undefined,
-      error: null,
-      ...(handoff
-        ? {
-            agentId: handoff.from,
-            model: undefined,
-            settings: undefined,
-            canCompact: undefined,
-            commands: undefined,
-          }
-        : {}),
+    // The messages, the thread and the note of the step back change together, or not at all.
+    const { removed, thread } = this.store.transaction(() => {
+      const removed = this.store.removeItemsFrom(threadId, itemId);
+      // Going back before a hand-off goes back to the agent of that time, on its defaults.
+      const handoff = removed.find((i) => i.kind === "handoff");
+      const thread = this.store.updateThread(threadId, {
+        status: "idle",
+        usage: undefined,
+        error: null,
+        ...(handoff
+          ? {
+              agentId: handoff.from,
+              model: undefined,
+              settings: undefined,
+              canCompact: undefined,
+              commands: undefined,
+            }
+          : {}),
+      });
+      this.setPendingRestore(threadId, undefined);
+      return { removed, thread };
     });
+    this.broadcast({ type: "thread", thread });
     this.sendToViewers(threadId, {
       type: "items",
       threadId,
@@ -582,7 +599,6 @@ export class Hub {
         i.kind === "user" && i.checkpoint ? [checkpointRef(threadId, i.id)] : [],
       ),
     ).catch(() => undefined);
-    this.setPendingRestore(threadId, undefined);
   }
 
   /**
@@ -595,8 +611,9 @@ export class Hub {
     const project = this.store.getProject(thread.projectId);
     await this.exclusive(threadId, "Attends la fin de l'archivage.", async () => {
       if (!archived) {
-        this.updateThread(threadId, { archived: false });
+        // Its folder comes back first: if that fails, the thread stays in the archive as it was.
         if (thread.workspace?.base && project) await this.prepareWorkspace(threadId, project);
+        this.updateThread(threadId, { archived: false });
         return;
       }
       await this.forgetSession(threadId);
@@ -606,7 +623,13 @@ export class Hub {
           // Written down before the folder goes: a stop in between loses nothing.
           const archivedTree = await saveCheckpoint(workspace.path, archiveRef(threadId));
           this.updateThread(threadId, { workspace: { ...workspace, archivedTree } });
-          await removeWorktree(project.path, workspace.path);
+          try {
+            await removeWorktree(project.path, workspace.path);
+          } catch (error) {
+            // The folder stays in use: the thread stays out of the archive, its files as they are.
+            this.updateThread(threadId, { workspace });
+            throw error;
+          }
         }
       }
       this.updateThread(threadId, { archived: true, status: "idle" });
@@ -638,14 +661,34 @@ export class Hub {
   /** Removes the project and its threads from MoonAgentic; its folder is left as it is. */
   async removeProject(projectId: string): Promise<void> {
     if (!this.store.getProject(projectId)) throw new Error("Projet introuvable.");
+    if (this.removingProjects.has(projectId))
+      throw new Error("Ce projet est déjà en cours de retrait.");
     const threads = this.store.listThreads().filter((t) => t.projectId === projectId);
     if (threads.some((t) => this.turns.has(t.id) || this.busy.has(t.id))) {
       throw new Error("Un fil de ce projet travaille encore : arrête-le d'abord.");
     }
-    for (const thread of threads) await this.deleteThread(thread.id);
-    this.store.deleteProject(projectId);
-    this.gitProjects.delete(projectId);
-    this.broadcast({ type: "projectRemoved", projectId });
+    // No new thread, message or step starts in the project while it goes, and closing waits.
+    const reason = "Attends la fin du retrait du projet.";
+    this.removingProjects.add(projectId);
+    for (const thread of threads) this.busy.set(thread.id, reason);
+    const step = (async () => {
+      for (const thread of threads) {
+        this.busy.delete(thread.id);
+        await this.deleteThread(thread.id);
+      }
+      this.store.deleteProject(projectId);
+      this.gitProjects.delete(projectId);
+      this.broadcast({ type: "projectRemoved", projectId });
+    })();
+    this.steps.add(step);
+    try {
+      await step;
+    } finally {
+      this.steps.delete(step);
+      this.removingProjects.delete(projectId);
+      for (const thread of threads)
+        if (this.busy.get(thread.id) === reason) this.busy.delete(thread.id);
+    }
   }
 
   /** Only folders MoonAgentic made for a thread are ever removed. */
@@ -656,7 +699,7 @@ export class Hub {
 
   /** Hands the thread to another agent between turns; it gets the conversation so far. */
   async switchAgent(threadId: string, agentId: string): Promise<void> {
-    const thread = this.requireThread(threadId);
+    const thread = this.requireLiveThread(threadId);
     if (thread.agentId === agentId) return;
     this.agents.launch(agentId);
     await this.exclusive(threadId, "Attends la fin du changement d'agent.", async () => {
@@ -1334,6 +1377,13 @@ export class Hub {
       this.putItem(pending.threadId, { ...item, outcome: "cancelled" });
     pending.resolve({ outcome: { outcome: "cancelled" } });
     this.broadcastRequests();
+  }
+
+  /** A thread that can still change: not put away in the archive. */
+  private requireLiveThread(threadId: string): Thread {
+    const thread = this.requireThread(threadId);
+    if (thread.archived) throw new Error("Ce fil est archivé : désarchive-le pour continuer.");
+    return thread;
   }
 
   private requireThread(threadId: string): Thread {

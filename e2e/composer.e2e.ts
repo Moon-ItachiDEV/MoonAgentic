@@ -210,6 +210,14 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Corrige la réponse" }).first().click();
     const menu = page.getByRole("button", { name: "Actions du fil" });
 
+    // On a phone, the menu opens inside the screen.
+    await page.setViewportSize({ width: 390, height: 780 });
+    await menu.click();
+    const box = await page.locator(".menu.thread-menu").boundingBox();
+    expect(box && box.y >= 0 && box.y + box.height <= 780 && box.x >= 0).toBe(true);
+    await menu.click();
+    await page.setViewportSize({ width: 1280, height: 820 });
+
     await menu.click();
     await page.getByRole("menuitem", { name: "Archiver" }).click();
     await page.getByText("Cette discussion est archivée.").waitFor();

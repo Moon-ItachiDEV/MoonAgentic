@@ -1903,6 +1903,7 @@ kbd {
   position: relative;
 }
 .menu.thread-menu {
+  position: absolute;
   top: calc(100% + 6px);
   bottom: auto;
   left: auto;
