@@ -88,6 +88,8 @@ Le mini-PC garde tes agents en marche ; ton PC principal et ton téléphone s'y 
 
    Pas besoin de droits administrateur. Évite une tâche planifiée `schtasks` : Windows arrête par défaut une tâche qui tourne depuis plus de 3 jours. Tailscale, lui, redémarre tout seul avec Windows et se souvient de `serve --bg`.
 
+Pour être prévenu quand un fil attend ta réponse ou qu'une équipe a fini, active **Réglages → Général → Notifications** sur chaque appareil. Le navigateur ne les autorise qu'en HTTPS, ce que donne `tailscale serve`, et tant que MoonAgentic reste ouvert dans un onglet.
+
 N'utilise pas `tailscale funnel` : il ouvrirait MoonAgentic à tout Internet. Réglages → Accès distant te prévient si c'est le cas.
 
 ## Agents

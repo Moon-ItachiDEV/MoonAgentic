@@ -1,6 +1,14 @@
 import type { AgentInfo, Favorites, McpServerInfo, Project } from "@moonagentic/protocol";
 import { type ReactNode, useState } from "react";
 import { connection } from "../connection.ts";
+import {
+  disableNotifications,
+  enableNotifications,
+  notificationPermission,
+  notificationSupport,
+  notificationsOn,
+  showNotice,
+} from "../notifications.ts";
 import { readPref, writePref } from "../prefs.ts";
 import type { SettingsSection } from "../router.ts";
 import { readTheme, setTheme, type Theme } from "../theme.ts";
@@ -89,15 +97,75 @@ function Seg<T extends string>(props: {
   );
 }
 
-function Toggle(props: { label: string; on: boolean; onChange: (on: boolean) => void }) {
+function Toggle(props: {
+  label: string;
+  on: boolean;
+  disabled?: boolean;
+  onChange: (on: boolean) => void;
+}) {
   return (
     <button
       className={`set-sw${props.on ? " on" : ""}`}
       role="switch"
       aria-checked={props.on}
       aria-label={props.label}
+      disabled={props.disabled}
       onClick={() => props.onChange(!props.on)}
     />
+  );
+}
+
+/** Browser notifications for this device: what is shown is what the browser really allows. */
+function NotificationsRow() {
+  const support = notificationSupport();
+  const [on, setOn] = useState(notificationsOn);
+  const [permission, setPermission] = useState(notificationPermission);
+  const [tried, setTried] = useState<"sent" | "refused" | null>(null);
+  const text =
+    support === "insecure"
+      ? "Indisponibles à cette adresse : le navigateur ne les autorise qu'en HTTPS (par exemple avec tailscale serve) ou sur la machine elle-même."
+      : support === "unsupported"
+        ? "Ce navigateur n'en propose pas. Sur iPhone, ajoute d'abord MoonAgentic à l'écran d'accueil."
+        : permission === "denied"
+          ? "Bloquées par le navigateur pour ce site : autorise-les dans ses réglages, puis réessaie."
+          : "Sur cet appareil, quand un fil attend ta réponse ou qu'une équipe termine ou échoue. Il faut que MoonAgentic reste ouvert dans un onglet, même en arrière-plan.";
+  return (
+    <Row title="Notifications" text={text}>
+      <div className="set-notif">
+        {on && (
+          <button
+            className="btn quiet sm"
+            onClick={() =>
+              void showNotice({
+                tag: "essai",
+                threadId: "",
+                title: "MoonAgentic",
+                body: "Les notifications marchent sur cet appareil.",
+              }).then((shown) => setTried(shown ? "sent" : "refused"))
+            }
+          >
+            {tried === "sent" ? "Envoyée" : tried === "refused" ? "Refusée" : "Essayer"}
+          </button>
+        )}
+        <Toggle
+          label="Notifications"
+          on={on}
+          disabled={support !== "ok"}
+          onChange={(next) => {
+            setTried(null);
+            if (!next) {
+              disableNotifications();
+              setOn(false);
+              return;
+            }
+            void enableNotifications().then((answer) => {
+              setPermission(answer);
+              setOn(answer === "granted");
+            });
+          }}
+        />
+      </div>
+    </Row>
   );
 }
 
@@ -179,6 +247,7 @@ export function SettingsPage(props: {
               }}
             />
           </Row>
+          <NotificationsRow />
         </div>
       );
       break;
