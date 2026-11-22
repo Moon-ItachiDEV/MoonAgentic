@@ -646,7 +646,7 @@ describe("teams", () => {
     projectId: string,
     task: string,
     permissionMode: "full" | "supervised" = "full",
-    checks: { reviewer?: boolean; tester?: boolean } = {},
+    checks: { reviewer?: boolean; tester?: boolean; merger?: boolean } = {},
   ) =>
     hub.startTeam({
       projectId,
@@ -655,6 +655,7 @@ describe("teams", () => {
       coder: { agentId: "demo" },
       ...(checks.reviewer ? { reviewer: { agentId: "demo" } } : {}),
       ...(checks.tester ? { tester: { agentId: "demo" } } : {}),
+      ...(checks.merger ? { merger: { agentId: "demo" } } : {}),
       coders: 2,
       permissionMode,
     });
@@ -689,6 +690,89 @@ describe("teams", () => {
     // The coder got its own piece of work, not the whole plan.
     const asked = store.listItems(coders[1]!.id).find((i) => i.kind === "user");
     expect(asked?.kind === "user" && asked.text).toContain("Ajoute une ligne sur answer");
+  });
+
+  it("merges every piece's branch onto one, in a thread the user can review and ship", async () => {
+    const { hub, store, repo, projectId } = repository();
+    const leadId = team(hub, projectId, "Corrige answer et documente-la");
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    const done = store.getThread(leadId)!.team!;
+    expect(done.tasks.every((t) => t.merged)).toBe(true);
+    const merge = store.getThread(done.mergeThreadId!)!;
+    expect(merge).toMatchObject({
+      role: "merger",
+      parentId: leadId,
+      title: expect.stringContaining("Fusion"),
+    });
+    // Each coder's work was committed on its branch, then merged as a commit of its own.
+    const branch = merge.workspace!.branch;
+    expect(git(repo, "show", `${branch}:equipe/corriger-answer.md`)).toBe("# Corriger answer");
+    expect(git(repo, "show", `${branch}:equipe/documenter-answer.md`)).toBe("# Documenter answer");
+    expect(git(repo, "log", "--format=%s", branch).split("\n")).toEqual(
+      expect.arrayContaining([
+        "Fusion : Corriger answer",
+        "Fusion : Documenter answer",
+        "Corriger answer",
+      ]),
+    );
+    // The merge thread starts without a message; the user ships it like any other.
+    expect(asked(store, merge.id)).toEqual([]);
+    const { files } = await hub.review(merge.id);
+    expect(files.map((f) => f.path).sort()).toEqual([
+      "equipe/corriger-answer.md",
+      "equipe/documenter-answer.md",
+    ]);
+  });
+
+  it("leaves a conflict to the user without a merger, and merges on once it is settled", async () => {
+    const { hub, store, repo, projectId } = repository();
+    const leadId = team(hub, projectId, "Écris en conflit");
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 })
+      .toBe("blocked");
+    const blocked = store.getThread(leadId)!.team!;
+    expect(blocked.error).toContain("conflit.txt");
+    expect(blocked.tasks.map((t) => t.merged)).toEqual([true, undefined]);
+    await expect(
+      hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId }),
+    ).rejects.toThrow("conflits dans conflit.txt");
+
+    // The user settles it in the merge thread's folder.
+    const dir = store.getThread(blocked.mergeThreadId!)!.workspace!.path;
+    writeFileSync(path.join(dir, "conflit.txt"), "A\nB\n");
+    git(dir, "add", "conflit.txt");
+    await expect(
+      hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId }),
+    ).rejects.toThrow("commit");
+    git(dir, "commit", "-q", "--no-edit");
+    await hub.handle({ send: () => undefined }, { type: "team.retry", threadId: leadId });
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    expect(store.getThread(leadId)!.team!.tasks.every((t) => t.merged)).toBe(true);
+    expect(
+      git(
+        repo,
+        "show",
+        `${store.getThread(blocked.mergeThreadId!)!.workspace!.branch}:conflit.txt`,
+      ),
+    ).toBe("A\nB");
+  });
+
+  it("has the merger settle conflicts and check the pieces together", async () => {
+    const { hub, store, projectId } = repository();
+    const clean = team(hub, projectId, "Corrige answer", "full", { merger: true });
+    await expect.poll(() => store.getThread(clean)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    const merger = store.getThread(clean)!.team!.mergeThreadId!;
+    expect(asked(store, merger)).toEqual([expect.stringContaining("Lance les tests du projet")]);
+
+    // The demo merger cannot settle a conflict: the merge then waits on the user.
+    const clash = team(hub, projectId, "Écris en conflit", "full", { merger: true });
+    await expect
+      .poll(() => store.getThread(clash)?.team?.phase, { timeout: 30_000 })
+      .toBe("blocked");
+    const team2 = store.getThread(clash)!.team!;
+    expect(team2.error).toContain("n'a pas fini de fusionner « Écrire B »");
+    expect(team2.mergeStep).toBeUndefined();
+    expect(asked(store, team2.mergeThreadId!)[0]).toContain("- conflit.txt");
   });
 
   it("asks the lead again for a plan it cannot read, then gives up", async () => {

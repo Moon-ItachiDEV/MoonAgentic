@@ -45,6 +45,13 @@ export interface TeamHost {
   lastReply(threadId: string): string;
   /** What changed on the thread's branch since it started. */
   changes(threadId: string): Promise<{ files: ReviewFile[]; omitted?: number }>;
+  /**
+   * Commits what the `from` thread left, then merges its branch onto the `into` thread's.
+   * Returns the files left in conflict, the merge then still under way; empty when merged.
+   */
+  mergeInto(intoId: string, fromId: string, message: string): Promise<string[]>;
+  /** The files still in conflict while a merge is under way in the thread's folder. */
+  unfinishedMerge(threadId: string): Promise<string[] | undefined>;
 }
 
 export interface TeamInput {
@@ -54,6 +61,7 @@ export interface TeamInput {
   coder: TeamMember;
   reviewer?: TeamMember | undefined;
   tester?: TeamMember | undefined;
+  merger?: TeamMember | undefined;
   coders: number;
   permissionMode: PermissionMode;
 }
@@ -136,6 +144,18 @@ const briefPrompt = (brief: string) =>
 ${brief}
 
 Quand tu as fini, résume ce que tu as changé.`;
+
+const conflictPrompt = (task: TeamTask, files: string[]) =>
+  `Tu fusionnes le travail d'une équipe sur cette branche. La fusion de la sous-tâche « ${task.title} » a des conflits dans :
+
+${files.map((f) => `- ${f}`).join("\n")}
+
+Règle chaque conflit en gardant les deux changements quand c'est possible, puis termine la fusion avec \`git add\` et \`git commit --no-edit\`. Ne change rien d'autre.`;
+
+const mergeCheckPrompt = (team: Team) =>
+  `Toutes les sous-tâches de l'équipe sont fusionnées sur cette branche. La tâche de l'équipe : ${team.task}
+
+Lance les tests du projet et corrige ce qui casse là où les sous-tâches se rejoignent, puis fais un commit de tes corrections. ${VERDICT_RULE}`;
 
 const RESUME_PROMPT =
   "Reprends ta sous-tâche là où elle en est et termine-la. Quand tu as fini, résume ce que tu as changé.";
@@ -230,7 +250,11 @@ export function diffText(changes: { files: ReviewFile[]; omitted?: number }): st
   return text.trimEnd();
 }
 
-const active = (team: Team | undefined) => team?.phase === "planning" || team?.phase === "coding";
+const active = (team: Team | undefined) =>
+  team?.phase === "planning" || team?.phase === "coding" || team?.phase === "merging";
+/** Pieces merged onto one branch once they are all done; a single one ships on its own. */
+const mergeable = (team: Team) =>
+  team.tasks.length > 1 && team.tasks.every((t) => t.status === "done");
 /** A piece someone is working on, which takes one of the team's places. */
 const working = (t: TeamTask) =>
   t.status === "running" ||
@@ -253,7 +277,7 @@ const runningThread = (t: TeamTask) =>
 
 /** The team with every piece at work cut short, what was done kept: a stop or a restart. */
 const cutShort = (team: Team): Team => {
-  const { leadTask: _lead, ...rest } = team;
+  const { leadTask: _lead, mergeStep: _step, ...rest } = team;
   return { ...rest, tasks: team.tasks.map((t) => (open(t) ? { ...t, status: "stopped" } : t)) };
 };
 
@@ -287,6 +311,7 @@ export class Teams {
       coder: input.coder,
       ...(input.reviewer ? { reviewer: input.reviewer } : {}),
       ...(input.tester ? { tester: input.tester } : {}),
+      ...(input.merger ? { merger: input.merger } : {}),
       coders: input.coders,
       permissionMode: input.permissionMode,
       tasks: [],
@@ -333,6 +358,7 @@ export class Teams {
     if (!lead || !team) throw new Error("Ce fil ne mène pas d'équipe.");
     if (!active(team)) return;
     const running = team.tasks.flatMap((t) => runningThread(t) ?? []);
+    if (team.mergeStep !== undefined && team.mergeThreadId) running.push(team.mergeThreadId);
     this.host.setTeam(leadId, { ...cutShort(team), phase: "stopped" });
     await Promise.all([this.host.cancel(leadId), ...running.map((id) => this.host.cancel(id))]);
   }
@@ -353,10 +379,11 @@ export class Teams {
    * Starts a piece again once the user has looked at it: its coder picks it up where it is,
    * then it is checked as usual, its tries counted from zero.
    */
-  retry(leadId: string, index: number): void {
+  async retry(leadId: string, index: number | undefined): Promise<void> {
     const lead = this.host.thread(leadId);
     const team = lead?.team;
     if (!lead || !team) throw new Error("Ce fil ne mène pas d'équipe.");
+    if (index === undefined) return this.retryMerge(lead, team);
     const task = team.tasks[index];
     if (!task) throw new Error("Cette sous-tâche n'existe pas.");
     if (task.status !== "blocked" && task.status !== "failed" && task.status !== "stopped") {
@@ -392,6 +419,10 @@ export class Teams {
     if (!thread.parentId || !thread.role) return;
     const lead = this.host.thread(thread.parentId);
     const team = lead?.team;
+    if (lead && team?.phase === "merging" && thread.role === "merger") {
+      this.mergerAnswered(lead, team, thread, cancelled);
+      return;
+    }
     if (!lead || !team || team.phase !== "coding") return;
     const role = thread.role;
     const index = team.tasks.findIndex(
@@ -626,8 +657,7 @@ export class Teams {
         }),
       );
     });
-    const tracked: Promise<void> = work.finally(() => this.starting.delete(tracked));
-    this.starting.add(tracked);
+    this.track(work);
   }
 
   /**
@@ -701,7 +731,169 @@ export class Teams {
                   team.error ??
                   `${failed} sous-tâche${failed > 1 ? "s ont" : " a"} échoué : ouvre ${failed > 1 ? "leurs fils" : "son fil"} pour voir pourquoi.`,
               }
-            : { phase: tasks.some((t) => t.status === "stopped") ? "stopped" : "done" }),
+            : tasks.some((t) => t.status === "stopped")
+              ? { phase: "stopped" }
+              : mergeable({ ...team, tasks })
+                ? { phase: "merging" }
+                : { phase: "done" }),
     });
+    if (this.host.thread(lead.id)?.team?.phase === "merging") this.merge(lead.id);
+  }
+
+  /** Runs `work` in the background, kept until done so a server stopping waits for it. */
+  private track(work: Promise<void>): void {
+    const tracked: Promise<void> = work.finally(() => this.starting.delete(tracked));
+    this.starting.add(tracked);
+  }
+
+  /**
+   * Merges each done piece's branch onto one branch, in a thread of its own the user can
+   * review and ship. A conflict goes to the merger, or to the user without one; once all
+   * are merged, the merger checks that the pieces work together.
+   */
+  private merge(leadId: string): void {
+    // The team as it is now, while it still merges.
+    const now = () => {
+      const lead = this.host.thread(leadId);
+      return !this.closed && lead?.team?.phase === "merging"
+        ? { lead, team: lead.team }
+        : undefined;
+    };
+    const work = async () => {
+      // After the caller has saved the team's new phase.
+      await Promise.resolve();
+      let state = now();
+      if (!state) return;
+      let into = state.team.mergeThreadId;
+      if (!into || !this.host.thread(into)) {
+        const member = state.team.merger ?? state.team.coder;
+        into = this.host.createThread({
+          projectId: state.lead.projectId,
+          agentId: member.agentId,
+          model: member.model,
+          permissionMode: state.team.permissionMode,
+          isolated: true,
+          text: "",
+          title: `Fusion : ${state.team.task}`,
+          parentId: leadId,
+          role: "merger",
+        });
+        this.host.setTeam(leadId, { ...state.team, mergeThreadId: into });
+      }
+      for (;;) {
+        state = now();
+        if (!state) return;
+        const index = state.team.tasks.findIndex((t) => !t.merged);
+        const task = state.team.tasks[index];
+        if (!task) break;
+        const conflicts = await this.host.mergeInto(into, task.threadId!, task.title);
+        state = now();
+        if (!state) return;
+        const { team } = state;
+        if (!conflicts.length) {
+          this.host.setTeam(leadId, withTask(team, index, { ...team.tasks[index]!, merged: true }));
+          continue;
+        }
+        if (team.merger) {
+          this.host.send(into, conflictPrompt(task, conflicts));
+          this.host.setTeam(leadId, { ...team, mergeStep: index });
+        } else {
+          this.host.setTeam(leadId, {
+            ...team,
+            phase: "blocked",
+            error: `Conflit en fusionnant « ${task.title} » (${conflicts.join(", ")}) : règle-le dans le fil de fusion et fais le commit, puis relance la fusion.`,
+          });
+        }
+        return;
+      }
+      if (state.team.merger) {
+        this.host.send(into, mergeCheckPrompt(state.team));
+        this.host.setTeam(leadId, { ...state.team, mergeStep: -1 });
+        return;
+      }
+      const { error: _error, ...done } = state.team;
+      this.host.setTeam(leadId, { ...done, phase: "done" });
+    };
+    this.track(
+      work().catch((error: unknown) => {
+        const state = now();
+        if (!state) return;
+        const { mergeStep: _step, ...rest } = state.team;
+        this.host.setTeam(leadId, {
+          ...rest,
+          phase: "blocked",
+          error: `La fusion s'est arrêtée : ${message(error)}`,
+        });
+      }),
+    );
+  }
+
+  /** The merger's turn: a conflict it settled, or its check of the pieces together. */
+  private mergerAnswered(lead: Thread, team: Team, merger: Thread, cancelled: boolean): void {
+    const step = team.mergeStep;
+    // A turn of the user's in the merge thread moves nothing.
+    if (step === undefined || team.mergeThreadId !== merger.id) return;
+    const { mergeStep: _step, ...rest } = team;
+    if (cancelled) {
+      this.host.setTeam(lead.id, { ...rest, phase: "stopped" });
+      return;
+    }
+    const block = (error: string) =>
+      this.host.setTeam(lead.id, { ...rest, phase: "blocked", error: cut(error) });
+    if (merger.status === "error") {
+      block(`Le fusionneur s'est arrêté sur une erreur : ${merger.error ?? "erreur inconnue"}`);
+      return;
+    }
+    if (step === -1) {
+      const reply = this.host.lastReply(merger.id);
+      if (readVerdict(reply) === "ok") this.host.setTeam(lead.id, { ...rest, phase: "done" });
+      else block(`Le fusionneur signale un problème : ouvre le fil de fusion.\n\n${reply}`);
+      return;
+    }
+    // Still merging, without a step: a stop meanwhile is not undone.
+    this.host.setTeam(lead.id, rest);
+    this.track(
+      this.host.unfinishedMerge(merger.id).then(
+        (left) => {
+          const now = this.host.thread(lead.id)?.team;
+          if (this.closed || now?.phase !== "merging") return;
+          const task = now.tasks[step];
+          if (left !== undefined || !task) {
+            this.host.setTeam(lead.id, {
+              ...now,
+              phase: "blocked",
+              error: `Le fusionneur n'a pas fini de fusionner « ${task?.title ?? "?"} » : règle la fusion dans son fil, puis relance-la.`,
+            });
+            return;
+          }
+          this.host.setTeam(lead.id, withTask(now, step, { ...task, merged: true }));
+          this.merge(lead.id);
+        },
+        (error: unknown) => block(`La fusion s'est arrêtée : ${message(error)}`),
+      ),
+    );
+  }
+
+  /** Starts the merge again once the user has settled what stopped it. */
+  private async retryMerge(lead: Thread, team: Team): Promise<void> {
+    if (!mergeable(team)) {
+      throw new Error("Il n'y a rien à fusionner : chaque sous-tâche doit d'abord être terminée.");
+    }
+    if (active(team) || team.phase === "done")
+      throw new Error("La fusion est déjà en cours ou faite.");
+    const into = team.mergeThreadId;
+    const left = into && this.host.thread(into) ? await this.host.unfinishedMerge(into) : undefined;
+    if (left?.length) {
+      throw new Error(
+        `Il reste des conflits dans ${left.join(", ")} : règle-les dans le fil de fusion.`,
+      );
+    }
+    if (left)
+      throw new Error("La fusion en cours attend son commit : fais-le dans le fil de fusion.");
+    const fresh = this.host.thread(lead.id)?.team;
+    if (!fresh || active(fresh)) return;
+    const { error: _error, mergeStep: _step, ...rest } = fresh;
+    this.host.setTeam(lead.id, { ...rest, phase: "merging" });
+    this.merge(lead.id);
   }
 }

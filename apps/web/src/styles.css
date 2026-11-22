@@ -2109,3 +2109,18 @@ kbd {
     grid-template-columns: 1fr;
   }
 }
+.dialog.team .seg.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.dialog.team .seg.presets button {
+  padding: 0 12px;
+  height: 34px;
+  font-size: 13px;
+}
+.dialog.team .hint {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-weight: 400;
+}

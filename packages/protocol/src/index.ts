@@ -195,13 +195,7 @@ export interface TeamMember {
  * nothing runs and a piece or the merge waits on the user.
  */
 export type TeamPhase =
-  | "planning"
-  | "coding"
-  | "merging"
-  | "blocked"
-  | "done"
-  | "failed"
-  | "stopped";
+  "planning" | "coding" | "merging" | "blocked" | "done" | "failed" | "stopped";
 
 /** A piece of the team's work, given by the lead to one coder. */
 export interface TeamTask {
