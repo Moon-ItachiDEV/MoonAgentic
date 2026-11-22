@@ -95,6 +95,25 @@ describe("reading a pull request from gh", () => {
     expect(pr?.checks[4]).not.toHaveProperty("url");
   });
 
+  it("keeps the last of a commit status posted twice, dated by when it was posted", () => {
+    const status = (state: string, createdAt: string) => ({
+      __typename: "StatusContext",
+      context: "deploy",
+      state,
+      createdAt,
+    });
+    const pr = parsePullRequest(
+      view({
+        statusCheckRollup: [
+          status("SUCCESS", "2026-11-22T11:00:00Z"),
+          status("FAILURE", "2026-11-22T10:00:00Z"),
+        ],
+      }),
+      "moon/demo",
+    );
+    expect(pr?.checks).toEqual([{ name: "deploy", state: "passed" }]);
+  });
+
   it("takes only the address of a pull request on github.com", () => {
     expect(parsePullRequestUrl("https://github.com/Moon-ItachiDEV/MoonAgentic/pull/43")).toEqual({
       repo: "Moon-ItachiDEV/MoonAgentic",

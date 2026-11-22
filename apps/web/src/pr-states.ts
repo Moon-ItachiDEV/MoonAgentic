@@ -14,6 +14,8 @@ interface Entry {
 }
 
 const REFRESH_MS = 2 * 60_000;
+/** How soon a link is asked about again when the server could not be reached. */
+const RETRY_MS = 10_000;
 const AT_ONCE = 2;
 
 const entries = new Map<string, Entry>();
@@ -46,16 +48,19 @@ function pump(): void {
       .ask({ type: "github.pr", requestId: newId(), url })
       .then(
         (reply) => {
+          entry.askedAt = Date.now();
           if (reply.pr && reply.pr.state !== entry.state) {
             entry.state = reply.pr.state;
             changed();
           }
         },
-        () => undefined,
+        () => {
+          // No connection, as when a phone wakes up: asked again soon, not in two minutes.
+          entry.askedAt = Date.now() - REFRESH_MS + RETRY_MS;
+        },
       )
       .finally(() => {
         entry.asking = false;
-        entry.askedAt = Date.now();
         running -= 1;
         pump();
       });
@@ -100,7 +105,7 @@ export const prStates = {
       ask(url);
     }
     if (urls.length && !timer) {
-      timer = setInterval(refreshShown, REFRESH_MS / 2);
+      timer = setInterval(refreshShown, RETRY_MS);
       document.addEventListener("visibilitychange", refreshShown);
     }
     return () => {
