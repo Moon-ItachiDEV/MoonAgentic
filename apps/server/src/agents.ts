@@ -143,7 +143,7 @@ const customDefinition = (agent: CustomAgent): AgentDefinition => ({
 /** Where Google's installer puts `agy`: it warns that the folder is not on the PATH yet. */
 export function agyPlaces(env = process.env, home = os.homedir()): string[] {
   return process.platform === "win32"
-    ? [path.join(env.LOCALAPPDATA ?? path.join(home, "AppData", "Local"), "agy", "bin", "agy")]
+    ? [path.join(env.LOCALAPPDATA || path.join(home, "AppData", "Local"), "agy", "bin", "agy")]
     : [path.join(home, ".local", "bin", "agy")];
 }
 

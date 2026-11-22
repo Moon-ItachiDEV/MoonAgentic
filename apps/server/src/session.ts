@@ -347,7 +347,8 @@ export class AgentSession {
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
       const lines = (stderrRest + chunk).split("\n");
-      stderrRest = (lines.pop() ?? "").slice(-STDERR_TAIL);
+      // The start of a very long line is what tells a sign-in line from another.
+      stderrRest = (lines.pop() ?? "").slice(0, OTHER_LINE_MAX);
       for (const line of lines) textLine(line);
     });
     child.stderr.on("end", flushStderr);
@@ -466,41 +467,63 @@ export class AgentSession {
       const caps = init.agentCapabilities;
       const mcpServers = acpMcpServers(options.mcpServers ?? [], caps?.mcpCapabilities);
       const previous = options.previousSessionId;
-      if (previous && caps?.sessionCapabilities?.resume) {
-        await connection.agent
-          .request("session/resume", { sessionId: previous, cwd, mcpServers })
-          .then((r) => {
-            sessionId = previous;
-            absorb(state, r);
-          })
-          .catch(() => undefined);
-      }
-      // An agent that could not resume the session may still be able to reload it.
-      if (!sessionId && previous && caps?.loadSession) {
-        replaying = true;
-        sessionId = previous;
-        await connection.agent
-          .request("session/load", { sessionId: previous, cwd, mcpServers })
-          .then((r) => absorb(state, r))
-          .catch(() => (sessionId = null));
-        replaying = false;
-      }
-      const fresh = !sessionId;
-      if (!sessionId) {
-        const create = () => connection.agent.request("session/new", { cwd, mcpServers });
-        const created = await create().catch(async (error: unknown) => {
-          const asked = (error as { code?: unknown } | null)?.code === AUTH_REQUIRED;
-          if (!asked || !authMethodId || !launch.authWhenAsked) throw error;
-          await connection.agent.request("authenticate", { methodId: authMethodId });
-          return create();
-        });
-        sessionId = created.sessionId;
-        absorb(state, created);
-      }
+      const askedToSignIn = (error: unknown) =>
+        (error as { code?: unknown } | null)?.code === AUTH_REQUIRED;
+      /** Continues the earlier session when the agent can, opens a new one otherwise. */
+      const open = async () => {
+        // A refusal for lack of sign-in is not "this session is gone": it is passed on.
+        const unlessSignIn = (error: unknown) => {
+          if (askedToSignIn(error)) throw error;
+        };
+        if (previous && caps?.sessionCapabilities?.resume) {
+          await connection.agent
+            .request("session/resume", { sessionId: previous, cwd, mcpServers })
+            .then((r) => {
+              sessionId = previous;
+              absorb(state, r);
+            })
+            .catch(unlessSignIn);
+        }
+        // An agent that could not resume the session may still be able to reload it.
+        if (!sessionId && previous && caps?.loadSession) {
+          replaying = true;
+          sessionId = previous;
+          try {
+            absorb(
+              state,
+              await connection.agent.request("session/load", {
+                sessionId: previous,
+                cwd,
+                mcpServers,
+              }),
+            );
+          } catch (error) {
+            sessionId = null;
+            unlessSignIn(error);
+          } finally {
+            replaying = false;
+          }
+        }
+        if (!sessionId) {
+          const created = await connection.agent.request("session/new", { cwd, mcpServers });
+          sessionId = created.sessionId;
+          absorb(state, created);
+          return true;
+        }
+        return false;
+      };
+      const fresh = await open().catch(async (error: unknown) => {
+        if (!askedToSignIn(error) || !authMethodId || !launch.authWhenAsked) throw error;
+        await connection.agent.request("authenticate", { methodId: authMethodId });
+        return open();
+      });
+      // Set by `open`, which the compiler does not follow.
+      const opened = sessionId as string | null;
+      if (!opened) throw new Error("L'agent n'a pas ouvert de session.");
       for (const params of early.splice(0)) dispatch(params);
       started = true;
       return new AgentSession({
-        sessionId,
+        sessionId: opened,
         connection,
         kill,
         state,

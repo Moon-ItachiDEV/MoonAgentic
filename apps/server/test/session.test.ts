@@ -105,7 +105,11 @@ describe("an agent that asks to sign in on its output", () => {
 
 describe("an agent that lists its sign-in methods whatever the user set up", () => {
   /** Answers like an ACP agent, and tells on its error output when it is asked to sign in. */
-  const start = (signedIn: boolean, authWhenAsked: boolean) => {
+  const start = (
+    signedIn: boolean,
+    authWhenAsked: boolean,
+    previousSessionId: string | null = null,
+  ) => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-session-"));
     cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5 }));
     const agent = path.join(dir, "agent.mjs");
@@ -117,7 +121,9 @@ describe("an agent that lists its sign-in methods whatever the user set up", () 
       createInterface({ input: process.stdin }).on("line", (line) => {
         const { id, method } = JSON.parse(line);
         if (method === "initialize") {
-          reply(id, { result: { protocolVersion: 1, authMethods: [
+          reply(id, { result: { protocolVersion: 1,
+            agentCapabilities: { loadSession: true, sessionCapabilities: { resume: {} } },
+            authMethods: [
             { id: "oauth-personal", name: "Compte" }, { id: "gemini-api-key", name: "Clé" } ] } });
         } else if (method === "authenticate") {
           signedIn = true;
@@ -125,9 +131,12 @@ describe("an agent that lists its sign-in methods whatever the user set up", () 
         } else if (method === "session/new") {
           if (signedIn) reply(id, { result: { sessionId: "s1" } });
           else reply(id, { error: { code: -32000, message: "Authentication required" } });
+        } else if (method === "session/resume" || method === "session/load") {
+          if (signedIn) reply(id, { result: {} });
+          else reply(id, { error: { code: -32000, message: "Authentication required" } });
         }
-        if (method === "authenticate") console.error("AUTHENTICATE");
-        if (method === "session/new" && signedIn) process.exit(3);
+        if (method !== "initialize") console.error(method.toUpperCase());
+        if (method.startsWith("session/") && signedIn) process.exit(3);
       });`,
     );
     let exit!: (reason: string | undefined) => void;
@@ -140,7 +149,7 @@ describe("an agent that lists its sign-in methods whatever the user set up", () 
         ...(authWhenAsked ? { authWhenAsked } : {}),
       },
       cwd: dir,
-      previousSessionId: null,
+      previousSessionId,
       handlers: {
         onUpdate: () => undefined,
         requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
@@ -148,18 +157,28 @@ describe("an agent that lists its sign-in methods whatever the user set up", () 
       },
     });
     // The agent stops itself once the session is open: what it wrote says what it was asked.
-    return session.then(() => exited);
+    return session.then(async ({ fresh }) => ({ fresh, asked: (await exited) ?? "" }));
   };
 
   it("leaves the user's own set-up alone when the session opens without signing in", async () => {
-    expect(await start(true, true)).not.toContain("AUTHENTICATE");
+    expect((await start(true, true)).asked).not.toContain("AUTHENTICATE");
   });
 
   it("signs in once the agent asks for it, then opens the session", async () => {
-    expect(await start(false, true)).toContain("AUTHENTICATE");
+    expect((await start(false, true)).asked).toContain("AUTHENTICATE");
   });
 
   it("still signs in first with agents that expect it", async () => {
-    expect(await start(true, false)).toContain("AUTHENTICATE");
+    expect((await start(true, false)).asked).toMatch(/^AUTHENTICATE\s+SESSION\/NEW/);
+  });
+
+  it("continues the earlier session once signed in, instead of opening a new one", async () => {
+    const { fresh, asked } = await start(false, true, "s0");
+    expect(fresh).toBe(false);
+    expect(asked.split(/\s+/).filter(Boolean)).toEqual([
+      "SESSION/RESUME",
+      "AUTHENTICATE",
+      "SESSION/RESUME",
+    ]);
   });
 });
