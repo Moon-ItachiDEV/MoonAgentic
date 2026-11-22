@@ -424,7 +424,10 @@ describe("archiving, deleting and recovering thread workspaces", () => {
 
     await hub.setArchived(threadId, false);
     expect(store.getThread(threadId)?.archived).toBeUndefined();
-    expect(readFileSync(path.join(dir, "brouillon.txt"), "utf8")).toBe("pas encore commité\n");
+    // Git writes files back with the line endings its config asks for (CRLF on Windows).
+    expect(readFileSync(path.join(dir, "brouillon.txt"), "utf8").replaceAll("\r\n", "\n")).toBe(
+      "pas encore commité\n",
+    );
     expect(store.getThread(threadId)?.workspace?.archivedTree).toBeUndefined();
     hub.send(threadId, "Deux");
     await hub.whenIdle(threadId);
@@ -492,9 +495,9 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     // Made by git, never recorded: as if the server stopped right after creating it.
     const { base: _base, ...unrecorded } = workspace;
     store.updateThread(threadId, { workspace: unrecorded });
-    // And its folder deleted by hand since.
-    rmSync(workspace.path, { recursive: true, force: true });
+    // And its folder deleted by hand since, once the agent no longer holds it (Windows).
     await hub.close();
+    rmSync(workspace.path, { recursive: true, force: true });
     const restarted = new Hub(store, new Agents({ demo: true }), {
       worktreesDir: path.join(root, "worktrees"),
     });
@@ -504,7 +507,9 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     await restarted.whenIdle(threadId);
     const recovered = store.getThread(threadId)!.workspace!;
     expect(recovered.base).toBe(git(repo, "rev-parse", "main"));
-    expect(readFileSync(path.join(recovered.path, "commité.txt"), "utf8")).toBe("garde\n");
+    expect(
+      readFileSync(path.join(recovered.path, "commité.txt"), "utf8").replaceAll("\r\n", "\n"),
+    ).toBe("garde\n");
     expect((await restarted.review(threadId)).files.map((f) => f.path)).toEqual(["commité.txt"]);
   });
 
