@@ -15,7 +15,7 @@ import type {
   ToolContent,
 } from "@moonagentic/protocol";
 import type { Agents } from "./agents.ts";
-import { AgentSession, describe, type ModelOption } from "./session.ts";
+import { AgentSession, describe, type ModelOption, modelOption } from "./session.ts";
 import type { Store } from "./store.ts";
 
 export interface Client {
@@ -40,6 +40,8 @@ const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolCon
     return [];
   });
 
+const DISCOVERY_TIMEOUT_MS = 30_000;
+
 /** Owns threads and their agent sessions, and keeps every connected client in sync. */
 export class Hub {
   private readonly store: Store;
@@ -47,7 +49,9 @@ export class Hub {
   private readonly clients = new Set<Client>();
   private readonly sessions = new Map<string, Promise<AgentSession>>();
   private readonly turns = new Map<string, Promise<void>>();
-  private readonly discoveries = new Map<string, Promise<void>>();
+  private readonly discoveries = new Map<string, { done: Promise<void>; stop: AbortController }>();
+  /** Why listing an agent's models failed, until a retry succeeds. */
+  private readonly discoveryErrors = new Map<string, string>();
   /** Identifies the running turn, so a turn's plan and text stay separate from the next. */
   private readonly turnIds = new Map<string, string>();
   private readonly pendingPermissions = new Map<
@@ -110,13 +114,9 @@ export class Hub {
       case "thread.setModel":
         await this.setModel(message.threadId, message.model);
         return;
-      case "favorites.set": {
-        const favorites = this.store.getSetting<Favorites>("favorites", {});
-        favorites[message.agentId] = [...new Set(message.models)];
-        this.store.setSetting("favorites", favorites);
-        this.broadcast({ type: "favorites", favorites });
+      case "favorites.toggle":
+        this.toggleFavorite(message.agentId, message.model, message.starred);
         return;
-      }
       case "agent.discover":
         await this.discover(message.agentId, message.projectId);
         return;
@@ -192,40 +192,68 @@ export class Hub {
     await session?.cancel();
   }
 
-  /** Switches the thread's model now if its agent is running, otherwise when it next starts. */
+  /** Switches the thread's model between turns: now if its agent is running, otherwise when it next starts. */
   async setModel(threadId: string, model: string): Promise<void> {
-    this.requireThread(threadId);
+    const thread = this.requireThread(threadId);
+    // Many agents mishandle a settings change in the middle of a prompt.
+    if (this.turns.has(threadId))
+      throw new Error("Attends la fin de la réponse pour changer de modèle.");
     const session = await this.sessions.get(threadId)?.catch(() => undefined);
-    if (session?.model) {
-      if (!session.model.choices.some((c) => c.id === model)) throw new Error("Modèle inconnu.");
-      await session.setConfig(session.model.configId, model);
-    }
-    this.updateThread(threadId, { model });
+    const choices = session?.model?.choices ?? this.store.getAgentModels(thread.agentId)?.models;
+    if (!choices?.some((c) => c.id === model)) throw new Error("Modèle inconnu.");
+    if (session?.model) await session.setModel(model);
+    this.updateThread(threadId, { model: session?.model?.current ?? model });
   }
 
-  /** Starts the agent briefly so the UI can list its models before the first message. */
+  toggleFavorite(agentId: string, model: string, starred: boolean): void {
+    if (!this.agents.list().some((a) => a.id === agentId))
+      throw new Error(`Agent inconnu : ${agentId}`);
+    const favorites = this.store.getSetting<Favorites>("favorites", {});
+    const current = Object.hasOwn(favorites, agentId) ? (favorites[agentId] ?? []) : [];
+    const next = current.filter((m) => m !== model);
+    favorites[agentId] = starred ? [...next, model] : next;
+    this.store.setSetting("favorites", favorites);
+    this.broadcast({ type: "favorites", favorites });
+  }
+
+  /**
+   * Starts the agent briefly so the UI can list its models before the first message.
+   * A failure is shown with the agent (`modelsError`) rather than thrown, so the picker can offer a retry.
+   */
   discover(agentId: string, projectId: string): Promise<void> {
     const running = this.discoveries.get(agentId);
-    if (running) return running;
+    if (running) return running.done;
     const project = this.store.getProject(projectId);
     if (!project) return Promise.reject(new Error("Projet introuvable."));
-    const discovery = AgentSession.start({
+    if (this.discoveryErrors.delete(agentId)) {
+      this.broadcast({ type: "agents", agents: this.agentList() });
+    }
+    const stop = new AbortController();
+    const done = AgentSession.start({
       launch: this.agents.launch(agentId),
       cwd: project.path,
       previousSessionId: null,
+      signal: AbortSignal.any([stop.signal, AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)]),
       handlers: {
         onUpdate: () => undefined,
         requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
         onExit: () => undefined,
       },
     })
-      .then((session) => {
-        this.learnModels(agentId, session);
-        session.close();
-      })
+      .then(
+        (session) => {
+          this.learnModels(agentId, session.model, session.fresh);
+          session.close();
+        },
+        (error: unknown) => {
+          if (stop.signal.aborted) return;
+          this.discoveryErrors.set(agentId, describe(error));
+          this.broadcast({ type: "agents", agents: this.agentList() });
+        },
+      )
       .finally(() => this.discoveries.delete(agentId));
-    this.discoveries.set(agentId, discovery);
-    return discovery;
+    this.discoveries.set(agentId, { done, stop });
+    return done;
   }
 
   setPermissionMode(threadId: string, permissionMode: PermissionMode): void {
@@ -253,6 +281,9 @@ export class Hub {
     for (const threadId of new Set([...this.pendingPermissions.values()].map((p) => p.threadId))) {
       this.settlePermissions(threadId);
     }
+    const discoveries = [...this.discoveries.values()];
+    for (const d of discoveries) d.stop.abort();
+    await Promise.all(discoveries.map((d) => d.done.catch(() => undefined)));
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
     await Promise.all(
@@ -310,23 +341,24 @@ export class Hub {
             this.updateThread(thread.id, { status: "error", error: reason });
           }
         },
-        onConfig: () => {
-          const current = this.sessions.get(thread.id);
-          void current?.then((s) => {
-            const model = s.model?.current;
-            if (model && model !== this.store.getThread(thread.id)?.model) {
-              this.updateThread(thread.id, { model });
-            }
-          });
+        onConfig: (options) => {
+          const model = modelOption(options);
+          this.learnModels(thread.agentId, model, false);
+          if (model && model.current !== this.store.getThread(thread.id)?.model) {
+            this.updateThread(thread.id, { model: model.current });
+          }
         },
       },
     });
-    this.learnModels(thread.agentId, session);
+    this.learnModels(thread.agentId, session.model, session.fresh);
     const model = session.model;
     if (model) {
-      const wanted = this.store.getThread(thread.id)?.model ?? this.defaultModel(thread.agentId);
+      // A continued session already runs the model it was left on.
+      const wanted =
+        this.store.getThread(thread.id)?.model ??
+        (session.fresh ? this.defaultModel(thread.agentId) : undefined);
       if (wanted && wanted !== model.current && model.choices.some((c) => c.id === wanted)) {
-        await session.setConfig(model.configId, wanted);
+        await session.setModel(wanted);
       }
       this.updateThread(thread.id, { model: session.model?.current ?? model.current });
     }
@@ -336,7 +368,8 @@ export class Hub {
   private agentList(): AgentInfo[] {
     return this.agents.list().map((agent) => {
       const known = this.store.getAgentModels(agent.id);
-      if (!known) return agent;
+      const modelsError = this.discoveryErrors.get(agent.id);
+      if (!known) return modelsError ? { ...agent, modelsError } : agent;
       const defaultModel = this.defaultModel(agent.id);
       return { ...agent, models: known.models, ...(defaultModel ? { defaultModel } : {}) };
     });
@@ -351,13 +384,16 @@ export class Hub {
     return match?.id ?? known.current;
   }
 
-  /** Remembers the models an agent offers, so new threads can offer them before starting it. */
-  private learnModels(agentId: string, session: AgentSession): void {
-    const model: ModelOption | undefined = session.model;
-    if (!model) return;
+  /**
+   * Remembers the models an agent offers, so new threads can offer them before starting it.
+   * Only a fresh session tells the agent's own default, or that it offers no model choice,
+   * which is remembered too so the UI stops asking.
+   */
+  private learnModels(agentId: string, model: ModelOption | undefined, fresh: boolean): void {
+    if (!model && !fresh) return;
     const before = this.store.getAgentModels(agentId);
-    const current = session.fresh || !before ? model.current : before.current;
-    const next = { models: model.choices, current };
+    const current = model ? (fresh || !before ? model.current : before.current) : "";
+    const next = { models: model?.choices ?? [], current };
     if (JSON.stringify(before) === JSON.stringify(next)) return;
     this.store.setAgentModels(agentId, next);
     this.broadcast({ type: "agents", agents: this.agentList() });

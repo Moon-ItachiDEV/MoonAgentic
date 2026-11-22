@@ -552,8 +552,28 @@ svg {
   font-size: 13px;
   color: var(--faint);
 }
-.menu .menu-close {
+.menu .menu-close,
+.menu-scrim {
   display: none;
+}
+.menu-note.err small {
+  display: block;
+  margin-top: 4px;
+  max-height: 4.2em;
+  overflow: hidden;
+  color: var(--err);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.menu .retry {
+  display: inline-flex;
+  margin-top: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line2);
+  border-radius: 999px;
+  color: var(--fg);
+  font-size: 12px;
 }
 .agentchip .sep {
   color: var(--faint);
@@ -1115,6 +1135,14 @@ svg {
     max-width: none;
     max-height: 70dvh;
     z-index: 50;
+  }
+  /* Catches taps outside the sheet so they never reach the buttons underneath. */
+  .menu-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 49;
+    background: var(--scrim);
   }
   .menu .menu-close {
     display: flex;

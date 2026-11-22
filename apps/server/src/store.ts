@@ -197,7 +197,9 @@ export class Store {
   ): Thread {
     const current = this.getThread(id);
     if (!current) throw new Error(`Unknown thread ${id}`);
-    const next = { ...current, ...patch, updatedAt: Date.now() };
+    // Only activity moves a thread up the sidebar, not a settings change.
+    const active = patch.status !== undefined || patch.title !== undefined;
+    const next = { ...current, ...patch, updatedAt: active ? Date.now() : current.updatedAt };
     const error = patch.error === undefined ? (current.error ?? null) : patch.error;
     this.db
       .prepare(

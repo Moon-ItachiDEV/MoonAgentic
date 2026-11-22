@@ -16,6 +16,7 @@ export interface SessionHandlers {
 }
 
 export interface ModelOption {
+  /** The config option to set, or LEGACY_MODEL for agents still on `session/set_model`. */
   configId: string;
   current: string;
   choices: { id: string; name: string; description?: string }[];
@@ -39,7 +40,35 @@ export function modelOption(options: acp.SessionConfigOption[]): ModelOption | u
   };
 }
 
+/** Older ACP agents (Hermes among them) list models in a `models` field instead of a config option. */
+interface LegacyModels {
+  availableModels: { modelId: string; name: string; description?: string | null }[];
+  currentModelId: string;
+}
+
+export const LEGACY_MODEL = "session/set_model";
+
+function legacyModels(response: unknown): LegacyModels | undefined {
+  const models = (response as { models?: LegacyModels } | null | undefined)?.models;
+  return Array.isArray(models?.availableModels) ? models : undefined;
+}
+
+interface SessionState {
+  options: acp.SessionConfigOption[];
+  legacy: LegacyModels | undefined;
+}
+
+/** Keeps what the agent already sent when a response leaves a field out. */
+function absorb(state: SessionState, response: unknown): void {
+  const options = (response as { configOptions?: acp.SessionConfigOption[] | null } | null)
+    ?.configOptions;
+  if (options) state.options = options;
+  state.legacy = legacyModels(response) ?? state.legacy;
+}
+
 const STDERR_TAIL = 4000;
+/** ACP's "Authentication required" error code. */
+const AUTH_REQUIRED = -32000;
 
 /** One agent process and its ACP session, owned by one thread. */
 export class AgentSession {
@@ -48,13 +77,13 @@ export class AgentSession {
   readonly fresh: boolean;
   private readonly connection: acp.ClientConnection;
   private readonly kill: () => void;
-  private readonly state: { options: acp.SessionConfigOption[] };
+  private readonly state: SessionState;
 
   private constructor(
     sessionId: string,
     connection: acp.ClientConnection,
     kill: () => void,
-    state: { options: acp.SessionConfigOption[] },
+    state: SessionState,
     fresh: boolean,
   ) {
     this.sessionId = sessionId;
@@ -65,13 +94,34 @@ export class AgentSession {
   }
 
   get model(): ModelOption | undefined {
-    return modelOption(this.state.options);
+    const fromOptions = modelOption(this.state.options);
+    const legacy = this.state.legacy;
+    if (fromOptions || !legacy) return fromOptions;
+    return {
+      configId: LEGACY_MODEL,
+      current: legacy.currentModelId,
+      choices: legacy.availableModels.map((m) => ({
+        id: m.modelId,
+        name: m.name,
+        ...(m.description ? { description: m.description } : {}),
+      })),
+    };
   }
 
-  async setConfig(configId: string, value: string): Promise<void> {
+  async setModel(value: string): Promise<void> {
+    const model = this.model;
+    if (!model) throw new Error("Cet agent ne propose pas de choix de modèle.");
+    if (model.configId === LEGACY_MODEL && this.state.legacy) {
+      await this.connection.agent.request(LEGACY_MODEL, {
+        sessionId: this.sessionId,
+        modelId: value,
+      });
+      this.state.legacy = { ...this.state.legacy, currentModelId: value };
+      return;
+    }
     const response = await this.connection.agent.request("session/set_config_option", {
       sessionId: this.sessionId,
-      configId,
+      configId: model.configId,
       value,
     });
     this.state.options = response.configOptions;
@@ -83,8 +133,11 @@ export class AgentSession {
     /** A session to continue, from an earlier run of this thread. */
     previousSessionId: string | null;
     handlers: SessionHandlers;
+    /** Stops the agent if it has not opened its session yet. */
+    signal?: AbortSignal;
   }): Promise<AgentSession> {
-    const { launch, cwd, handlers } = options;
+    const { launch, cwd, handlers, signal } = options;
+    signal?.throwIfAborted();
     const child = spawn(launch.command, launch.args, {
       cwd,
       env: process.env,
@@ -103,7 +156,7 @@ export class AgentSession {
     });
 
     let sessionId: string | null = null;
-    const state: { options: acp.SessionConfigOption[] } = { options: [] };
+    const state: SessionState = { options: [], legacy: undefined };
     // session/load replays the history as updates; the timeline already holds it.
     let replaying = false;
     const app = acp
@@ -140,7 +193,14 @@ export class AgentSession {
       if (!exited) child.kill("SIGTERM");
     };
 
-    try {
+    const aborted = new Promise<never>((_, reject) => {
+      const stop = () => reject(new Error("Démarrage de l'agent arrêté."));
+      if (signal?.aborted) stop();
+      signal?.addEventListener("abort", stop, { once: true });
+    });
+    aborted.catch(() => undefined);
+
+    const handshake = async (): Promise<AgentSession> => {
       const init = await connection.agent.request("initialize", {
         protocolVersion: acp.PROTOCOL_VERSION,
         clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
@@ -156,7 +216,7 @@ export class AgentSession {
           .request("session/resume", { sessionId: previous, cwd, mcpServers: [] })
           .then((r) => {
             sessionId = previous;
-            state.options = r.configOptions ?? [];
+            absorb(state, r);
           })
           .catch(() => undefined);
       } else if (previous && caps?.loadSession) {
@@ -164,9 +224,7 @@ export class AgentSession {
         sessionId = previous;
         await connection.agent
           .request("session/load", { sessionId: previous, cwd, mcpServers: [] })
-          .then((r) => {
-            state.options = r?.configOptions ?? [];
-          })
+          .then((r) => absorb(state, r))
           .catch(() => (sessionId = null));
         replaying = false;
       }
@@ -174,11 +232,20 @@ export class AgentSession {
       if (!sessionId) {
         const created = await connection.agent.request("session/new", { cwd, mcpServers: [] });
         sessionId = created.sessionId;
-        state.options = created.configOptions ?? [];
+        absorb(state, created);
       }
       return new AgentSession(sessionId, connection, kill, state, fresh);
+    };
+
+    try {
+      return await Promise.race([handshake(), aborted]);
     } catch (error) {
       kill();
+      if ((error as { code?: unknown } | null)?.code === AUTH_REQUIRED && launch.login) {
+        throw new Error(`Connecte-toi d'abord avec ton compte : ${launch.login}.`, {
+          cause: error,
+        });
+      }
       throw new Error(describe(error, stderr), { cause: error });
     }
   }

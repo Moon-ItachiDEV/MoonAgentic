@@ -1,7 +1,7 @@
 import type { AgentInfo, Item, Thread, ToolContent } from "@moonagentic/protocol";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { connection } from "../connection.ts";
-import { AgentBadge } from "./Composer.tsx";
+import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconCheck, IconChevron, IconX } from "./icons.tsx";
 import { Markdown } from "./Markdown.tsx";
 

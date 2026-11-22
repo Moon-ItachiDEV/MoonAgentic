@@ -22,7 +22,9 @@ Le serveur écoute sur `127.0.0.1:4747` et garde ses données dans `~/.moonagent
 
 Agents reconnus : Claude Code et Codex (inclus), Antigravity (`agy`), Cursor (`agent`) et Hermes (`hermes`) s'ils sont installés.
 
-Connexion aux agents : connecte-toi une fois avec ton propre compte dans l'outil officiel de chaque agent (`claude` puis `/login`, `codex login`, `agent login`, `agy`), ou fournis ta propre clé API. MoonAgentic lance ces outils tels quels sur ta machine et ne voit, ne stocke ni ne relaie jamais tes identifiants. `node apps/server/src/bin.ts --demo` ajoute un agent de démo gratuit pour essayer l'interface.
+Connexion aux agents : connecte-toi une fois avec ton propre compte dans l'outil officiel de chaque agent (`claude` puis `/login`, `codex login`, `agent login`, `agy`), ou fournis ta propre clé API. MoonAgentic lance ces outils tels quels sur ta machine et ne voit, ne stocke ni ne relaie jamais tes identifiants.
+
+`node apps/server/src/bin.ts --demo` ajoute un agent de démo gratuit pour essayer l'interface.
 
 ## Développer
 

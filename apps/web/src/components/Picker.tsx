@@ -1,7 +1,7 @@
 import type { AgentInfo, Favorites, ModelChoice } from "@moonagentic/protocol";
 import { useEffect } from "react";
 import { connection } from "../connection.ts";
-import { AgentBadge } from "./Composer.tsx";
+import { AgentBadge } from "./AgentBadge.tsx";
 import { IconCheck, IconStar } from "./icons.tsx";
 
 /** Agent and model menu above the composer. Agents are listed only for a new thread. */
@@ -20,17 +20,25 @@ export function Picker(props: {
   const models = agent?.models;
   const starred = agent ? (favorites[agent.id] ?? []) : [];
 
-  // The model list comes from the agent itself; start it once to learn it.
-  useEffect(() => {
-    if (agent?.available && !agent.models && props.projectId) {
+  const asking = !!agent?.available && !models && !agent.modelsError && !!props.projectId;
+  const discover = () => {
+    if (agent && props.projectId)
       connection.send({ type: "agent.discover", agentId: agent.id, projectId: props.projectId });
-    }
-  }, [agent?.id, agent?.available, agent?.models, props.projectId]);
+  };
+
+  // The model list comes from the agent itself; the server starts it once to learn it.
+  useEffect(() => {
+    if (asking) discover();
+  }, [agent?.id, asking, props.projectId]);
 
   const toggleStar = (id: string) => {
     if (!agent) return;
-    const next = starred.includes(id) ? starred.filter((m) => m !== id) : [...starred, id];
-    connection.send({ type: "favorites.set", agentId: agent.id, models: next });
+    connection.send({
+      type: "favorites.toggle",
+      agentId: agent.id,
+      model: id,
+      starred: !starred.includes(id),
+    });
   };
 
   const row = (m: ModelChoice) => (
@@ -65,49 +73,67 @@ export function Picker(props: {
   const otherModels = models?.filter((m) => !starred.includes(m.id)) ?? [];
 
   return (
-    <div className="menu" role="menu">
-      {props.showAgents && (
-        <>
-          <div className="menu-h">Agent</div>
-          {props.agents.map((a) => (
-            <button
-              key={a.id}
-              role="menuitemradio"
-              aria-checked={a.id === agent?.id}
-              disabled={!a.available}
-              onClick={() => props.onPickAgent(a.id)}
-            >
-              <AgentBadge agent={a} />
-              <span className="tx">
-                {a.name}
-                {!a.available && a.hint && <small>{a.hint}</small>}
-              </span>
-              {a.id === agent?.id && (
-                <span className="on-mark">
-                  <IconCheck />
+    <>
+      <div className="menu-scrim" onClick={props.onClose} />
+      <div className="menu" role="menu">
+        {props.showAgents && (
+          <>
+            <div className="menu-h">Agent</div>
+            {props.agents.map((a) => (
+              <button
+                key={a.id}
+                role="menuitemradio"
+                aria-checked={a.id === agent?.id}
+                disabled={!a.available}
+                onClick={() => props.onPickAgent(a.id)}
+              >
+                <AgentBadge agent={a} />
+                <span className="tx">
+                  {a.name}
+                  {!a.available && a.hint && <small>{a.hint}</small>}
                 </span>
-              )}
-            </button>
-          ))}
-        </>
-      )}
-      {agent?.available && (
-        <div className="menu-models">
-          {favoriteModels.length > 0 && <div className="menu-h">Favoris</div>}
-          {favoriteModels.map(row)}
-          <div className="menu-h">
-            {favoriteModels.length > 0 ? "Autres modèles" : `Modèles ${agent.name}`}
+                {a.id === agent?.id && (
+                  <span className="on-mark">
+                    <IconCheck />
+                  </span>
+                )}
+              </button>
+            ))}
+          </>
+        )}
+        {agent?.available && (
+          <div className="menu-models">
+            {favoriteModels.length > 0 && <div className="menu-h">Favoris</div>}
+            {favoriteModels.map(row)}
+            {(otherModels.length > 0 || !models?.length) && (
+              <div className="menu-h">
+                {favoriteModels.length > 0 ? "Autres modèles" : `Modèles ${agent.name}`}
+              </div>
+            )}
+            {!models && !props.projectId && (
+              <div className="menu-note">Crée d'abord un projet pour voir les modèles.</div>
+            )}
+            {asking && <div className="menu-note">Je demande la liste à {agent.name}…</div>}
+            {!models && agent.modelsError && (
+              <div className="menu-note err">
+                Impossible de lister les modèles de {agent.name}.<small>{agent.modelsError}</small>
+                {props.projectId && (
+                  <button className="retry" onClick={discover}>
+                    Réessayer
+                  </button>
+                )}
+              </div>
+            )}
+            {models?.length === 0 && (
+              <div className="menu-note">{agent.name} ne propose pas de choix de modèle.</div>
+            )}
+            {otherModels.map(row)}
           </div>
-          {!models && <div className="menu-note">Je demande la liste à {agent.name}…</div>}
-          {models?.length === 0 && (
-            <div className="menu-note">{agent.name} ne propose pas de choix de modèle.</div>
-          )}
-          {otherModels.map(row)}
-        </div>
-      )}
-      <button className="menu-close" onClick={props.onClose}>
-        Fermer
-      </button>
-    </div>
+        )}
+        <button className="menu-close" onClick={props.onClose}>
+          Fermer
+        </button>
+      </div>
+    </>
   );
 }

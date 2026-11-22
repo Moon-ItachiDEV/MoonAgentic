@@ -9,6 +9,8 @@ export interface AgentLaunch {
   args: string[];
   /** ACP auth method to call before opening a session, for agents that expect it. */
   authMethodId?: string;
+  /** How the user signs in with the agent's own tool, shown when the agent asks for it. */
+  login?: string;
 }
 
 interface AgentDefinition {
@@ -44,29 +46,22 @@ const require = createRequire(import.meta.url);
 function nativeAcp(
   base: Omit<AgentDefinition, "resolve">,
   clis: string[],
-  hint: string,
-  authMethodId?: string,
+  setup: { hint: string; login: string; authMethodId?: string },
 ): AgentDefinition {
+  const { hint, ...launch } = setup;
   return {
     ...base,
     resolve: () => {
       const command = clis.map((cli) => findOnPath(cli)).find(Boolean);
-      if (!command) return { hint };
-      return { command, args: ["acp"], ...(authMethodId ? { authMethodId } : {}) };
+      return command ? { command, args: ["acp"], ...launch } : { hint };
     },
   };
 }
 
-function codexBinary(): string | undefined {
-  const fromAdapter = createRequire(require.resolve("@zed-industries/codex-acp/package.json"));
-  const binary = process.platform === "win32" ? "codex-acp.exe" : "codex-acp";
-  try {
-    return fromAdapter.resolve(
-      `@zed-industries/codex-acp-${process.platform}-${process.arch}/bin/${binary}`,
-    );
-  } catch {
-    return undefined;
-  }
+/** Runs an ACP adapter published on npm with this Node, from its package's entry file. */
+function nodeAdapter(pkg: string): AgentLaunch {
+  const main = path.join(path.dirname(require.resolve(`${pkg}/package.json`)), "dist/index.js");
+  return { command: process.execPath, args: [main] };
 }
 
 const definitions: AgentDefinition[] = [
@@ -75,42 +70,36 @@ const definitions: AgentDefinition[] = [
     name: "Claude Code",
     short: "CC",
     resolve: () => ({
-      command: process.execPath,
-      args: [
-        path.join(
-          path.dirname(require.resolve("@agentclientprotocol/claude-agent-acp/package.json")),
-          "dist/index.js",
-        ),
-      ],
+      ...nodeAdapter("@agentclientprotocol/claude-agent-acp"),
+      login: "lance « claude » puis « /login »",
     }),
   },
   {
     id: "codex",
     name: "Codex",
     short: "Cx",
-    resolve: () => {
-      const command = codexBinary();
-      return command
-        ? { command, args: [] }
-        : { hint: "Codex n'est pas disponible pour ce système." };
-    },
+    resolve: () => ({
+      ...nodeAdapter("@agentclientprotocol/codex-acp"),
+      login: "lance « codex login »",
+    }),
   },
   nativeAcp(
     { id: "antigravity", name: "Antigravity", short: "Ag", preferredModel: /neon/i },
     ["agy"],
-    "Installe Antigravity CLI (commande agy), puis lance « agy » une fois pour te connecter.",
+    {
+      hint: "Installe Antigravity CLI (commande agy), puis lance « agy » une fois pour te connecter.",
+      login: "lance « agy »",
+    },
   ),
-  nativeAcp(
-    { id: "cursor", name: "Cursor", short: "Cu" },
-    ["cursor-agent", "agent"],
-    "Installe Cursor CLI (commande agent), puis lance « agent login » une fois.",
-    "cursor_login",
-  ),
-  nativeAcp(
-    { id: "hermes", name: "Hermes", short: "He" },
-    ["hermes"],
-    "Installe Hermes Agent avec son extension ACP, puis lance « hermes model » une fois.",
-  ),
+  nativeAcp({ id: "cursor", name: "Cursor", short: "Cu" }, ["cursor-agent", "agent"], {
+    hint: "Installe Cursor CLI (commande agent), puis lance « agent login » une fois.",
+    login: "lance « agent login »",
+    authMethodId: "cursor_login",
+  }),
+  nativeAcp({ id: "hermes", name: "Hermes", short: "He" }, ["hermes"], {
+    hint: "Installe Hermes Agent avec son extension ACP, puis lance « hermes model » une fois.",
+    login: "lance « hermes model »",
+  }),
 ];
 
 const demoAgent: AgentDefinition = {

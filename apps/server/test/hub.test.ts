@@ -5,6 +5,7 @@ import type { Item, ServerMessage } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { type Client, Hub } from "../src/hub.ts";
+import { modelOption } from "../src/session.ts";
 import { Store } from "../src/store.ts";
 
 class TestClient implements Client {
@@ -41,6 +42,14 @@ function setup() {
     rmSync(dir, { recursive: true, force: true });
   });
   return { dir, store, hub, client, projectId };
+}
+
+/** Makes demo agents started from now on offer their models in another way. */
+function demoModels(style: "legacy" | "none" | "hang" | "fail") {
+  process.env.MOONAGENTIC_DEMO_MODELS = style;
+  cleanups.push(() => {
+    delete process.env.MOONAGENTIC_DEMO_MODELS;
+  });
 }
 
 const isPermissionRequest = (m: ServerMessage) =>
@@ -216,6 +225,25 @@ describe("Hub with the demo agent", () => {
     expect(store.getThread(threadId)?.model).toBe("precis");
   });
 
+  it("refuses an unknown model, and a switch while the agent is answering", async () => {
+    const { hub, store, client, projectId } = setup();
+    const asked = client.next(isPermissionRequest);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Un",
+    });
+    client.openThreadId = threadId;
+    await asked;
+    await expect(hub.setModel(threadId, "rapide")).rejects.toThrow("fin de la réponse");
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+
+    await expect(hub.setModel(threadId, "inexistant")).rejects.toThrow("Modèle inconnu");
+    expect(store.getThread(threadId)?.model).toBe("precis");
+  });
+
   it("lists an agent's models before any thread uses it", async () => {
     const { hub, projectId } = setup();
     expect(hub.snapshot().agents.find((a) => a.id === "demo")?.models).toBeUndefined();
@@ -223,9 +251,93 @@ describe("Hub with the demo agent", () => {
     expect(hub.snapshot().agents.find((a) => a.id === "demo")?.models).toHaveLength(2);
   });
 
+  it("remembers that an agent offers no model choice, so the UI stops asking", async () => {
+    demoModels("none");
+    const { hub, projectId } = setup();
+    await hub.discover("demo", projectId);
+    expect(hub.snapshot().agents.find((a) => a.id === "demo")?.models).toEqual([]);
+  });
+
+  it("shows why an agent could not list its models, until a retry", async () => {
+    demoModels("fail");
+    const { hub, projectId } = setup();
+    await hub.discover("demo", projectId);
+    expect(hub.snapshot().agents.find((a) => a.id === "demo")?.modelsError).toContain(
+      "Connecte-toi d'abord.",
+    );
+
+    delete process.env.MOONAGENTIC_DEMO_MODELS;
+    await hub.discover("demo", projectId);
+    const demo = hub.snapshot().agents.find((a) => a.id === "demo");
+    expect(demo?.modelsError).toBeUndefined();
+    expect(demo?.models).toHaveLength(2);
+  });
+
+  it("picks models on agents that still use the older session/set_model", async () => {
+    demoModels("legacy");
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+
+    expect(store.getThread(threadId)?.model).toBe("precis");
+    const replies = store.listItems(threadId).filter((i) => i.kind === "agent");
+    expect(replies.map((i) => ("text" in i ? i.text : "")).join()).toContain("(modèle precis)");
+  });
+
+  it("stops an agent still starting up when the server stops", async () => {
+    demoModels("hang");
+    const { hub, projectId } = setup();
+    const discovery = hub.discover("demo", projectId);
+    await hub.close();
+    await discovery;
+    expect(hub.snapshot().agents.find((a) => a.id === "demo")).not.toHaveProperty("models");
+  });
+
+  it("stars and unstars favorite models one at a time, for known agents only", async () => {
+    const { hub, client } = setup();
+    hub.toggleFavorite("demo", "precis", true);
+    hub.toggleFavorite("demo", "rapide", true);
+    hub.toggleFavorite("demo", "precis", false);
+
+    expect(hub.snapshot().favorites).toEqual({ demo: ["rapide"] });
+    expect(client.messages.at(-1)).toEqual({ type: "favorites", favorites: { demo: ["rapide"] } });
+    expect(() => hub.toggleFavorite("__proto__", "x", true)).toThrow("Agent inconnu");
+  });
+
   it("rejects a project folder that does not exist", () => {
     const { hub, dir } = setup();
     expect(() => hub.createProject("x", path.join(dir, "missing"))).toThrow("n'existe pas");
+  });
+});
+
+describe("modelOption", () => {
+  it("flattens grouped choices and falls back to an option named model", () => {
+    expect(
+      modelOption([
+        {
+          id: "model",
+          name: "Model",
+          type: "select",
+          currentValue: "b",
+          options: [
+            { group: "g1", name: "G1", options: [{ value: "a", name: "A" }] },
+            { group: "g2", name: "G2", options: [{ value: "b", name: "B", description: "Bee" }] },
+          ],
+        },
+      ]),
+    ).toEqual({
+      configId: "model",
+      current: "b",
+      choices: [
+        { id: "a", name: "A" },
+        { id: "b", name: "B", description: "Bee" },
+      ],
+    });
   });
 });
 

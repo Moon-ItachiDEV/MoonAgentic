@@ -2,22 +2,9 @@ import type { AgentInfo, Favorites, PermissionMode, Project, Thread } from "@moo
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { connection } from "../connection.ts";
 import { readPref, writePref } from "../prefs.ts";
+import { AgentBadge } from "./AgentBadge.tsx";
 import { IconArrowUp, IconShield, IconStop } from "./icons.tsx";
 import { Picker } from "./Picker.tsx";
-
-export function AgentBadge({
-  agent,
-  small,
-}: {
-  agent: Pick<AgentInfo, "id" | "short"> | undefined;
-  small?: boolean;
-}) {
-  return (
-    <span className={`ag${small ? " sm" : ""}`} data-agent={agent?.id}>
-      {agent?.short ?? "?"}
-    </span>
-  );
-}
 
 export function Composer(props: {
   agents: AgentInfo[];
@@ -50,18 +37,29 @@ export function Composer(props: {
     thread?.model ??
     (agent?.models?.some((m) => m.id === pickedModel) ? pickedModel : agent?.defaultModel) ??
     undefined;
-  const modelName = agent?.models?.find((m) => m.id === model)?.name;
+  const modelName = agent?.models?.find((m) => m.id === model)?.name ?? model;
+  const running = thread?.status === "running" || thread?.status === "waiting";
+  // The model is switched between turns only; a new thread can still pick its agent.
+  const pickerOpen = menu && !(thread && running);
 
-  // Close the picker on any press outside the composer.
+  // Close the picker on Escape or on any press outside the composer.
   useEffect(() => {
-    if (!menu) return;
+    if (!pickerOpen) return;
     const close = (event: PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setMenu(false);
     };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMenu(false);
+      input.current?.focus();
+    };
     document.addEventListener("pointerdown", close);
-    return () => document.removeEventListener("pointerdown", close);
-  }, [menu]);
-  const running = thread?.status === "running" || thread?.status === "waiting";
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [pickerOpen]);
   const canSend = text.trim().length > 0 && !busy && !running && !!agent?.available && !!project;
 
   useLayoutEffect(() => {
@@ -138,9 +136,10 @@ export function Composer(props: {
       <div className="cbar">
         <button
           className="agentchip"
-          disabled={!agent?.available}
+          disabled={!agent?.available || (!!thread && running)}
+          title={thread && running ? "Le modèle se change entre deux réponses" : undefined}
           aria-haspopup="menu"
-          aria-expanded={menu}
+          aria-expanded={pickerOpen}
           onClick={() => setMenu((m) => !m)}
         >
           <AgentBadge agent={agent} />
@@ -184,7 +183,7 @@ export function Composer(props: {
           </button>
         )}
       </div>
-      {menu && (
+      {pickerOpen && (
         <Picker
           agents={agents}
           agent={agent}

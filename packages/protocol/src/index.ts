@@ -20,6 +20,8 @@ export interface AgentInfo {
   models?: ModelChoice[];
   /** The model a new thread gets when the user picks none. */
   defaultModel?: string;
+  /** Why the agent could not list its models, while it has none on record. */
+  modelsError?: string;
 }
 
 export interface Project {
@@ -143,10 +145,12 @@ export const ClientMessage = z.discriminatedUnion("type", [
     permissionMode: z.enum(["supervised", "full"]),
   }),
   z.object({ type: z.literal("thread.setModel"), threadId: id, model: id }),
+  /** Stars or unstars one model, so two devices editing favorites never overwrite each other. */
   z.object({
-    type: z.literal("favorites.set"),
+    type: z.literal("favorites.toggle"),
     agentId: id,
-    models: z.array(id).max(100),
+    model: id,
+    starred: z.boolean(),
   }),
   /** Starts the agent briefly to learn which models it offers. */
   z.object({ type: z.literal("agent.discover"), agentId: id, projectId: id }),
