@@ -221,8 +221,14 @@ export function App() {
           }}
           onPickProject={(id) => {
             pickProject(id);
-            // On the planner, picking a project shows that project's planner.
-            go(route.name === "planner" ? { name: "planner" } : { name: "home" });
+            // On the planner, picking a project shows that project's planner; on the home
+            // page or in a conversation, it only unfolds the project, the drawer left open.
+            if (route.name === "planner") go({ name: "planner" });
+            else if (route.name !== "thread" && route.name !== "home") go({ name: "home" });
+          }}
+          onNewInProject={(id) => {
+            pickProject(id);
+            go({ name: "home" });
           }}
           onOpenThread={(id) => go({ name: "thread", threadId: id })}
           onTogglePin={togglePin}

@@ -338,9 +338,17 @@ describe("composer", () => {
       "Corriger answerfusionnéeRelectureTests",
       "Documenter answerfusionnéeRelectureTests",
     ]);
-    // The coders' and the merge's threads sit under the lead's in the sidebar; the
-    // reviewers' and testers' are reached from the card.
-    expect(await page.locator(".thr-row.child").count()).toBe(3);
+    // The team is one line of its project in the sidebar; open, its lead shows every member
+    // under it: two coders, their reviewers and testers, and the merge.
+    expect(await page.locator(".thr-row.lead").count()).toBe(1);
+    expect(await page.locator(".thr-row.child").count()).toBe(7);
+    // Its chevron still folds it, though its lead's thread is open; so does the project's.
+    await page.getByRole("button", { name: /^Replier l'équipe/ }).click();
+    expect(await page.locator(".thr-row.child").count()).toBe(0);
+    await page.getByRole("button", { name: /^Replier le projet/ }).click();
+    expect(await page.locator(".thr-row.lead").count()).toBe(0);
+    await page.getByRole("button", { name: /^Déplier le projet/ }).click();
+    await page.getByRole("button", { name: /^Déplier l'équipe/ }).click();
     // The timeline, drawn from what the team really did: a lane for the lead, each piece
     // and the merge, ended.
     const strip = page.getByRole("region", { name: "Frise de l'équipe" });

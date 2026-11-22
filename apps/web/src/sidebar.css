@@ -154,3 +154,70 @@
     border: 1px solid var(--line);
   }
 }
+
+/* Projects as folders: the chevron folds one, its conversations sit under it, a team on
+   one line whose members unfold under it. */
+.thr-row .fold-proj,
+.thr-row .fold-team {
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  transform: translateY(-50%);
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-radius: 8px;
+  color: var(--muted);
+  z-index: 1;
+}
+.thr-row .fold-proj:hover,
+.thr-row .fold-team:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.thr-row .fold-proj svg:last-child,
+.thr-row .fold-team svg {
+  color: var(--faint);
+  transition: transform 0.2s var(--ease);
+}
+.thr-row.proj.open .fold-proj svg:last-child,
+.thr-row .fold-team.open svg {
+  transform: rotate(90deg);
+}
+.thr-row.proj .thr {
+  padding-left: 46px;
+  padding-right: 62px;
+}
+.thr-row.proj .pin.new {
+  right: 32px;
+}
+.thr-row.lead .thr {
+  padding-left: 30px;
+}
+.thr-row.lead .fold-team {
+  padding: 0 7px;
+}
+.thr-row.child .thr {
+  padding-left: 42px;
+}
+/* A project's conversations, set in under it. */
+.proj-items {
+  padding-left: 14px;
+}
+@media (hover: hover) {
+  .thr-row.proj .pin.new {
+    opacity: 0;
+  }
+  .thr-row.proj:hover .pin.new,
+  .thr-row.proj .pin.new:focus-visible {
+    opacity: 1;
+  }
+}
+/* No hover on touch: the « + » stays in sight, the count makes room for it. */
+@media (hover: none) {
+  .thr-row.proj .aux {
+    display: none;
+  }
+}
