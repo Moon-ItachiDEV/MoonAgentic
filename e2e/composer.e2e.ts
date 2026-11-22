@@ -334,10 +334,18 @@ describe("composer", () => {
 
     const card = page.getByRole("region", { name: "Équipe", exact: true });
     await card.getByText("Terminé : tout est réuni sur une branche").waitFor({ timeout: 30_000 });
+    // One calm step per role: the lead's plan, each piece with its coder, then the merge.
     expect(await card.getByRole("listitem").allTextContents()).toEqual([
-      "Corriger answerfusionnéeRelectureTests",
-      "Documenter answerfusionnéeRelectureTests",
+      "Découper la tâcheChef · Agent de démo2 sous-tâches",
+      "Corriger answerCodeur · Agent de démofusionnéeRelectureTests",
+      "Documenter answerCodeur · Agent de démofusionnéeRelectureTests",
+      "Réunir les sous-tâchesFusionneur · Agent de démofaiteOuvrir la fusion",
     ]);
+    // The lead's internal prompt and plan stay folded: only « Voir le détail » shows.
+    expect(await page.getByText("Tu es le chef d'une équipe").count()).toBe(0);
+    await page.locator(".team-detail-h").first().click();
+    await page.getByText("Tu es le chef d'une équipe").waitFor();
+    await page.locator(".team-detail-h").first().click();
     // The team is one line of its project in the sidebar; open, its lead shows every member
     // under it: two coders, their reviewers and testers, and the merge.
     expect(await page.locator(".thr-row.lead").count()).toBe(1);
@@ -364,6 +372,7 @@ describe("composer", () => {
 
     await card.getByRole("button", { name: "Documenter answer" }).click();
     await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).waitFor();
+    await shot(page, "c11b-equipe-codeur");
 
     // A piece the reviewer keeps refusing goes back three times, then to the lead, then to the user.
     await composer(page).fill("/equipe Corrige answer, à toujours refuser");

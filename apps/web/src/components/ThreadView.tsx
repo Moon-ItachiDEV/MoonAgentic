@@ -1,15 +1,17 @@
 import type { AgentInfo, Item, Thread, ToolContent } from "@moonagentic/protocol";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { messageTokens } from "../commands.ts";
 import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
+import { Clamp } from "./Clamp.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TeamCard } from "./TeamCard.tsx";
 import { TeamStrip } from "./TeamStrip.tsx";
 import { withoutTeamJson } from "../team-json.ts";
+import { isTeamThread, teamFeed } from "../team-feed.ts";
 
 export function ThreadView({
   thread,
@@ -90,6 +92,24 @@ export function ThreadView({
   const lastUser = items?.findLastIndex((i) => i.kind === "user") ?? -1;
   const working = thread.status === "running" || thread.status === "waiting";
 
+  const renderItem = (i: number, clamp?: boolean) => {
+    const item = items![i]!;
+    return (
+      <div key={item.id} className="item" data-item={item.id}>
+        <FeedItem
+          item={item}
+          thread={thread}
+          agents={agents}
+          agent={agents.find((a) => a.id === authors[i])}
+          showBy={startsAgentBlock(items!, i)}
+          openQuestion={openQuestion}
+          live={working && i > lastUser}
+          clamp={clamp}
+        />
+      </div>
+    );
+  };
+
   return (
     <div
       className="view"
@@ -117,24 +137,28 @@ export function ThreadView({
             Sous-tâche de l'équipe « {lead.title.replace(/^Équipe : /, "")} »
           </button>
         )}
-        {items?.map((item, i) => (
-          <div key={item.id} className="item" data-item={item.id}>
-            <FeedItem
-              item={item}
-              thread={thread}
-              agents={agents}
-              agent={agents.find((a) => a.id === authors[i])}
-              showBy={startsAgentBlock(items, i)}
-              openQuestion={openQuestion}
-              live={working && i > lastUser}
-            />
-          </div>
-        ))}
+        {items &&
+          (isTeamThread(thread)
+            ? teamFeed(thread, items).map((block) =>
+                block.kind === "detail" ? (
+                  <TeamDetail
+                    key={block.key}
+                    items={items}
+                    indices={block.indices}
+                    live={working && block.indices.some((i) => i > lastUser)}
+                    render={renderItem}
+                  />
+                ) : (
+                  renderItem(block.index, block.clamp)
+                ),
+              )
+            : items.map((_, i) => renderItem(i)))}
         {thread.team && (
           <TeamCard
             thread={thread}
             team={thread.team}
             threads={threads}
+            agents={agents}
             onOpenThread={onOpenThread}
           />
         )}
@@ -171,6 +195,7 @@ function FeedItem({
   showBy,
   openQuestion,
   live,
+  clamp,
 }: {
   item: Item;
   thread: Thread;
@@ -181,6 +206,8 @@ function FeedItem({
   openQuestion: string | undefined;
   /** Part of the turn the agent is working on now. */
   live: boolean;
+  /** A long answer shows its start, with a way to read the rest. */
+  clamp?: boolean | undefined;
 }) {
   switch (item.kind) {
     case "user":
@@ -204,7 +231,13 @@ function FeedItem({
             </div>
           )}
           {/* The team card shows the plan; its raw JSON is for the server only. */}
-          <Markdown text={thread.role === "lead" ? withoutTeamJson(item.text) : item.text} />
+          {clamp ? (
+            <Clamp>
+              <Markdown text={item.text} />
+            </Clamp>
+          ) : (
+            <Markdown text={thread.role === "lead" ? withoutTeamJson(item.text) : item.text} />
+          )}
         </div>
       );
     case "thought":
@@ -250,6 +283,41 @@ function FeedItem({
     case "permission":
       return <PermissionCard item={item} threadId={thread.id} />;
   }
+}
+
+/**
+ * What a team's agent did out of sight, folded: while it works, its last step shows.
+ * Opened, it is the thread as it ran, the engine's own messages included.
+ */
+function TeamDetail({
+  items,
+  indices,
+  live,
+  render,
+}: {
+  items: Item[];
+  indices: number[];
+  live: boolean;
+  render: (index: number) => ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const steps = indices.filter((i) => items[i]?.kind === "tool").length;
+  const lastTool = indices.map((i) => items[i]).findLast((i) => i?.kind === "tool");
+  const label = live && lastTool?.kind === "tool" ? lastTool.title : "Voir le détail";
+  return (
+    <div className={`team-detail${open ? " open" : ""}`}>
+      <button className="team-detail-h" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        {live ? <span className="spin" /> : <IconChevron />}
+        <span className="nm">{label}</span>
+        {steps > 0 && (
+          <span className="meta">
+            {steps} {steps > 1 ? "étapes" : "étape"}
+          </span>
+        )}
+      </button>
+      {open && <div className="team-detail-b">{indices.map((i) => render(i))}</div>}
+    </div>
+  );
 }
 
 /** The user's message, with a way back to the files as they were just before it. */

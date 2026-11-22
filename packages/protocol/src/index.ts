@@ -374,6 +374,8 @@ export type Item =
       id: string;
       kind: "user";
       text: string;
+      /** Written by the team's engine, not by the user: a member's brief, a fix, a check. */
+      byTeam?: true;
       /** The thread's files just before this message, for threads with their own branch. */
       checkpoint?: string;
       at: number;

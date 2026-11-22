@@ -201,8 +201,8 @@ export class Hub {
     this.teams = new Teams({
       thread: (id) => this.store.getThread(id),
       threads: () => this.store.listThreads(),
-      createThread: (input) => this.createThread(input),
-      send: (id, text) => this.send(id, text),
+      createThread: (input) => this.createThread({ ...input, byTeam: true }),
+      send: (id, text) => this.send(id, text, undefined, true),
       cancel: (id) => this.cancel(id),
       setTeam: (id, team) => {
         this.updateThread(id, { team });
@@ -519,6 +519,8 @@ export class Hub {
     /** Works in that thread's folder: a team's reviewer or tester. */
     worksIn?: string | undefined;
     team?: Team | undefined;
+    /** The first message is the team engine's, not the user's. */
+    byTeam?: boolean | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
@@ -552,7 +554,7 @@ export class Hub {
     this.store.addThread(thread);
     this.broadcast({ type: "thread", thread });
     // A team's merge thread starts with no message: its branch is filled first.
-    if (input.text) this.send(thread.id, input.text);
+    if (input.text) this.send(thread.id, input.text, undefined, input.byTeam);
     return thread.id;
   }
 
@@ -610,8 +612,11 @@ export class Hub {
       .join("\n");
   }
 
-  /** Sends the user's message to the thread's agent; `context` goes before it, unseen. */
-  send(threadId: string, text: string, context?: string): void {
+  /**
+   * Sends the user's message to the thread's agent; `context` goes before it, unseen.
+   * `byTeam` marks a message the team's engine wrote, which the app keeps out of sight.
+   */
+  send(threadId: string, text: string, context?: string, byTeam?: boolean): void {
     const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
     const busy = this.busy.get(threadId);
@@ -619,7 +624,13 @@ export class Hub {
     // A step back left over from a failure must never replay over the turns that follow.
     if (this.pendingRestores()[threadId]) this.setPendingRestore(threadId, undefined);
     const itemId = `user:${randomUUID()}`;
-    this.putItem(threadId, { id: itemId, kind: "user", text, at: Date.now() });
+    this.putItem(threadId, {
+      id: itemId,
+      kind: "user",
+      text,
+      ...(byTeam ? { byTeam: true as const } : {}),
+      at: Date.now(),
+    });
     this.updateThread(threadId, { status: "running", error: null });
     this.turnIds.set(threadId, randomUUID());
     this.cancelled.delete(threadId);
