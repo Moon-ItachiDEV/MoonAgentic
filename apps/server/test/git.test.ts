@@ -395,3 +395,228 @@ describe("git helpers", () => {
     ]);
   });
 });
+
+describe("archiving, deleting and recovering thread workspaces", () => {
+  const isolatedThread = async (hub: Hub, projectId: string, text = "Un") => {
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: true,
+      text,
+    });
+    await hub.whenIdle(threadId);
+    return threadId;
+  };
+
+  it("archives a thread with its uncommitted files, and brings them back", async () => {
+    const { hub, store, repo, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    const { path: dir, branch } = store.getThread(threadId)!.workspace!;
+    writeFileSync(path.join(dir, "brouillon.txt"), "pas encore commité\n");
+
+    await hub.setArchived(threadId, true);
+    expect(store.getThread(threadId)).toMatchObject({ archived: true, status: "idle" });
+    expect(existsSync(dir)).toBe(false);
+    // The branch stays, with nothing of the thread lost.
+    expect(git(repo, "branch", "--list", branch)).toContain(branch);
+    expect(() => hub.send(threadId, "Deux")).toThrow("archivé");
+
+    await hub.setArchived(threadId, false);
+    expect(store.getThread(threadId)?.archived).toBeUndefined();
+    // Git writes files back with the line endings its config asks for (CRLF on Windows).
+    expect(readFileSync(path.join(dir, "brouillon.txt"), "utf8").replaceAll("\r\n", "\n")).toBe(
+      "pas encore commité\n",
+    );
+    expect(store.getThread(threadId)?.workspace?.archivedTree).toBeUndefined();
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)?.status).toBe("idle");
+  });
+
+  it("deletes a thread and its worktree, and keeps its branch", async () => {
+    const { hub, store, repo, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+    const { path: dir, branch } = store.getThread(threadId)!.workspace!;
+    expect(git(repo, "for-each-ref", "refs/moonagentic")).not.toBe("");
+
+    await hub.deleteThread(threadId);
+    expect(store.getThread(threadId)).toBeUndefined();
+    expect(store.listItems(threadId)).toEqual([]);
+    expect(existsSync(dir)).toBe(false);
+    expect(git(repo, "for-each-ref", "refs/moonagentic")).toBe("");
+    expect(git(repo, "worktree", "list")).not.toContain(dir);
+    expect(git(repo, "branch", "--list", branch)).toContain(branch);
+  });
+
+  it("removes a project with its threads, and leaves its folder alone", async () => {
+    const { hub, store, repo, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    await hub.removeProject(projectId);
+    expect(store.getProject(projectId)).toBeUndefined();
+    expect(store.getThread(threadId)).toBeUndefined();
+    expect(readFileSync(path.join(repo, "README.md"), "utf8")).toContain("# Demo");
+    expect(hub.snapshot().projects).toEqual([]);
+  });
+
+  it("works in the project's folder inside the worktree when the project is a subfolder", async () => {
+    const { hub, store, repo } = repository();
+    mkdirSync(path.join(repo, "apps", "web"), { recursive: true });
+    writeFileSync(path.join(repo, "apps", "web", "page.ts"), "export {};\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "web");
+    const projectId = hub.createProject("web", path.join(repo, "apps", "web"));
+    const threadId = await isolatedThread(hub, projectId);
+    const workspace = store.getThread(threadId)!.workspace!;
+    expect(workspace.subdir).toBe("apps/web");
+    // The thread's files are those of its folder, as the agent sees them.
+    const client = { send: (m: ServerMessage) => replies.push(m) };
+    const replies: ServerMessage[] = [];
+    await hub.handle(client, {
+      type: "files.search",
+      requestId: "f1",
+      projectId,
+      threadId,
+      query: "page",
+    });
+    expect(replies.at(-1)).toMatchObject({ type: "files", files: ["page.ts"] });
+  });
+
+  it("finishes a worktree that a stop left unrecorded, or that went missing", async () => {
+    const { hub, store, repo, root, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    const workspace = store.getThread(threadId)!.workspace!;
+    writeFileSync(path.join(workspace.path, "commité.txt"), "garde\n");
+    git(workspace.path, "add", "-A");
+    git(workspace.path, "commit", "-q", "-m", "travail");
+
+    // Made by git, never recorded: as if the server stopped right after creating it.
+    const { base: _base, ...unrecorded } = workspace;
+    store.updateThread(threadId, { workspace: unrecorded });
+    // And its folder deleted by hand since, once the agent no longer holds it (Windows).
+    await hub.close();
+    rmSync(workspace.path, { recursive: true, force: true });
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+    });
+    cleanups.unshift(() => restarted.close());
+
+    restarted.send(threadId, "Deux");
+    await restarted.whenIdle(threadId);
+    const recovered = store.getThread(threadId)!.workspace!;
+    expect(recovered.base).toBe(git(repo, "rev-parse", "main"));
+    expect(
+      readFileSync(path.join(recovered.path, "commité.txt"), "utf8").replaceAll("\r\n", "\n"),
+    ).toBe("garde\n");
+    expect((await restarted.review(threadId)).files.map((f) => f.path)).toEqual(["commité.txt"]);
+  });
+
+  it("finishes a step back that a stop cut in half", async () => {
+    const { hub, store, root, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    const dir = store.getThread(threadId)!.workspace!.path;
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+    const second = store.listItems(threadId).filter((i) => i.kind === "user")[1]!;
+    if (second.kind !== "user" || !second.checkpoint) throw new Error("no checkpoint");
+    writeFileSync(path.join(dir, "après.txt"), "à défaire\n");
+
+    // Written down, then the server stops before doing anything.
+    store.setSetting("pendingRestores", {
+      [threadId]: { itemId: second.id, tree: second.checkpoint },
+    });
+    await hub.close();
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+    });
+    cleanups.unshift(() => restarted.close());
+    await restarted.recovered;
+    expect(existsSync(path.join(dir, "après.txt"))).toBe(false);
+    expect(
+      store
+        .listItems(threadId)
+        .filter((i) => i.kind === "user")
+        .map((i) => i.text),
+    ).toEqual(["Un"]);
+    expect(store.getSetting("pendingRestores", {})).toEqual({});
+  });
+
+  it("forgets a step back that failed, so a restart never replays it", async () => {
+    const { hub, store, root, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    hub.send(threadId, "Deux");
+    await hub.whenIdle(threadId);
+    const second = store.listItems(threadId).filter((i) => i.kind === "user")[1]!;
+    if (second.kind !== "user") throw new Error("no user item");
+    // A point of return git no longer has: going back to it fails.
+    store.putItem(threadId, { ...second, checkpoint: "0".repeat(40) });
+
+    await expect(hub.restore(threadId, second.id)).rejects.toThrow();
+    expect(store.getSetting("pendingRestores", {})).toEqual({});
+    hub.send(threadId, "Trois");
+    await hub.whenIdle(threadId);
+    await hub.close();
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+    });
+    cleanups.unshift(() => restarted.close());
+    await restarted.recovered;
+    expect(
+      store
+        .listItems(threadId)
+        .filter((i) => i.kind === "user")
+        .map((i) => i.text),
+    ).toEqual(["Un", "Deux", "Trois"]);
+  });
+
+  it("changes nothing on an archived thread, and keeps it archived if it cannot come back", async () => {
+    const { hub, store, repo, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    const first = store.listItems(threadId).find((i) => i.kind === "user")!;
+    await hub.setArchived(threadId, true);
+
+    await expect(hub.review(threadId)).rejects.toThrow("archivé");
+    await expect(hub.ship(threadId, "msg", false)).rejects.toThrow("archivé");
+    await expect(hub.restore(threadId, first.id)).rejects.toThrow("archivé");
+    await expect(hub.setModel(threadId, "x")).rejects.toThrow("archivé");
+    await expect(hub.setSetting(threadId, "mode", "x")).rejects.toThrow("archivé");
+    await expect(hub.switchAgent(threadId, "other")).rejects.toThrow("archivé");
+
+    // The project's folder has moved: the worktree cannot be made again.
+    renameSync(repo, `${repo}-ailleurs`);
+    await expect(hub.setArchived(threadId, false)).rejects.toThrow();
+    expect(store.getThread(threadId)).toMatchObject({ archived: true });
+    expect(store.getThread(threadId)?.workspace?.archivedTree).toBeDefined();
+
+    renameSync(`${repo}-ailleurs`, repo);
+    await hub.setArchived(threadId, false);
+    expect(store.getThread(threadId)?.archived).toBeUndefined();
+  });
+
+  it("removes a project's worktrees even when its folder is gone", async () => {
+    const { hub, store, repo, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    const dir = store.getThread(threadId)!.workspace!.path;
+    rmSync(repo, { recursive: true, force: true });
+
+    await hub.removeProject(projectId);
+    expect(existsSync(dir)).toBe(false);
+    expect(store.getProject(projectId)).toBeUndefined();
+  });
+
+  it("takes no new thread or message in a project while it is being removed", async () => {
+    const { hub, store, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    const other = await isolatedThread(hub, projectId, "Autre");
+    const removing = hub.removeProject(projectId);
+    expect(() =>
+      hub.createThread({ projectId, agentId: "demo", permissionMode: "full", text: "Non" }),
+    ).toThrow("Projet introuvable");
+    expect(() => hub.send(other, "Non")).toThrow();
+    await removing;
+    expect(store.getThread(threadId)).toBeUndefined();
+    expect(store.getThread(other)).toBeUndefined();
+  });
+});

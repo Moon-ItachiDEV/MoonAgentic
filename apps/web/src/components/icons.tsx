@@ -127,3 +127,22 @@ export const IconInbox = ({ size = 16 }: P) => (
     <path d="M5.5 5h13L21 13v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-5Z" />
   </svg>
 );
+export const IconMore = ({ size = 17 }: P) => (
+  <svg {...base(size)}>
+    <circle cx="5" cy="12" r="1.2" />
+    <circle cx="12" cy="12" r="1.2" />
+    <circle cx="19" cy="12" r="1.2" />
+  </svg>
+);
+export const IconArchive = ({ size = 15 }: P) => (
+  <svg {...base(size)}>
+    <rect x="3" y="4" width="18" height="4" rx="1" />
+    <path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8" />
+    <path d="M10 12h4" />
+  </svg>
+);
+export const IconClose = ({ size = 13 }: P) => (
+  <svg {...base(size)}>
+    <path d="M6 6l12 12M18 6 6 18" />
+  </svg>
+);

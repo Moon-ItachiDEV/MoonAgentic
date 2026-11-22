@@ -59,6 +59,10 @@ export function Composer(props: {
   onRequests: () => void;
   /** Opens the agents' connections. */
   onConnections: () => void;
+  /** Archives the thread. */
+  onArchive: () => void;
+  /** Asks before deleting the thread. */
+  onDelete: () => void;
 }) {
   const { agents, thread, project } = props;
   const [text, setText] = useState("");
@@ -292,6 +296,12 @@ export function Composer(props: {
         return;
       case "connections":
         props.onConnections();
+        return;
+      case "archive":
+        props.onArchive();
+        return;
+      case "delete":
+        props.onDelete();
         return;
     }
   };

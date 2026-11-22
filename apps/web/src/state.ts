@@ -66,6 +66,30 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, projects: upsert(state.projects, message.project) };
     case "thread":
       return { ...state, threads: upsert(state.threads, message.thread) };
+    case "threadRemoved": {
+      const { [message.threadId]: _items, ...items } = state.items;
+      const { [message.threadId]: _review, ...reviews } = state.reviews;
+      return {
+        ...state,
+        threads: state.threads.filter((t) => t.id !== message.threadId),
+        items,
+        reviews,
+        requests: state.requests.filter((r) => r.threadId !== message.threadId),
+      };
+    }
+    case "projectRemoved": {
+      const gone = new Set(
+        state.threads.filter((t) => t.projectId === message.projectId).map((t) => t.id),
+      );
+      return {
+        ...state,
+        projects: state.projects.filter((p) => p.id !== message.projectId),
+        threads: state.threads.filter((t) => !gone.has(t.id)),
+        items: Object.fromEntries(Object.entries(state.items).filter(([id]) => !gone.has(id))),
+        reviews: Object.fromEntries(Object.entries(state.reviews).filter(([id]) => !gone.has(id))),
+        requests: state.requests.filter((r) => !gone.has(r.threadId)),
+      };
+    }
     case "items":
       return { ...state, items: { ...state.items, [message.threadId]: message.items } };
     case "item": {

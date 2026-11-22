@@ -74,7 +74,8 @@ export function QuickSearch(props: {
   const projectName = (id: string) => state.projects.find((p) => p.id === id)?.name ?? "";
   const threadTitle = (id: string) => state.threads.find((t) => t.id === id)?.title ?? "";
   const threads = state.threads
-    .filter((t) => !q || fuzzyMatch(q, t.title))
+    // Archived threads stay out of the recent ones, but typing still finds them.
+    .filter((t) => (q ? fuzzyMatch(q, t.title) : !t.archived))
     .sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned))
     .slice(0, q ? MAX_THREADS : 6);
   const entries: Entry[] = [
@@ -85,7 +86,7 @@ export function QuickSearch(props: {
       key: `thread:${t.id}`,
       group: q ? "Fils" : "Fils récents",
       label: t.title,
-      detail: projectName(t.projectId),
+      detail: t.archived ? `${projectName(t.projectId)} · Archivé` : projectName(t.projectId),
       icon: t.pinned ? <IconPin filled /> : <IconCompose size={15} />,
       run: () => props.onOpenThread(t.id),
     })),

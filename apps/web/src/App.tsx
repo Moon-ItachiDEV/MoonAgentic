@@ -1,6 +1,7 @@
 import type { Thread } from "@moonagentic/protocol";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Composer } from "./components/Composer.tsx";
+import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Home } from "./components/Home.tsx";
 import {
@@ -8,6 +9,8 @@ import {
   IconMenu,
   IconCompose,
   IconFile,
+  IconArchive,
+  IconClose,
   IconFolder,
   IconInbox,
   IconPin,
@@ -21,8 +24,9 @@ import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
+import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
-import { connection } from "./connection.ts";
+import { connection, newId } from "./connection.ts";
 import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
 import { focusItem } from "./focus.ts";
 import { readPref, writePref } from "./prefs.ts";
@@ -39,6 +43,7 @@ export function App() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pickedProjectId, setPickedProjectId] = useState(() => readPref("project"));
   const [searchOpen, setSearchOpen] = useState(false);
+  const [confirm, setConfirm] = useState<Confirmation | null>(null);
 
   // Ctrl K (⌘ K on a Mac) opens the quick search from anywhere, even while typing.
   useEffect(() => {
@@ -76,6 +81,49 @@ export function App() {
     if (!thread || !items) return;
     downloadMarkdown(exportFileName(thread.title), threadMarkdown(thread, items, state.agents));
   };
+  const setArchived = (id: string, archived: boolean) =>
+    connection.send({ type: "thread.setArchived", threadId: id, archived });
+  const askDeleteThread = (t: Thread) =>
+    setConfirm({
+      title: "Supprimer cette discussion ?",
+      text: t.workspace
+        ? `« ${t.title} » et sa copie de travail seront supprimées. Sa branche ${t.workspace.branch} reste dans le dépôt, avec ses commits.`
+        : `« ${t.title} » sera supprimée, avec tous ses messages.`,
+      action: "Supprimer",
+      // The box stays open, and says why, until the server has really deleted it.
+      run: async () => {
+        await connection.request({ type: "thread.delete", requestId: newId(), threadId: t.id });
+        if (thread?.id === t.id) go({ name: "home" });
+      },
+    });
+  const askRemoveProject = (id: string) => {
+    const p = state.projects.find((x) => x.id === id);
+    if (!p) return;
+    const count = state.threads.filter((t) => t.projectId === id).length;
+    setConfirm({
+      title: "Retirer ce projet ?",
+      text: `« ${p.name} » quitte MoonAgentic${count ? `, avec ses ${count} discussion${count > 1 ? "s" : ""} et leurs copies de travail` : ""}. Le dossier ${p.path} et ses branches restent intacts.`,
+      action: "Retirer",
+      run: async () => {
+        await connection.request({ type: "project.remove", requestId: newId(), projectId: id });
+        if (thread?.projectId === id) go({ name: "home" });
+      },
+    });
+  };
+  const threadActions = thread
+    ? [
+        {
+          label: thread.pinned ? "Désépingler" : "Épingler",
+          run: () => togglePin(thread.id, !thread.pinned),
+        },
+        { label: "Exporter en Markdown", run: exportThread },
+        {
+          label: thread.archived ? "Désarchiver" : "Archiver",
+          run: () => setArchived(thread.id, !thread.archived),
+        },
+        { label: "Supprimer…", danger: true, run: () => askDeleteThread(thread) },
+      ]
+    : [];
   const quickActions: QuickAction[] = [
     {
       label: "Nouvelle discussion",
@@ -102,6 +150,16 @@ export function App() {
             run: () => togglePin(thread.id, !thread.pinned),
           },
           { label: "Exporter cette discussion en Markdown", icon: <IconFile />, run: exportThread },
+          {
+            label: thread.archived ? "Désarchiver cette discussion" : "Archiver cette discussion",
+            icon: <IconArchive />,
+            run: () => setArchived(thread.id, !thread.archived),
+          },
+          {
+            label: "Supprimer cette discussion",
+            icon: <IconClose />,
+            run: () => askDeleteThread(thread),
+          },
         ]
       : []),
   ];
@@ -131,6 +189,10 @@ export function App() {
         }}
         onOpenThread={(id) => go({ name: "thread", threadId: id })}
         onTogglePin={togglePin}
+        onRemoveProject={(id) => {
+          setDrawer(false);
+          askRemoveProject(id);
+        }}
       />
       <div className="side-scrim" onClick={() => setDrawer(false)} />
       <main className="center">
@@ -147,7 +209,7 @@ export function App() {
           >
             <IconSearch />
           </button>
-          {thread?.workspace && (
+          {thread?.workspace && !thread.archived && (
             <button
               className="review-btn"
               aria-label="À revoir"
@@ -158,6 +220,7 @@ export function App() {
               <span className="lbl">À revoir</span>
             </button>
           )}
+          {thread && <ThreadMenu actions={threadActions} />}
           {route.name === "thread" ? (
             <button
               className="ib mobile-only"
@@ -184,19 +247,31 @@ export function App() {
           <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
         )}
         <div className="dock">
-          <Composer
-            key={thread?.id ?? "new"}
-            agents={state.agents}
-            favorites={state.favorites}
-            thread={thread}
-            project={project}
-            onNewProject={() => setCreatingProject(true)}
-            onCreated={(id) => navigate({ name: "thread", threadId: id })}
-            onExport={exportThread}
-            onSearch={() => setSearchOpen(true)}
-            onRequests={() => setRequestsOpen(true)}
-            onConnections={() => setConnectionsOpen(true)}
-          />
+          {thread?.archived ? (
+            <div className="archived-bar" role="status">
+              <IconArchive />
+              <span>Cette discussion est archivée.</span>
+              <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
+                Désarchiver
+              </button>
+            </div>
+          ) : (
+            <Composer
+              key={thread?.id ?? "new"}
+              agents={state.agents}
+              favorites={state.favorites}
+              thread={thread}
+              project={project}
+              onNewProject={() => setCreatingProject(true)}
+              onCreated={(id) => navigate({ name: "thread", threadId: id })}
+              onExport={exportThread}
+              onSearch={() => setSearchOpen(true)}
+              onRequests={() => setRequestsOpen(true)}
+              onConnections={() => setConnectionsOpen(true)}
+              onArchive={() => thread && setArchived(thread.id, true)}
+              onDelete={() => thread && askDeleteThread(thread)}
+            />
+          )}
         </div>
       </main>
       {creatingProject && (
@@ -209,7 +284,7 @@ export function App() {
           }}
         />
       )}
-      {reviewOpen && thread?.workspace && (
+      {reviewOpen && thread?.workspace && !thread.archived && (
         <ReviewPanel
           key={thread.id}
           thread={thread}
@@ -240,6 +315,7 @@ export function App() {
           onClose={() => setRequestsOpen(false)}
         />
       )}
+      {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
       {mcpOpen && <McpDialog servers={state.mcpServers} onClose={() => setMcpOpen(false)} />}
       {searchOpen && (
         <QuickSearch

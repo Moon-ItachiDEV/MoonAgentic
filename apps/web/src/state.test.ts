@@ -36,6 +36,30 @@ describe("client state", () => {
     ]);
   });
 
+  it("forgets a deleted thread, and a removed project with its threads", () => {
+    let state = reduce(initialState, {
+      type: "snapshot",
+      snapshot: {
+        favorites: {},
+        requests: [],
+        mcpServers: [],
+        agents: [],
+        projects: [
+          { id: "p", name: "p", path: "/p", createdAt: 1 },
+          { id: "q", name: "q", path: "/q", createdAt: 1 },
+        ],
+        threads: [thread("a"), thread("b"), { ...thread("c"), projectId: "q" }],
+      },
+    });
+    state = reduce(state, { type: "items", threadId: "a", items: [user("u1", "Un")] });
+    state = reduce(state, { type: "threadRemoved", threadId: "a" });
+    expect(state.threads.map((t) => t.id)).toEqual(["b", "c"]);
+    expect(state.items.a).toBeUndefined();
+    state = reduce(state, { type: "projectRemoved", projectId: "p" });
+    expect(state.projects.map((p) => p.id)).toEqual(["q"]);
+    expect(state.threads.map((t) => t.id)).toEqual(["c"]);
+  });
+
   it("adds items at the end and streams text into the right one", () => {
     let state = reduce(initialState, { type: "items", threadId: "t", items: [user("u1", "Un")] });
     state = reduce(state, {

@@ -1897,3 +1897,60 @@ kbd {
 .side-foot button.st:hover {
   color: var(--fg);
 }
+
+/* Archives and the thread's menu */
+.thread-menu-wrap {
+  position: relative;
+}
+.menu.thread-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  bottom: auto;
+  left: auto;
+  right: 0;
+  width: 220px;
+  min-width: 0;
+}
+.menu.thread-menu button.danger {
+  color: var(--err);
+}
+.thr-row.proj .thr {
+  padding-right: 34px;
+}
+.thr-row.proj .aux {
+  margin-right: 4px;
+}
+@media (hover: hover) {
+  .thr-row.proj:hover .aux {
+    visibility: hidden;
+  }
+}
+.sec-h.arch-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  border: none;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+.sec-h.arch-toggle:hover {
+  color: var(--fg);
+}
+.archived-bar {
+  width: min(720px, 100%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13.5px;
+}
+.archived-bar span {
+  flex: 1;
+}

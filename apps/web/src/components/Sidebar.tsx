@@ -1,6 +1,15 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
-import { IconCompose, IconFolder, IconInbox, IconPin, IconPlug } from "./icons.tsx";
+import { useState } from "react";
+import {
+  IconArchive,
+  IconClose,
+  IconCompose,
+  IconFolder,
+  IconInbox,
+  IconPin,
+  IconPlug,
+} from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
 
 function ThreadStatus({ thread }: { thread: Thread }) {
@@ -21,6 +30,7 @@ export function Sidebar(props: {
   onPickProject: (id: string) => void;
   onOpenThread: (id: string) => void;
   onTogglePin: (id: string, pinned: boolean) => void;
+  onRemoveProject: (id: string) => void;
 }) {
   const { state } = props;
   const available = state.agents.filter((a) => a.available).length;
@@ -28,8 +38,11 @@ export function Sidebar(props: {
   for (const t of state.threads)
     countByProject.set(t.projectId, (countByProject.get(t.projectId) ?? 0) + 1);
 
-  const pinned = state.threads.filter((t) => t.pinned);
-  const recent = state.threads.filter((t) => !t.pinned);
+  const [showArchived, setShowArchived] = useState(false);
+  const live = state.threads.filter((t) => !t.archived);
+  const archived = state.threads.filter((t) => t.archived);
+  const pinned = live.filter((t) => t.pinned);
+  const recent = live.filter((t) => !t.pinned);
   const row = (t: Thread) => (
     <div key={t.id} className={`thr-row${t.pinned ? " pinned" : ""}`}>
       <button
@@ -39,15 +52,17 @@ export function Sidebar(props: {
         <span className="t">{t.title}</span>
         <ThreadStatus thread={t} />
       </button>
-      <button
-        className="pin"
-        aria-pressed={!!t.pinned}
-        aria-label={t.pinned ? `Désépingler ${t.title}` : `Épingler ${t.title}`}
-        title={t.pinned ? "Désépingler" : "Épingler"}
-        onClick={() => props.onTogglePin(t.id, !t.pinned)}
-      >
-        <IconPin filled={!!t.pinned} />
-      </button>
+      {!t.archived && (
+        <button
+          className="pin"
+          aria-pressed={!!t.pinned}
+          aria-label={t.pinned ? `Désépingler ${t.title}` : `Épingler ${t.title}`}
+          title={t.pinned ? "Désépingler" : "Épingler"}
+          onClick={() => props.onTogglePin(t.id, !t.pinned)}
+        >
+          <IconPin filled={!!t.pinned} />
+        </button>
+      )}
     </div>
   );
 
@@ -80,21 +95,41 @@ export function Sidebar(props: {
           <div className="empty-note">Aucun projet pour l'instant.</div>
         )}
         {state.projects.map((p) => (
-          <button
-            key={p.id}
-            className={`thr${!props.activeThreadId && p.id === props.activeProjectId ? " on" : ""}`}
-            title={p.path}
-            onClick={() => props.onPickProject(p.id)}
-          >
-            <IconFolder />
-            <span className="t">{p.name}</span>
-            <span className="aux">{countByProject.get(p.id) ?? ""}</span>
-          </button>
+          <div key={p.id} className="thr-row proj">
+            <button
+              className={`thr${!props.activeThreadId && p.id === props.activeProjectId ? " on" : ""}`}
+              title={p.path}
+              onClick={() => props.onPickProject(p.id)}
+            >
+              <IconFolder />
+              <span className="t">{p.name}</span>
+              <span className="aux">{countByProject.get(p.id) ?? ""}</span>
+            </button>
+            <button
+              className="pin"
+              aria-label={`Retirer le projet ${p.name}`}
+              title="Retirer de MoonAgentic"
+              onClick={() => props.onRemoveProject(p.id)}
+            >
+              <IconClose />
+            </button>
+          </div>
         ))}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
         {pinned.map(row)}
         {recent.length > 0 && <div className="sec-h">Récents</div>}
         {recent.map(row)}
+        {archived.length > 0 && (
+          <button
+            className="sec-h arch-toggle"
+            aria-expanded={showArchived}
+            onClick={() => setShowArchived(!showArchived)}
+          >
+            <IconArchive size={13} />
+            Archivés ({archived.length})
+          </button>
+        )}
+        {showArchived && archived.map(row)}
       </div>
       <div className="side-foot">
         {state.status === "open" ? (

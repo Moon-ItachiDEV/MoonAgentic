@@ -1,3 +1,4 @@
+import { chmodSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type {
   AgentSetting,
@@ -36,7 +37,10 @@ interface ThreadRow {
   updated_at: number;
 }
 
-type ThreadExtra = Pick<Thread, "settings" | "usage" | "canCompact" | "commands" | "pinned">;
+type ThreadExtra = Pick<
+  Thread,
+  "settings" | "usage" | "canCompact" | "commands" | "pinned" | "archived"
+>;
 
 const extraOf = (thread: ThreadExtra): string | null => {
   const extra: ThreadExtra = {
@@ -45,6 +49,7 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.canCompact ? { canCompact: true } : {}),
     ...(thread.commands?.length ? { commands: thread.commands } : {}),
     ...(thread.pinned ? { pinned: true } : {}),
+    ...(thread.archived ? { archived: true } : {}),
   };
   return Object.keys(extra).length ? JSON.stringify(extra) : null;
 };
@@ -68,11 +73,11 @@ const toThread = (row: ThreadRow): Thread => ({
 const SNIPPET_BEFORE = 30;
 const SNIPPET_AFTER = 90;
 
-/** The text around the first match, on one line. */
 /** Text without case or accents, so « etat » finds « État ». */
 export const fold = (text: string): string =>
   text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 
+/** The text around the first match, on one line. */
 export function snippet(text: string, query: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
   const folded = fold(flat);
@@ -85,18 +90,15 @@ export function snippet(text: string, query: string): string {
   return `${start > 0 ? "…" : ""}${flat.slice(start, end)}${end < flat.length ? "…" : ""}`;
 }
 
-/** Durable state: projects, threads and each thread's timeline items. */
-export class Store {
-  readonly db: DatabaseSync;
-
-  constructor(file: string) {
-    this.db = new DatabaseSync(file);
-    this.db.function("moon_fold", { deterministic: true }, (text) =>
-      typeof text === "string" ? fold(text) : null,
-    );
-    this.db.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA foreign_keys = ON;
+/**
+ * The schema's history, one step per version, kept in `PRAGMA user_version`. A step is
+ * only ever added at the end: a database is brought up to date by the steps it has not run.
+ */
+export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
+  // 1. The schema before it had a version (jalons 1 to 6a): written so that a database of
+  // that time, which may lack the later columns, ends up the same.
+  (db) => {
+    db.exec(`
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -132,11 +134,81 @@ export class Store {
         data TEXT NOT NULL
       );
     `);
-    const threadColumns = this.db.prepare(`PRAGMA table_info(threads)`).all() as { name: string }[];
+    const threadColumns = db.prepare(`PRAGMA table_info(threads)`).all() as { name: string }[];
     for (const column of ["model", "workspace", "extra"]) {
       if (!threadColumns.some((c) => c.name === column)) {
-        this.db.exec(`ALTER TABLE threads ADD COLUMN ${column} TEXT`);
+        db.exec(`ALTER TABLE threads ADD COLUMN ${column} TEXT`);
       }
+    }
+  },
+];
+
+/**
+ * Brings the database up to the schema this version knows, one step at a time, each in a
+ * transaction. A database that holds data is copied first, next to it, so an update that
+ * goes wrong loses nothing. A database from a newer MoonAgentic is left untouched.
+ */
+export function migrate(
+  db: DatabaseSync,
+  file: string,
+  migrations: ((db: DatabaseSync) => void)[] = MIGRATIONS,
+): void {
+  const version = (db.prepare(`PRAGMA user_version`).get() as { user_version: number })
+    .user_version;
+  if (version > migrations.length) {
+    throw new Error(
+      `Cette base de données vient d'une version plus récente de MoonAgentic (schéma ${version}, celle-ci s'arrête au ${migrations.length}). Mets MoonAgentic à jour pour l'ouvrir.`,
+    );
+  }
+  if (version === migrations.length) return;
+  const tables = db
+    .prepare(`SELECT count(*) AS n FROM sqlite_master WHERE type = 'table'`)
+    .get() as {
+    n: number;
+  };
+  if (tables.n > 0 && file !== ":memory:") {
+    const backup = `${file}.v${version}-${Date.now()}.bak`;
+    db.exec(`VACUUM INTO '${backup.replaceAll("'", "''")}'`);
+    // The copy holds what the database holds, MCP secrets included: only its owner reads it.
+    if (process.platform !== "win32") chmodSync(backup, 0o600);
+  }
+  for (let step = version; step < migrations.length; step++) {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      migrations[step]!(db);
+      db.exec(`PRAGMA user_version = ${step + 1}`);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+}
+
+/** Durable state: projects, threads and each thread's timeline items. */
+export class Store {
+  readonly db: DatabaseSync;
+
+  constructor(file: string) {
+    this.db = new DatabaseSync(file);
+    this.db.function("moon_fold", { deterministic: true }, (text) =>
+      typeof text === "string" ? fold(text) : null,
+    );
+    this.db.exec(`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`);
+    migrate(this.db, file);
+  }
+
+  /** Runs `work` as one write: all of it lands, or none of it. */
+  transaction<T>(work: () => T): T {
+    if (this.db.isTransaction) return work();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const result = work();
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
     }
   }
 
@@ -256,6 +328,7 @@ export class Store {
         | "canCompact"
         | "commands"
         | "pinned"
+        | "archived"
       >
     > & {
       error?: string | null;
@@ -357,6 +430,16 @@ export class Store {
   }
 
   /** Removes the item and every item after it; returns what was removed. */
+  /** Deletes the thread and its timeline. */
+  deleteThread(id: string): void {
+    this.db.prepare(`DELETE FROM threads WHERE id = ?`).run(id);
+  }
+
+  /** Deletes the project, its threads and their timelines. */
+  deleteProject(id: string): void {
+    this.db.prepare(`DELETE FROM projects WHERE id = ?`).run(id);
+  }
+
   removeItemsFrom(threadId: string, id: string): Item[] {
     const from = `(SELECT seq FROM items WHERE thread_id = ? AND id = ?)`;
     const removed = this.db
