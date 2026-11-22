@@ -14,10 +14,24 @@ const base = (size: number): SVGProps<SVGSVGElement> => ({
 
 type P = { size?: number };
 
+/** Drawn on the mockup's 16 px grid, with its 1.4 px lines. */
+const fine = (size: number): SVGProps<SVGSVGElement> => ({
+  ...base(size),
+  viewBox: "0 0 16 16",
+  strokeWidth: 1.4,
+});
+
+/** A square with a pen: a new conversation, as in the mockup. */
 export const IconCompose = ({ size = 16 }: P) => (
-  <svg {...base(size)}>
-    <path d="M12 20h9" />
-    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+  <svg {...fine(size)}>
+    <path d="M8 3H4.5A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5V8" />
+    <path d="M11.5 2.5l2 2L8 10H6V8z" />
+  </svg>
+);
+/** Three lines with bullets: the planner, as in the mockup. */
+export const IconList = ({ size = 16 }: P) => (
+  <svg {...fine(size)}>
+    <path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8M2.5 4.5h.01M2.5 8h.01M2.5 11.5h.01" />
   </svg>
 );
 export const IconFolder = ({ size = 16 }: P) => (
@@ -127,6 +141,13 @@ export const IconPlug = ({ size = 16 }: P) => (
     <path d="M9 2v5M15 2v5" />
     <path d="M6 7h12v4a6 6 0 0 1-12 0Z" />
     <path d="M12 17v5" />
+  </svg>
+);
+/** A panel with its side bar: folds or unfolds the side bar. */
+export const IconSidebar = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <rect x="3" y="4" width="18" height="16" rx="3" />
+    <path d="M9 4v16" />
   </svg>
 );
 export const IconWifi = ({ size = 16 }: P) => (
