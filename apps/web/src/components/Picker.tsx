@@ -23,7 +23,9 @@ export function Picker(props: {
   const models = agent?.models;
   const starred = agent ? (favorites[agent.id] ?? []) : [];
 
-  const asking = !!agent?.available && !models && !agent.modelsError && !!props.projectId;
+  // Settings missing from an older cache are learned the same way.
+  const asking =
+    !!agent?.available && (!models || !agent.settings) && !agent.modelsError && !!props.projectId;
   const discover = () => {
     if (agent && props.projectId)
       connection.send({ type: "agent.discover", agentId: agent.id, projectId: props.projectId });
@@ -125,7 +127,9 @@ export function Picker(props: {
             {!models && !props.projectId && (
               <div className="menu-note">Crée d'abord un projet pour voir les modèles.</div>
             )}
-            {asking && <div className="menu-note">Je demande la liste à {agent.name}…</div>}
+            {asking && !models && (
+              <div className="menu-note">Je demande la liste à {agent.name}…</div>
+            )}
             {!models && agent.modelsError && (
               <div className="menu-note err">
                 Impossible de lister les modèles de {agent.name}.<small>{agent.modelsError}</small>

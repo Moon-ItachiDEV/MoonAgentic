@@ -254,6 +254,29 @@ describe("Hub with the demo agent", () => {
     expect(store.getThread(threadId)?.model).toBe("precis");
   });
 
+  it("takes the context use an agent states while reloading its session", async () => {
+    demoModels("load");
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)?.usage?.used).toBe(24_000);
+    await hub.close();
+
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(os.tmpdir(), "unused-worktrees"),
+    });
+    cleanups.unshift(() => restarted.close());
+    // This turn fails before the agent reports anything new, so only the reload speaks.
+    restarted.send(threadId, "boom");
+    await restarted.whenIdle(threadId);
+    expect(store.getThread(threadId)?.usage?.used).toBe(99_000);
+  });
+
   it("refuses an unknown model, and a switch while the agent is answering", async () => {
     const { hub, store, client, projectId } = setup();
     const asked = client.next(isPermissionRequest);
@@ -282,9 +305,15 @@ describe("Hub with the demo agent", () => {
 
   it("remembers that an agent offers no model choice, so the UI stops asking", async () => {
     demoModels("none");
-    const { hub, projectId } = setup();
+    const { hub, store, projectId } = setup();
+    // A catalog saved before settings existed is missing them, so the picker asks again.
+    store.setAgentModels("demo", { models: [], current: "" });
+    expect(hub.snapshot().agents.find((a) => a.id === "demo")).not.toHaveProperty("settings");
     await hub.discover("demo", projectId);
-    expect(hub.snapshot().agents.find((a) => a.id === "demo")?.models).toEqual([]);
+    expect(hub.snapshot().agents.find((a) => a.id === "demo")).toMatchObject({
+      models: [],
+      settings: [],
+    });
   });
 
   it("shows why an agent could not list its models, until a retry", async () => {
@@ -352,9 +381,13 @@ describe("Hub with the demo agent", () => {
       usage: { used: 24_000, size: 200_000 },
       canCompact: true,
     });
-    // The thread's choices are not the agent's defaults.
+    // The thread's choices are not the agent's defaults, and its model offers one more level.
     expect(settings()?.map((s) => s.current)).toEqual(["agent", "moyen"]);
+    expect(settings()?.[1]?.choices.map((c) => c.id)).toEqual(["bas", "moyen", "haut", "max"]);
 
+    await hub.setModel(threadId, "rapide");
+    expect(settings()?.[1]?.choices).toHaveLength(3);
+    await hub.setModel(threadId, "precis");
     await hub.setSetting(threadId, "mode", "agent");
     await expect(hub.setSetting(threadId, "mode", "yolo")).rejects.toThrow("Réglage inconnu");
     hub.send(threadId, "Deux");

@@ -163,7 +163,7 @@ export function Composer(props: {
         <button
           className="agentchip"
           disabled={!agent?.available || (!!thread && running)}
-          title={thread && running ? "Le modèle se change entre deux réponses" : undefined}
+          title={thread && running ? "Ces réglages se changent entre deux réponses" : undefined}
           aria-haspopup="menu"
           aria-expanded={pickerOpen}
           onClick={() => setMenu((m) => !m)}
@@ -210,19 +210,23 @@ export function Composer(props: {
           {mode === "full" ? "Accès complet" : "Supervisé"}
         </button>
         {thread?.usage && (
-          <ContextGauge usage={thread.usage}>
-            {thread.canCompact && (
-              <button
-                className="btn sm"
-                disabled={running}
-                onClick={() =>
-                  connection.send({ type: "thread.send", threadId: thread.id, text: "/compact" })
-                }
-              >
-                Compacter la conversation
-              </button>
-            )}
-          </ContextGauge>
+          <ContextGauge
+            usage={thread.usage}
+            action={
+              thread.canCompact
+                ? {
+                    label: "Compacter la conversation",
+                    disabled: running,
+                    run: () =>
+                      connection.send({
+                        type: "thread.send",
+                        threadId: thread.id,
+                        text: "/compact",
+                      }),
+                  }
+                : undefined
+            }
+          />
         )}
         {running ? (
           <button
