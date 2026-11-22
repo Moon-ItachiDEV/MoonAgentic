@@ -2657,3 +2657,36 @@ kbd {
     font-size: 11px;
   }
 }
+
+/* Under the team's timeline: only what is yours to do, on one calm line. */
+.team-acts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  margin: -6px 2px 4px;
+  font-size: 13px;
+}
+.team-phase.blocked {
+  color: var(--warn);
+}
+.team-acts-note {
+  flex: 1 1 100%;
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.team-acts-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-left: auto;
+}
+.team-acts-piece {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

@@ -391,19 +391,14 @@ describe("composer", () => {
 
     const card = page.getByRole("region", { name: "Équipe", exact: true });
     await card.getByText("Terminé : tout est réuni sur une branche").waitFor({ timeout: 30_000 });
-    // One calm step per role: the lead's plan, each piece with its coder, then the merge.
-    await expect
-      .poll(() => card.getByRole("listitem").allTextContents())
-      .toEqual([
-        "Découper la tâcheChef · Agent de démo2 sous-tâches",
-        "Corriger answerCodeur · Agent de démofusionnéeRelectureTests",
-        "Documenter answerCodeur · Agent de démofusionnéeRelectureTests",
-        "Réunir les sous-tâchesFusionneur · Agent de démofaiteOuvrir la fusion",
-        // This repository has no remote: the team says so, and can try again.
-        expect.stringMatching(
-          /^Ouvrir la PRL'équipe, avec ton compte GitHubà toi de voir.*remote.*Réessayer$/s,
-        ),
-      ]);
+    // One view of the team, its timeline: under it, only what is the user's to do. This
+    // repository has no remote: the team says so, and can try again.
+    await card.getByText(/remote/).waitFor();
+    expect(await card.getByRole("button").allTextContents()).toEqual([
+      "Ouvrir la fusion",
+      "Réessayer",
+    ]);
+    expect(await page.getByText("Découper la tâche").count()).toBe(0);
     // The lead's internal prompt and plan stay folded: only « Voir le détail » shows.
     expect(await page.getByText("Tu es le chef d'une équipe").count()).toBe(0);
     await page.locator(".team-detail-h").first().click();
@@ -442,7 +437,7 @@ describe("composer", () => {
     await card.getByRole("button", { name: "Ouvrir la fusion" }).click();
     await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).click();
 
-    await card.getByRole("button", { name: "Documenter answer" }).click();
+    await strip.getByRole("button", { name: /^Documenter answer :/ }).click();
     await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).waitFor();
     await shot(page, "c11b-equipe-codeur");
 
@@ -456,7 +451,6 @@ describe("composer", () => {
     await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Personne" });
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
     await card.getByText("2 sous-tâches t'attendent").waitFor({ timeout: 60_000 });
-    await card.getByText("Il manque une vérification").first().waitFor();
     await shot(page, "c12-equipe-bloquee");
     await card.getByRole("button", { name: "Relancer « Corriger answer »" }).click();
     await card.getByText("L'équipe travaille").or(card.getByText("t'attend")).first().waitFor();
