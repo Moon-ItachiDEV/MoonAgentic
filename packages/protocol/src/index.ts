@@ -409,6 +409,39 @@ export type ItemKind = Item["kind"];
 /** Favorite model ids per agent, shared by every device. */
 export type Favorites = Record<AgentId, string[]>;
 
+export const SCHEDULE_REPEATS = ["once", "hourly", "daily", "weekdays", "weekly"] as const;
+export type ScheduleRepeat = (typeof SCHEDULE_REPEATS)[number];
+
+/**
+ * A task MoonAgentic starts by itself, once or again and again: at its time, a new thread
+ * of its project gets the task's text, with the agent chosen when it was planned.
+ */
+export interface Schedule {
+  id: string;
+  projectId: string;
+  title: string;
+  /** The message the thread starts with. */
+  text: string;
+  agentId: string;
+  model?: string;
+  permissionMode: PermissionMode;
+  /** Each run gets its own branch, when the project is a git repository. */
+  isolated?: boolean;
+  repeat: ScheduleRepeat;
+  /** When it next starts. For one that is off or has run its only time, when it last was due. */
+  nextAt: number;
+  /** Off: paused by the user, or a one-time task that has run. */
+  enabled: boolean;
+  /** How many times it really started a thread. */
+  runs: number;
+  lastAt?: number;
+  /** The thread of its last run, while that thread exists. */
+  lastThreadId?: string;
+  /** Why its last time did not start, in words for the user. */
+  lastError?: string;
+  createdAt: number;
+}
+
 export interface Snapshot {
   favorites: Favorites;
   requests: PendingRequest[];
@@ -417,6 +450,7 @@ export interface Snapshot {
   projects: Project[];
   threads: Thread[];
   plan: PlanTask[];
+  schedules: Schedule[];
 }
 
 export type ServerMessage =
@@ -433,6 +467,8 @@ export type ServerMessage =
   /** A planner card, new or changed. */
   | { type: "planTask"; task: PlanTask }
   | { type: "planTaskRemoved"; id: string }
+  | { type: "schedule"; schedule: Schedule }
+  | { type: "scheduleRemoved"; id: string }
   /** The project was removed from MoonAgentic, with its threads; its folder stays. */
   | { type: "projectRemoved"; projectId: string }
   | { type: "items"; threadId: string; items: Item[] }
@@ -598,6 +634,34 @@ export const ClientMessage = z.discriminatedUnion("type", [
     threadId: id.nullable().optional(),
   }),
   z.object({ type: z.literal("plan.remove"), requestId: id, id }),
+  /** Plans a task: at `at`, then as `repeat` says, a new thread starts with `text`. */
+  z.object({
+    type: z.literal("schedule.add"),
+    requestId: id,
+    projectId: id,
+    title: planTitle.optional(),
+    text: z.string().trim().min(1).max(200_000),
+    agentId: id,
+    model: id.optional(),
+    permissionMode: z.enum(["supervised", "full"]),
+    isolated: z.boolean().optional(),
+    repeat: z.enum(SCHEDULE_REPEATS),
+    at: z.number().int().positive(),
+  }),
+  /** Changes a planned task. Turning one back on that is past due moves it to its next time. */
+  z.object({
+    type: z.literal("schedule.update"),
+    requestId: id,
+    id,
+    title: planTitle.optional(),
+    text: z.string().trim().min(1).max(200_000).optional(),
+    repeat: z.enum(SCHEDULE_REPEATS).optional(),
+    at: z.number().int().positive().optional(),
+    enabled: z.boolean().optional(),
+  }),
+  z.object({ type: z.literal("schedule.remove"), requestId: id, id }),
+  /** Starts the planned task now, whatever its time; its next time does not move. */
+  z.object({ type: z.literal("schedule.run"), requestId: id, id }),
   z.object({ type: z.literal("thread.setArchived"), threadId: id, archived: z.boolean() }),
   z.object({ type: z.literal("thread.delete"), requestId: id, threadId: id }),
   z.object({ type: z.literal("project.remove"), requestId: id, projectId: id }),

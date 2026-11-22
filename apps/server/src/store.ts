@@ -7,6 +7,7 @@ import type {
   PermissionMode,
   PlanTask,
   Project,
+  Schedule,
   SearchHit,
   Thread,
   ThreadStatus,
@@ -167,6 +168,17 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       );
       CREATE INDEX plan_tasks_by_project ON plan_tasks(project_id, number);
       ALTER TABLE projects ADD COLUMN plan_next INTEGER NOT NULL DEFAULT 1;
+    `);
+  },
+  // 3. The tasks planned for later (jalon 8c).
+  (db) => {
+    db.exec(`
+      CREATE TABLE schedules (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        data TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
   },
 ];
@@ -491,6 +503,30 @@ export class Store {
 
   deletePlanTask(id: string): void {
     this.sql(`DELETE FROM plan_tasks WHERE id = ?`).run(id);
+  }
+
+  listSchedules(): Schedule[] {
+    const rows = this.sql(`SELECT data FROM schedules ORDER BY created_at, id`).all() as {
+      data: string;
+    }[];
+    return rows.map((r) => JSON.parse(r.data) as Schedule);
+  }
+
+  getSchedule(id: string): Schedule | undefined {
+    const row = this.sql(`SELECT data FROM schedules WHERE id = ?`).get(id) as
+      { data: string } | undefined;
+    return row && (JSON.parse(row.data) as Schedule);
+  }
+
+  putSchedule(schedule: Schedule): void {
+    this.sql(
+      `INSERT INTO schedules (id, project_id, data, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT (id) DO UPDATE SET data = excluded.data`,
+    ).run(schedule.id, schedule.projectId, JSON.stringify(schedule), schedule.createdAt);
+  }
+
+  deleteSchedule(id: string): void {
+    this.sql(`DELETE FROM schedules WHERE id = ?`).run(id);
   }
 
   /** Deletes the thread and its timeline. */

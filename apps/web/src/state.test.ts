@@ -24,6 +24,20 @@ const card = (id: string, projectId: string): PlanTask => ({
 });
 const user = (id: string, text: string): Item => ({ id, kind: "user", text, at: 1 });
 
+const planned: Schedule = {
+  id: "s",
+  projectId: "p",
+  title: "Tests",
+  text: "Lance les tests",
+  agentId: "demo",
+  permissionMode: "supervised",
+  repeat: "daily",
+  nextAt: 10,
+  enabled: true,
+  runs: 0,
+  createdAt: 1,
+};
+
 describe("client state", () => {
   it("takes the snapshot, then keeps the newest thread first", () => {
     let state = reduce(initialState, {
@@ -36,6 +50,7 @@ describe("client state", () => {
         projects: [],
         threads: [thread("a")],
         plan: [],
+        schedules: [],
       },
     });
     expect(state.ready).toBe(true);
@@ -61,6 +76,10 @@ describe("client state", () => {
         ],
         threads: [thread("a"), thread("b"), { ...thread("c"), projectId: "q" }],
         plan: [card("c1", "p"), card("c2", "q")],
+        schedules: [
+          { ...planned, id: "s1", projectId: "p" },
+          { ...planned, id: "s2", projectId: "q" },
+        ],
       },
     });
     state = reduce(state, { type: "items", threadId: "a", items: [user("u1", "Un")] });

@@ -7,6 +7,7 @@ import type {
   PlanTask,
   Project,
   ReviewFile,
+  Schedule,
   ServerMessage,
   Thread,
 } from "@moonagentic/protocol";
@@ -34,6 +35,8 @@ export interface State {
   threads: Thread[];
   /** The planner's cards, of every project. */
   plan: PlanTask[];
+  /** The tasks planned for later, of every project. */
+  schedules: Schedule[];
   items: Record<string, Item[]>;
   /** The last review fetched for each thread with its own branch. */
   reviews: Record<string, Review>;
@@ -73,6 +76,10 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, plan: upsert(state.plan, message.task, false) };
     case "planTaskRemoved":
       return { ...state, plan: state.plan.filter((c) => c.id !== message.id) };
+    case "schedule":
+      return { ...state, schedules: upsert(state.schedules, message.schedule, false) };
+    case "scheduleRemoved":
+      return { ...state, schedules: state.schedules.filter((s) => s.id !== message.id) };
     case "threadRemoved": {
       const { [message.threadId]: _items, ...items } = state.items;
       const { [message.threadId]: _review, ...reviews } = state.reviews;
@@ -96,6 +103,7 @@ export function reduce(state: State, message: ServerMessage): State {
         reviews: Object.fromEntries(Object.entries(state.reviews).filter(([id]) => !gone.has(id))),
         requests: state.requests.filter((r) => !gone.has(r.threadId)),
         plan: state.plan.filter((c) => c.projectId !== message.projectId),
+        schedules: state.schedules.filter((s) => s.projectId !== message.projectId),
       };
     }
     case "items":
@@ -148,6 +156,7 @@ export const initialState: State = {
   projects: [],
   threads: [],
   plan: [],
+  schedules: [],
   items: {},
   reviews: {},
   notice: null,

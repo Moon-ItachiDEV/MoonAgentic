@@ -68,6 +68,8 @@ export function Composer(props: {
   onDelete: () => void;
   /** Opens the team launcher on the project, with the task typed so far. */
   onTeam: (task: string) => void;
+  /** Opens the planning of a task for later, with what was typed so far. */
+  onSchedule: (task: string) => void;
 }) {
   const { agents, thread, project } = props;
   const [text, setText] = useState("");
@@ -333,6 +335,14 @@ export function Composer(props: {
           return;
         }
         props.onTeam(rest);
+        putText("", 0);
+        return;
+      case "schedule":
+        if (!project) {
+          connection.notify("Choisis d'abord un projet.");
+          return;
+        }
+        props.onSchedule(rest);
         putText("", 0);
         return;
     }

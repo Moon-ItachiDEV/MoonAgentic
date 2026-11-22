@@ -1,4 +1,4 @@
-import type { Thread } from "@moonagentic/protocol";
+import type { Schedule, Thread } from "@moonagentic/protocol";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { Composer } from "./components/Composer.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
@@ -27,6 +27,7 @@ import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { SettingsNav, SettingsPage } from "./components/Settings.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
+import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { TeamDialog } from "./components/TeamDialog.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
@@ -49,6 +50,8 @@ export function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const [teamTask, setTeamTask] = useState<string | null>(null);
+  // The planning of a task for later: a new one with its text, or one being changed.
+  const [scheduling, setScheduling] = useState<{ text: string; schedule?: Schedule } | null>(null);
 
   // Ctrl K (⌘ K on a Mac) opens the quick search from anywhere, even while typing.
   useEffect(() => {
@@ -303,6 +306,10 @@ export function App() {
             key={project?.id}
             project={project}
             plan={state.plan}
+            schedules={state.schedules}
+            onSchedule={(schedule) =>
+              setScheduling(schedule ? { text: "", schedule } : { text: "" })
+            }
             threads={state.threads}
             agents={state.agents}
             onOpenThread={(id) => go({ name: "thread", threadId: id })}
@@ -337,6 +344,7 @@ export function App() {
                 onArchive={() => thread && setArchived(thread.id, true)}
                 onDelete={() => thread && askDeleteThread(thread)}
                 onTeam={(task) => setTeamTask(task)}
+                onSchedule={(text) => setScheduling({ text })}
                 onSettings={() => go({ name: "settings", section: "general" })}
               />
             )}
@@ -360,6 +368,21 @@ export function App() {
           onStarted={(id) => {
             setTeamTask(null);
             navigate({ name: "thread", threadId: id });
+          }}
+        />
+      )}
+      {scheduling && project && (
+        <ScheduleDialog
+          project={project}
+          agents={state.agents}
+          text={scheduling.text}
+          schedule={scheduling.schedule}
+          onClose={() => setScheduling(null)}
+          onSaved={() => {
+            setScheduling(null);
+            // The planned tasks are listed in the planner.
+            writePref("plannerView", "planifiees");
+            go({ name: "planner" });
           }}
         />
       )}

@@ -5,6 +5,7 @@ import {
   type PlanStatus,
   type PlanTask,
   type Project,
+  type Schedule,
   type Thread,
 } from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
@@ -20,6 +21,7 @@ import {
 } from "../planner.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { IconClose, IconFolder } from "./icons.tsx";
+import { PlanSchedules } from "./PlanSchedules.tsx";
 import { PlanTimeline } from "./PlanTimeline.tsx";
 
 type Filter = "all" | "lead" | "user";
@@ -45,11 +47,17 @@ export function Planner({
   plan,
   threads,
   agents,
+  schedules,
+  onSchedule,
   onOpenThread,
   onNewProject,
 }: {
   project: Project | undefined;
   plan: PlanTask[];
+  /** The tasks planned for later, of every project. */
+  schedules: Schedule[];
+  /** Opens the planning of a new task, or of the one given. */
+  onSchedule: (schedule?: Schedule) => void;
   threads: Thread[];
   agents: AgentInfo[];
   onOpenThread: (id: string) => void;
@@ -61,9 +69,10 @@ export function Planner({
   const [dragId, setDragId] = useState<string | null>(null);
   const [over, setOver] = useState<PlanStatus | null>(null);
   // The view and its scale are this device's own choice.
-  const [view, setView] = useState<"tableau" | "timeline">(() =>
-    readPref("plannerView") === "timeline" ? "timeline" : "tableau",
-  );
+  const [view, setView] = useState<"tableau" | "timeline" | "planifiees">(() => {
+    const kept = readPref("plannerView");
+    return kept === "timeline" || kept === "planifiees" ? kept : "tableau";
+  });
   const [zoom, setZoom] = useState<"sem" | "mois">(() =>
     readPref("plannerZoom") === "sem" ? "sem" : "mois",
   );
@@ -83,6 +92,7 @@ export function Planner({
   }
 
   const cards = plan.filter((c) => c.projectId === project.id);
+  const planned = schedules.filter((s) => s.projectId === project.id);
   const shown = cards.filter((c) => filter === "all" || c.source === filter);
   const count = (status: PlanStatus) => cards.filter((c) => c.status === status).length;
   const fromLead = cards.filter((c) => c.source === "lead").length;
@@ -129,6 +139,7 @@ export function Planner({
             [
               ["tableau", "Tableau"],
               ["timeline", "Timeline"],
+              ["planifiees", "Planifiées"],
             ] as const
           ).map(([key, label]) => (
             <button
@@ -148,12 +159,13 @@ export function Planner({
         <button
           className="btn pri"
           onClick={() => {
+            if (view === "planifiees") return onSchedule();
             // A card is written on the board, where its column is chosen.
             setView("tableau");
             setAdding("todo");
           }}
         >
-          Ajouter une tâche
+          {view === "planifiees" ? "Planifier une tâche" : "Ajouter une tâche"}
         </button>
       </div>
       <div className="pl-sum" role="status">
@@ -167,7 +179,12 @@ export function Planner({
           </span>
         ))}
       </div>
-      <div className="pl-filters" role="group" aria-label="Filtrer les tâches">
+      <div
+        className="pl-filters"
+        role="group"
+        aria-label="Filtrer les tâches"
+        hidden={view === "planifiees"}
+      >
         {(
           [
             ["all", "Toutes", cards.length],
@@ -192,6 +209,16 @@ export function Planner({
           agents={agents}
           zoom={zoom}
           onOpen={setOpenId}
+        />
+      )}
+      {view === "planifiees" && (
+        <PlanSchedules
+          schedules={planned}
+          threads={threads}
+          agents={agents}
+          onEdit={onSchedule}
+          onNew={() => onSchedule()}
+          onOpenThread={onOpenThread}
         />
       )}
       <div className="pl-board" hidden={view !== "tableau"}>
@@ -253,7 +280,7 @@ export function Planner({
           );
         })}
       </div>
-      <PlannerHelp />
+      {view !== "planifiees" && <PlannerHelp />}
       {open && (
         <Detail
           key={open.id}
