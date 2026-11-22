@@ -54,6 +54,7 @@ import {
 } from "./files.ts";
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { historyBefore } from "./history.ts";
+import { Planner } from "./planner.ts";
 import { Teams } from "./team.ts";
 import { mcpInfo } from "./mcp.ts";
 import { toolQuestions } from "./questions.ts";
@@ -177,13 +178,18 @@ export class Hub {
     this.maxLiveAgents = Math.max(1, options.maxLiveAgents ?? MAX_LIVE_AGENTS);
     this.homeDir = options.homeDir ?? os.homedir();
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
+    this.planner = new Planner(store, (m) => this.broadcast(m));
     this.teams = new Teams({
       thread: (id) => this.store.getThread(id),
       threads: () => this.store.listThreads(),
       createThread: (input) => this.createThread(input),
       send: (id, text) => this.send(id, text),
       cancel: (id) => this.cancel(id),
-      setTeam: (id, team) => this.updateThread(id, { team }),
+      setTeam: (id, team) => {
+        this.updateThread(id, { team });
+        const lead = this.store.getThread(id);
+        if (lead) this.planner.syncTeam(lead);
+      },
       mergeInto: (intoId, fromId, title) => this.mergeInto(intoId, fromId, title),
       contains: async (intoId, fromId) => {
         const into = this.store.getThread(intoId)?.workspace;
@@ -216,6 +222,8 @@ export class Hub {
 
   /** The agents, their models and checks, the MCP servers and the favorites. */
   readonly catalog: AgentCatalog;
+  /** Each project's planner. */
+  readonly planner: Planner;
   /** Teams of agents, each run from its lead's thread. */
   readonly teams: Teams;
 
@@ -236,6 +244,7 @@ export class Hub {
       agents: this.catalog.list(),
       projects: this.store.listProjects().map((p) => this.withGit(p)),
       threads: this.store.listThreads(),
+      plan: this.planner.list(),
     };
   }
 
@@ -306,6 +315,20 @@ export class Hub {
         return;
       case "team.retry":
         await this.teams.retry(message.threadId, message.index);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "plan.add": {
+        if (!this.store.getProject(message.projectId)) throw new Error("Projet introuvable.");
+        const { id } = this.planner.add(message);
+        client.send({ type: "created", requestId: message.requestId, id });
+        return;
+      }
+      case "plan.update":
+        this.planner.update(message.id, message);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "plan.remove":
+        this.planner.remove(message.id);
         client.send({ type: "done", requestId: message.requestId });
         return;
       case "thread.setPinned":
@@ -787,6 +810,7 @@ export class Hub {
       this.drafts.delete(threadId);
       this.store.deleteThread(threadId);
       this.broadcast({ type: "threadRemoved", threadId });
+      this.planner.threadDeleted(threadId);
     });
   }
 

@@ -5,6 +5,7 @@ import { readPref, writePref } from "../prefs.ts";
 import { recentAlwaysShown } from "../recent.ts";
 import {
   IconArchive,
+  IconBoard,
   IconChevron,
   IconClose,
   IconCompose,
@@ -30,6 +31,9 @@ export function Sidebar(props: {
   state: State;
   activeThreadId: string | undefined;
   activeProjectId: string | undefined;
+  /** True on the planner's page. */
+  onPlanner: boolean;
+  onOpenPlanner: () => void;
   onNewThread: () => void;
   onNewProject: () => void;
   onOpenConnections: () => void;
@@ -125,13 +129,24 @@ export function Sidebar(props: {
             <span className="aux badge">{state.requests.length}</span>
           </button>
         )}
-        <button className={!props.activeThreadId ? "on" : ""} onClick={props.onNewThread}>
+        <button
+          className={!props.activeThreadId && !props.onPlanner ? "on" : ""}
+          onClick={props.onNewThread}
+        >
           <IconCompose />
           Nouvelle discussion
         </button>
         <button onClick={props.onNewProject}>
           <IconFolder />
           Nouveau projet
+        </button>
+        <button
+          className={props.onPlanner ? "on" : ""}
+          aria-current={props.onPlanner ? "page" : undefined}
+          onClick={props.onOpenPlanner}
+        >
+          <IconBoard />
+          Planner
         </button>
       </nav>
       <div className="side-scroll">

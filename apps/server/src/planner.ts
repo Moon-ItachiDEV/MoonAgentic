@@ -1,0 +1,171 @@
+import { randomUUID } from "node:crypto";
+import type { PlanStatus, PlanTask, ServerMessage, TeamTask, Thread } from "@moonagentic/protocol";
+import type { Store } from "./store.ts";
+
+const LAID = "planLaid";
+const FOLLOWS_TEAM = "Cette carte suit le travail de l'équipe : son état change avec lui.";
+
+/** Where a team's piece stands on the board, from what its agents are really doing. */
+export function pieceStatus(task: TeamTask, teamDone: boolean): PlanStatus {
+  switch (task.status) {
+    case "waiting":
+      return "todo";
+    case "running":
+    case "lead":
+      return "doing";
+    case "reviewing":
+    case "testing":
+      return "test";
+    case "blocked":
+    case "failed":
+    case "stopped":
+      return "report";
+    case "done":
+      // Done on its branch is not delivered: it is once merged, or once the team is done.
+      return task.merged || teamDone ? "live" : "test";
+  }
+}
+
+export interface PlanAdd {
+  projectId: string;
+  title: string;
+  description?: string | undefined;
+  status?: PlanStatus | undefined;
+  due?: number | undefined;
+}
+
+export interface PlanPatch {
+  title?: string | undefined;
+  description?: string | null | undefined;
+  status?: PlanStatus | undefined;
+  due?: number | null | undefined;
+  threadId?: string | null | undefined;
+}
+
+/**
+ * Each project's planner: cards the user writes, and the cards a team's lead lays down with
+ * its plan. A team's card moves only as its piece really does.
+ */
+export class Planner {
+  private readonly store: Store;
+  private readonly broadcast: (message: ServerMessage) => void;
+
+  constructor(store: Store, broadcast: (message: ServerMessage) => void) {
+    this.store = store;
+    this.broadcast = broadcast;
+  }
+
+  list(): PlanTask[] {
+    return this.store.listPlanTasks();
+  }
+
+  add(input: PlanAdd, extra: Pick<PlanTask, "source" | "team"> = { source: "user" }): PlanTask {
+    const now = Date.now();
+    const task: PlanTask = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      number: this.store.nextPlanNumber(input.projectId),
+      title: input.title,
+      ...(input.description ? { description: input.description } : {}),
+      status: input.status ?? "todo",
+      source: extra.source,
+      ...(extra.team ? { team: extra.team } : {}),
+      ...(input.due ? { due: input.due } : {}),
+      createdAt: now,
+      updatedAt: now,
+    };
+    return this.put(task);
+  }
+
+  update(id: string, patch: PlanPatch): PlanTask {
+    const task = this.store.getPlanTask(id);
+    if (!task) throw new Error("Cette carte n'existe plus.");
+    const next: PlanTask = { ...task };
+    if (patch.status !== undefined && patch.status !== task.status) {
+      if (task.team) throw new Error(FOLLOWS_TEAM);
+      next.status = patch.status;
+    }
+    if (patch.title !== undefined) next.title = patch.title;
+    if (patch.description !== undefined) {
+      if (patch.description) next.description = patch.description;
+      else delete next.description;
+    }
+    if (patch.due !== undefined) {
+      if (patch.due) next.due = patch.due;
+      else delete next.due;
+    }
+    if (patch.threadId !== undefined) {
+      if (patch.threadId === null) delete next.threadId;
+      else {
+        if (task.team) throw new Error("Cette carte est déjà liée à une équipe.");
+        const thread = this.store.getThread(patch.threadId);
+        if (!thread || thread.projectId !== task.projectId) {
+          throw new Error("Ce fil n'est pas dans le projet de la carte.");
+        }
+        next.threadId = thread.id;
+      }
+    }
+    return this.put({ ...next, updatedAt: Date.now() });
+  }
+
+  remove(id: string): void {
+    if (!this.store.getPlanTask(id)) return;
+    this.store.deletePlanTask(id);
+    this.broadcast({ type: "planTaskRemoved", id });
+  }
+
+  /**
+   * Brings the board in line with a team: a card for each piece of the lead's plan, at the
+   * place its piece really is. Called each time the team changes.
+   */
+  syncTeam(lead: Thread): void {
+    const team = lead.team;
+    if (!team?.tasks.length) return;
+    const cards = this.list().filter((c) => c.team?.leadId === lead.id);
+    // A piece gets its card once: one the user deleted since is not laid down again.
+    const laid = this.laid();
+    const already = laid[lead.id] ?? 0;
+    team.tasks.forEach((piece, index) => {
+      const status = pieceStatus(piece, team.phase === "done");
+      const card = cards.find((c) => c.team?.index === index);
+      if (!card) {
+        if (index < already) return;
+        this.add(
+          { projectId: lead.projectId, title: piece.title, description: piece.brief, status },
+          { source: "lead", team: { leadId: lead.id, index } },
+        );
+      } else if (card.status !== status) {
+        this.put({ ...card, status, updatedAt: Date.now() });
+      }
+    });
+    if (team.tasks.length > already) {
+      this.store.setSetting(LAID, { ...laid, [lead.id]: team.tasks.length });
+    }
+  }
+
+  /** How many pieces of each team's plan already got their card, by lead thread. */
+  private laid(): Record<string, number> {
+    return this.store.getSetting<Record<string, number>>(LAID, {});
+  }
+
+  /** A deleted thread leaves its cards where they were, no longer linked to it. */
+  threadDeleted(threadId: string): void {
+    const { [threadId]: wasLead, ...laid } = this.laid();
+    if (wasLead !== undefined) this.store.setSetting(LAID, laid);
+    for (const card of this.list()) {
+      if (card.threadId === threadId) {
+        const { threadId: _thread, ...rest } = card;
+        this.put(rest);
+      } else if (card.team?.leadId === threadId) {
+        const { team: _team, ...rest } = card;
+        this.put(rest);
+      }
+    }
+  }
+
+  private put(task: PlanTask): PlanTask {
+    this.store.putPlanTask(task);
+    this.broadcast({ type: "planTask", task });
+    return task;
+  }
+}
