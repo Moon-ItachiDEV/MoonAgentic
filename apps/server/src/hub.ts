@@ -841,9 +841,29 @@ export class Hub {
    * ones included, are kept in git. Bringing it back puts the worktree and the files back.
    */
   async setArchived(threadId: string, archived: boolean): Promise<void> {
+    this.requireThread(threadId);
+    if (archived && this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
+    // A team goes to the archive whole, and comes back whole: never its lead alone.
+    const members = this.teamMembers(threadId);
+    const order = archived ? [...members, threadId] : [threadId, ...members.reverse()];
+    for (const id of order) await this.setOneArchived(id, archived);
+  }
+
+  /**
+   * The threads of the team this thread leads, those working in a coder's folder first:
+   * they leave it before it goes.
+   */
+  private teamMembers(leadId: string): string[] {
+    return this.store
+      .listThreads()
+      .filter((t) => t.parentId === leadId)
+      .sort((a, b) => Number(!a.worksIn) - Number(!b.worksIn))
+      .map((t) => t.id);
+  }
+
+  private async setOneArchived(threadId: string, archived: boolean): Promise<void> {
     const thread = this.requireThread(threadId);
     if (!!thread.archived === archived) return;
-    if (archived && this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
     const project = this.store.getProject(thread.projectId);
     await this.exclusive(threadId, "Attends la fin de l'archivage.", async () => {
       if (!archived) {
@@ -878,9 +898,21 @@ export class Hub {
    * with the commits on it, so no committed work is lost.
    */
   async deleteThread(threadId: string): Promise<void> {
-    const thread = this.requireThread(threadId);
-    if (this.turns.has(threadId)) throw new Error("Arrête d'abord l'agent de ce fil.");
+    this.requireThread(threadId);
+    // A team is deleted whole: its members' threads would be left without their lead.
+    const members = this.teamMembers(threadId);
+    if ([threadId, ...members].some((id) => this.turns.has(id)))
+      throw new Error(
+        members.length
+          ? "Arrête d'abord les agents de cette équipe."
+          : "Arrête d'abord l'agent de ce fil.",
+      );
     if (this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
+    for (const id of [...members, threadId]) await this.deleteOneThread(id);
+  }
+
+  private async deleteOneThread(threadId: string): Promise<void> {
+    const thread = this.requireThread(threadId);
     await this.exclusive(threadId, "Attends la fin de la suppression.", async () => {
       await this.releaseFolder(threadId);
       await this.forgetSession(threadId);
@@ -921,7 +953,7 @@ export class Hub {
       const order = [...threads].sort((a, b) => Number(!a.worksIn) - Number(!b.worksIn));
       for (const thread of order) {
         this.busy.delete(thread.id);
-        await this.deleteThread(thread.id);
+        await this.deleteOneThread(thread.id);
       }
       this.store.deleteProject(projectId);
       this.gitProjects.delete(projectId);

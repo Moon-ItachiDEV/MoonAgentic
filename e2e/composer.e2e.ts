@@ -299,6 +299,18 @@ describe("composer", () => {
     await shot(page, "c9b-menu-ligne");
     await page.keyboard.press("Escape");
     await expect.poll(() => rowMenu.count()).toBe(0);
+    // A pinned thread is listed twice: the menu belongs to one line, and moves to the other.
+    const twice = page.getByRole("button", { name: /^Actions de Lis/ });
+    expect(await twice.count()).toBe(2);
+    // The lower line first: its menu drops below it, clear of the other line's button.
+    await twice.last().click();
+    await expect.poll(() => page.locator(".thr-row.menu-open").count()).toBe(1);
+    await twice.first().click();
+    await expect.poll(() => twice.first().getAttribute("aria-expanded")).toBe("true");
+    expect(await twice.last().getAttribute("aria-expanded")).toBe("false");
+    expect(await page.locator(".thr-row.menu-open").count()).toBe(1);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.getByRole("menu", { name: /^Actions de Lis/ }).count()).toBe(0);
     await more.click();
     await rowMenu.getByRole("menuitem", { name: "Archiver" }).click();
     await page.getByText("Cette discussion est archivée.").waitFor();

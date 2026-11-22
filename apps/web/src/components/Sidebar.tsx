@@ -94,8 +94,14 @@ export function Sidebar(props: {
     setUnfolded(next);
   };
 
-  // The row whose « … » menu is open, and where its button is on screen.
-  const [menu, setMenu] = useState<{ id: string; x: number; y: number; up: boolean } | null>(null);
+  // The row whose « … » menu is open (a thread can be listed twice: by its line's key), and where its button is on screen.
+  const [menu, setMenu] = useState<{
+    id: string;
+    key: string;
+    x: number;
+    y: number;
+    up: boolean;
+  } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuThread = state.threads.find((t) => t.id === menu?.id);
   const menuOpen = !!menu && !!menuThread;
@@ -195,7 +201,7 @@ export function Sidebar(props: {
   ) => (
     <div
       key={opts.key}
-      className={`thr-row has-more${t.pinned ? " pinned" : ""}${opts.child ? " child" : ""}${opts.team ? " lead" : ""}${menu?.id === t.id ? " menu-open" : ""}`}
+      className={`thr-row has-more${t.pinned ? " pinned" : ""}${opts.child ? " child" : ""}${opts.team ? " lead" : ""}${menu?.key === opts.key ? " menu-open" : ""}`}
     >
       {opts.team && (
         <button
@@ -231,12 +237,18 @@ export function Sidebar(props: {
         aria-label={`Actions de ${t.title}`}
         title="Actions"
         aria-haspopup="menu"
-        aria-expanded={menu?.id === t.id}
+        aria-expanded={menu?.key === opts.key}
         onClick={(e) => {
-          if (menu?.id === t.id) return setMenu(null);
+          if (menu?.key === opts.key) return setMenu(null);
           const box = e.currentTarget.getBoundingClientRect();
           const up = box.bottom + MENU_ROOM > window.innerHeight;
-          setMenu({ id: t.id, x: box.right, y: up ? box.top - 4 : box.bottom + 4, up });
+          setMenu({
+            id: t.id,
+            key: opts.key,
+            x: box.right,
+            y: up ? box.top - 4 : box.bottom + 4,
+            up,
+          });
         }}
       >
         <IconMore size={15} />

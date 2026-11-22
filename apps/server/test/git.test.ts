@@ -885,7 +885,20 @@ describe("teams", () => {
       "stopped",
       "stopped",
     ]);
+
+    // Once stopped, the team is put away, brought back and deleted whole: no thread is left
+    // without its lead.
+    const memberIds = store
+      .listThreads()
+      .filter((t) => t.parentId === leadId)
+      .map((t) => t.id);
+    expect(memberIds.length).toBeGreaterThanOrEqual(2);
+    await hub.setArchived(leadId, true);
+    for (const id of [leadId, ...memberIds]) expect(store.getThread(id)?.archived).toBe(true);
+    await hub.setArchived(leadId, false);
+    for (const id of [leadId, ...memberIds]) expect(store.getThread(id)?.archived).toBeUndefined();
     await hub.deleteThread(leadId);
+    for (const id of [leadId, ...memberIds]) expect(store.getThread(id)).toBeUndefined();
   });
 
   it("gives the lead's access to the whole team, and to the agents it starts later", async () => {
