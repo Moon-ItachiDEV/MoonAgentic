@@ -47,6 +47,14 @@ export function QuickSearch(props: {
   const list = useRef<HTMLDivElement>(null);
   const q = query.trim();
 
+  // Escape closes it wherever the focus is in it, as in the other dialogs.
+  const { onClose } = props;
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  }, [onClose]);
+
   // Messages are searched on the server, which holds every thread's timeline.
   useEffect(() => {
     if (q.length < 2) return;
@@ -146,9 +154,6 @@ export function QuickSearch(props: {
               } else if (e.key === "Enter") {
                 e.preventDefault();
                 choose(entries[highlighted]);
-              } else if (e.key === "Escape") {
-                e.preventDefault();
-                props.onClose();
               }
             }}
           />

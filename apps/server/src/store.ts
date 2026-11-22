@@ -69,9 +69,16 @@ const SNIPPET_BEFORE = 30;
 const SNIPPET_AFTER = 90;
 
 /** The text around the first match, on one line. */
+/** Text without case or accents, so « etat » finds « État ». */
+export const fold = (text: string): string =>
+  text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
+
 export function snippet(text: string, query: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
-  const at = flat.toLowerCase().indexOf(query.toLowerCase());
+  const folded = fold(flat);
+  // Folding keeps each letter in place, except in rare scripts: then the start will do.
+  const found = folded.length === flat.length ? folded.indexOf(fold(query)) : -1;
+  const at = found === -1 ? flat.toLowerCase().indexOf(query.toLowerCase()) : found;
   if (at === -1) return flat.slice(0, SNIPPET_BEFORE + SNIPPET_AFTER);
   const start = Math.max(0, at - SNIPPET_BEFORE);
   const end = Math.min(flat.length, at + query.length + SNIPPET_AFTER);
@@ -84,6 +91,9 @@ export class Store {
 
   constructor(file: string) {
     this.db = new DatabaseSync(file);
+    this.db.function("moon_fold", { deterministic: true }, (text) =>
+      typeof text === "string" ? fold(text) : null,
+    );
     this.db.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA foreign_keys = ON;
@@ -321,13 +331,13 @@ export class Store {
 
   /** Messages from the user or an agent that contain `query`, newest first. */
   searchItems(query: string, limit = 30): SearchHit[] {
-    const pattern = `%${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const pattern = `%${fold(query).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const rows = this.db
       .prepare(
         `SELECT items.thread_id, items.id, items.data FROM items
          JOIN threads ON threads.id = items.thread_id
          WHERE json_extract(items.data, '$.kind') IN ('user', 'agent')
-           AND json_extract(items.data, '$.text') LIKE ? ESCAPE '\\'
+           AND moon_fold(json_extract(items.data, '$.text')) LIKE ? ESCAPE '\\'
          ORDER BY threads.updated_at DESC, items.seq DESC
          LIMIT ?`,
       )

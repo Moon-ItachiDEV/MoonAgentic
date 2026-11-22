@@ -1757,4 +1757,8 @@ kbd {
   .qs-in kbd {
     display: none;
   }
+  /* Below 16px, iOS zooms in on the field. */
+  .qs-in input {
+    font-size: 16px;
+  }
 }

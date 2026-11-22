@@ -98,6 +98,12 @@ describe("composer", () => {
     await composer(page).press("Escape");
     expect(await options(page).count()).toBe(0);
     await composer(page).fill("");
+    // A command that takes arguments waits for them instead of sending its message bare.
+    await composer(page).fill("/dep");
+    await options(page).first().waitFor();
+    await composer(page).press("Enter");
+    expect(await composer(page).inputValue()).toBe("/deploy ");
+    await composer(page).fill("");
     await composer(page).fill("/rev");
     await composer(page).press("Enter");
     await expect.poll(() => composer(page).inputValue()).toContain("Relis les changements");

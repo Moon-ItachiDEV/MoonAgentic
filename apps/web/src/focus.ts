@@ -7,6 +7,9 @@ export function focusItem(threadId: string, itemId: string): void {
   for (const listener of listeners) listener();
 }
 
+/** True when a message waits to be shown in this thread. */
+export const hasFocus = (threadId: string): boolean => wanted?.threadId === threadId;
+
 /** Takes the message waiting to be shown in this thread, if any. */
 export function takeFocus(threadId: string): string | undefined {
   if (wanted?.threadId !== threadId) return undefined;

@@ -13,6 +13,7 @@ import {
   composerCommands,
   fillTemplate,
   matchCommands,
+  mention,
   planModes,
   replaceTrigger,
   resolveSubmission,
@@ -73,11 +74,15 @@ export function Composer(props: {
   /** Where the `/`, `@` or `$` word starts that the user closed the list for with Escape. */
   const [dismissed, setDismissed] = useState<number | null>(null);
   const [active, setActive] = useState(0);
-  const [found, setFound] = useState<{ query: string; files: string[] } | null>(null);
-  const [catalog, setCatalog] = useState<{ skills: Skill[]; commands: ProjectCommand[] }>({
-    skills: [],
-    commands: [],
-  });
+  /** Files found for a `@` word, with the folder and the word they were searched for. */
+  const [found, setFound] = useState<{ folder: string; query: string; files: string[] } | null>(
+    null,
+  );
+  const [catalog, setCatalog] = useState<{
+    folder: string;
+    skills: Skill[];
+    commands: ProjectCommand[];
+  } | null>(null);
   /** The caret to restore once a picked suggestion is in the text. */
   const nextCaret = useRef<number | null>(null);
   const narrow = useNarrow();
@@ -149,8 +154,13 @@ export function Composer(props: {
   // The skills and project commands of the folder the thread works in.
   const projectId = project?.id;
   const threadId = thread?.id;
+  // Answers about another folder, such as the project picked before, are dropped.
+  const folder = `${projectId ?? ""}/${threadId ?? ""}`;
+  const currentFolder = useRef(folder);
+  currentFolder.current = folder;
   const loadCatalog = () => {
     if (!projectId) return;
+    const asked = folder;
     connection
       .ask({
         type: "composer.catalog",
@@ -158,15 +168,19 @@ export function Composer(props: {
         projectId,
         ...(threadId ? { threadId } : {}),
       })
-      .then((reply) => setCatalog({ skills: reply.skills, commands: reply.commands }))
+      .then((reply) => {
+        if (currentFolder.current !== asked) return;
+        setCatalog({ folder: asked, skills: reply.skills, commands: reply.commands });
+      })
       .catch(() => undefined);
   };
+  const known = catalog?.folder === folder ? catalog : { skills: [], commands: [] };
   useEffect(loadCatalog, [projectId, threadId]);
 
   const commands = composerCommands({
     agent,
     agentCommands: thread?.commands,
-    projectCommands: catalog.commands,
+    projectCommands: known.commands,
     inThread: !!thread,
   });
   const rawTrigger = project ? triggerAt(text, caret) : null;
@@ -176,6 +190,7 @@ export function Composer(props: {
   // Files come from the server, which searches the thread's folder.
   useEffect(() => {
     if (fileQuery === null || !projectId) return;
+    const asked = `${projectId}/${threadId ?? ""}`;
     let current = true;
     const timer = setTimeout(() => {
       connection
@@ -186,7 +201,12 @@ export function Composer(props: {
           ...(threadId ? { threadId } : {}),
           query: fileQuery,
         })
-        .then((reply) => current && setFound({ query: fileQuery, files: reply.files }))
+        .then(
+          (reply) =>
+            current &&
+            currentFolder.current === asked &&
+            setFound({ folder: asked, query: fileQuery, files: reply.files }),
+        )
         .catch(() => undefined);
     }, FILE_SEARCH_DELAY_MS);
     return () => {
@@ -195,13 +215,15 @@ export function Composer(props: {
     };
   }, [fileQuery, projectId, threadId]);
 
+  // Only the answer to what is typed now, so Enter never picks a file from an earlier word.
+  const files = found?.folder === folder && found.query === fileQuery ? found.files : null;
   const suggestions: Suggestion[] = !trigger
     ? []
     : trigger.kind === "/"
       ? matchCommands(commands, trigger.query).map((command) => ({ type: "command", command }))
       : trigger.kind === "@"
-        ? (found?.files ?? []).map((path) => ({ type: "file", path }))
-        : catalog.skills
+        ? (files ?? []).map((path) => ({ type: "file", path }))
+        : known.skills
             .filter((s) => s.name.toLowerCase().includes(trigger.query.toLowerCase()))
             .sort(
               (a, b) =>
@@ -211,11 +233,11 @@ export function Composer(props: {
             .map((skill) => ({ type: "skill", skill }));
   const empty =
     trigger?.kind === "@"
-      ? found
+      ? files
         ? "Aucun fichier ne correspond."
         : "Je cherche dans le projet…"
       : trigger?.kind === "$"
-        ? catalog.skills.length
+        ? known.skills.length
           ? "Aucun skill ne correspond."
           : "Aucun skill trouvé. Ils se rangent dans .claude/skills ou .agents/skills, dans le projet ou chez toi."
         : null;
@@ -267,7 +289,7 @@ export function Composer(props: {
   const pick = (item: Suggestion) => {
     if (!trigger) return;
     if (item.type === "file" || item.type === "skill") {
-      const word = item.type === "file" ? `@${item.path}` : `$${item.skill.name}`;
+      const word = item.type === "file" ? mention(item.path) : `$${item.skill.name}`;
       const next = replaceTrigger(text, trigger, word);
       putText(next.text, next.caret);
       return;
@@ -277,10 +299,11 @@ export function Composer(props: {
     if (command.action) {
       putText(rest, rest.length);
       runAction(command.action);
-    } else if (command.template) {
+    } else if (command.template && !(command.template.includes("$ARGUMENTS") && !rest)) {
       const filled = fillTemplate(command.template, rest);
       putText(filled, filled.length);
     } else {
+      // A command that takes arguments waits for them; sending it fills its message.
       const next = replaceTrigger(text, trigger, `/${command.name}`);
       putText(next.text, next.caret);
     }
