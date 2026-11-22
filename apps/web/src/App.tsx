@@ -23,6 +23,7 @@ import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
+import { SettingsNav, SettingsPage } from "./components/Settings.tsx";
 import { Sidebar } from "./components/Sidebar.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { TeamDialog } from "./components/TeamDialog.tsx";
@@ -173,41 +174,52 @@ export function App() {
     <div
       className={`app${drawer ? " drawer" : ""}${route.name === "home" ? " home-route" : ""}${reviewing ? " reviewing" : ""}`}
     >
-      <Sidebar
-        state={state}
-        activeThreadId={thread?.id}
-        activeProjectId={project?.id}
-        onNewThread={() => go({ name: "home" })}
-        onNewProject={() => {
-          setDrawer(false);
-          setCreatingProject(true);
-        }}
-        onOpenConnections={() => {
-          setDrawer(false);
-          setConnectionsOpen(true);
-        }}
-        onOpenRequests={() => {
-          setDrawer(false);
-          setRequestsOpen(true);
-        }}
-        onPickProject={(id) => {
-          pickProject(id);
-          go({ name: "home" });
-        }}
-        onOpenThread={(id) => go({ name: "thread", threadId: id })}
-        onTogglePin={togglePin}
-        onRemoveProject={(id) => {
-          setDrawer(false);
-          askRemoveProject(id);
-        }}
-      />
+      {route.name === "settings" ? (
+        <SettingsNav
+          section={route.section}
+          onPick={(section) => go({ name: "settings", section })}
+          onBack={() => go({ name: "home" })}
+        />
+      ) : (
+        <Sidebar
+          state={state}
+          activeThreadId={thread?.id}
+          activeProjectId={project?.id}
+          onNewThread={() => go({ name: "home" })}
+          onNewProject={() => {
+            setDrawer(false);
+            setCreatingProject(true);
+          }}
+          onOpenConnections={() => {
+            setDrawer(false);
+            setConnectionsOpen(true);
+          }}
+          onOpenRequests={() => {
+            setDrawer(false);
+            setRequestsOpen(true);
+          }}
+          onPickProject={(id) => {
+            pickProject(id);
+            go({ name: "home" });
+          }}
+          onOpenThread={(id) => go({ name: "thread", threadId: id })}
+          onTogglePin={togglePin}
+          onRemoveProject={(id) => {
+            setDrawer(false);
+            askRemoveProject(id);
+          }}
+          onOpenSettings={() => go({ name: "settings", section: "general" })}
+        />
+      )}
       <div className="side-scrim" onClick={() => setDrawer(false)} />
       <main className="center">
         <header className="top">
           <button className="ib mobile-only" aria-label="Menu" onClick={() => setDrawer(true)}>
             <IconMenu />
           </button>
-          <div className="ttl">{thread?.title ?? ""}</div>
+          <div className="ttl">
+            {route.name === "settings" ? "Réglages" : (thread?.title ?? "")}
+          </div>
           <button
             className="ib"
             aria-label="Rechercher"
@@ -242,7 +254,19 @@ export function App() {
             <span className="spacer mobile-only" />
           )}
         </header>
-        {route.name === "thread" ? (
+        {route.name === "settings" ? (
+          <SettingsPage
+            section={route.section}
+            agents={state.agents}
+            favorites={state.favorites}
+            projects={state.projects}
+            projectId={project?.id}
+            mcpServers={state.mcpServers}
+            onPickProject={pickProject}
+            onOpenConnections={() => setConnectionsOpen(true)}
+            onOpenMcp={() => setMcpOpen(true)}
+          />
+        ) : route.name === "thread" ? (
           thread ? (
             <ThreadView
               thread={thread}
@@ -261,34 +285,37 @@ export function App() {
         ) : (
           <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
         )}
-        <div className="dock">
-          {thread?.archived ? (
-            <div className="archived-bar" role="status">
-              <IconArchive />
-              <span>Cette discussion est archivée.</span>
-              <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
-                Désarchiver
-              </button>
-            </div>
-          ) : (
-            <Composer
-              key={thread?.id ?? "new"}
-              agents={state.agents}
-              favorites={state.favorites}
-              thread={thread}
-              project={project}
-              onNewProject={() => setCreatingProject(true)}
-              onCreated={(id) => navigate({ name: "thread", threadId: id })}
-              onExport={exportThread}
-              onSearch={() => setSearchOpen(true)}
-              onRequests={() => setRequestsOpen(true)}
-              onConnections={() => setConnectionsOpen(true)}
-              onArchive={() => thread && setArchived(thread.id, true)}
-              onDelete={() => thread && askDeleteThread(thread)}
-              onTeam={(task) => setTeamTask(task)}
-            />
-          )}
-        </div>
+        {route.name !== "settings" && (
+          <div className="dock">
+            {thread?.archived ? (
+              <div className="archived-bar" role="status">
+                <IconArchive />
+                <span>Cette discussion est archivée.</span>
+                <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
+                  Désarchiver
+                </button>
+              </div>
+            ) : (
+              <Composer
+                key={thread?.id ?? "new"}
+                agents={state.agents}
+                favorites={state.favorites}
+                thread={thread}
+                project={project}
+                onNewProject={() => setCreatingProject(true)}
+                onCreated={(id) => navigate({ name: "thread", threadId: id })}
+                onExport={exportThread}
+                onSearch={() => setSearchOpen(true)}
+                onRequests={() => setRequestsOpen(true)}
+                onConnections={() => setConnectionsOpen(true)}
+                onArchive={() => thread && setArchived(thread.id, true)}
+                onDelete={() => thread && askDeleteThread(thread)}
+                onTeam={(task) => setTeamTask(task)}
+                onSettings={() => go({ name: "settings", section: "general" })}
+              />
+            )}
+          </div>
+        )}
       </main>
       {reviewOpen && thread?.workspace && !thread.archived && (
         <ReviewPanel
