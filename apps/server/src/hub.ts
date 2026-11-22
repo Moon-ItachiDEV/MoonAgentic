@@ -950,7 +950,6 @@ export class Hub {
     }
   }
 
-  /** Stops the thread's agent and forgets its session, so the next turn starts a new one. */
   /**
    * Stops the agents working in the thread's folder, a team's reviewer and tester, before
    * the folder goes: Windows will not remove a folder a process works in. They keep their
@@ -972,6 +971,7 @@ export class Hub {
     );
   }
 
+  /** Stops the thread's agent and forgets its session, so the next turn starts a new one. */
   private async forgetSession(threadId: string): Promise<void> {
     const session = this.sessions.get(threadId);
     this.sessions.delete(threadId);
