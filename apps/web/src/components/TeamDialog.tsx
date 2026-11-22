@@ -1,19 +1,7 @@
 import type { AgentInfo, PermissionMode, Project, TeamMember } from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
-
-/** The agent and model to start a role on: the model the role prefers, when an agent offers it. */
-export function pickMember(agents: AgentInfo[], prefer: RegExp): TeamMember | undefined {
-  const usable = agents.filter((a) => a.available);
-  for (const agent of usable) {
-    const model = agent.models?.find((m) => prefer.test(m.name) || prefer.test(m.id));
-    if (model) return { agentId: agent.id, model: model.id };
-  }
-  const first = usable[0];
-  return (
-    first && { agentId: first.id, ...(first.defaultModel ? { model: first.defaultModel } : {}) }
-  );
-}
+import { pickMember, TEAM_PRESETS, type TeamRole } from "../team-presets.ts";
 
 function MemberPicker({
   label,
@@ -92,20 +80,22 @@ export function TeamDialog({
   onStarted: (leadId: string) => void;
 }) {
   const [task, setTask] = useState(initialTask);
-  // Until the user picks, the choice follows the agents as their models arrive.
-  const [leadChoice, setLead] = useState<TeamMember>();
-  const [coderChoice, setCoder] = useState<TeamMember>();
-  // `null` once the user said nobody: the team does without that check.
-  const [reviewerChoice, setReviewer] = useState<TeamMember | null>();
-  const [testerChoice, setTester] = useState<TeamMember | null>();
-  const lead = leadChoice ?? pickMember(agents, /fable/i);
-  const coder = coderChoice ?? pickMember(agents, /opus/i);
-  const reviewer =
-    reviewerChoice === undefined
-      ? pickMember(agents, /neon|gemini/i)
-      : (reviewerChoice ?? undefined);
-  const tester =
-    testerChoice === undefined ? pickMember(agents, /sonnet/i) : (testerChoice ?? undefined);
+  const [presetId, setPresetId] = useState(TEAM_PRESETS[0]!.id);
+  const preset = TEAM_PRESETS.find((p) => p.id === presetId) ?? TEAM_PRESETS[0]!;
+  // Until the user picks, a role follows the preset and the agents as their models arrive;
+  // `null` once the user said nobody, and the team does without that role.
+  const [choices, setChoices] = useState<Partial<Record<TeamRole, TeamMember | null>>>({});
+  const member = (role: TeamRole) => {
+    const chosen = choices[role];
+    return chosen === undefined ? pickMember(agents, preset.prefer[role]) : (chosen ?? undefined);
+  };
+  const choose = (role: TeamRole) => (m: TeamMember | undefined) =>
+    setChoices((c) => ({ ...c, [role]: m ?? null }));
+  const lead = member("lead");
+  const coder = member("coder");
+  const reviewer = member("reviewer");
+  const tester = member("tester");
+  const merger = member("merger");
   const noGit = !project.git;
   const [coders, setCoders] = useState(2);
   const [mode, setMode] = useState<PermissionMode>("full");
@@ -144,6 +134,7 @@ export function TeamDialog({
         coder,
         ...(reviewer ? { reviewer } : {}),
         ...(tester ? { tester } : {}),
+        ...(merger ? { merger } : {}),
         coders,
         permissionMode: mode,
       });
@@ -167,7 +158,8 @@ export function TeamDialog({
         <p>
           Le chef lit « {project.name} » sans rien modifier et découpe la tâche. Chaque codeur fait
           sa part en même temps, sur sa propre branche. Le relecteur et le testeur la vérifient : ce
-          qu'ils trouvent repart au codeur trois fois au plus, puis au chef, puis à toi.
+          qu'ils trouvent repart au codeur trois fois au plus, puis au chef, puis à toi. Le
+          fusionneur réunit enfin les branches sur une seule.
         </p>
         <label className="field">
           Tâche
@@ -180,20 +172,48 @@ export function TeamDialog({
             onChange={(e) => setTask(e.target.value)}
           />
         </label>
-        <MemberPicker label="Chef" agents={agents} member={lead} onChange={setLead} />
-        <MemberPicker label="Codeurs" agents={agents} member={coder} onChange={setCoder} />
+        <div className="field">
+          Équipe
+          <div className="seg presets" role="radiogroup" aria-label="Équipe">
+            {TEAM_PRESETS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                role="radio"
+                aria-checked={p.id === preset.id}
+                className={p.id === preset.id ? "on" : ""}
+                onClick={() => {
+                  setPresetId(p.id);
+                  setChoices({});
+                }}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+          <small className="hint">{preset.hint}</small>
+        </div>
+        <MemberPicker label="Chef" agents={agents} member={lead} onChange={choose("lead")} />
+        <MemberPicker label="Codeurs" agents={agents} member={coder} onChange={choose("coder")} />
         <MemberPicker
           label="Relecteur"
           agents={agents}
           member={reviewer}
-          onChange={(m) => setReviewer(m ?? null)}
+          onChange={choose("reviewer")}
           optional
         />
         <MemberPicker
           label="Testeur"
           agents={agents}
           member={tester}
-          onChange={(m) => setTester(m ?? null)}
+          onChange={choose("tester")}
+          optional
+        />
+        <MemberPicker
+          label="Fusionneur"
+          agents={agents}
+          member={merger}
+          onChange={choose("merger")}
           optional
         />
         <div className="team-row">

@@ -191,21 +191,21 @@ flowchart TB
 
 ### Structure du monorepo
 
-| Chemin                       | Rôle                                                                                                      |
-| ---------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `packages/protocol`          | Types partagés et schémas Zod (`ClientMessage`, `ServerMessage`, `Snapshot`, `Thread`, `Item`…).          |
-| `apps/server/src/bin.ts`     | Point d’entrée CLI, préparation du dossier de données privé, arrêt propre des agents.                     |
-| `apps/server/src/http.ts`    | Serveur HTTP (fichiers statiques, `/api/auth`), WebSocket `/ws`, décodage Zod et corrélation de requêtes. |
-| `apps/server/src/hub.ts`     | Orchestration des projets, fils, tours, verrous exclusifs, permissions, git, relais et agents en pause.   |
-| `apps/server/src/catalog.ts` | Catalogue des agents : vérifications, modèles et réglages connus, agents ajoutés, MCP, favoris.           |
-| `apps/server/src/team.ts`    | Équipes : plan du chef, codeurs sur leur branche, relecture et tests de chaque part, reprise en 3 essais. |
-| `apps/server/src/session.ts` | Client ACP unique (`initialize`, `authenticate`, `session/*`, `configOptions`, `modes`, `usage_update`).  |
-| `apps/server/src/agents.ts`  | Résolution des adaptateurs npm inclus et des CLI ACP natives sur le `PATH`.                               |
-| `apps/server/src/git.ts`     | Worktrees, revue de diff sur index jetable, checkpoints `refs/moonagentic/*`, commit, push et PR (`gh`).  |
-| `apps/server/src/history.ts` | Construction de l’historique récent transmis lors d’un changement d’agent ou d’une nouvelle session.      |
-| `apps/server/src/mcp.ts`     | Projection sans secret (`mcpInfo`) et conversion vers le format ACP (`acpMcpServers`).                    |
-| `apps/server/src/store.ts`   | Persistance SQLite (`node:sqlite`, mode WAL), requêtes préparées une fois, migrations versionnées.        |
-| `apps/web`                   | Interface React 19 / Vite (sidebar, composer, sélecteur, panneau de revue, dialogue MCP, jauge).          |
+| Chemin                       | Rôle                                                                                                            |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `packages/protocol`          | Types partagés et schémas Zod (`ClientMessage`, `ServerMessage`, `Snapshot`, `Thread`, `Item`…).                |
+| `apps/server/src/bin.ts`     | Point d’entrée CLI, préparation du dossier de données privé, arrêt propre des agents.                           |
+| `apps/server/src/http.ts`    | Serveur HTTP (fichiers statiques, `/api/auth`), WebSocket `/ws`, décodage Zod et corrélation de requêtes.       |
+| `apps/server/src/hub.ts`     | Orchestration des projets, fils, tours, verrous exclusifs, permissions, git, relais et agents en pause.         |
+| `apps/server/src/catalog.ts` | Catalogue des agents : vérifications, modèles et réglages connus, agents ajoutés, MCP, favoris.                 |
+| `apps/server/src/team.ts`    | Équipes : plan du chef, codeurs sur leur branche, relecture et tests, reprise en 3 essais, fusion des branches. |
+| `apps/server/src/session.ts` | Client ACP unique (`initialize`, `authenticate`, `session/*`, `configOptions`, `modes`, `usage_update`).        |
+| `apps/server/src/agents.ts`  | Résolution des adaptateurs npm inclus et des CLI ACP natives sur le `PATH`.                                     |
+| `apps/server/src/git.ts`     | Worktrees, revue de diff sur index jetable, checkpoints `refs/moonagentic/*`, commit, push et PR (`gh`).        |
+| `apps/server/src/history.ts` | Construction de l’historique récent transmis lors d’un changement d’agent ou d’une nouvelle session.            |
+| `apps/server/src/mcp.ts`     | Projection sans secret (`mcpInfo`) et conversion vers le format ACP (`acpMcpServers`).                          |
+| `apps/server/src/store.ts`   | Persistance SQLite (`node:sqlite`, mode WAL), requêtes préparées une fois, migrations versionnées.              |
+| `apps/web`                   | Interface React 19 / Vite (sidebar, composer, sélecteur, panneau de revue, dialogue MCP, jauge).                |
 
 ---
 
@@ -223,6 +223,7 @@ MoonAgentic est construit par jalons successifs :
 - [x] **Avant le jalon 7** : catalogue d’agents sorti de `hub.ts`, agent inactif mis en pause après 10 minutes (sa session reprend au message suivant), 8 agents lancés au plus, texte du flux écrit par lots, fermeture qui attend tout.
 - [x] **Jalon 7a — Équipe** : commande `/equipe`, un chef lit le projet et découpe la tâche, des codeurs font chaque part en même temps sur leur propre branche ; fils des codeurs rangés sous celui du chef, carte de l’équipe et arrêt d’urgence.
 - [x] **Jalon 7b — Relecture et tests** : un relecteur lit les changements de chaque part et un testeur lance les tests dans le dossier du codeur ; ce qu’ils trouvent repart au codeur trois fois au plus, puis le chef réécrit la consigne, puis la part attend l’utilisateur, qui peut la relancer.
+- [x] **Jalon 7c — Fusion et préréglages** : une fois chaque part terminée, leurs branches sont réunies sur un fil « Fusion » à relire et envoyer ; un fusionneur règle les conflits et vérifie l’ensemble, sinon l’utilisateur ; préréglages Équilibrée, Économique, Qualité max et « Neon relit et teste » ; fils de relecture et de tests rangés dans la carte de l’équipe ; frise d’équipe en direct, tirée du vrai déroulé de chaque part.
 - [ ] **Suite** : synchronisation/rebase des branches, et emballage en **application desktop Windows (Electron)** une fois le cœur stabilisé.
 
 ---

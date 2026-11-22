@@ -1,11 +1,15 @@
 import type { Team, TeamTask, Thread } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
-import { connection } from "../connection.ts";
+import { connection, newId } from "../connection.ts";
 
 /** Corrections a coder gets before the lead steps in, as the server counts them. */
 const MAX_TRIES = 3;
 
-const active = (team: Team) => team.phase === "planning" || team.phase === "coding";
+const active = (team: Team) =>
+  team.phase === "planning" || team.phase === "coding" || team.phase === "merging";
+/** Every piece done, to be merged onto one branch: more than one, as the server does. */
+const mergeable = (team: Team) =>
+  team.tasks.length > 1 && team.tasks.every((t) => t.status === "done");
 const plural = (n: number, one: string, many: string) => (n > 1 ? many : one);
 
 function headline(team: Team): string {
@@ -15,12 +19,22 @@ function headline(team: Team): string {
       return "Le chef lit le projet et prépare le plan…";
     case "coding":
       return `L'équipe travaille : ${done} sur ${team.tasks.length} ${plural(done, "terminée", "terminées")}.`;
+    case "merging":
+      return team.mergeStep === -1
+        ? "Le fusionneur vérifie que les sous-tâches marchent ensemble…"
+        : team.mergeStep !== undefined
+          ? "Le fusionneur règle un conflit…"
+          : "Fusion des sous-tâches sur une seule branche…";
     case "blocked": {
       const left = team.tasks.filter((t) => t.status === "blocked").length;
+      // Nothing blocked but the merge.
+      if (!left) return team.error ?? "La fusion t'attend.";
       return `${left} ${plural(left, "sous-tâche t'attend", "sous-tâches t'attendent")} : ${plural(left, "ouvre son fil, puis relance-la", "ouvre leurs fils, puis relance-les")}.`;
     }
     case "done":
-      return "Terminé : chaque sous-tâche est prête sur sa branche.";
+      return team.mergeThreadId
+        ? "Terminé : tout est réuni sur une branche, prête à relire et à envoyer."
+        : "Terminé : chaque sous-tâche est prête sur sa branche.";
     case "failed":
       return team.error ?? "L'équipe s'est arrêtée sur une erreur.";
     case "stopped":
@@ -53,7 +67,7 @@ function taskState(task: TeamTask, byId: (id: string | undefined) => Thread | un
     case "waiting":
       return "en attente d'un codeur";
     case "done":
-      return "terminée";
+      return task.merged ? "fusionnée" : "terminée";
     case "failed":
       return "échouée";
     case "stopped":
@@ -81,14 +95,24 @@ export function TeamCard({
     if (!isActive) setStopping(false);
   }, [isActive]);
   const byId = (id: string | undefined) => (id ? threads.find((t) => t.id === id) : undefined);
-  // A piece asked to start again waits for its new state rather than being asked twice.
+  // A piece asked to start again is not asked twice before the server answers.
   const [retrying, setRetrying] = useState<number[]>([]);
-  const states = team.tasks.map((t) => t.status).join();
-  useEffect(() => setRetrying([]), [states]);
+  const merge = byId(team.mergeThreadId);
+  const retryMerge = !isActive && team.phase !== "done" && mergeable(team);
+  // -1 stands for the merge. The button waits for the server's answer, not for a guess.
   const retry = (index: number) => {
-    if (connection.send({ type: "team.retry", threadId: thread.id, index })) {
-      setRetrying((r) => [...r, index]);
-    }
+    setRetrying((r) => [...r, index]);
+    connection
+      .request({
+        type: "team.retry",
+        requestId: newId(),
+        threadId: thread.id,
+        ...(index >= 0 ? { index } : {}),
+      })
+      .catch((error: unknown) =>
+        connection.notify(error instanceof Error ? error.message : String(error)),
+      )
+      .finally(() => setRetrying((r) => r.filter((i) => i !== index)));
   };
   return (
     <div className="card team-card" role="region" aria-label="Équipe">
@@ -149,6 +173,20 @@ export function TeamCard({
             );
           })}
         </ul>
+      )}
+      {(merge || retryMerge) && (
+        <div className="row">
+          {retryMerge && (
+            <button className="btn sm" disabled={retrying.includes(-1)} onClick={() => retry(-1)}>
+              Relancer la fusion
+            </button>
+          )}
+          {merge && (
+            <button className="btn sm" onClick={() => onOpenThread(merge.id)}>
+              Ouvrir la fusion
+            </button>
+          )}
+        </div>
       )}
       {isActive && (
         <div className="row">

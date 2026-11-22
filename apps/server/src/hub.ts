@@ -25,7 +25,11 @@ import type {
 import type { Agents } from "./agents.ts";
 import {
   branchExists,
+  commitAll,
+  containsBranch,
   dropRefs,
+  mergeBranch,
+  unfinishedMerge,
   ensureWorktree,
   forkPoint,
   removeWorktree,
@@ -180,6 +184,18 @@ export class Hub {
       send: (id, text) => this.send(id, text),
       cancel: (id) => this.cancel(id),
       setTeam: (id, team) => this.updateThread(id, { team }),
+      mergeInto: (intoId, fromId, title) => this.mergeInto(intoId, fromId, title),
+      contains: async (intoId, fromId) => {
+        const into = this.store.getThread(intoId)?.workspace;
+        const from = this.store.getThread(fromId)?.workspace;
+        if (!into?.base || !from || !existsSync(into.path)) return false;
+        return containsBranch(into.path, from.branch);
+      },
+      unfinishedMerge: async (id) => {
+        const workspace = this.store.getThread(id)?.workspace;
+        if (!workspace?.base || !existsSync(workspace.path)) return undefined;
+        return unfinishedMerge(workspace.path);
+      },
       changes: async (id) => {
         const workspace = this.store.getThread(id)?.workspace;
         if (!workspace?.base || !existsSync(workspace.path)) return { files: [] };
@@ -289,7 +305,8 @@ export class Hub {
         await this.teams.stop(message.threadId);
         return;
       case "team.retry":
-        this.teams.retry(message.threadId, message.index);
+        await this.teams.retry(message.threadId, message.index);
+        client.send({ type: "done", requestId: message.requestId });
         return;
       case "thread.setPinned":
         this.requireThread(message.threadId);
@@ -445,7 +462,8 @@ export class Hub {
     };
     this.store.addThread(thread);
     this.broadcast({ type: "thread", thread });
-    this.send(thread.id, input.text);
+    // A team's merge thread starts with no message: its branch is filled first.
+    if (input.text) this.send(thread.id, input.text);
     return thread.id;
   }
 
@@ -457,6 +475,7 @@ export class Hub {
     coder: { agentId: string; model?: string | undefined };
     reviewer?: { agentId: string; model?: string | undefined } | undefined;
     tester?: { agentId: string; model?: string | undefined } | undefined;
+    merger?: { agentId: string; model?: string | undefined } | undefined;
     coders: number;
     permissionMode: PermissionMode;
   }): string {
@@ -479,6 +498,7 @@ export class Hub {
       coder: member(input.coder),
       reviewer: input.reviewer && member(input.reviewer),
       tester: input.tester && member(input.tester),
+      merger: input.merger && member(input.merger),
     });
   }
 
@@ -1193,6 +1213,31 @@ export class Hub {
     } catch {
       // The turn goes on; this message just offers no way back.
     }
+  }
+
+  /**
+   * Commits what a team's piece left on its branch, then merges that branch onto the team's
+   * merge thread. Returns the files left in conflict.
+   */
+  private async mergeInto(intoId: string, fromId: string, title: string): Promise<string[]> {
+    const into = this.requireLiveThread(intoId);
+    const from = this.requireThread(fromId);
+    const project = this.store.getProject(into.projectId);
+    if (!project) throw new Error("Projet introuvable.");
+    const source = from.workspace;
+    if (!source?.base || !existsSync(source.path)) {
+      throw new Error(`La copie de travail de « ${from.title} » n'est plus là : ramène son fil.`);
+    }
+    // Neither thread takes a message, a step back, a push or an archive meanwhile.
+    const reason = "Attends la fin de la fusion de l'équipe.";
+    return this.exclusive(fromId, reason, () =>
+      this.exclusive(intoId, reason, async () => {
+        await commitAll(source.path, title);
+        await this.prepareWorkspace(intoId, project);
+        const target = this.store.getThread(intoId)!.workspace!;
+        return mergeBranch(target.path, source.branch, `Fusion : ${title}`);
+      }),
+    );
   }
 
   /** The folder of the thread a reviewer or a tester works in, while it is there. */

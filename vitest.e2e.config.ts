@@ -7,5 +7,7 @@ export default defineConfig({
     include: ["e2e/**/*.e2e.ts"],
     testTimeout: 60_000,
     hookTimeout: 60_000,
+    // A CI runner starts an agent more slowly than a laptop: a second is not always enough.
+    expect: { poll: { timeout: 10_000 } },
   },
 });

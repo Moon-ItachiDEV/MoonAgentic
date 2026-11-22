@@ -182,7 +182,19 @@ export type ThreadStatus = "idle" | "running" | "waiting" | "error";
 
 export type PermissionMode = "supervised" | "full";
 
-export type TeamRole = "lead" | "coder" | "reviewer" | "tester";
+export type TeamRole = "lead" | "coder" | "reviewer" | "tester" | "merger";
+
+/** What one lane of a team's timeline is doing: the lead's, a piece's, or the merge's. */
+export type TeamLanePhase =
+  TeamTask["status"] | "planning" | "idle" | "merging" | "solving" | "checking";
+
+/** A change in one lane of the team, when it happened: the timeline is drawn from them. */
+export interface TeamEvent {
+  at: number;
+  /** -1 for the lead, -2 for the merge, else the piece's index. */
+  lane: number;
+  phase: TeamLanePhase;
+}
 
 /** One agent and model of a team, by role. */
 export interface TeamMember {
@@ -190,8 +202,12 @@ export interface TeamMember {
   model?: string;
 }
 
-/** Where a team is; `blocked` once nothing runs and some piece waits on the user. */
-export type TeamPhase = "planning" | "coding" | "blocked" | "done" | "failed" | "stopped";
+/**
+ * Where a team is: `merging` while its pieces are merged onto one branch, `blocked` once
+ * nothing runs and a piece or the merge waits on the user.
+ */
+export type TeamPhase =
+  "planning" | "coding" | "merging" | "blocked" | "done" | "failed" | "stopped";
 
 /** A piece of the team's work, given by the lead to one coder. */
 export interface TeamTask {
@@ -224,6 +240,8 @@ export interface TeamTask {
   reasked?: boolean;
   /** The last remarks of the reviewer or the tester, or why the piece is blocked. */
   note?: string;
+  /** True once its branch is merged onto the team's. */
+  merged?: boolean;
 }
 
 /** What a team, run from its lead's thread, is doing. The server keeps it. */
@@ -236,6 +254,16 @@ export interface Team {
   reviewer?: TeamMember;
   /** Runs the tests, and writes the missing ones, on each piece's branch. */
   tester?: TeamMember;
+  /** Settles merge conflicts, then checks the pieces work together. */
+  merger?: TeamMember;
+  /** The thread whose branch gets every piece, once they are all done. */
+  mergeThreadId?: string;
+  /** What the merger is at: the piece whose conflicts it settles, or -1 for the last check. */
+  mergeStep?: number;
+  /** True once the merger was asked again for the verdict its last check left out. */
+  mergeReasked?: boolean;
+  /** Every change of each lane, oldest first, as it really happened. */
+  timeline?: TeamEvent[];
   /** Coders working at once. */
   coders: number;
   permissionMode: PermissionMode;
@@ -489,16 +517,21 @@ export const ClientMessage = z.discriminatedUnion("type", [
     coder: z.object({ agentId: id, model: id.optional() }),
     reviewer: z.object({ agentId: id, model: id.optional() }).optional(),
     tester: z.object({ agentId: id, model: id.optional() }).optional(),
+    merger: z.object({ agentId: id, model: id.optional() }).optional(),
     coders: z.number().int().min(1).max(4),
     permissionMode: z.enum(["supervised", "full"]),
   }),
   /** Stops the team, its lead and every coder at work. */
   z.object({ type: z.literal("team.stop"), threadId: id }),
-  /** Starts a piece that is blocked, failed or stopped again, its tries counted from zero. */
+  /**
+   * Starts a piece that is blocked, failed or stopped again, its tries counted from zero;
+   * without a piece, the merge that stopped.
+   */
   z.object({
     type: z.literal("team.retry"),
+    requestId: id,
     threadId: id,
-    index: z.number().int().min(0).max(63),
+    index: z.number().int().min(0).max(63).optional(),
   }),
   z.object({ type: z.literal("thread.setArchived"), threadId: id, archived: z.boolean() }),
   z.object({ type: z.literal("thread.delete"), requestId: id, threadId: id }),
