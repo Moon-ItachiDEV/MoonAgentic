@@ -52,7 +52,7 @@ export function repoFolderName(input: string): string {
   const last = input
     .trim()
     .replace(/[#?].*$/, "")
-    .replace(/\/(tree|blob|pulls?|issues|commits?)(\/.*)?$/, "")
+    .replace(/^(?:https?:\/\/)?(?:www\.)?github\.com\/([^/]+\/[^/]+).*$/i, "$1")
     .replace(/\/+$/, "")
     .replace(/\.git$/, "")
     .split(/[/:]/)

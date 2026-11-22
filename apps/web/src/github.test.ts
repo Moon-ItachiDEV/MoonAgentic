@@ -41,6 +41,8 @@ describe("repoFolderName", () => {
     expect(repoFolderName("https://github.com/moon/app.git")).toBe("app");
     expect(repoFolderName("https://github.com/moon/app/tree/main")).toBe("app");
     expect(repoFolderName("git@github.com:moon/app.git")).toBe("app");
+    expect(repoFolderName("https://github.com/moon/app/pull/28")).toBe("app");
+    expect(repoFolderName("github.com/moon/app.git/")).toBe("app");
     expect(repoFolderName("moon/..")).toBe("");
   });
 });

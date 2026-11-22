@@ -105,7 +105,7 @@ export async function ghCredentialArgs(): Promise<string[]> {
 export function parseGithubRepo(input: string): { owner: string; name: string } | undefined {
   const text = input.trim();
   const match =
-    /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?(?:[#?].*|\/(?:tree|blob|pulls?|issues|commits?)(?:\/.*)?)?$/i.exec(
+    /^(?:(?:https?:\/\/)?(?:www\.)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)?([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?(?:[#?].*|\/(?:tree|blob|pulls?|issues|commits?|compare|actions|releases|wiki|branches|tags|settings|security|discussions|projects|raw|blame)(?:[/?#].*)?)?$/i.exec(
       text,
     );
   if (!match) return undefined;
