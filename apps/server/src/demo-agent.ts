@@ -19,6 +19,26 @@ const used = new Map<string, number>();
 const mcpNames = new Map<string, string[]>();
 /** The folder each session works in. */
 const cwds = new Map<string, string>();
+
+/**
+ * Aborts the merge under way in `cwd`. MoonAgentic may be reading the folder at the same
+ * moment (a `git status` holds the index lock for a while on Windows), so it tries again
+ * a few times before it gives up, with git's own words.
+ */
+async function abortMerge(cwd: string) {
+  for (let tries = 1; ; tries++) {
+    try {
+      execFileSync("git", ["merge", "--abort"], { cwd, stdio: ["ignore", "ignore", "pipe"] });
+      return;
+    } catch (error) {
+      if (tries >= 10) {
+        const stderr = (error as { stderr?: Buffer }).stderr?.toString().trim();
+        throw new Error(`git merge --abort : ${stderr || String(error)}`);
+      }
+      await delay(200);
+    }
+  }
+}
 const CONTEXT_SIZE = 200_000;
 
 const modeChoices = [
@@ -256,7 +276,7 @@ const app = acp
     // It gives up on a conflict as an agent might: it aborts the merge.
     if (ask.startsWith("Tu fusionnes le travail d'une équipe")) {
       const cwd = cwds.get(sessionId);
-      if (cwd) execFileSync("git", ["merge", "--abort"], { cwd, stdio: "ignore" });
+      if (cwd) await abortMerge(cwd);
       return answer("Je ne sais pas régler ce conflit : j'ai annulé la fusion.");
     }
     if (ask.startsWith("Toutes les sous-tâches de l'équipe sont fusionnées")) {
