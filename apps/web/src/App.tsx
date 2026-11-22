@@ -5,7 +5,8 @@ import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Home } from "./components/Home.tsx";
 import {
-  IconBranch,
+  IconCode,
+  IconShield,
   IconMenu,
   IconCompose,
   IconFile,
@@ -15,7 +16,6 @@ import {
   IconInbox,
   IconPin,
   IconPlug,
-  IconSearch,
 } from "./components/icons.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
@@ -209,6 +209,10 @@ export function App() {
             askRemoveProject(id);
           }}
           onOpenSettings={() => go({ name: "settings", section: "general" })}
+          onOpenSearch={() => {
+            setDrawer(false);
+            setSearchOpen(true);
+          }}
         />
       )}
       <div className="side-scrim" onClick={() => setDrawer(false)} />
@@ -220,32 +224,38 @@ export function App() {
           <div className="ttl">
             {route.name === "settings" ? "Réglages" : (thread?.title ?? "")}
           </div>
-          <button
-            className="ib"
-            aria-label="Rechercher"
-            title="Rechercher (Ctrl K)"
-            onClick={() => setSearchOpen(true)}
-          >
-            <IconSearch />
-          </button>
+          {state.requests.length > 0 && (
+            <button
+              className="inbbtn"
+              aria-label={`${state.requests.length} ${
+                state.requests.length > 1 ? "demandes" : "demande"
+              } à traiter`}
+              title="À traiter"
+              onClick={() => setRequestsOpen(true)}
+            >
+              <IconShield size={14} />
+              <span>{state.requests.length}</span>
+            </button>
+          )}
           {thread?.workspace && !thread.archived && (
             <button
-              className={`review-btn${reviewing ? " on" : ""}`}
-              aria-label="À revoir"
+              className={`review-btn codebtn${reviewing ? " on" : ""}`}
+              aria-label={reviewCount ? `Code : ${reviewCount} à revoir` : "Code"}
               aria-pressed={reviewing}
-              title="À revoir"
+              title="Code et modifications"
               onClick={() => setReviewOpen(!reviewing)}
             >
-              <IconBranch />
-              <span className="lbl">À revoir</span>
+              <IconCode />
+              <span className="lbl">Code</span>
               {!!reviewCount && <span className="cnt">{reviewCount}</span>}
             </button>
           )}
           {thread && <ThreadMenu actions={threadActions} />}
           {route.name === "thread" ? (
             <button
-              className="ib mobile-only"
+              className="ib"
               aria-label="Nouvelle discussion"
+              title="Nouvelle discussion"
               onClick={() => go({ name: "home" })}
             >
               <IconCompose size={17} />
