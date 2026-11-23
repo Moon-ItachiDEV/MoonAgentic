@@ -8,6 +8,7 @@ import {
   claudeReading,
   parseClaudeUsage,
   parseCodexLimits,
+  probeClaude,
   type QuotaReader,
   Quotas,
   readClaudeQuota,
@@ -125,6 +126,35 @@ describe("Claude Code's quotas", () => {
       state: "unreadable",
       note: expect.stringMatching(/ne donne pas les limites/),
     });
+  });
+
+  it("keeps a subscription whose figures failed this time transient, with a backoff", async () => {
+    const failedThisTime = claudeReading(subscriber, {
+      subscription_type: "max",
+      rate_limits_available: true,
+      rate_limits: null,
+    });
+    expect(failedThisTime).toMatchObject({ state: "unreadable", transient: true });
+    expect(failedThisTime.retryAfterMs).toBeGreaterThan(0);
+    const limited = await readClaudeQuota(async () => {
+      throw new Error("API Error: 429 rate_limit_error");
+    });
+    expect(limited).toMatchObject({ transient: true, retryAfterMs: expect.any(Number) });
+    expect(
+      claudeReading(subscriber, {
+        rate_limits_available: true,
+        rate_limits: {
+          ...usage,
+          model_scoped: [{ display_name: "opus", utilization: 99, resets_at: null }],
+        },
+      }).windows.filter((w) => w.model?.toLowerCase() === "opus"),
+    ).toHaveLength(1);
+  });
+
+  it("starts no Claude Code when stopped while the SDK loads", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(probeClaude(controller.signal)).rejects.toThrow(/annulée/);
   });
 
   it("marks a slow or failing Claude Code transient, and stops it", async () => {

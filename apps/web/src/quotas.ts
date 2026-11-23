@@ -10,14 +10,25 @@ export function quotaLevel(usedPercent: number): QuotaLevel {
   return usedPercent >= 100 ? "full" : usedPercent >= WARN_PERCENT ? "warn" : "ok";
 }
 
+/** Lowercase words of a model's id or name: « claude-fable-5-2 » gives « claude fable 5 2 ». */
+const modelWords = (text: string) =>
+  text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
 /**
  * Whether a window limits the model in use. A window of one model (« Opus », « Fable 5.2 »)
- * counts only when the model's id or name holds that model's family name.
+ * counts only when the model's id or name holds all its words, in order: « Fable 5.2 » is not
+ * « Fable 5.3 », and a leading « Claude » names no model on its own.
  */
 export function limitsModel(window: QuotaWindow, model?: (string | undefined)[]): boolean {
   if (!window.model) return true;
-  const family = window.model.trim().split(/\s+/)[0]!.toLowerCase();
-  return !!family && !!model?.some((m) => m?.toLowerCase().includes(family));
+  const words = modelWords(window.model);
+  if (words[0] === "claude") words.shift();
+  if (!words.length) return false;
+  const wanted = ` ${words.join(" ")} `;
+  return !!model?.some((m) => !!m && ` ${modelWords(m).join(" ")} `.includes(wanted));
 }
 
 /**

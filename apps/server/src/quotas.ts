@@ -126,7 +126,7 @@ export function parseClaudeUsage(body: unknown, plan?: string): QuotaReading {
   if (Array.isArray(data.model_scoped)) {
     for (const entry of data.model_scoped as Record<string, unknown>[]) {
       const name = typeof entry?.display_name === "string" ? entry.display_name.trim() : "";
-      if (!name || windows.some((w) => w.model === name)) continue;
+      if (!name || windows.some((w) => w.model?.toLowerCase() === name.toLowerCase())) continue;
       add(entry, { label: `Semaine, ${name}`, short: `semaine ${name}`, model: name });
     }
   }
@@ -166,8 +166,14 @@ export function claudeReading(account: ClaudeAccount, usage: unknown): QuotaRead
       ? answer.subscription_type
       : (account.subscriptionType ?? "");
   const plan = CLAUDE_PLANS[type.toLowerCase()];
-  if (answer.rate_limits_available === true && answer.rate_limits)
-    return parseClaudeUsage(answer.rate_limits, plan);
+  if (answer.rate_limits_available === true) {
+    if (answer.rate_limits) return parseClaudeUsage(answer.rate_limits, plan);
+    // A subscription whose figures Claude Code could not fetch this time (429, network).
+    return unreadable("Claude Code n'a pas pu lire ses limites pour l'instant.", {
+      transient: true,
+      retryAfterMs: RATE_LIMIT_BASE_BACKOFF_MS,
+    });
+  }
   const none = (note: string): QuotaReading => ({ state: "none", windows: [], extras: [], note });
   if (account.apiProvider && account.apiProvider !== "firstParty") {
     const provider = CLAUDE_PROVIDERS[account.apiProvider] ?? account.apiProvider;
@@ -196,6 +202,8 @@ export type ClaudeProbe = (
  */
 export const probeClaude: ClaudeProbe = async (signal) => {
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  // Stopped while the SDK loaded: start nothing.
+  if (signal.aborted) throw new Error("Lecture annulée.");
   const controller = new AbortController();
   const stop = () => controller.abort();
   signal.addEventListener("abort", stop, { once: true });
@@ -249,8 +257,12 @@ export async function readClaudeQuota(
     return claudeReading(answer.account ?? {}, answer.usage);
   } catch (error) {
     if (signal?.aborted) return unreadable("Lecture annulée.", { transient: true });
-    const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
-    return unreadable(`Claude Code n'a pas donné ses limites : ${why}`, { transient: true });
+    const why = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
+    const limited = /\b429\b|rate.?limit/i.test(why);
+    return unreadable(`Claude Code n'a pas donné ses limites : ${why}`, {
+      transient: true,
+      ...(limited ? { retryAfterMs: RATE_LIMIT_BASE_BACKOFF_MS } : {}),
+    });
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", stop);
