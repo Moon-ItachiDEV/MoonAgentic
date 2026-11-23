@@ -74,6 +74,12 @@ async function callMoonAgentic(sessionId: string, name: string, args: unknown): 
 /** The folder each session works in. */
 const cwds = new Map<string, string>();
 
+/** A file of 1,200 lines: a result too large to travel with the timeline. */
+const BIG_FILE = Array.from(
+  { length: 1200 },
+  (_, n) => `export const ligne${n + 1} = ${n + 1};`,
+).join("\n");
+
 /** A long answer with all that Markdown costs to draw: titles, lists, a table, code. */
 const LONG_ANSWER = Array.from(
   { length: 12 },
@@ -498,7 +504,15 @@ const app = acp
       title: "Lire src/app.ts",
       kind: "read",
       status: "completed",
-      content: [{ type: "content", content: { type: "text", text: "export const answer = 41;" } }],
+      content: [
+        {
+          type: "content",
+          content: {
+            type: "text",
+            text: ask.includes("gros fichier") ? BIG_FILE : "export const answer = 41;",
+          },
+        },
+      ],
     });
     // The code is read: the plan moves on, as a real agent's todo list does.
     await update({

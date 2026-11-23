@@ -10,6 +10,7 @@ import { historyBefore } from "../src/history.ts";
 import { type Client, Hub } from "../src/hub.ts";
 import { LEGACY_MODE, modelOption } from "../src/session.ts";
 import { Store } from "../src/store.ts";
+import { TOOL_INLINE_CHARS } from "../src/timeline.ts";
 
 class TestClient implements Client {
   openThreadIds?: Set<string>;
@@ -1074,6 +1075,50 @@ describe("Composer: files, skills, commands, pins and search", () => {
       type: "searched",
       hits: [{ threadId: briefed, kind: "agent" }],
     });
+  });
+
+  it("keeps a tool's large result out of the timeline until it is asked for", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Lis le gros fichier",
+    });
+    await hub.handle(client, { type: "thread.open", threadId });
+    await hub.whenIdle(threadId);
+    const stored = store
+      .listItems(threadId)
+      .find((i) => i.kind === "tool" && i.title === "Lire src/app.ts");
+    if (stored?.kind !== "tool" || stored.content[0]?.type !== "text") throw new Error("no read");
+    const chars = stored.content[0].text.length;
+    expect(chars).toBeGreaterThan(TOOL_INLINE_CHARS);
+
+    // As it happens, and when the thread is opened: the line without its result, counted.
+    const light = { id: stored.id, kind: "tool", content: [], omitted: chars };
+    const live = client.messages.filter((m) => m.type === "item" && m.item.id === stored.id);
+    expect(live.at(-1)).toMatchObject({ item: light });
+    await hub.handle(client, { type: "thread.open", threadId });
+    const opened = client.messages.at(-1);
+    if (opened?.type !== "items") throw new Error("no timeline");
+    expect(opened.items.find((i) => i.id === stored.id)).toMatchObject(light);
+    // A small result travels with its line: the edit's two lines.
+    const edit = opened.items.find((i) => i.kind === "tool" && i.toolKind === "edit");
+    expect(edit).toMatchObject({ content: [{ type: "diff", path: "src/app.ts" }] });
+    expect(edit).not.toHaveProperty("omitted");
+    expect(JSON.stringify(opened).length).toBeLessThan(chars);
+
+    // Opened, the line asks for the whole of it.
+    await hub.handle(client, { type: "item.get", requestId: "g1", threadId, itemId: stored.id });
+    expect(client.messages.at(-1)).toEqual({
+      type: "fullItem",
+      requestId: "g1",
+      threadId,
+      item: stored,
+    });
+    await expect(
+      hub.handle(client, { type: "item.get", requestId: "g2", threadId, itemId: "inconnu" }),
+    ).rejects.toThrow("n'est plus dans le fil");
   });
 
   it("pins a thread for every device", async () => {

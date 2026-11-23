@@ -460,7 +460,7 @@ const FeedItem = memo(function FeedItem({
       if (item.questions) {
         return <QuestionCard item={item} threadId={thread.id} open={item.id === openQuestion} />;
       }
-      return <ToolRow item={item} live={live} />;
+      return <ToolRow item={item} live={live} threadId={thread.id} />;
     case "plan":
       return <AgentPlan entries={item.entries} live={live} ask={ask} threadId={thread.id} />;
     case "permission":
@@ -695,9 +695,49 @@ function QuestionCard({
   );
 }
 
-function ToolRow({ item, live }: { item: Extract<Item, { kind: "tool" }>; live: boolean }) {
+/** How much of a tool's result is drawn at first: the rest waits for « Afficher tout ». */
+const TOOL_SHOWN_LINES = 400;
+
+function ToolRow({
+  item,
+  live,
+  threadId,
+}: {
+  item: Extract<Item, { kind: "tool" }>;
+  live: boolean;
+  threadId: string;
+}) {
   const [open, setOpen] = useState(false);
-  const hasBody = item.content.length > 0;
+  const hasBody = item.content.length > 0 || !!item.omitted;
+  // A large result is not in the timeline: it is asked for when the line is opened, and
+  // again if the tool went on since.
+  const [whole, setWhole] = useState<{ of: string; content: ToolContent[] }>();
+  const [failed, setFailed] = useState<string>();
+  const [tries, setTries] = useState(0);
+  const version = `${item.status}/${item.omitted ?? 0}`;
+  const missing = open && !!item.omitted && whole?.of !== version;
+  useEffect(() => {
+    if (!missing) return;
+    let current = true;
+    setFailed(undefined);
+    connection
+      .ask({ type: "item.get", requestId: newId(), threadId, itemId: item.id })
+      .then((reply) => {
+        if (!current) return;
+        setWhole({
+          of: version,
+          content: reply.item.kind === "tool" ? reply.item.content : [],
+        });
+      })
+      .catch((error: unknown) => {
+        if (current) setFailed(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      current = false;
+    };
+  }, [missing, version, threadId, item.id, tries]);
+  // What was read stays on screen while a newer version is on its way.
+  const content = item.omitted ? whole?.content : item.content;
   return (
     <div className={`tool${open ? " open" : ""}`}>
       <button
@@ -715,13 +755,40 @@ function ToolRow({ item, live }: { item: Extract<Item, { kind: "tool" }>; live: 
       </button>
       {open && (
         <div className="tool-body">
-          {item.content.map((c, i) => (
+          {content?.map((c, i) => (
             <ToolBody key={i} content={c} />
           ))}
+          {!content &&
+            (failed ? (
+              <p className="tool-wait" role="alert">
+                {failed}{" "}
+                <button className="tool-more" onClick={() => setTries((n) => n + 1)}>
+                  Réessayer
+                </button>
+              </p>
+            ) : (
+              <p className="tool-wait" role="status">
+                Chargement du résultat…
+              </p>
+            ))}
         </div>
       )}
     </div>
   );
+}
+
+/** Lines beyond the first ones, behind a button: a file of thousands is not drawn at once. */
+function useShownLines<T>(lines: T[]): { shown: T[]; more: ReactNode } {
+  const [all, setAll] = useState(false);
+  const hidden = all ? 0 : Math.max(0, lines.length - TOOL_SHOWN_LINES);
+  return {
+    shown: hidden ? lines.slice(0, TOOL_SHOWN_LINES) : lines,
+    more: hidden > 0 && (
+      <button className="tool-more" onClick={() => setAll(true)}>
+        Afficher tout ({hidden} {hidden > 1 ? "lignes de plus" : "ligne de plus"})
+      </button>
+    ),
+  };
 }
 
 function ToolStatusIcon({ status, glyph }: { status: string; glyph: GlyphKind }) {
@@ -742,7 +809,24 @@ function ToolStatusIcon({ status, glyph }: { status: string; glyph: GlyphKind })
 }
 
 function ToolBody({ content }: { content: ToolContent }) {
-  if (content.type === "text") return <pre>{content.text}</pre>;
+  return content.type === "text" ? (
+    <ToolText text={content.text} />
+  ) : (
+    <ToolDiff content={content} />
+  );
+}
+
+function ToolText({ text }: { text: string }) {
+  const { shown, more } = useShownLines(text.split("\n"));
+  return (
+    <>
+      <pre>{shown.join("\n")}</pre>
+      {more}
+    </>
+  );
+}
+
+function ToolDiff({ content }: { content: Extract<ToolContent, { type: "diff" }> }) {
   const lines = [
     ...(content.oldText ?? "")
       .split("\n")
@@ -750,17 +834,19 @@ function ToolBody({ content }: { content: ToolContent }) {
       .map((l) => ({ t: "del", l })),
     ...content.newText.split("\n").map((l) => ({ t: "add", l })),
   ];
+  const { shown, more } = useShownLines(lines);
   return (
     <div className="diff">
       <div className="diff-h">{content.path}</div>
       <div className="diff-b">
-        {lines.map((line, i) => (
+        {shown.map((line, i) => (
           <div key={i} className={line.t}>
             {line.t === "add" ? "+ " : "- "}
             {line.l}
           </div>
         ))}
       </div>
+      {more}
     </div>
   );
 }

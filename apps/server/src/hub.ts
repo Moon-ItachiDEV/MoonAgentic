@@ -76,6 +76,7 @@ import { type QuotaReader, Quotas } from "./quotas.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
+import { light } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
 import type { Store } from "./store.ts";
 
@@ -518,7 +519,7 @@ export class Hub {
         const id = this.createThread(message);
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.items(id) });
+        client.send({ type: "items", threadId: id, items: this.timeline(id) });
         return;
       }
       case "thread.leave":
@@ -544,7 +545,7 @@ export class Hub {
         client.send({
           type: "items",
           threadId: message.threadId,
-          items: this.items(message.threadId),
+          items: this.timeline(message.threadId),
         });
         return;
       case "thread.send": {
@@ -564,12 +565,24 @@ export class Hub {
         const id = this.openCoordinator(message.projectId, message.agentId, message.model);
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.items(id) });
+        client.send({ type: "items", threadId: id, items: this.timeline(id) });
         return;
       }
       case "thread.cancel":
         await this.cancel(message.threadId);
         return;
+      case "item.get": {
+        this.requireThread(message.threadId);
+        const item = this.store.getItem(message.threadId, message.itemId);
+        if (!item) throw new Error("Cet élément n'est plus dans le fil.");
+        client.send({
+          type: "fullItem",
+          requestId: message.requestId,
+          threadId: message.threadId,
+          item,
+        });
+        return;
+      }
       case "thread.restore":
         await this.restore(message.threadId, message.itemId);
         client.send({ type: "done", requestId: message.requestId });
@@ -668,7 +681,7 @@ export class Hub {
         });
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.items(id) });
+        client.send({ type: "items", threadId: id, items: this.timeline(id) });
         return;
       }
       case "team.stop":
@@ -1475,7 +1488,7 @@ export class Hub {
     this.sendToViewers(threadId, {
       type: "items",
       threadId,
-      items: this.items(threadId),
+      items: this.timeline(threadId),
     });
     // A ref left behind only keeps an old tree alive, so failing here is harmless.
     await dropCheckpoints(
@@ -1656,7 +1669,7 @@ export class Hub {
         this.sendToViewers(threadId, {
           type: "items",
           threadId,
-          items: this.items(threadId),
+          items: this.timeline(threadId),
         });
       } else if (last?.kind === "handoff") {
         this.putItem(threadId, { ...last, to: agentId });
@@ -2231,6 +2244,11 @@ export class Hub {
     return this.store.listItems(threadId);
   }
 
+  /** The thread's items as a screen gets them: large tool results stay here until asked for. */
+  private timeline(threadId: string): Item[] {
+    return this.items(threadId).map(light);
+  }
+
   private upsertTool(threadId: string, update: acp.ToolCall | acp.ToolCallUpdate): void {
     // Agents may number their tool calls from scratch on every turn or session, so the turn
     // is part of the item's id: a later call never replaces an earlier turn's card.
@@ -2414,7 +2432,7 @@ export class Hub {
     // Another item ends the text being streamed, which keeps its place before it.
     if (this.drafts.get(threadId)?.item.id !== item.id) this.flushText(threadId);
     this.store.putItem(threadId, item);
-    this.sendToViewers(threadId, { type: "item", threadId, item });
+    this.sendToViewers(threadId, { type: "item", threadId, item: light(item) });
   }
 
   private updateThread(threadId: string, patch: Parameters<Store["updateThread"]>[1]): void {
