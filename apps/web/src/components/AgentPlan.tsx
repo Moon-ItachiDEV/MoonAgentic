@@ -48,9 +48,13 @@ export function AgentPlan({
     .find((l) => l.trim())
     ?.trim();
 
+  // An agent may clear its list with an empty plan: then there is nothing to show.
+  if (!total) return null;
+
   return (
     <div className={`card agent-plan${open ? " open" : ""}`}>
       <button
+        type="button"
         className="agent-plan-h"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
@@ -113,6 +117,7 @@ export function AgentPlan({
                   )}
                   {i === stopAt && (
                     <button
+                      type="button"
                       className="agent-plan-retry"
                       onClick={() =>
                         fillComposer(
