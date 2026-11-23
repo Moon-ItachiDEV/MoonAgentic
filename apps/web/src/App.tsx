@@ -4,6 +4,7 @@ import { Composer as PlainComposer, useNarrow } from "./components/Composer.tsx"
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
+import { Artifacts } from "./components/Artifacts.tsx";
 import { Home } from "./components/Home.tsx";
 import {
   IconBack,
@@ -187,6 +188,20 @@ export function App() {
     setReviewOpen(false);
     navigate(next);
   };
+  /** The phone's tabs, on the home page and on « Artefacts ». */
+  const tabBar = (current: "new" | "artifacts") => (
+    <TabBar
+      state={state}
+      current={current}
+      onNew={() => go({ name: "home" })}
+      onProjects={() => setDrawer(true)}
+      onCode={(id) => {
+        go({ name: "thread", threadId: id });
+        setReviewOpen(true);
+      }}
+      onArtifacts={() => go({ name: "artifacts" })}
+    />
+  );
   /** Opens the planner on its board or its timeline, the one last looked at on this device. */
   const openPlanner = () =>
     go(
@@ -439,6 +454,8 @@ export function App() {
           onSchedules={route.name === "planner" && route.view === "planifiees"}
           onProject={route.name === "project"}
           onOpenPlanner={openPlanner}
+          onArtifacts={route.name === "artifacts"}
+          onOpenArtifacts={() => go({ name: "artifacts" })}
           onOpenSchedules={() => go({ name: "planner", view: "planifiees" })}
           onNewThread={() => go({ name: "home" })}
           onNewProject={() => {
@@ -520,9 +537,11 @@ export function App() {
           <div className="ttl">
             {route.name === "settings"
               ? "Réglages"
-              : route.name === "project"
-                ? (routeProject?.name ?? "")
-                : (thread?.title ?? "")}
+              : route.name === "artifacts"
+                ? "Artefacts"
+                : route.name === "project"
+                  ? (routeProject?.name ?? "")
+                  : (thread?.title ?? "")}
           </div>
           {state.requests.length > 0 && (
             <button
@@ -792,6 +811,14 @@ export function App() {
               </div>
             </div>
           )
+        ) : route.name === "artifacts" ? (
+          <ErrorBoundary key="artifacts">
+            <Artifacts
+              threads={state.threads}
+              projects={state.projects}
+              onOpenThread={(id) => go({ name: "thread", threadId: id })}
+            />
+          </ErrorBoundary>
         ) : route.name === "planner" ? (
           <ErrorBoundary key={`planner:${project?.id ?? ""}`}>
             <Suspense fallback={<div className="view" />}>
@@ -835,8 +862,12 @@ export function App() {
             }}
           />
         )}
+        {route.name === "artifacts" && narrow && (
+          <div className="dock tab-dock">{tabBar("artifacts")}</div>
+        )}
         {route.name !== "settings" &&
           route.name !== "planner" &&
+          route.name !== "artifacts" &&
           // Under the « Fils » tab the coordinator's conversation is out of sight: so is its composer.
           // A thread shown alone on a narrow screen brings its own.
           // Beside its threads, the coordinator's is under its own conversation.
@@ -857,17 +888,7 @@ export function App() {
                 />
               )}
               {coordinator ? coordinatorDock : composerFor(spoken)}
-              {route.name === "home" && narrow && (
-                <TabBar
-                  state={state}
-                  onNew={() => go({ name: "home" })}
-                  onProjects={() => setDrawer(true)}
-                  onCode={(id) => {
-                    go({ name: "thread", threadId: id });
-                    setReviewOpen(true);
-                  }}
-                />
-              )}
+              {route.name === "home" && narrow && tabBar("new")}
             </div>
           )}
       </main>

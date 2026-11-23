@@ -150,6 +150,13 @@ export const IconBrackets = ({ size = 20 }: P) => (
     <path d="m5.5 4.5-3.5 3.5 3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />
   </svg>
 );
+/** Two sheets, one over the other, on the mockup's grid: the phone's « Artefacts » tab. */
+export const IconCopies = ({ size = 20 }: P) => (
+  <svg {...fine(size)}>
+    <rect x="5" y="5" width="8.5" height="8.5" rx="2" />
+    <path d="M10.5 3.2A1.7 1.7 0 0 0 9 2.5H4.2A1.7 1.7 0 0 0 2.5 4.2V9a1.7 1.7 0 0 0 .7 1.4" />
+  </svg>
+);
 /** An arrow to the left: back home, in a conversation on a phone. */
 export const IconArrowLeft = ({ size = 18 }: P) => (
   <svg {...base(size)}>

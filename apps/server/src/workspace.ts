@@ -117,6 +117,20 @@ function worktreeListing(dir: string, maxAge: number): Promise<string[]> {
   return files;
 }
 
+/**
+ * Where one file of the thread's folder really is, when its listing holds it and it stays
+ * inside the folder once symbolic links are followed; nothing otherwise, nor for a thread
+ * without a folder of its own.
+ */
+export async function listedWorktreeFile(
+  workspace: Workspace | undefined,
+  file: string,
+): Promise<string | undefined> {
+  if (!workspace?.base || !existsSync(workspace.path)) return undefined;
+  const files = await worktreeListing(workspace.path, LISTING_TTL_MS).catch((): string[] => []);
+  return files.includes(file) ? resolveInside(workspace.path, file) : undefined;
+}
+
 /** The files of the thread's folder, listed anew: what the agent just made is in it. */
 export async function worktreeFiles(
   workspace: Workspace | undefined,

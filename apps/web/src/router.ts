@@ -33,6 +33,8 @@ export type Route =
   /** A project's page, with one of its threads open beside its coordinator when given. */
   | { name: "project"; projectId: string; threadId?: string }
   | { name: "thread"; threadId: string }
+  /** The pages, images and PDFs the agents made in their threads' branches. */
+  | { name: "artifacts" }
   | { name: "settings"; section: SettingsSection };
 
 const parse = (pathname: string): Route => {
@@ -59,6 +61,7 @@ const parse = (pathname: string): Route => {
   } catch {
     // an address no project can have
   }
+  if (pathname === "/artefacts") return { name: "artifacts" };
   const planner = /^\/planner(?:\/([a-z]+))?$/.exec(pathname);
   if (planner) {
     const view = PLANNER_VIEWS.find((v) => v === planner[1]);
@@ -86,7 +89,9 @@ const pathOf = (route: Route): string =>
         ? `/planner${route.view ? `/${route.view}` : ""}`
         : route.name === "settings"
           ? `/reglages/${route.section}`
-          : "/";
+          : route.name === "artifacts"
+            ? "/artefacts"
+            : "/";
 
 export function navigate(route: Route, options: { replace?: boolean } = {}): void {
   const path = pathOf(route);

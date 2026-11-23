@@ -108,12 +108,13 @@
   display: none;
 }
 @media (max-width: 860px) {
-  .home-route .dock:has(.tabbar) {
+  .home-route .dock:has(.tabbar),
+  .tab-dock {
     padding-bottom: env(safe-area-inset-bottom);
   }
   .tabbar {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     width: 100%;
     padding: 0 8px;
     margin-top: 6px;

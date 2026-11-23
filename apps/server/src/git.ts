@@ -1012,3 +1012,15 @@ export function deleteBranch(dir: string, branch: string): Promise<void> {
     await git(dir, ["branch", "-D", "--", branch]);
   });
 }
+
+/**
+ * The files that changed in the folder since `base`, committed or not, new ones included and
+ * ignored ones left out; those deleted are not listed. Paths relative to the folder's root.
+ */
+export async function changedPaths(dir: string, base: string): Promise<string[]> {
+  const [changed, added] = await Promise.all([
+    git(dir, ["diff", "--name-only", "-z", "--no-renames", "--diff-filter=ACMRT", base]),
+    git(dir, ["ls-files", "-z", "--others", "--exclude-standard"]),
+  ]);
+  return [...new Set([...changed.split("\0"), ...added.split("\0")].filter(Boolean))];
+}

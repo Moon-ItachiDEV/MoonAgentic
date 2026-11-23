@@ -1,6 +1,6 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../state.ts";
-import { IconBrackets, IconBubble, IconStack } from "./icons.tsx";
+import { IconBrackets, IconBubble, IconCopies, IconStack } from "./icons.tsx";
 
 /**
  * The conversation whose changes the « Code » tab opens: the latest one with its own branch,
@@ -15,16 +15,21 @@ export function codeThread(state: Pick<State, "threads">): Thread | undefined {
 
 /** The phone's tabs on the home page, as in the mockup, with only what is real. */
 export function TabBar(props: {
-  state: State;
+  state: Pick<State, "threads" | "requests">;
+  /** The tab of the page shown: « Nouveau » on the home page. */
+  current: "new" | "artifacts";
   onNew: () => void;
   onProjects: () => void;
   onCode: (threadId: string) => void;
+  onArtifacts: () => void;
 }) {
   const code = codeThread(props.state);
   const waiting = props.state.requests.length > 0;
+  const on = (tab: typeof props.current) =>
+    props.current === tab ? { className: "on", "aria-current": "page" as const } : {};
   return (
     <nav className="tabbar" aria-label="Sections">
-      <button className="on" aria-current="page" onClick={props.onNew}>
+      <button {...on("new")} onClick={props.onNew}>
         <IconBubble />
         <span className="tl">Nouveau</span>
       </button>
@@ -40,6 +45,10 @@ export function TabBar(props: {
       >
         <IconBrackets />
         <span className="tl">Code</span>
+      </button>
+      <button {...on("artifacts")} onClick={props.onArtifacts}>
+        <IconCopies />
+        <span className="tl">Artefacts</span>
       </button>
     </nav>
   );

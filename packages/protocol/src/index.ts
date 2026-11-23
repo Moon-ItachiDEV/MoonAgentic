@@ -941,6 +941,25 @@ export interface MoonBranch {
   thread?: { id: string; title: string; archived?: boolean };
 }
 
+/** What an artifact is shown as: a page, an image, or a PDF document. */
+export type ArtifactKind = "html" | "image" | "pdf";
+
+/**
+ * A file an agent made or changed in its thread's own branch that can be looked at as it is:
+ * an HTML page, an image or a PDF. Found anew each time the list is asked for.
+ */
+export interface Artifact {
+  threadId: string;
+  threadTitle: string;
+  projectId: string;
+  /** Its path in the thread's folder, with `/` separators. */
+  path: string;
+  kind: ArtifactKind;
+  size: number;
+  /** When it was last written, in milliseconds. */
+  mtime: number;
+}
+
 export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "agents"; agents: AgentInfo[] }
@@ -1028,6 +1047,13 @@ export type ServerMessage =
       targets: string[];
       branches: MoonBranch[];
     }
+  /** The artifacts of the threads' own branches, the newest first; see `Artifact`. */
+  | { type: "artifacts"; requestId: string; artifacts: Artifact[]; capped: boolean }
+  /**
+   * Where one artifact can be shown for a while: an address on this server that works without
+   * the token, for the files of that thread's folder alone, and only for some minutes.
+   */
+  | { type: "artifactLink"; requestId: string; url: string; expiresAt: number }
   /** What deleting merged branches did: those deleted, and those kept with why. */
   | {
       type: "branchesDeleted";
@@ -1442,6 +1468,15 @@ export const ClientMessage = z.discriminatedUnion("type", [
     name: z.string().trim().min(1).max(120),
   }),
   z.object({ type: z.literal("project.setPinned"), projectId: id, pinned: z.boolean() }),
+  /** Lists the artifacts of the threads' own branches; see `artifacts`. */
+  z.object({ type: z.literal("artifacts.list"), requestId: id }),
+  /** Asks for an address to show one artifact; see `artifactLink`. */
+  z.object({
+    type: z.literal("artifacts.open"),
+    requestId: id,
+    threadId: id,
+    path: z.string().min(1).max(4096),
+  }),
   /** Lists the project repository's `moon/*` branches; see `projectBranches`. */
   z.object({ type: z.literal("project.branches"), requestId: id, projectId: id }),
   /**

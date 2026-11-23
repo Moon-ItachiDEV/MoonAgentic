@@ -10,6 +10,7 @@ import {
 } from "@moonagentic/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
 import { AttachmentRefused } from "./attachments.ts";
+import { ARTIFACTS_PATH } from "./artifacts.ts";
 import { COORDINATOR_PATH } from "./coordinator-tools.ts";
 import { Devices } from "./devices.ts";
 import { type Client, CoordinatorRefused, type Hub } from "./hub.ts";
@@ -300,6 +301,38 @@ export function securityHeaders(host: string | undefined): Record<string, string
     "x-frame-options": "DENY",
     "x-content-type-options": "nosniff",
     "referrer-policy": "no-referrer",
+  };
+}
+
+/**
+ * How an artifact is served: inside the app's own frame alone, as a sandbox with no script
+ * and nothing loaded from elsewhere, so a page an agent wrote can neither run code with the
+ * app's rights nor send anything out. A PDF is shown by the browser's own reader, which a
+ * sandbox would turn away: nothing in it runs with the app's rights either.
+ */
+export function artifactHeaders(type: string): Record<string, string> {
+  const pdf = type === "application/pdf";
+  return {
+    "content-security-policy": (pdf
+      ? ["default-src 'none'", "frame-ancestors 'self'"]
+      : [
+          "sandbox",
+          "default-src 'none'",
+          "img-src 'self' data: blob:",
+          "style-src 'self' 'unsafe-inline'",
+          "font-src 'self' data:",
+          "media-src 'self'",
+          "base-uri 'none'",
+          "form-action 'none'",
+          "frame-ancestors 'self'",
+        ]
+    ).join("; "),
+    "x-content-type-options": "nosniff",
+    "referrer-policy": "no-referrer",
+    "cache-control": "no-store",
+    // No resource policy: the page, sandboxed, has an origin of its own, and loads its images
+    // and styles from here. Only its address, secret and short-lived, lets them be read.
+    "content-disposition": "inline",
   };
 }
 
@@ -656,6 +689,42 @@ export function createHttpServer(options: {
       return;
     }
     const asked = parseUrl(req.url ?? "/")?.pathname ?? "";
+    if (asked.startsWith(`${ARTIFACTS_PATH}/`)) {
+      // An artifact shown in the app: its address is the permission, for some minutes.
+      const limit = apiLimiter.take(remoteIp);
+      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.writeHead(405).end();
+        return;
+      }
+      const notFound = () => void res.writeHead(404, { "cache-control": "no-store" }).end();
+      const [ticket, ...rest] = asked.slice(ARTIFACTS_PATH.length + 1).split("/");
+      let file: string;
+      try {
+        const parts = rest.map(decodeURIComponent);
+        // A part may not hide a separator of its own.
+        if (!ticket || !parts.length || parts.some((p) => !p || /[\\/]/.test(p))) return notFound();
+        file = parts.join("/");
+      } catch {
+        return notFound();
+      }
+      void hub.artifactLinks.resolve(ticket, file).then(
+        (found) => {
+          if (!found) return notFound();
+          for (const [name, value] of Object.entries(artifactHeaders(found.type)))
+            res.setHeader(name, value);
+          res.removeHeader("x-frame-options");
+          res.writeHead(200, { "content-type": found.type, "content-length": found.size });
+          if (req.method === "HEAD") return void res.end();
+          const stream = createReadStream(found.file);
+          stream.on("error", () => res.destroy());
+          res.on("close", () => stream.destroy());
+          stream.pipe(res);
+        },
+        () => (res.headersSent ? res.destroy() : notFound()),
+      );
+      return;
+    }
     if (asked === ATTACHMENTS_PATH || asked.startsWith(`${ATTACHMENTS_PATH}/`)) {
       // The images sent with messages: received before the message, read back by its thread.
       const limit = apiLimiter.take(remoteIp);
