@@ -134,3 +134,15 @@ describe("client state", () => {
     expect(reduce(state, { type: "files", requestId: "r", files: ["a"] })).toBe(state);
   });
 });
+
+describe("githubLogin", () => {
+  it("numbers each sign-in ending, and other replies leave it alone", () => {
+    let state = reduce(initialState, { type: "githubLogin", state: "done", login: "moon" });
+    expect(state.githubLogin).toEqual({ seq: 1, state: "done", login: "moon" });
+    state = reduce(state, { type: "done", requestId: "r" });
+    state = reduce(state, { type: "files", requestId: "r", files: [] });
+    expect(state.githubLogin?.seq).toBe(1);
+    state = reduce(state, { type: "githubLogin", state: "cancelled" });
+    expect(state.githubLogin).toEqual({ seq: 2, state: "cancelled" });
+  });
+});

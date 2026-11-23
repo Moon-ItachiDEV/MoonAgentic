@@ -6,6 +6,8 @@ import { serverArgs } from "./args.ts";
 import { dailyBackups } from "./backups.ts";
 import { preparePrivateDataDir } from "./data-dir.ts";
 import { createHttpServer, newToken } from "./http.ts";
+import { GithubAccount, setGithubAccount } from "./github-account.ts";
+import { systemVault } from "./github-vault.ts";
 import { Hub } from "./hub.ts";
 import { Store } from "./store.ts";
 
@@ -20,6 +22,18 @@ const token = readFileSync(tokenFile, "utf8").trim();
 
 const webDir = fileURLToPath(new URL("../../web/dist", import.meta.url));
 const store = new Store(path.join(dataDir, "state.sqlite"));
+// MoonAgentic's own GitHub sign-in, sealed by the system; read now so pushes find it at once.
+const github = new GithubAccount({
+  vault: systemVault(dataDir),
+  // Stand-ins for github.com, for the end-to-end tests only.
+  ...(process.env.MOONAGENTIC_GITHUB_URL ? { webUrl: process.env.MOONAGENTIC_GITHUB_URL } : {}),
+  ...(process.env.MOONAGENTIC_GITHUB_API_URL
+    ? { apiUrl: process.env.MOONAGENTIC_GITHUB_API_URL }
+    : {}),
+  onLogin: (result) => hub.githubLoginEnded(result),
+});
+setGithubAccount(github);
+void github.currentToken();
 const hub = new Hub(store, new Agents({ demo: values.dev || values.demo }), {
   worktreesDir: path.join(dataDir, "worktrees"),
 });

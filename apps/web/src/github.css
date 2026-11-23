@@ -103,3 +103,158 @@
   color: var(--muted);
   line-height: 1.45;
 }
+
+/* « Se connecter à GitHub »: the card, the code to type, and where the project will go. */
+.ag.gh svg {
+  display: block;
+}
+.gh-card {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 18px 16px 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg);
+  text-align: center;
+}
+.gh-card b {
+  font-size: 14.5px;
+}
+.dialog .gh-card p {
+  margin: 0;
+  max-width: 34ch;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.gh-logo {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--fg);
+  color: var(--bg);
+}
+.gh-signin {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  width: 100%;
+}
+.gh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  max-width: 100%;
+}
+.gh-code {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 4px;
+}
+.gh-step {
+  font-size: 12px;
+  color: var(--muted);
+}
+.gh-user-code {
+  font: 600 26px var(--mono);
+  letter-spacing: 0.12em;
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px dashed var(--line2);
+  background: var(--surface);
+  user-select: all;
+}
+.dialog p.gh-wait,
+.gh-wait {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  max-width: 38ch;
+}
+.gh-wait a {
+  color: var(--accent);
+}
+/* Real waiting: the server is asking GitHub every few seconds. */
+.gh-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: 1px;
+  animation: gh-pulse 1.4s ease-in-out infinite;
+}
+@keyframes gh-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gh-dot {
+    animation: none;
+  }
+}
+.cx-tx .gh-signin,
+.cx-tx .gh-code {
+  justify-items: start;
+  text-align: left;
+}
+.np-tags {
+  display: inline-flex;
+  gap: 4px;
+}
+.np-tag.here {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+}
+.np-picked {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  min-width: 0;
+}
+.np-picked .np-name {
+  flex: 1;
+  min-width: 0;
+}
+.dialog p.np-where {
+  margin: -2px 0 0;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.dialog p.np-where.ok {
+  color: var(--fg);
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+}
+.np-where .mono {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg);
+}
+.np-link {
+  color: var(--accent);
+  font-size: 12.5px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.np-repos small.mono {
+  font-family: var(--mono);
+  font-size: 11.5px;
+}
