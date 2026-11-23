@@ -76,17 +76,21 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
       ? Extract<ServerMessage, { type: "searched" }>
       : T extends "item.get"
         ? Extract<ServerMessage, { type: "fullItem" }>
-        : T extends "github.status"
-          ? Extract<ServerMessage, { type: "github" }>
-          : T extends "github.repos"
-            ? Extract<ServerMessage, { type: "githubRepos" }>
-            : T extends "github.login"
-              ? Extract<ServerMessage, { type: "githubDevice" }>
-              : T extends "local.clones"
-                ? Extract<ServerMessage, { type: "localClones" }>
-                : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
-                  ? Extract<ServerMessage, { type: "pullRequest" }>
-                  : ServerMessage;
+        : T extends "thread.page"
+          ? Extract<ServerMessage, { type: "page" }>
+          : T extends "thread.read"
+            ? Extract<ServerMessage, { type: "timeline" }>
+            : T extends "github.status"
+              ? Extract<ServerMessage, { type: "github" }>
+              : T extends "github.repos"
+                ? Extract<ServerMessage, { type: "githubRepos" }>
+                : T extends "github.login"
+                  ? Extract<ServerMessage, { type: "githubDevice" }>
+                  : T extends "local.clones"
+                    ? Extract<ServerMessage, { type: "localClones" }>
+                    : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
+                      ? Extract<ServerMessage, { type: "pullRequest" }>
+                      : ServerMessage;
 
 export class Connection {
   private state: State = initialState;
@@ -268,8 +272,22 @@ export class Connection {
     }
   }
 
+  /**
+   * The message that shows a thread. A timeline this screen already holds comes with its
+   * mark, so the server sends what changed since rather than all of it again.
+   */
+  private opening(threadId: string): ClientMessage {
+    const held = this.state.items[threadId] && this.state.held[threadId];
+    if (!held) return { type: "thread.open", threadId };
+    const { epoch, rev, first } = held;
+    return { type: "thread.open", threadId, since: { epoch, rev, first } };
+  }
+
   send(message: ClientMessage): boolean {
-    if (message.type === "thread.open") this.openThreadIds.add(message.threadId);
+    if (message.type === "thread.open") {
+      this.openThreadIds.add(message.threadId);
+      message = this.opening(message.threadId);
+    }
     if (message.type === "thread.leave") this.openThreadIds.delete(message.threadId);
     if (this.socket?.readyState !== WebSocket.OPEN) {
       // Which threads are shown is told again once connected; anything else is an action
@@ -332,7 +350,7 @@ export class Connection {
       this.stopHeartbeat();
       if (this.pingMs > 0) this.pingTimer = setInterval(() => this.ping(), this.pingMs);
       for (const threadId of this.openThreadIds)
-        socket.send(JSON.stringify({ type: "thread.open", threadId }));
+        socket.send(JSON.stringify(this.opening(threadId)));
     };
     socket.onmessage = (event) => {
       // A connection already given up on has nothing more to say.

@@ -792,6 +792,17 @@ export interface Snapshot {
   quotas: AgentQuota[];
 }
 
+/**
+ * Where a screen is in a thread's timeline: the number of the first item it holds, and the
+ * count of changes it has seen (`rev`) since the server started (`epoch`). Given back when
+ * the thread is opened again, it lets the server send only what changed since.
+ */
+export interface TimelineMark {
+  first: number;
+  epoch: string;
+  rev: number;
+}
+
 export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "agents"; agents: AgentInfo[] }
@@ -811,10 +822,29 @@ export type ServerMessage =
   | { type: "scheduleRemoved"; id: string }
   /** The project was removed from MoonAgentic, with its threads; its folder stays. */
   | { type: "projectRemoved"; projectId: string }
-  | { type: "items"; threadId: string; items: Item[] }
-  | { type: "item"; threadId: string; item: Item }
+  /**
+   * The end of a thread's timeline, from its item numbered `first`: the `earlier` ones
+   * before it stay on the server until asked for with `thread.page`.
+   */
+  | ({ type: "items"; threadId: string; items: Item[]; earlier: number } & TimelineMark)
+  /** An item, new or changed, with its number in the timeline. */
+  | { type: "item"; threadId: string; item: Item; seq: number; rev: number }
   /** Streaming text appended to an existing agent or thought item. */
-  | { type: "append"; threadId: string; itemId: string; text: string }
+  | { type: "append"; threadId: string; itemId: string; text: string; rev: number }
+  /** What changed in a timeline since the screen's mark: the answer to `thread.open` with `since`. */
+  | { type: "changes"; threadId: string; items: { item: Item; seq: number }[]; rev: number }
+  /** The stretch of a timeline that ends just before the item numbered `before`. */
+  | {
+      type: "page";
+      requestId: string;
+      threadId: string;
+      items: Item[];
+      before: number;
+      first: number;
+      earlier: number;
+    }
+  /** A whole timeline, for a use that needs all of it at once, such as an export. */
+  | { type: "timeline"; requestId: string; threadId: string; items: Item[] }
   | {
       type: "review";
       threadId: string;
@@ -867,6 +897,8 @@ export type ServerMessage =
   | { type: "error"; requestId?: string; message: string };
 
 const id = z.string().min(1).max(200);
+/** An item's number in its timeline, or a count of changes. */
+const seq = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const text = z.string().min(1).max(200_000);
 /** A message's text, which may be empty when images say it all. */
 const messageText = z.string().max(200_000);
@@ -969,7 +1001,25 @@ export const ClientMessage = z.discriminatedUnion("type", [
     /** The files to commit, as the review lists them; every change when left out. */
     files: z.array(z.string().min(1).max(4096)).min(1).max(5000).optional(),
   }),
-  z.object({ type: z.literal("thread.open"), threadId: id }),
+  /**
+   * Shows the thread. With `since`, the mark of what the screen already holds, the server
+   * answers with what changed only, when it still knows.
+   */
+  z.object({
+    type: z.literal("thread.open"),
+    threadId: id,
+    since: z.object({ epoch: id, rev: seq, first: seq }).optional(),
+  }),
+  /** Asks for the items just before the one numbered `before`, back to `reach` if given. */
+  z.object({
+    type: z.literal("thread.page"),
+    requestId: id,
+    threadId: id,
+    before: seq,
+    reach: id.optional(),
+  }),
+  /** Asks for the whole timeline at once. */
+  z.object({ type: z.literal("thread.read"), requestId: id, threadId: id }),
   /** The window no longer shows the thread: what its agent says next is unread. */
   z.object({ type: z.literal("thread.leave"), threadId: id }),
   z.object({ type: z.literal("thread.setUnread"), threadId: id, unread: z.boolean() }),
