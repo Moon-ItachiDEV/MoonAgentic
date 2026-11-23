@@ -1,15 +1,21 @@
 import type { ReviewFile, Thread } from "@moonagentic/protocol";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
-import { baseName, changesUnder, type FileDir, fileTree, filterFiles } from "../file-tree.ts";
+import {
+  baseName,
+  changesUnder,
+  type FileDir,
+  fileLines,
+  fileSize,
+  fileTree,
+  filterFiles,
+} from "../file-tree.ts";
 import { IconArrowLeft, IconChevron, IconFile, IconFolder } from "./icons.tsx";
 
 /** Past this many lines, the rest of a file is only counted. */
 const SHOWN_LINES = 5000;
 
 type Read = { path: string; text?: string; binary?: boolean; size?: number; error?: string };
-
-const kb = (bytes: number) => `${Math.round(bytes / 1024).toLocaleString("fr-FR")} Ko`;
 
 function FileView({
   read,
@@ -22,8 +28,7 @@ function FileView({
   onBack: () => void;
   onShowChange: () => void;
 }) {
-  const lines = useMemo(() => read?.text?.split("\n") ?? [], [read?.text]);
-  if (read?.text !== undefined && lines.at(-1) === "") lines.pop();
+  const lines = useMemo(() => (read?.text === undefined ? [] : fileLines(read.text)), [read?.text]);
   return (
     <div className="wf-view">
       <div className="wf-vh">
@@ -45,10 +50,12 @@ function FileView({
         <p className="rv-msg error">Impossible de lire ce fichier : {read.error}</p>
       ) : read.binary ? (
         <p className="rv-msg">
-          Fichier binaire{read.size ? ` (${kb(read.size)})` : ""}, pas affiché.
+          Fichier binaire{read.size ? ` (${fileSize(read.size)})` : ""}, pas affiché.
         </p>
       ) : read.text === undefined ? (
-        <p className="rv-msg">Fichier trop gros pour l'afficher ici ({kb(read.size ?? 0)}).</p>
+        <p className="rv-msg">
+          Fichier trop gros pour l'afficher ici ({fileSize(read.size ?? 0)}).
+        </p>
       ) : (
         <div className="wf-code" role="table" aria-label={`Contenu de ${read.path}`}>
           {lines.slice(0, SHOWN_LINES).map((line, i) => (
@@ -86,6 +93,8 @@ function FileRow({
       title={file}
       onClick={() => onOpen(file)}
     >
+      {/* Where a folder has its chevron, so names line up. */}
+      <span className="wf-chev" />
       <IconFile size={13} />
       <span className="wf-name">{label}</span>
       {change && (
@@ -182,8 +191,12 @@ export function WorktreeFiles({
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [reading, setReading] = useState<Read | null>(null);
+  // Only files still on disk are listed: a removed one has its place in « Modifications ».
   const changes = useMemo(
-    () => new Map((changedFiles ?? []).map((f) => [f.path, f] as const)),
+    () =>
+      new Map(
+        (changedFiles ?? []).filter((f) => f.status !== "deleted").map((f) => [f.path, f] as const),
+      ),
     [changedFiles],
   );
   const tree = useMemo(() => (list ? fileTree(list.files) : null), [list]);
@@ -205,8 +218,9 @@ export function WorktreeFiles({
     };
   }, [thread.id, running, thread.workspace?.base]);
 
-  const openFile = (path: string) => {
-    setReading({ path });
+  /** Reads a file; `again` keeps what is shown until the new text comes. */
+  const load = (path: string, again = false) => {
+    if (!again) setReading({ path });
     connection
       .ask({ type: "workspace.readFile", requestId: newId(), threadId: thread.id, path })
       .then(
@@ -227,6 +241,16 @@ export function WorktreeFiles({
           ),
       );
   };
+  const openFile = (path: string) => load(path);
+
+  // The file open when a turn ends is read again: the agent may have changed it.
+  const shownPath = useRef<string | undefined>(undefined);
+  shownPath.current = reading?.path;
+  useEffect(() => {
+    if (shownPath.current && !running) load(shownPath.current, true);
+    // Only a turn's end or a new start of the branch asks again; `load` is the same each time.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [running, thread.workspace?.base]);
 
   if (reading) {
     return (
@@ -251,7 +275,9 @@ export function WorktreeFiles({
         onChange={(e) => setQuery(e.target.value)}
       />
       {list.capped && (
-        <p className="rv-msg">Seuls les {list.files.length} premiers fichiers sont listés.</p>
+        <p className="rv-msg">
+          Seuls les {list.files.length.toLocaleString("fr-FR")} premiers fichiers sont listés.
+        </p>
       )}
       <div className="wf-list">
         {query.trim() ? (

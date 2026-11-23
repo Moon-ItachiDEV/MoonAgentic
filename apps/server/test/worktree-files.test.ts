@@ -64,6 +64,22 @@ describe("the files of a thread's folder", { timeout: 40_000 }, () => {
     });
   });
 
+  it("leaves out a file removed from the folder, not committed yet", async () => {
+    const { workspace, dir } = await threadFolder();
+    rmSync(path.join(dir, "src/app.ts"));
+    expect((await worktreeFiles(workspace)).files).not.toContain("src/app.ts");
+    await expect(readWorktreeFile(workspace, "src/app.ts")).rejects.toThrow(/pas dans la copie/);
+  });
+
+  it("says so when git cannot list the folder, rather than list ignored files", async () => {
+    const { workspace, dir } = await threadFolder();
+    writeFileSync(path.join(dir, "secret.txt"), "chut\n");
+    // The folder's link to its repository broken: git no longer knows it.
+    writeFileSync(path.join(dir, ".git"), "gitdir: /nulle/part\n");
+    await expect(worktreeFiles(workspace)).rejects.toThrow();
+    await expect(readWorktreeFile(workspace, "secret.txt")).rejects.toThrow();
+  });
+
   it("gives only the size of a binary or very large file", async () => {
     const { workspace, dir } = await threadFolder();
     writeFileSync(path.join(dir, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2]));

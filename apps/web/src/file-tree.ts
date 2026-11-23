@@ -58,3 +58,14 @@ export function changesUnder(dir: string, changed: Iterable<string>): number {
   for (const file of changed) if (!dir || file.startsWith(`${dir}/`)) n++;
   return n;
 }
+
+/** A size as people read it: bytes under 1 Ko, then whole Ko. */
+export const fileSize = (bytes: number) =>
+  bytes < 1024 ? `${bytes} o` : `${Math.round(bytes / 1024).toLocaleString("fr-FR")} Ko`;
+
+/** The lines of a file, whatever its line endings; the newline that ends it starts none. */
+export function fileLines(text: string): string[] {
+  const lines = text.split(/\r?\n/);
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
