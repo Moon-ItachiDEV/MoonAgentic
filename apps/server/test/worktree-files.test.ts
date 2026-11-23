@@ -74,7 +74,9 @@ describe("the files of a thread's folder", { timeout: 40_000 }, () => {
   it("says so when git cannot list the folder, rather than list ignored files", async () => {
     const { workspace, dir } = await threadFolder();
     writeFileSync(path.join(dir, "secret.txt"), "chut\n");
-    // The folder's link to its repository broken: git no longer knows it.
+    // The folder's link to its repository broken: git no longer knows it. Removed first:
+    // Windows will not write over the hidden file git made.
+    rmSync(path.join(dir, ".git"), { force: true });
     writeFileSync(path.join(dir, ".git"), "gitdir: /nulle/part\n");
     await expect(worktreeFiles(workspace)).rejects.toThrow();
     await expect(readWorktreeFile(workspace, "secret.txt")).rejects.toThrow();
