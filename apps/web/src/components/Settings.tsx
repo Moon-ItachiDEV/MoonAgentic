@@ -48,6 +48,7 @@ import {
   IconWifi,
   IconX,
 } from "./icons.tsx";
+import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { MascotSettings } from "./MascotSettings.tsx";
 import { RemoteAccess } from "./RemoteAccess.tsx";
 import { Subscriptions } from "./Subscriptions.tsx";
@@ -337,6 +338,7 @@ function NotificationsRow() {
  */
 function LockCard(props: { projects: Project[]; lockPin: boolean }) {
   const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  const [confirmReset, setConfirmReset] = useState(false);
   return (
     <>
       <h3 className="lk-h">Verrouillage des projets</h3>
@@ -345,8 +347,8 @@ function LockCard(props: { projects: Project[]; lockPin: boolean }) {
           title="Code de verrouillage"
           text={
             props.lockPin
-              ? "Un code à 6 chiffres est défini. Il est demandé pour rouvrir un projet verrouillé."
-              : "Aucun code pour l'instant. Il te sera demandé au premier verrouillage."
+              ? "Un code à 6 chiffres est défini. Il est demandé pour rouvrir un projet verrouillé. Réservé à cet ordinateur."
+              : "Aucun code pour l'instant. Il te sera demandé au premier verrouillage (sur cet ordinateur)."
           }
         >
           <button
@@ -356,6 +358,16 @@ function LockCard(props: { projects: Project[]; lockPin: boolean }) {
             {props.lockPin ? "Changer le code" : "Définir le code"}
           </button>
         </Row>
+        {props.lockPin && (
+          <Row
+            title="Code oublié"
+            text="Efface le code et rouvre tous les projets verrouillés. Réservé à cet ordinateur."
+          >
+            <button className="btn sm" onClick={() => setConfirmReset(true)}>
+              Réinitialiser le code
+            </button>
+          </Row>
+        )}
         {props.projects.length > 0 && (
           <Row
             title="Projets verrouillés"
@@ -384,6 +396,19 @@ function LockCard(props: { projects: Project[]; lockPin: boolean }) {
           <kbd>{mac ? "⌘ ⇧ L" : "Ctrl Maj L"}</kbd>
         </Row>
       </div>
+      {confirmReset && (
+        <ConfirmDialog
+          confirm={{
+            title: "Réinitialiser le code de verrouillage ?",
+            text: "Le code sera effacé et tous les projets verrouillés redeviendront visibles sur tes appareils.",
+            action: "Réinitialiser",
+            run: async () => {
+              await connection.request({ type: "lock.reset", requestId: newId() });
+            },
+          }}
+          onClose={() => setConfirmReset(false)}
+        />
+      )}
     </>
   );
 }

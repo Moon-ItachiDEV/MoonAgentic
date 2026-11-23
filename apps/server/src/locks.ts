@@ -22,18 +22,36 @@ export const validPin = (pin: string) => /^\d{6}$/.test(pin);
 
 const hashPin = (pin: string, salt: Buffer) => scryptSync(pin, salt, 32);
 
+/** Actor key for the computer itself (as opposed to paired devices). */
+export const COMPUTER_ACTOR = "computer";
+
+function loadFailures(raw: unknown): Record<string, number[]> {
+  if (Array.isArray(raw)) {
+    const list = raw.filter((n): n is number => typeof n === "number" && Number.isFinite(n));
+    return list.length ? { [COMPUTER_ACTOR]: list } : {};
+  }
+  if (!raw || typeof raw !== "object") return {};
+  const map: Record<string, number[]> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!Array.isArray(value)) continue;
+    const list = value.filter((n): n is number => typeof n === "number" && Number.isFinite(n));
+    if (list.length) map[key] = list;
+  }
+  return map;
+}
+
 export class ProjectLocks {
   private readonly storage: LockStorage;
   private readonly now: () => number;
   private locked: Set<string>;
-  /** When each recent wrong code was given. */
-  private failures: number[] = [];
+  /** When each recent wrong code was given, per device (`computer` or paired device id). */
+  private failures: Record<string, number[]> = {};
 
   constructor(storage: LockStorage, now: () => number = Date.now) {
     this.storage = storage;
     this.now = now;
     this.locked = new Set(storage.getSetting<string[]>(LOCKED_SETTING, []));
-    this.failures = storage.getSetting<number[]>(FAILURES_SETTING, []);
+    this.failures = loadFailures(storage.getSetting<unknown>(FAILURES_SETTING, {}));
   }
 
   /** True when some project is locked: everything sent is then looked at. */
@@ -54,14 +72,25 @@ export class ProjectLocks {
   }
 
   /** Sets the code, or changes it with the current one. */
-  setPin(pin: string, current?: string): void {
+  setPin(pin: string, current?: string, actor = COMPUTER_ACTOR): void {
     if (!validPin(pin)) throw new Error("Le code doit faire 6 chiffres.");
-    if (this.hasPin() && !this.check(current ?? "")) throw new Error("Code actuel incorrect.");
+    if (this.hasPin() && !this.check(current ?? "", actor)) {
+      throw new Error("Code actuel incorrect.");
+    }
     const salt = randomBytes(16);
     this.storage.setSetting(PIN_SETTING, {
       salt: salt.toString("base64"),
       hash: hashPin(pin, salt).toString("base64"),
     });
+  }
+
+  /** Clears the code, unlocks every project, and resets failed attempt counters. */
+  reset(): void {
+    this.storage.setSetting(PIN_SETTING, null);
+    this.locked.clear();
+    this.save();
+    this.failures = {};
+    this.storage.setSetting(FAILURES_SETTING, {});
   }
 
   /** Locks a project; a code must be set first, to open it again. */
@@ -72,8 +101,8 @@ export class ProjectLocks {
   }
 
   /** Opens a project again, for every device, with the code. */
-  unlock(projectId: string, pin: string): void {
-    if (!this.check(pin)) throw new Error("Code incorrect.");
+  unlock(projectId: string, pin: string, actor = COMPUTER_ACTOR): void {
+    if (!this.check(pin, actor)) throw new Error("Code incorrect.");
     this.locked.delete(projectId);
     this.save();
   }
@@ -84,14 +113,17 @@ export class ProjectLocks {
   }
 
   /**
-   * Whether the code is right. After too many wrong ones in a short while, every code is
-   * refused for a time, the right one too: guessing a million codes takes years then.
+   * Whether the code is right. After too many wrong ones in a short while from the same
+   * device, every code from that device is refused for a time without blocking other devices
+   * or the computer itself.
    */
-  private check(pin: string): boolean {
+  private check(pin: string, actor: string): boolean {
     const now = this.now();
-    this.failures = this.failures.filter((at) => now - at < TRIES_WINDOW_MS);
-    if (this.failures.length >= MAX_TRIES) {
-      const wait = Math.ceil((this.failures[0]! + TRIES_WINDOW_MS - now) / 60_000);
+    const list = (this.failures[actor] ?? []).filter((at) => now - at < TRIES_WINDOW_MS);
+    if (list.length) this.failures[actor] = list;
+    else delete this.failures[actor];
+    if (list.length >= MAX_TRIES) {
+      const wait = Math.ceil((list[0]! + TRIES_WINDOW_MS - now) / 60_000);
       throw new Error(`Trop de codes faux. Réessaie dans ${wait} min.`);
     }
     const kept = this.storage.getSetting<{ salt: string; hash: string } | null>(PIN_SETTING, null);
@@ -102,10 +134,21 @@ export class ProjectLocks {
         hashPin(pin, Buffer.from(kept.salt, "base64")),
         Buffer.from(kept.hash, "base64"),
       );
-    const before = this.failures.length;
-    if (right) this.failures = [];
-    else this.failures.push(now);
-    if (before || this.failures.length) this.storage.setSetting(FAILURES_SETTING, this.failures);
+    const before = list.length;
+    if (right) {
+      delete this.failures[actor];
+    } else {
+      this.failures[actor] = [...list, now];
+    }
+    if (before || this.failures[actor]?.length) {
+      // Prune expired buckets from other actors while persisting.
+      for (const [key, times] of Object.entries(this.failures)) {
+        const active = times.filter((at) => now - at < TRIES_WINDOW_MS);
+        if (active.length) this.failures[key] = active;
+        else delete this.failures[key];
+      }
+      this.storage.setSetting(FAILURES_SETTING, this.failures);
+    }
     return right;
   }
 
