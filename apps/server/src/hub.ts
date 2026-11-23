@@ -1330,20 +1330,16 @@ export class Hub {
           "Ce dossier chevauche un projet verrouillé : saisis le code pour l'ouvrir.",
         );
       }
-      if (existsSync(p.path)) {
-        // Only compare git repositories when the locked project is the root of its own repo,
-        // not when it merely sits inside a git-tracked parent (such as a versioned home folder).
-        const lockedCommonDir = gitRootCommonDir(p.path);
-        if (lockedCommonDir) {
-          if (targetCommonDir === null) {
-            targetCommonDir = existsSync(resolved) ? gitCommonDir(resolved) : undefined;
-          }
-          if (targetCommonDir === lockedCommonDir) {
-            throw new Error(
-              "Ce dossier partage son dépôt git avec un projet verrouillé : saisis le code pour l'ouvrir.",
-            );
-          }
-        }
+      // Only compare git repositories when the locked project is the root of its own repo,
+      // not when it merely sits inside a git-tracked parent (such as a versioned home folder).
+      // The target's repository is asked once, and a folder outside git skips the rest.
+      if (targetCommonDir === null) {
+        targetCommonDir = existsSync(resolved) ? gitCommonDir(resolved) : undefined;
+      }
+      if (targetCommonDir && existsSync(p.path) && gitRootCommonDir(p.path) === targetCommonDir) {
+        throw new Error(
+          "Ce dossier partage son dépôt git avec un projet verrouillé : saisis le code pour l'ouvrir.",
+        );
       }
     }
   }
