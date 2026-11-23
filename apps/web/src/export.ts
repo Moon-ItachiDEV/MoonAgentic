@@ -15,7 +15,7 @@ export function threadMarkdown(thread: Thread, items: Item[], agents: AgentInfo[
   items.forEach((item, i) => {
     switch (item.kind) {
       case "user":
-        lines.push("## Toi", "", item.text, "");
+        lines.push(item.from === "coordinator" ? "## Coordinateur" : "## Toi", "", item.text, "");
         return;
       case "agent":
         lines.push(`## ${name(authors[i] ?? thread.agentId)}`, "", item.text, "");

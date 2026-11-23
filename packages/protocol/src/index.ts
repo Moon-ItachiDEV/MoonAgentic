@@ -327,6 +327,11 @@ export interface Thread {
   openedBy?: string;
   /** The coordinator's own name for the subject: asked again, it gets this thread back. */
   taskKey?: string;
+  /**
+   * The brief it gets once a place is free: its coordinator already has as many threads
+   * at work as it may run at once, so this one waits in line.
+   */
+  held?: string;
   /** The team lead's thread, for a coder's thread. */
   parentId?: string;
   /** The thread's part in a team. */
@@ -395,7 +400,13 @@ export function threadGroup(thread: Thread, members: readonly Thread[] = []): Th
     members.some((m) => m.status === "waiting" && !m.archived)
   )
     return "waiting";
-  if (thread.status === "running" || (thread.team && TEAM_AT_WORK.includes(thread.team.phase)))
+  // One waiting in line behind its coordinator starts by itself: it stays in sight with the
+  // threads at work, not folded away with the idle ones.
+  if (
+    thread.status === "running" ||
+    !!thread.held ||
+    (thread.team && TEAM_AT_WORK.includes(thread.team.phase))
+  )
     return "running";
   if (thread.status === "error" || thread.team?.phase === "failed") return "waiting";
   const pr = thread.pr;
@@ -476,6 +487,8 @@ export type Item =
       text: string;
       /** Written by the team's engine, not by the user: a member's brief, a fix, a check. */
       byTeam?: true;
+      /** Written by the project's coordinator, an agent, not typed by the user. */
+      from?: "coordinator";
       /** The thread's files just before this message, for threads with their own branch. */
       checkpoint?: string;
       at: number;
@@ -576,7 +589,38 @@ export interface GithubRepo {
   pushedAt?: number;
 }
 
+/** The kinds of work a coordinator opens a thread for. */
+export const WORK_KINDS = ["question", "bug", "fonctionnalite", "relecture", "tests"] as const;
+export type WorkKind = (typeof WORK_KINDS)[number];
+
+/** Threads a coordinator runs at once unless the settings say otherwise, and at most. */
+export const DEFAULT_PARALLEL = 3;
+export const MAX_PARALLEL = 6;
+
+/** A team as the user last set one up: what a coordinator starts when asked for a team. */
+export interface TeamSetup {
+  lead: TeamMember;
+  coder: TeamMember;
+  reviewer?: TeamMember;
+  tester?: TeamMember;
+  merger?: TeamMember;
+  coders: number;
+  permissionMode: PermissionMode;
+  autoShip?: boolean;
+}
+
+/** How coordinators route work: an agent and model for each kind, and the team to start. */
+export interface CoordinatorSettings {
+  /** A kind left out goes to the coordinator's own agent. */
+  routes: Partial<Record<WorkKind, TeamMember>>;
+  /** Kept from the last team the user started by hand. */
+  team?: TeamSetup;
+  /** Threads a coordinator runs at once, the others waiting in line; 3 when left out. */
+  parallel?: number;
+}
+
 export interface Snapshot {
+  coordinator: CoordinatorSettings;
   favorites: Favorites;
   requests: PendingRequest[];
   mcpServers: McpServerInfo[];
@@ -591,6 +635,7 @@ export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "agents"; agents: AgentInfo[] }
   | { type: "favorites"; favorites: Favorites }
+  | { type: "coordinatorSettings"; settings: CoordinatorSettings }
   /** Every permission request still waiting, after one is added or answered. */
   | { type: "requests"; requests: PendingRequest[] }
   | { type: "mcpServers"; servers: McpServerInfo[] }
@@ -707,6 +752,18 @@ export const ClientMessage = z.discriminatedUnion("type", [
     projectId: id,
     agentId: id,
     model: id.optional(),
+  }),
+  /** Sends a kind of work to an agent and model; without an agent, back to the coordinator's own. */
+  z.object({
+    type: z.literal("coordinator.setRoute"),
+    kind: z.enum(WORK_KINDS),
+    agentId: id.optional(),
+    model: id.optional(),
+  }),
+  /** How many threads a coordinator runs at once. */
+  z.object({
+    type: z.literal("coordinator.setParallel"),
+    parallel: z.number().int().min(1).max(MAX_PARALLEL),
   }),
   z.object({ type: z.literal("workspace.review"), threadId: id }),
   z.object({

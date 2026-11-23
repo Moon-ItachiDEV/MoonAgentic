@@ -40,6 +40,8 @@ export interface TeamHost {
     worksIn?: string;
     /** Given at creation, so the thread is never seen without its team. */
     team?: Team;
+    openedBy?: string;
+    taskKey?: string;
   }): string;
   send(threadId: string, text: string): void;
   cancel(threadId: string): Promise<void>;
@@ -73,6 +75,9 @@ export interface TeamInput {
   permissionMode: PermissionMode;
   /** Opens the pull request by itself once done; true when left out. */
   autoShip?: boolean | undefined;
+  /** The coordinator that started it, and its name for the subject. */
+  openedBy?: string | undefined;
+  taskKey?: string | undefined;
 }
 
 const planPrompt = (task: string, coders: number) =>
@@ -526,6 +531,8 @@ export class Teams {
       title: `Équipe : ${input.task}`,
       role: "lead",
       team,
+      ...(input.openedBy ? { openedBy: input.openedBy } : {}),
+      ...(input.taskKey ? { taskKey: input.taskKey } : {}),
     });
   }
 
