@@ -409,7 +409,8 @@ function renderSurface(
   halo.scale(scale, scale);
   halo.fillStyle = "#fff";
   halo.shadowColor = rgba(glowColor, 0.9);
-  halo.shadowBlur = 39;
+  // shadowBlur ignores the transform: it is set in canvas pixels, so it follows the scale.
+  halo.shadowBlur = 39 * (scale / 2);
   halo.fill(outline);
   halo.shadowBlur = 0;
   halo.globalCompositeOperation = "destination-out";
