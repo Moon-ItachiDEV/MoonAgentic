@@ -1,11 +1,15 @@
 // How the sidebar groups threads: by project, a team on one line. Pure, so it is easy to test.
 import type { Thread } from "@moonagentic/protocol";
 
-/** What a sidebar line shows: at work, waiting on the user, failed, or nothing. */
-export type LineStatus = "running" | "waiting" | "error" | undefined;
+/** What a sidebar line shows: at work, in the server's queue, waiting on the user, failed, or nothing. */
+export type LineStatus = "running" | "queued" | "waiting" | "error" | undefined;
 
 const own = (t: Thread): LineStatus =>
-  t.status === "running" || t.status === "waiting" || t.status === "error" ? t.status : undefined;
+  t.status === "running" && t.inLine
+    ? "queued"
+    : t.status === "running" || t.status === "waiting" || t.status === "error"
+      ? t.status
+      : undefined;
 const working = (t: Thread) =>
   t.team?.phase === "planning" || t.team?.phase === "coding" || t.team?.phase === "merging";
 
@@ -17,6 +21,7 @@ export function lineStatus(thread: Thread, children: Thread[] = []): LineStatus 
   const all = [thread, ...children].map(own);
   if (all.includes("waiting")) return "waiting";
   if (all.includes("running") || working(thread)) return "running";
+  if (all.includes("queued")) return "queued";
   return all.includes("error") ? "error" : undefined;
 }
 

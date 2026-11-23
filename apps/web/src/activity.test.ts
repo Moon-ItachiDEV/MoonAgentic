@@ -140,3 +140,13 @@ describe("activityGlyph", () => {
     expect(activityGlyph(tool("q", {}, true))).toBe("attend");
   });
 });
+
+describe("tests commands", () => {
+  it("knows the usual test runners", () => {
+    for (const title of ["pnpm test", "npx vitest run", "pytest -q", "jest --ci", "cargo test"]) {
+      expect(activityGlyph(tool("x", { toolKind: "execute", title }))).toBe("tests");
+      expect(activityLabel(tool("x", { toolKind: "execute", title }))).toBe("Lance les tests…");
+    }
+    expect(activityGlyph(tool("x", { toolKind: "execute", title: "pnpm build" }))).toBe("commande");
+  });
+});

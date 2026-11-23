@@ -8,6 +8,9 @@ import type { FeedBlock } from "./team-feed.ts";
  */
 const PLAN_MODE = /^(?:run\s+)?(?:enter|exit)_plan_mode$/i;
 
+/** A command that runs tests: `pnpm test`, `vitest`, `pytest`, `jest`, `cargo test`… */
+const TEST_CMD = /\b(?:test\w*|vitest|pytest|jest|rspec|mocha|playwright)\b/i;
+
 export const isPlanModeSwitch = (item: Item | undefined) =>
   item?.kind === "tool" && PLAN_MODE.test(item.title.trim());
 
@@ -76,7 +79,7 @@ export function activityLabel(item: Item | undefined): string {
         case "search":
           return "Cherche dans le code…";
         case "execute":
-          return /\btest/i.test(item.title) ? "Lance les tests…" : "Lance une commande…";
+          return TEST_CMD.test(item.title) ? "Lance les tests…" : "Lance une commande…";
         case "fetch":
           return "Consulte le web…";
         case "think":
@@ -112,7 +115,7 @@ export function activityGlyph(item: Item | undefined): GlyphKind {
         case "search":
           return "cherche";
         case "execute":
-          return /\btest/i.test(item.title) ? "tests" : "commande";
+          return TEST_CMD.test(item.title) ? "tests" : "commande";
         case "fetch":
           return "web";
         case "think":

@@ -20,9 +20,21 @@ import { TeamCard } from "./TeamCard.tsx";
 import { TeamStrip } from "./TeamStrip.tsx";
 import { withoutTeamJson } from "../team-json.ts";
 import { isTeamThread, teamFeed } from "../team-feed.ts";
-import { activityFeed, activityGlyph, activityLabel, activitySteps } from "../activity.ts";
+import {
+  activityFeed,
+  activityGlyph,
+  activityLabel,
+  activitySteps,
+  isPlanModeSwitch,
+} from "../activity.ts";
 import { StateGlyph } from "./StateGlyph.tsx";
 import type { GlyphKind } from "../glyphs.ts";
+
+/** The working line's verb, when the agent's name stands before it. */
+const WORKING_VERB: Partial<Record<GlyphKind, string>> = {
+  demarre: "démarre…",
+  ecrit: "écrit…",
+};
 
 export function ThreadView({
   thread,
@@ -122,6 +134,8 @@ export function ThreadView({
 
   const team = isTeamThread(thread);
   const blocks = items ? (team ? teamFeed(thread, items) : activityFeed(items)) : [];
+  // What the agent does now, from the last item shown (plan mode switches are not shown).
+  const lastGlyph = activityGlyph(items?.findLast((i) => !isPlanModeSwitch(i)));
 
   const renderItem = (i: number, clamp?: boolean, showBy?: boolean) => {
     const item = items![i]!;
@@ -217,10 +231,9 @@ export function ThreadView({
         )}
         {thread.status === "running" && !thread.inLine && blocks.at(-1)?.kind !== "detail" && (
           <div className="working">
-            <StateGlyph kind={activityGlyph(items?.at(-1))} size={18} />
+            <StateGlyph kind={lastGlyph} size={18} />
             <span className="shimmer">
-              {agent?.name ?? "L'agent"}{" "}
-              {activityGlyph(items?.at(-1)) === "demarre" ? "démarre…" : "travaille…"}
+              {agent?.name ?? "L'agent"} {WORKING_VERB[lastGlyph] ?? "travaille…"}
             </span>
           </div>
         )}

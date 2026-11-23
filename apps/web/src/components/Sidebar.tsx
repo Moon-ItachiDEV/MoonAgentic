@@ -41,6 +41,7 @@ const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
 function ThreadStatus({ status }: { status: LineStatus }) {
   if (status === "running") return <StateGlyph kind="travaille" size={14} label="En cours" />;
+  if (status === "queued") return <StateGlyph kind="file" size={14} label="En file" />;
   if (status === "waiting") return <StateGlyph kind="attend" size={14} label="Attend ta réponse" />;
   if (status === "error") return <span className="dot err" title="Erreur" aria-label="Erreur" />;
   return null;
