@@ -213,11 +213,14 @@ describe("searching messages", () => {
         VALUES ('t1', 'p', 't1', 'demo', 'idle', 'full', 1, 1);
     `);
     const put = old.prepare(`INSERT INTO items (thread_id, id, seq, data) VALUES ('t1', ?, ?, ?)`);
-    // Written out of order: the search goes by when each message was said.
+    // Written out of order: the search goes by when each message was said. In one write:
+    // one by one, each would wait for the disk, which is slow on Windows.
+    old.exec("BEGIN");
     for (const n of [250, ...Array.from({ length: 249 }, (_, i) => i + 1)]) {
       const item: Item = { id: `m${n}`, kind: "user", text: `Ancien message numéro ${n}`, at: n };
       put.run(item.id, n, JSON.stringify(item));
     }
+    old.exec("COMMIT");
     old.close();
 
     const store = withThreads(file);
