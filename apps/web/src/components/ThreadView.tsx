@@ -292,13 +292,13 @@ function FeedItem({
     case "result": {
       const done = threads.find((t) => t.id === item.threadId);
       return (
-        <div className="result">
+        <div className={`result${item.failed ? " failed-result" : ""}`}>
           <button
             className="result-t"
             disabled={!done}
             onClick={() => done && onOpenThread(done.id)}
           >
-            <IconCheck size={12} />
+            {item.failed ? <IconAlert size={13} /> : <IconCheck size={12} />}
             {done?.title ?? item.title}
           </button>
           <p className="result-s">{item.summary}</p>

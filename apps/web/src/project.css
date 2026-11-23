@@ -353,6 +353,9 @@ button.opened-line:hover {
 .result-t svg {
   color: var(--ok);
 }
+.failed-result .result-t svg {
+  color: var(--err);
+}
 .result-s {
   margin: 0;
   line-height: 1.55;
