@@ -14,6 +14,7 @@ import { conflictRequest, type Forecast, forecastLine } from "../forecast.ts";
 import { readReviewDrafts, writeReviewDrafts } from "../review-drafts.ts";
 import { IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { PullRequestStatus, usePullRequest } from "./PullRequestStatus.tsx";
+import { WorktreeFiles } from "./WorktreeFiles.tsx";
 
 const STATUS: Record<ReviewFile["status"], { letter: string; label: string }> = {
   added: { letter: "A", label: "nouveau" },
@@ -285,6 +286,8 @@ export function ReviewPanel({
   const workspace = thread.workspace;
   const running = thread.status === "running" || thread.status === "waiting";
   const [message, setMessage] = useState(thread.title);
+  /** The tab shown: the branch's changes, or every file of its folder. */
+  const [tab, setTab] = useState<"changes" | "files">("changes");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pushed, setPushed] = useState(false);
@@ -319,11 +322,11 @@ export function ReviewPanel({
   const remarks = placed.all;
   const lost = remarks.filter((c) => c.lost);
 
-  // The server holds the files; ask on opening, once the branch exists, and whenever a
-  // turn starts or ends.
+  // The server holds the files; ask on opening, once the branch exists, whenever a
+  // turn starts or ends, and on each change of tab: files written meanwhile show up.
   useEffect(() => {
     connection.send({ type: "workspace.review", threadId: thread.id });
-  }, [thread.id, running, workspace?.base]);
+  }, [thread.id, running, workspace?.base, tab]);
 
   const canForecast = !!workspace?.base && !!workspace.baseBranch && !thread.archived;
   useEffect(() => {
@@ -457,9 +460,24 @@ export function ReviewPanel({
       <aside className="rv-panel" aria-label="À revoir">
         <div className="rv-top">
           <div className="rv-tabs" role="tablist">
-            <span className="rv-tab on" role="tab" aria-selected>
+            <button
+              className={`rv-tab${tab === "changes" ? " on" : ""}`}
+              role="tab"
+              aria-selected={tab === "changes"}
+              onClick={() => setTab("changes")}
+            >
               Modifications {!!files?.length && <b>{files.length}</b>}
-            </span>
+            </button>
+            {!!workspace?.base && !thread.archived && (
+              <button
+                className={`rv-tab${tab === "files" ? " on" : ""}`}
+                role="tab"
+                aria-selected={tab === "files"}
+                onClick={() => setTab("files")}
+              >
+                Fichiers
+              </button>
+            )}
           </div>
           <span className="grow" />
           <button className="ib" aria-label="Fermer la revue" onClick={onClose}>
@@ -518,7 +536,16 @@ export function ReviewPanel({
         )}
         {syncError && <p className="rv-msg error rv-sync-e">{syncError}</p>}
         <div className="rv-scroll">
-          {!workspace?.base ? (
+          {tab === "files" && workspace?.base && !thread.archived ? (
+            <WorktreeFiles
+              thread={thread}
+              files={files}
+              onShowChange={(path) => {
+                setTab("changes");
+                setOpened((o) => ({ ...o, [path]: true }));
+              }}
+            />
+          ) : !workspace?.base ? (
             <p className="rv-msg">La branche sera créée quand l'agent démarrera.</p>
           ) : review?.error ? (
             <p className="rv-msg error">Impossible de lire les changements : {review.error}</p>

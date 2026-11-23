@@ -28,10 +28,13 @@ const MAX_DEPTH = 12;
 
 const listings = new Map<string, { at: number; files: Promise<string[]> }>();
 
-/** The folder's files, relative and with `/` separators, ignored ones left out. */
-export function listFiles(dir: string): Promise<string[]> {
+/**
+ * The folder's files, relative and with `/` separators, ignored ones left out. A listing
+ * younger than `maxAge` is given again rather than made anew.
+ */
+export function listFiles(dir: string, maxAge = LISTING_TTL_MS): Promise<string[]> {
   const cached = listings.get(dir);
-  if (cached && Date.now() - cached.at < LISTING_TTL_MS) return cached.files;
+  if (cached && Date.now() - cached.at < maxAge) return cached.files;
   const files = gitFiles(dir).catch(() => walk(dir));
   listings.set(dir, { at: Date.now(), files });
   files.catch(() => listings.delete(dir));

@@ -1,5 +1,5 @@
 // The review in the built app against a real server: it says main moved on, merges it in
-// when nothing conflicts, and drops one file's changes after asking.
+// when nothing conflicts, drops one file's changes after asking, and shows every file.
 import { execFileSync } from "node:child_process";
 import { type ChildProcess, spawn } from "node:child_process";
 import {
@@ -128,6 +128,22 @@ describe("review against main", () => {
     expect(readFileSync(path.join(folder, "notes.md"), "utf8")).toBe(
       "# Notes\n\nPremière ligne.\n",
     );
+
+    // Every file of the folder, as it is now, to read.
+    writeFileSync(path.join(folder, "nouveau.md"), "Écrit par l'agent.\n");
+    await panel.getByRole("tab", { name: "Fichiers" }).click();
+    // A changed file's row ends with its letter from the review.
+    const row = (name: string) => panel.getByRole("button", { name: new RegExp(`^${name}`) });
+    await row("autre.md").waitFor();
+    await row("nouveau.md").waitFor();
+    if (shots) await page.screenshot({ path: path.join(shots, "revue-fichiers.png") });
+    await row("autre.md").click();
+    await panel.getByRole("row").filter({ hasText: "Arrivé sur main." }).waitFor();
+    await panel.getByRole("button", { name: "Retour aux fichiers" }).click();
+    await panel.getByRole("searchbox", { name: "Chercher un fichier" }).fill("nouv");
+    await row("nouveau.md").click();
+    await panel.getByRole("button", { name: "Voir les changements" }).click();
+    await panel.getByRole("row").filter({ hasText: "Écrit par l'agent." }).waitFor();
     expect(errors).toEqual([]);
     await page.close();
   });

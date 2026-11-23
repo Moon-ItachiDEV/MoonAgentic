@@ -155,7 +155,7 @@ describe("keeping up with the branch it started from", { timeout: 40_000 }, () =
   });
 
   it("names the files that would conflict, and merges nothing then", async () => {
-    const { repo, hub, threadId, dir, workspace } = await threadOnBranch();
+    const { repo, hub, threadId, dir } = await threadOnBranch();
     writeFileSync(path.join(dir, "README.md"), "# Demo\ncôté fil\n");
     writeFileSync(path.join(repo, "README.md"), "# Demo\ncôté main\n");
     git(repo, "commit", "-q", "-am", "main avance");
