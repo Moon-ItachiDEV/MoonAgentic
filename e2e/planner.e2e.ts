@@ -90,7 +90,8 @@ describe("planner", () => {
     await page.getByLabel("Nouvelle tâche, À faire").fill("Dire bonjour au projet");
     await page.keyboard.press("Enter");
     await page.keyboard.press("Escape");
-    expect(await column(page, "À faire")).toEqual(["Dire bonjour au projet"]);
+    // The card comes back from the server: on a busy machine, after Escape.
+    await expect.poll(() => column(page, "À faire")).toEqual(["Dire bonjour au projet"]);
 
     // « Lancer » on the card opens it on its launch: which agent, with what access.
     await page.getByRole("button", { name: "Lancer la tâche 1" }).click();
