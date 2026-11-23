@@ -1956,6 +1956,36 @@ describe("a planner card started from the board", () => {
     expect(status()).toBe("todo");
   });
 
+  it("is not left at work when the server stopped in the middle of its thread's turn", async () => {
+    const { dir, hub, store, client, projectId } = setup();
+    await hub.handle(client, { type: "plan.add", requestId: "a", projectId, title: "Une tâche" });
+    const card = hub.planner.list()[0]!;
+    await hub.handle(client, {
+      type: "plan.run",
+      requestId: "r",
+      id: card.id,
+      agentId: "demo",
+      permissionMode: "supervised",
+    });
+    const threadId = store.getPlanTask(card.id)!.threadId!;
+    // The agent asks before it acts: the turn is under way when the server stops.
+    await expect.poll(() => store.getThread(threadId)?.status, { timeout: 15_000 }).toBe("waiting");
+    expect(store.getPlanTask(card.id)!.status).toBe("doing");
+    await hub.close();
+    // As after a crash: the thread was left at work, and so was its card.
+    store.db.exec(`UPDATE threads SET status = 'running'`);
+    store.putPlanTask({ ...store.getPlanTask(card.id)!, status: "doing" });
+
+    const restarted = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(dir, ".worktrees"),
+      homeDir: path.join(dir, ".home"),
+    });
+    cleanups.push(() => restarted.close());
+    // Its turn was cut short: the thread is free again, and the card is to check.
+    expect(store.getThread(threadId)?.status).toBe("idle");
+    expect(store.getPlanTask(card.id)!.status).toBe("test");
+  });
+
   it("refuses an agent that is not there, and leaves the card as it was", async () => {
     const { hub, store, client, projectId } = setup();
     await hub.handle(client, { type: "plan.add", requestId: "a", projectId, title: "Une tâche" });

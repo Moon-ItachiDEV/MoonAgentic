@@ -20,6 +20,7 @@ import {
   dueLabel,
   followedThread,
   isLate,
+  linkableThreads,
   planLabel,
 } from "../planner.ts";
 import { readPref, writePref } from "../prefs.ts";
@@ -310,7 +311,7 @@ export function Planner({
           agents={agents}
           followed={followedThread(open, threads)}
           launch={launchId === open.id}
-          threads={threads.filter((t) => t.projectId === project.id && !t.archived)}
+          threads={linkableThreads(open, threads)}
           onOpenThread={onOpenThread}
           onClose={() => {
             setOpenId(null);
@@ -509,9 +510,6 @@ function Detail({
     saveDescription();
     onClose();
   };
-  // Team threads are reached through their card; a card links to a thread of its own.
-  const linkable = threads.filter((t) => !t.parentId || t.id === card.threadId);
-
   return (
     <div className="pl-scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
       <aside
@@ -629,7 +627,7 @@ function Detail({
                 onChange={(e) => void update({ threadId: e.target.value || null })}
               >
                 <option value="">Aucun</option>
-                {linkable.map((t) => (
+                {threads.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.title}
                   </option>

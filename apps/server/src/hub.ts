@@ -322,7 +322,6 @@ export class Hub {
     }
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
     this.planner = new Planner(store, (m) => this.broadcast(m));
-    this.planner.syncThreads();
     this.quotas = new Quotas({
       readers: options.quotaReaders ?? {},
       available: () =>
@@ -410,6 +409,9 @@ export class Hub {
     // Messages the index does not have yet: all of them, the first time after an update.
     this.indexSearchSoon();
     this.teams.recover();
+    // Once the threads say what they really are: a turn the last stop cut short is over,
+    // and its card must not stay at work.
+    this.planner.syncThreads();
     this.recovered = this.finishRestores();
     // Tasks that were due while the server was off start once what was interrupted is put right.
     void this.recovered.then(() => {

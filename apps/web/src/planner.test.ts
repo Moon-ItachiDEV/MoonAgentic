@@ -10,6 +10,7 @@ import {
   dueDay,
   followedThread,
   isLate,
+  linkableThreads,
   timeline,
   timelineTicks,
 } from "./planner.ts";
@@ -106,6 +107,31 @@ describe("a card and its thread", () => {
     expect(followedThread(card(), [thread("t")])).toBeUndefined();
     expect(followedThread(card({ threadId: "gone" }), [thread("t")])).toBeUndefined();
     expect(followedThread(card({ threadId: "t", team }), [thread("t")])).toBeUndefined();
+  });
+});
+
+describe("the threads a card can be linked to", () => {
+  it("are its project's own, not resolved, a team's members aside", () => {
+    const threads = [
+      thread("a"),
+      thread("ailleurs", { projectId: "q" }),
+      thread("résolu", { archived: true }),
+      thread("codeur", { parentId: "a" }),
+    ];
+    expect(linkableThreads(card(), threads).map((t) => t.id)).toEqual(["a"]);
+  });
+
+  it("always hold the one it is linked to, so that it can be unlinked", () => {
+    const threads = [thread("a"), thread("résolu", { archived: true })];
+    // Delivered with its thread resolved: the thread is still shown as the card's.
+    expect(linkableThreads(card({ threadId: "résolu" }), threads).map((t) => t.id)).toEqual([
+      "a",
+      "résolu",
+    ]);
+    const member = thread("codeur", { parentId: "a" });
+    expect(
+      linkableThreads(card({ threadId: "codeur" }), [...threads, member]).map((t) => t.id),
+    ).toEqual(["a", "codeur"]);
   });
 });
 
