@@ -11,6 +11,7 @@ import {
 import { type WebSocket, WebSocketServer } from "ws";
 import { AttachmentRefused } from "./attachments.ts";
 import { COORDINATOR_PATH } from "./coordinator-tools.ts";
+import { Devices } from "./devices.ts";
 import { type Client, CoordinatorRefused, type Hub } from "./hub.ts";
 import { findRemoteAccess } from "./remote.ts";
 
@@ -31,6 +32,13 @@ const DEFAULT_MAX_WS_UPGRADES = 120;
 export const newToken = () => randomBytes(24).toString("base64url");
 /** Why a connection is closed when the token it came in with is replaced. */
 export const TOKEN_RENEWED = 4001;
+/** Why a device's connections are closed when it is revoked. */
+export const DEVICE_REVOKED = 4003;
+/** A pairing request is a code and a device name: never large. */
+const MAX_PAIR_BODY = 4 * 1024;
+
+/** Who a request comes from: the computer's own token, or a paired device. */
+type Who = { owner: true } | { owner: false; deviceId: string };
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -244,6 +252,31 @@ function dropRest(req: IncomingMessage): void {
   req.resume();
 }
 
+/** Said when a paired device asks for what only the computer may do. */
+const ONLY_ON_COMPUTER = "Seul l'ordinateur où tourne MoonAgentic peut faire ça.";
+
+/** Reads a small JSON object; anything else, too large or unreadable, gives undefined. */
+function readJson(req: IncomingMessage, max: number): Promise<Record<string, unknown> | undefined> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size <= max) chunks.push(chunk);
+    });
+    req.on("error", () => resolve(undefined));
+    req.on("end", () => {
+      if (size > max) return resolve(undefined);
+      try {
+        const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        resolve(body && typeof body === "object" ? (body as Record<string, unknown>) : undefined);
+      } catch {
+        resolve(undefined);
+      }
+    });
+  });
+}
+
 /**
  * Keeps the app out of other sites' frames (a hidden frame could collect a click on
  * "Autoriser"), and keeps an agent's answer from loading anything from elsewhere, which
@@ -315,9 +348,19 @@ export function createHttpServer(options: {
   wsTicketTtlMs?: number;
   /** Custom rate-limiting parameters (for tests or hardened deployments). */
   rateLimit?: RateLimitOptions;
+  /** The paired devices; kept in memory alone when not given. */
+  devices?: Devices;
 }): Server {
   const { hub, webDir } = options;
   let token = options.token;
+  const devices = options.devices ?? new Devices();
+  const identify = (given: string | null): Who | undefined => {
+    if (sameToken(given, token)) return { owner: true };
+    const deviceId = devices.authenticate(given);
+    return deviceId ? { owner: false, deviceId } : undefined;
+  };
+  /** Each open connection, with who opened it: a revoked device's are closed. */
+  const sockets = new Map<WebSocket, Who>();
   const remote = options.remoteAccess ?? findRemoteAccess;
   const maxClients = options.maxClients ?? MAX_WS_CLIENTS;
   const wsTicketTtlMs = options.wsTicketTtlMs ?? WS_TICKET_TTL_MS;
@@ -342,11 +385,11 @@ export function createHttpServer(options: {
     options.rateLimit?.maxWsUpgrades ?? DEFAULT_MAX_WS_UPGRADES,
     rateWindowMs,
   );
-  /** Single-use short-lived tickets issued for WebSocket upgrades, keyed by ticket -> expiresAt. */
-  const wsTickets = new Map<string, number>();
-  const issueWsTicket = (): string => {
+  /** Single-use short-lived tickets issued for WebSocket upgrades, with whom each is for. */
+  const wsTickets = new Map<string, { expiresAt: number; who: Who }>();
+  const issueWsTicket = (who: Who): string => {
     const now = Date.now();
-    for (const [key, expiresAt] of wsTickets) {
+    for (const [key, { expiresAt }] of wsTickets) {
       if (expiresAt <= now) wsTickets.delete(key);
     }
     while (wsTickets.size >= MAX_WS_TICKETS) {
@@ -355,16 +398,22 @@ export function createHttpServer(options: {
       wsTickets.delete(oldest);
     }
     const ticket = newToken();
-    wsTickets.set(ticket, now + wsTicketTtlMs);
+    wsTickets.set(ticket, { expiresAt: now + wsTicketTtlMs, who });
     return ticket;
   };
-  const consumeWsTicket = (given: string | null): boolean => {
-    if (!given) return false;
-    const expiresAt = wsTickets.get(given);
-    if (expiresAt === undefined) return false;
+  const consumeWsTicket = (given: string | null): Who | undefined => {
+    if (!given) return undefined;
+    const found = wsTickets.get(given);
+    if (found === undefined) return undefined;
     wsTickets.delete(given);
-    return expiresAt > Date.now();
+    return found.expiresAt > Date.now() ? found.who : undefined;
   };
+  /** Drops the tickets and closes the connections that `whose` says are no longer let in. */
+  const shutOut = (whose: (who: Who) => boolean, code: number, reason: string) => {
+    for (const [key, { who }] of wsTickets) if (whose(who)) wsTickets.delete(key);
+    for (const [socket, who] of sockets) if (whose(who)) socket.close(code, reason);
+  };
+  const ofDevice = (id: string) => (who: Who) => !who.owner && who.deviceId === id;
 
   const json = (res: ServerResponse, status: number, body: unknown) => {
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
@@ -384,13 +433,19 @@ export function createHttpServer(options: {
       res.setHeader(name, value);
     const given = bearerToken(req.headers.authorization);
     const remoteIp = req.socket.remoteAddress ?? "unknown";
+    // Only a wrong token counts against this address, not a missing one: another site open in
+    // the browser can send requests here without a token, never with one, and must not be
+    // able to lock the user out.
+    const countFailure = () => {
+      if (given) authFailures.record(remoteIp);
+    };
     if (req.url === "/api/auth") {
       const limit = apiLimiter.take(remoteIp);
       if (!limit.ok) return tooMany(res, limit.retryAfterSec);
       const authLimit = authFailures.check(remoteIp);
       if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
-      if (!sameToken(given, token)) {
-        authFailures.record(remoteIp);
+      if (!identify(given)) {
+        countFailure();
         res.writeHead(401).end();
         return;
       }
@@ -406,12 +461,13 @@ export function createHttpServer(options: {
         res.writeHead(405).end();
         return;
       }
-      if (!sameToken(given, token)) {
-        authFailures.record(remoteIp);
+      const who = identify(given);
+      if (!who) {
+        countFailure();
         res.writeHead(401).end();
         return;
       }
-      json(res, 200, { ticket: issueWsTicket() });
+      json(res, 200, { ticket: issueWsTicket(who) });
       return;
     }
     if (req.url === COORDINATOR_PATH) {
@@ -482,8 +538,9 @@ export function createHttpServer(options: {
       if (!limit.ok) return tooMany(res, limit.retryAfterSec);
       const authLimit = authFailures.check(remoteIp);
       if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
-      if (!sameToken(given, token)) {
-        authFailures.record(remoteIp);
+      const who = identify(given);
+      if (!who) {
+        countFailure();
         res.writeHead(401).end();
         return;
       }
@@ -492,6 +549,7 @@ export function createHttpServer(options: {
         res.writeHead(405).end();
         return;
       }
+      if (renew && !who.owner) return json(res, 403, { message: ONLY_ON_COMPUTER });
       if (renew) {
         const next = newToken();
         try {
@@ -502,10 +560,13 @@ export function createHttpServer(options: {
           return;
         }
         token = next;
-        wsTickets.clear();
-        // Every device still on the old token is shown out, once this one has the new one.
+        // Every window still on the old token is shown out, once this one has the new one.
+        // Those are the ones open now: one this window opens with the new token stays. Paired
+        // devices have tokens of their own: they stay too.
+        for (const [key, { who: w }] of wsTickets) if (w.owner) wsTickets.delete(key);
+        const old = [...sockets].filter(([, w]) => w.owner).map(([socket]) => socket);
         res.once("close", () => {
-          for (const socket of wss.clients) socket.close(TOKEN_RENEWED, "token renewed");
+          for (const socket of old) socket.close(TOKEN_RENEWED, "token renewed");
         });
         json(res, 200, { token });
         return;
@@ -519,6 +580,81 @@ export function createHttpServer(options: {
       );
       return;
     }
+    if (req.url === "/api/pair") {
+      // A device with a code shown on the computer: the only call here without a token.
+      const limit = apiLimiter.take(remoteIp);
+      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
+      const authLimit = authFailures.check(remoteIp);
+      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
+      if (req.method !== "POST") {
+        res.writeHead(405).end();
+        return;
+      }
+      // JSON only: another site cannot send it without the browser asking first, which this
+      // server never allows, so it cannot try codes from a page open on this computer.
+      if (!/^application\/json\s*(;|$)/i.test(req.headers["content-type"] ?? "")) {
+        dropRest(req);
+        return json(res, 415, { message: "Une demande d'appairage s'envoie en JSON." });
+      }
+      if (!allowedWsOrigin(req.headers.origin, req.headers.host)) {
+        dropRest(req);
+        res.writeHead(403).end();
+        return;
+      }
+      void readJson(req, MAX_PAIR_BODY).then((body) => {
+        const code = typeof body?.code === "string" ? body.code : "";
+        const name = typeof body?.name === "string" ? body.name : "";
+        let paired: ReturnType<Devices["pair"]>;
+        try {
+          paired = devices.pair(code, name);
+        } catch (error) {
+          return json(res, 409, {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+        if (!paired) {
+          authFailures.record(remoteIp);
+          return json(res, 401, {
+            message: "Ce code ne marche pas : il a expiré ou a déjà servi. Demandes-en un nouveau.",
+          });
+        }
+        json(res, 200, paired);
+      });
+      return;
+    }
+    if (req.url === "/api/pair/start" || req.url?.startsWith("/api/devices")) {
+      // Only the computer pairs and revokes devices: a phone that was lost cannot add others.
+      const limit = apiLimiter.take(remoteIp);
+      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
+      const authLimit = authFailures.check(remoteIp);
+      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
+      const who = identify(given);
+      if (!who) {
+        countFailure();
+        res.writeHead(401).end();
+        return;
+      }
+      if (!who.owner) return json(res, 403, { message: ONLY_ON_COMPUTER });
+      if (req.url === "/api/pair/start" && req.method === "POST") {
+        return json(res, 200, devices.startPairing());
+      }
+      if (req.url === "/api/devices" && req.method === "GET") {
+        return json(res, 200, { devices: devices.list() });
+      }
+      if (req.url === "/api/devices/revoke" && req.method === "POST") {
+        void readJson(req, MAX_PAIR_BODY).then((body) => {
+          const id = typeof body?.id === "string" ? body.id : "";
+          if (!devices.revoke(id))
+            return json(res, 404, { message: "Cet appareil n'est plus là." });
+          shutOut(ofDevice(id), DEVICE_REVOKED, "device revoked");
+          json(res, 200, { devices: devices.list() });
+        });
+        return;
+      }
+      const known = ["/api/pair/start", "/api/devices", "/api/devices/revoke"];
+      res.writeHead(known.includes(req.url ?? "") ? 405 : 404).end();
+      return;
+    }
     const asked = parseUrl(req.url ?? "/")?.pathname ?? "";
     if (asked === ATTACHMENTS_PATH || asked.startsWith(`${ATTACHMENTS_PATH}/`)) {
       // The images sent with messages: received before the message, read back by its thread.
@@ -526,8 +662,8 @@ export function createHttpServer(options: {
       if (!limit.ok) return tooMany(res, limit.retryAfterSec);
       const authLimit = authFailures.check(remoteIp);
       if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
-      if (!sameToken(given, token)) {
-        authFailures.record(remoteIp);
+      if (!identify(given)) {
+        countFailure();
         res.writeHead(401).end();
         return;
       }
@@ -689,10 +825,10 @@ export function createHttpServer(options: {
       );
       return;
     }
-    const authorized =
-      consumeWsTicket(url.searchParams.get("ticket")) ||
-      sameToken(bearerToken(req.headers.authorization), token);
-    if (!authorized) {
+    const who =
+      consumeWsTicket(url.searchParams.get("ticket")) ??
+      identify(bearerToken(req.headers.authorization));
+    if (!who) {
       authFailures.record(remoteIp);
       socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
       return;
@@ -718,6 +854,8 @@ export function createHttpServer(options: {
         },
       };
       const disconnect = hub.connect(client);
+      sockets.set(ws, who);
+      ws.on("close", () => sockets.delete(ws));
       alive.add(ws);
       ws.on("pong", () => alive.add(ws));
       ws.on("close", disconnect);

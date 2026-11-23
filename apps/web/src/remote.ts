@@ -1,10 +1,6 @@
 // How remote access is described to the user: pure, so it is easy to test.
 import type { RemoteAccess, RemoteAddress } from "@moonagentic/protocol";
 
-/** The link another device opens: the address, then the token in the fragment (never sent in HTTP). */
-export const remoteLink = (address: RemoteAddress, token: string) =>
-  `${address.url}/#token=${encodeURIComponent(token)}`;
-
 /** What kind of address this is, and what it means for who can read the traffic. */
 export function addressText(address: RemoteAddress): {
   tone: "ok" | "warn";
@@ -72,4 +68,53 @@ export function remoteAdvice(access: RemoteAccess): { text: string; command?: st
   return {
     text: "MoonAgentic n'écoute que sur cette machine, et Tailscale n'y est pas installé. Installe Tailscale (https://tailscale.com/download), ou relance MoonAgentic avec --host 0.0.0.0 pour l'ouvrir au réseau local.",
   };
+}
+
+/**
+ * The link a phone scans to pair: the address, then the one-time code in the fragment, never
+ * sent in HTTP. Unlike a token, the code is worth nothing once used or after a few minutes.
+ */
+export const pairLink = (address: RemoteAddress, code: string) =>
+  `${address.url}/#pair=${encodeURIComponent(code)}`;
+
+/** A code shown in two halves, easier to read aloud and type: `ABCD-EFGH`. */
+export const shownCode = (code: string) =>
+  code.length === 8 ? `${code.slice(0, 4)}-${code.slice(4)}` : code;
+
+/** What a device is called in the list, from what its browser says about itself. */
+export function deviceName(userAgent: string): string {
+  const system = /iPhone/.test(userAgent)
+    ? "iPhone"
+    : /iPad/.test(userAgent)
+      ? "iPad"
+      : /Android/.test(userAgent)
+        ? /Mobile/.test(userAgent)
+          ? "Téléphone Android"
+          : "Tablette Android"
+        : /Macintosh/.test(userAgent)
+          ? "Mac"
+          : /Windows/.test(userAgent)
+            ? "PC Windows"
+            : /Linux/.test(userAgent)
+              ? "Linux"
+              : "Appareil";
+  const browser = /Edg\//.test(userAgent)
+    ? "Edge"
+    : /Firefox\/|FxiOS/.test(userAgent)
+      ? "Firefox"
+      : /Chrome\/|CriOS/.test(userAgent)
+        ? "Chrome"
+        : /Safari\//.test(userAgent)
+          ? "Safari"
+          : undefined;
+  return browser ? `${system} · ${browser}` : system;
+}
+
+/** How long ago, said shortly: « à l'instant », « il y a 5 min », « il y a 3 j ». */
+export function seenAgo(at: number, now: number): string {
+  const minutes = Math.floor((now - at) / 60_000);
+  if (minutes < 2) return "à l'instant";
+  if (minutes < 60) return `il y a ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `il y a ${hours} h` : `il y a ${Math.floor(hours / 24)} j`;
 }

@@ -1,5 +1,11 @@
-import type { ClientMessage, RemoteAccess, ServerMessage } from "@moonagentic/protocol";
+import type {
+  ClientMessage,
+  PairedDevice,
+  RemoteAccess,
+  ServerMessage,
+} from "@moonagentic/protocol";
 import { nextFrame } from "./frame.ts";
+import { deviceName } from "./remote.ts";
 import { initialState, reduce, type State } from "./state.ts";
 
 export type { ConnectionStatus, Review, State } from "./state.ts";
@@ -7,6 +13,8 @@ export type { ConnectionStatus, Review, State } from "./state.ts";
 const TOKEN_KEY = "moonagentic.token";
 /** The code the server closes a connection with when its token was replaced. */
 const TOKEN_RENEWED = 4001;
+/** The code the server closes a device's connections with when it is revoked. */
+const DEVICE_REVOKED = 4003;
 export const ASK_TIMEOUT_MS = 60_000;
 /**
  * What the server may work on for longer than that: a clone, a push, a merge. The page
@@ -75,6 +83,23 @@ export function readToken(): string | null {
 }
 
 /**
+ * The one-time code of a pairing link (`#pair=…`), taken out of the address at once so it
+ * stays in no history or bookmark.
+ */
+export function readPairCode(): string | null {
+  if (typeof location === "undefined") return null;
+  const url = new URL(location.href);
+  const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+  const code = hashParams.get("pair");
+  if (code === null) return null;
+  hashParams.delete("pair");
+  const nextHash = hashParams.toString();
+  url.hash = nextHash ? `#${nextHash}` : "";
+  history.replaceState(history.state, "", url);
+  return code || null;
+}
+
+/**
  * A fresh id for a request. `crypto.randomUUID` is missing on pages opened over plain HTTP
  * from another machine, such as a phone on the local network.
  */
@@ -82,6 +107,15 @@ export function newId(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** What the server refused, with the HTTP status it answered. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
 }
 
 type Pending = {
@@ -153,7 +187,21 @@ export class Connection {
   constructor(options: ConnectionOptions = {}) {
     this.askTimeoutMs = options.askTimeoutMs ?? ASK_TIMEOUT_MS;
     this.pingMs = options.pingMs ?? PING_MS;
-    if (!this.token || !/^[\x21-\x7e]+$/.test(this.token)) {
+    const pairCode = readPairCode();
+    if (pairCode) {
+      // Opened from a pairing link: this device gets its own token first.
+      this.pair(pairCode).catch((error: unknown) => {
+        const why = error instanceof Error ? error.message : String(error);
+        if (this.usableToken()) {
+          // Already paired: it connects as before, and says why the link did nothing.
+          this.notify(`Appairage refusé : ${why}`);
+          void this.open();
+        } else {
+          this.pairError = why;
+          this.set({ ...this.state, status: "unauthorized" });
+        }
+      });
+    } else if (!this.usableToken()) {
       this.state = { ...this.state, status: "unauthorized" };
     } else {
       void this.open();
@@ -169,6 +217,47 @@ export class Connection {
         if (document.visibilityState === "visible") wake();
       });
     }
+  }
+
+  private usableToken(): boolean {
+    return !!this.token && /^[\x21-\x7e]+$/.test(this.token);
+  }
+
+  /** Why the last pairing failed, to show on the page asking for a code. */
+  pairError: string | null = null;
+
+  /**
+   * Pairs this device with a code shown on the computer: the server gives it a token of its
+   * own, kept here, and the connection opens with it.
+   */
+  async pair(code: string): Promise<void> {
+    let response: Response;
+    try {
+      response = await fetch("/api/pair", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code, name: deviceName(navigator.userAgent) }),
+      });
+    } catch {
+      throw new Error("Pas de connexion au serveur MoonAgentic.");
+    }
+    const body = (await response.json().catch(() => null)) as {
+      token?: string;
+      message?: string;
+    } | null;
+    if (response.status === 429) throw new Error("Trop d'essais : réessaie dans une minute.");
+    if (!response.ok || !body?.token) {
+      throw new Error(body?.message ?? `Le serveur a répondu ${response.status}.`);
+    }
+    this.token = body.token;
+    try {
+      localStorage.setItem(TOKEN_KEY, body.token);
+    } catch {
+      // private mode: the token lives only in this tab
+    }
+    this.pairError = null;
+    this.set({ ...this.state, status: "connecting" });
+    void this.open();
   }
 
   /** Checks the connection now: pinged if it looks open, opened again at once if it waits. */
@@ -264,22 +353,56 @@ export class Connection {
     });
   }
 
-  /** The token this device connects with: what a link for another device must carry. */
+  /** The token this device connects with, for what it reads over HTTP. */
   getToken = () => this.token ?? "";
 
   /** Asks the server something about itself, over HTTP with the token. */
-  private async api<T>(path: string, method: "GET" | "POST"): Promise<T> {
+  private async api<T>(path: string, method: "GET" | "POST", payload?: unknown): Promise<T> {
     let response: Response;
     try {
-      response = await fetch(path, { method, headers: { authorization: `Bearer ${this.token}` } });
+      response = await fetch(path, {
+        method,
+        headers: {
+          authorization: `Bearer ${this.token}`,
+          ...(payload !== undefined ? { "content-type": "application/json" } : {}),
+        },
+        ...(payload !== undefined ? { body: JSON.stringify(payload) } : {}),
+      });
     } catch {
       throw new Error("Pas de connexion au serveur MoonAgentic.");
     }
     const body = (await response.json().catch(() => null)) as (T & { message?: string }) | null;
     if (!response.ok || !body) {
-      throw new Error(body?.message ?? `Le serveur a répondu ${response.status}.`);
+      throw new ApiError(
+        body?.message ?? `Le serveur a répondu ${response.status}.`,
+        response.status,
+      );
     }
     return body;
+  }
+
+  /**
+   * The paired devices, or `null` on a device itself: only the computer MoonAgentic runs on
+   * pairs and revokes them.
+   */
+  async devices(): Promise<PairedDevice[] | null> {
+    try {
+      return (await this.api<{ devices: PairedDevice[] }>("/api/devices", "GET")).devices;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 403) return null;
+      throw error;
+    }
+  }
+
+  /** A one-time code for a phone to pair with, for a few minutes. */
+  startPairing(): Promise<{ code: string; expiresAt: number }> {
+    return this.api("/api/pair/start", "POST");
+  }
+
+  /** Revokes a device: its connections close and its token stops working at once. */
+  async revokeDevice(id: string): Promise<PairedDevice[]> {
+    return (await this.api<{ devices: PairedDevice[] }>("/api/devices/revoke", "POST", { id }))
+      .devices;
   }
 
   /** How the server can be reached from another device, as it is right now. */
@@ -388,6 +511,8 @@ export class Connection {
     socket.onopen = () => {
       opened = true;
       this.retry = 0;
+      // Connected: a pairing that failed earlier says nothing about a later loss of access.
+      this.pairError = null;
       this.set({
         ...this.state,
         status: "open",
@@ -458,7 +583,7 @@ export class Connection {
     // After a renewal the old token is refused too, so it is asked again, with the new one
     // on the device that renewed it.
     const check = Promise.resolve(this.renewal).then(() =>
-      wasOpen && code !== TOKEN_RENEWED ? true : this.tokenAccepted(),
+      wasOpen && code !== TOKEN_RENEWED && code !== DEVICE_REVOKED ? true : this.tokenAccepted(),
     );
     void check.then((accepted) => {
       if (attempt !== this.attempt) return;

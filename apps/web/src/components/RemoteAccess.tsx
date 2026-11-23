@@ -1,8 +1,8 @@
-import type { RemoteAccess as Access } from "@moonagentic/protocol";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import type { RemoteAccess as Access, PairedDevice } from "@moonagentic/protocol";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { encode } from "uqr";
 import { connection } from "../connection.ts";
-import { addressText, remoteAdvice, remoteLink } from "../remote.ts";
+import { addressText, pairLink, remoteAdvice, seenAgo, shownCode } from "../remote.ts";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 
 /** Copies text, also on a page opened over plain HTTP, where the clipboard API is missing. */
@@ -46,7 +46,7 @@ function QrCode({ text }: { text: string }) {
       viewBox={`0 0 ${size} ${size}`}
       shapeRendering="crispEdges"
       role="img"
-      aria-label="QR code du lien de connexion"
+      aria-label="QR code d'appairage"
     >
       <rect width={size} height={size} fill="#fff" />
       <path d={path} fill="#000" />
@@ -63,9 +63,60 @@ export function RemoteAccess() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [picked, setPicked] = useState<string | null>(null);
-  const [token, setToken] = useState(connection.getToken);
   const [copied, setCopied] = useState<"ok" | "failed" | null>(null);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
+  // The paired devices; `null` on a paired device, which cannot see or change them.
+  const [devices, setDevices] = useState<PairedDevice[] | null | undefined>(undefined);
+  const [pairing, setPairing] = useState<{ code: string; expiresAt: number } | null>(null);
+  const [pairError, setPairError] = useState<string | null>(null);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
+  const [justPaired, setJustPaired] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    // Unknown until the server says: nothing of the computer's own part is shown before.
+    connection
+      .devices()
+      .then(setDevices, (e: unknown) =>
+        setDevicesError(e instanceof Error ? e.message : String(e)),
+      );
+  }, []);
+  // While a code is shown: the time left moves on, and the list is asked again, so the new
+  // device shows up as soon as it pairs.
+  const known = useRef<ReadonlySet<string>>(new Set());
+  useEffect(() => {
+    if (!pairing) return;
+    const timer = setInterval(() => {
+      setNow(Date.now());
+      if (Date.now() >= pairing.expiresAt) return setPairing(null);
+      connection.devices().then(
+        (list) => {
+          if (!list) return;
+          setDevices(list);
+          const added = list.find((d) => !known.current.has(d.id));
+          if (added) {
+            setJustPaired(added.name);
+            setPairing(null);
+          }
+        },
+        () => undefined,
+      );
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [pairing]);
+  const startPairing = () => {
+    setPairError(null);
+    setJustPaired(null);
+    known.current = new Set((devices ?? []).map((d) => d.id));
+    connection.startPairing().then(
+      (started) => {
+        setNow(Date.now());
+        setPairing(started);
+      },
+      (e: unknown) => setPairError(e instanceof Error ? e.message : String(e)),
+    );
+  };
+  const owner = devices !== null && devices !== undefined;
 
   const load = useCallback(() => {
     setLoading(true);
@@ -89,7 +140,7 @@ export function RemoteAccess() {
   }, [copied]);
 
   const address = access?.addresses.find((a) => a.url === picked) ?? access?.addresses[0];
-  const link = address ? remoteLink(address, token) : null;
+  const link = address && pairing ? pairLink(address, pairing.code) : null;
   const about = address ? addressText(address) : null;
   const advice = access ? remoteAdvice(access) : null;
 
@@ -136,34 +187,83 @@ export function RemoteAccess() {
             </button>
           </div>
         </div>
-        {link && (
+        {owner && address && (
           <div className="set-row top ra-link">
             <div className="set-tx">
-              <b>Lien de connexion</b>
-              <p>
-                Scanne le QR code avec ton téléphone, ou copie le lien. Il contient le jeton : qui
-                l'a pilote tes agents, alors ne le partage pas.
-              </p>
-              <code className="ra-code" aria-label="Lien de connexion">
-                {link}
-              </code>
-              <div className="ra-actions">
-                <button
-                  className="btn sm"
-                  onClick={() => void copyText(link).then((ok) => setCopied(ok ? "ok" : "failed"))}
-                >
-                  Copier le lien
-                </button>
-                <span className="set-note" role="status">
-                  {copied === "ok"
-                    ? "Lien copié."
-                    : copied === "failed"
-                      ? "Copie impossible ici : sélectionne le lien à la main."
-                      : ""}
-                </span>
-              </div>
+              <b>Appairer un appareil</b>
+              {pairing && link ? (
+                <>
+                  <p>
+                    Scanne le QR code avec le téléphone, ou ouvre <code>{address.url}</code> dessus
+                    et tape ce code. Il ne sert qu'une fois, jusqu'à{" "}
+                    {new Date(pairing.expiresAt).toLocaleTimeString("fr-FR", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}{" "}
+                    ({Math.max(0, Math.ceil((pairing.expiresAt - now) / 60_000))} min).
+                  </p>
+                  <code className="ra-pair-code" aria-label="Code d'appairage">
+                    {shownCode(pairing.code)}
+                  </code>
+                  <div className="ra-actions">
+                    <button
+                      className="btn sm"
+                      onClick={() =>
+                        void copyText(link).then((ok) => setCopied(ok ? "ok" : "failed"))
+                      }
+                    >
+                      Copier le lien
+                    </button>
+                    <button className="btn sm quiet" onClick={() => setPairing(null)}>
+                      Masquer
+                    </button>
+                    <span className="set-note" role="status">
+                      {copied === "ok"
+                        ? "Lien copié."
+                        : copied === "failed"
+                          ? "Copie impossible ici : sélectionne le code à la main."
+                          : ""}
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <p>
+                    {justPaired ? `« ${justPaired} » est appairé. ` : ""}
+                    Chaque appareil reçoit son propre accès, que tu peux révoquer ici. Le code
+                    affiché ne sert qu'une fois, pendant 5 minutes.
+                  </p>
+                  <div className="ra-actions">
+                    <button className="btn sm" onClick={startPairing}>
+                      Appairer un appareil
+                    </button>
+                  </div>
+                </>
+              )}
+              {pairError && <p className="ra-err">{pairError}</p>}
             </div>
-            <QrCode text={link} />
+            {link && <QrCode text={link} />}
+          </div>
+        )}
+        {devicesError && devices === undefined && (
+          <div className="set-row">
+            <div className="set-tx">
+              <b>Appareils</b>
+              <p className="ra-err">
+                Impossible de savoir quels appareils sont appairés : {devicesError}
+              </p>
+            </div>
+          </div>
+        )}
+        {devices === null && (
+          <div className="set-row">
+            <div className="set-tx">
+              <b>Cet appareil est appairé</b>
+              <p>
+                Pour appairer un autre appareil ou en révoquer un, va sur l'ordinateur où tourne
+                MoonAgentic.
+              </p>
+            </div>
           </div>
         )}
         {advice && (
@@ -176,32 +276,79 @@ export function RemoteAccess() {
           </div>
         )}
       </div>
-      <div className="set-card">
-        <div className="set-row">
-          <div className="set-tx">
-            <b>Renouveler le jeton</b>
-            <p>
-              À faire si le lien a pu fuiter. L'ancien lien cesse de marcher tout de suite : cet
-              appareil reste connecté, les autres devront ouvrir le nouveau lien.
-            </p>
-          </div>
-          <div className="set-ctl">
-            <button
-              className="btn sm"
-              onClick={() =>
-                setConfirm({
-                  title: "Renouveler le jeton ?",
-                  text: "Tous les autres appareils seront déconnectés et devront ouvrir le nouveau lien. Le lien affiché au démarrage du serveur change aussi.",
-                  action: "Renouveler",
-                  run: async () => setToken(await connection.renewToken()),
-                })
-              }
-            >
-              Renouveler
-            </button>
+      {owner && (
+        <div className="set-card">
+          <div className="set-row top">
+            <div className="set-tx">
+              <b>Appareils appairés</b>
+              {devices.length === 0 ? (
+                <p>Aucun pour l'instant.</p>
+              ) : (
+                <ul className="ra-devices">
+                  {devices.map((d) => (
+                    <li key={d.id}>
+                      <span>
+                        <b>{d.name}</b>
+                        <small>
+                          Appairé le{" "}
+                          {new Date(d.createdAt).toLocaleDateString("fr-FR", {
+                            day: "numeric",
+                            month: "long",
+                          })}
+                          {d.lastSeen ? ` · vu ${seenAgo(d.lastSeen, Date.now())}` : ""}
+                        </small>
+                      </span>
+                      <button
+                        className="btn sm quiet"
+                        onClick={() =>
+                          setConfirm({
+                            title: `Révoquer « ${d.name} » ?`,
+                            text: "Il est déconnecté tout de suite et devra être appairé à nouveau avec un nouveau code.",
+                            action: "Révoquer",
+                            run: async () => setDevices(await connection.revokeDevice(d.id)),
+                          })
+                        }
+                      >
+                        Révoquer
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
+      {owner && (
+        <div className="set-card">
+          <div className="set-row">
+            <div className="set-tx">
+              <b>Renouveler le jeton de cet ordinateur</b>
+              <p>
+                À faire si le lien affiché au démarrage du serveur a pu fuiter, ou pour couper un
+                appareil ouvert avec un ancien lien de connexion. Les autres fenêtres de cet
+                ordinateur devront rouvrir le nouveau lien ; les appareils appairés gardent leur
+                accès.
+              </p>
+            </div>
+            <div className="set-ctl">
+              <button
+                className="btn sm"
+                onClick={() =>
+                  setConfirm({
+                    title: "Renouveler le jeton ?",
+                    text: "Les autres fenêtres ouvertes avec l'ancien lien seront déconnectées. Le lien affiché au démarrage du serveur change aussi.",
+                    action: "Renouveler",
+                    run: async () => void (await connection.renewToken()),
+                  })
+                }
+              >
+                Renouveler
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
     </>
   );
