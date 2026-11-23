@@ -324,6 +324,11 @@ const app = acp
       await usage(3_000, false);
       return { stopReason: "end_turn" };
     }
+    if (ask.trim() === "/fige") {
+      // Stands for a frozen agent: it ignores « Arrêter » and never ends its turn.
+      await say("Je réfléchis…", "agent_message_chunk");
+      await new Promise(() => undefined);
+    }
     if (ask.trim() === "/question") {
       // As Antigravity asks: a tool call left unfinished, the question as text, and the
       // turn ends; the answer is the next message.

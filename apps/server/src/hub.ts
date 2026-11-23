@@ -122,6 +122,8 @@ const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolCon
     return [];
   });
 
+/** How long an agent may take to stop after « Arrêter » before its process is killed. */
+const FORCE_STOP_MS = 10_000;
 /** How long an agent may take to open its session before the turn gives up. */
 const START_TIMEOUT_MS = 120_000;
 
@@ -135,6 +137,8 @@ export interface HubOptions {
   pullRequests?: () => PullRequests | undefined;
   /** How often known pull requests are asked about again; 0 for never. */
   prWatchMs?: number;
+  /** How long an agent may take to stop after « Arrêter » before it is killed. */
+  forceStopMs?: number;
 }
 
 /** Threads a coordinator may open while answering one message, so a mistake cannot flood. */
@@ -248,6 +252,9 @@ export class Hub {
   private readonly turns = new Map<string, Promise<void>>();
   /** Threads whose running turn the user asked to stop. */
   private readonly cancelled = new Set<string>();
+  /** Kills the agent of each thread asked to stop, if its turn has not ended in time. */
+  private readonly forceStops = new Map<string, NodeJS.Timeout>();
+  private readonly forceStopMs: number;
   /** Steps under way (a push, a step back, a hand-off), awaited before the server stops. */
   private readonly steps = new Set<Promise<unknown>>();
   /** Identifies the running turn, so a turn's plan and text stay separate from the next. */
@@ -302,6 +309,7 @@ export class Hub {
     this.store = store;
     this.agents = agents;
     this.worktreesDir = options.worktreesDir;
+    this.forceStopMs = options.forceStopMs ?? FORCE_STOP_MS;
     this.pool = new AgentPool({
       idleMs: options.idleMs,
       maxLiveAgents: options.maxLiveAgents,
@@ -1387,6 +1395,10 @@ export class Hub {
       this.cancelled.delete(threadId);
       this.toolNames.delete(threadId);
       this.flushText(threadId);
+      // An agent killed in a quiet stretch could not say it was over.
+      if (this.store.getThread(threadId)?.quietSince) {
+        this.updateThread(threadId, { quietSince: null });
+      }
       this.pool.leftIdle(threadId);
       if (!this.closed) {
         const summary = summaryOf(this.lastReply(threadId));
@@ -1478,11 +1490,36 @@ export class Hub {
   async cancel(threadId: string): Promise<void> {
     // An agent only cancels a prompt it already has: one that is still starting never sees
     // the request, so the turn remembers it and stops before sending its prompt.
-    if (this.turns.has(threadId)) this.cancelled.add(threadId);
+    const turn = this.turns.get(threadId);
+    if (turn) this.cancelled.add(threadId);
     this.pool.abortStart(threadId);
     this.settlePermissions(threadId);
+    // Armed first: an agent frozen enough may not even read the request.
+    if (turn) this.forceStopAfter(threadId, turn);
     const session = await this.pool.get(threadId)?.catch(() => undefined);
     await session?.cancel();
+  }
+
+  /**
+   * Kills the thread's agent if the turn asked to stop has not ended in time: its turn then
+   * ends as stopped, which frees its place in its coordinator's line. Its session is kept,
+   * for the next message to resume.
+   */
+  private forceStopAfter(threadId: string, turn: Promise<void>): void {
+    if (this.forceStops.has(threadId)) return;
+    const timer = setTimeout(() => {
+      this.forceStops.delete(threadId);
+      if (this.closed || this.turns.get(threadId) !== turn) return;
+      console.warn(`L'agent du fil ${threadId} ne s'arrêtait pas : arrêté de force.`);
+      void this.pool.stop(threadId);
+    }, this.forceStopMs);
+    timer.unref();
+    this.forceStops.set(threadId, timer);
+    const done = () => {
+      clearTimeout(timer);
+      if (this.forceStops.get(threadId) === timer) this.forceStops.delete(threadId);
+    };
+    turn.then(done, done);
   }
 
   /** Switches the thread's model between turns: now if its agent is running, otherwise when it next starts. */
@@ -2104,6 +2141,8 @@ export class Hub {
     // A review starting reads the changes first; it must not reach the store once closed.
     await this.teams.settled();
     this.pool.clearTimers();
+    for (const timer of this.forceStops.values()) clearTimeout(timer);
+    this.forceStops.clear();
     await this.recovered;
     for (const threadId of new Set([...this.pendingPermissions.values()].map((p) => p.threadId))) {
       this.settlePermissions(threadId);
@@ -2325,6 +2364,10 @@ export class Hub {
       signal: AbortSignal.any([stop, AbortSignal.timeout(START_TIMEOUT_MS)]),
       handlers: {
         onUpdate: (update) => this.applyUpdate(thread.id, update),
+        onQuiet: (since) => {
+          if (this.closed || !this.store.getThread(thread.id)) return;
+          this.updateThread(thread.id, { quietSince: since ?? null });
+        },
         requestPermission: (request, signal) => this.requestPermission(thread.id, request, signal),
         onExit: (reason) => {
           if (!owns()) return;
