@@ -1,7 +1,10 @@
 /* The agent's own plan: one card, steps turn green as the agent finishes them. */
-/* As wide as a step list reads well, not the whole thread: the same width open or folded. */
+/* As wide as its steps, like a checklist: never the whole thread. */
 .agent-plan {
-  width: min(100%, 420px);
+  width: fit-content;
+  min-width: min(100%, 240px);
+  max-width: min(100%, 340px);
+  border-radius: 14px;
   padding: 0;
   gap: 0;
 }
@@ -14,12 +17,12 @@
   font-size: 13.5px;
   color: var(--fg);
   text-align: left;
-  border-radius: 18px;
+  border-radius: 14px;
 }
 /* Inside the card: the ring would sit on its border otherwise. */
 .agent-plan-h:focus-visible {
   outline-offset: -2px;
-  border-radius: 18px;
+  border-radius: 14px;
 }
 .agent-plan-h:hover svg {
   color: var(--fg);
@@ -45,9 +48,9 @@
 }
 .agent-plan-l {
   display: grid;
-  gap: 7px;
+  gap: 9px;
   margin: 0;
-  padding: 2px 14px 12px;
+  padding: 2px 16px 14px 14px;
   list-style: none;
 }
 .agent-plan-l li {
@@ -56,7 +59,7 @@
   align-items: flex-start;
   font-size: 13.5px;
   line-height: 1.4;
-  color: var(--muted);
+  color: var(--fg);
   min-width: 0;
 }
 .agent-plan-t {
