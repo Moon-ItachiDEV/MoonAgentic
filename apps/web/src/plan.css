@@ -16,7 +16,7 @@
   gap: 8px;
   width: 100%;
   padding: 12px 16px 0;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--faint);
   text-align: left;
   border-radius: 14px 14px 0 0;
@@ -43,8 +43,9 @@
 }
 .agent-plan-tt {
   padding: 4px 16px 0;
-  font-size: 14.5px;
+  font-size: 14px;
   font-weight: 500;
+  letter-spacing: -0.005em;
   line-height: 1.35;
   color: var(--fg);
   display: -webkit-box;
@@ -66,7 +67,7 @@
   grid-template-columns: 18px minmax(0, 1fr);
   gap: 12px;
   padding-bottom: 14px;
-  font-size: 13.5px;
+  font-size: 13px;
   line-height: 18px;
   color: var(--fg);
 }
@@ -128,7 +129,7 @@
 
 .agent-plan-b {
   display: grid;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
 }
 .agent-plan-r {
@@ -141,12 +142,8 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.agent-plan-l li.now .agent-plan-t,
-.agent-plan-l li.held .agent-plan-t {
-  font-weight: 500;
-}
 .agent-plan-d {
-  font: 11.5px var(--mono);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   color: var(--faint);
   white-space: nowrap;
@@ -157,11 +154,11 @@
   gap: 4px;
 }
 .agent-plan-tools code {
-  font: 11px/1 var(--mono);
-  padding: 3px 6px;
-  border-radius: 5px;
-  background: var(--card);
-  color: var(--muted);
+  font: 10.5px/1 var(--mono);
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--sunken);
+  color: var(--faint);
   max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -191,7 +188,7 @@
   gap: 8px;
   padding: 10px 16px;
   border-top: 1px solid var(--line);
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .agent-plan:not(.open) .agent-plan-f {

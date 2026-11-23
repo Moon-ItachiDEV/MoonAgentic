@@ -252,6 +252,50 @@ const app = acp
     };
 
     if (ask.includes("boom")) throw new Error("Le démo a planté exprès.");
+
+    // A longer task in five steps, each with its tool, so a plan can be seen moving on.
+    if (ask.includes("en 5 étapes")) {
+      const steps: [string, acp.ToolKind, string][] = [
+        ["Lire le code concerné", "read", "Lire src/app.ts"],
+        ["Chercher où answer est utilisé", "search", "Chercher answer dans src"],
+        ["Modifier la valeur de answer", "edit", "Modifier src/app.ts"],
+        ["Lancer les tests", "execute", "`pnpm test`"],
+        ["Résumer le changement", "think", "Relire le diff"],
+      ];
+      const plan = (at: number) =>
+        update({
+          sessionUpdate: "plan",
+          entries: steps.map(([content], i) => ({
+            content,
+            priority: "medium" as const,
+            status:
+              i < at
+                ? ("completed" as const)
+                : i === at
+                  ? ("in_progress" as const)
+                  : ("pending" as const),
+          })),
+        });
+      for (const [i, [, kind, title]] of steps.entries()) {
+        await plan(i);
+        await update({
+          sessionUpdate: "tool_call",
+          toolCallId: `step-${i}`,
+          title,
+          kind,
+          status: "in_progress",
+        });
+        await delay(900 + i * 300);
+        await update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: `step-${i}`,
+          status: "completed",
+        });
+      }
+      await plan(steps.length);
+      await say("Fait en 5 étapes : answer vaut 42 et les tests passent.", "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
     const usage = async (tokens: number, priced = true) => {
       used.set(sessionId, tokens);
       // Priced like a real agent, which says what the session has cost so far.
