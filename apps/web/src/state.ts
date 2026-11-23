@@ -5,6 +5,7 @@ import type {
   Favorites,
   Item,
   McpServerInfo,
+  PendingQuestion,
   PendingRequest,
   PlanTask,
   Project,
@@ -42,6 +43,8 @@ export interface State {
   coordinator: CoordinatorSettings;
   /** Permission requests waiting in every thread. */
   requests: PendingRequest[];
+  /** Questions agents hold their turn on, in every thread. */
+  questions: PendingQuestion[];
   mcpServers: McpServerInfo[];
   mcpSecretsError: string | null;
   projects: Project[];
@@ -85,6 +88,8 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, coordinator: message.settings };
     case "requests":
       return { ...state, requests: message.requests };
+    case "questions":
+      return { ...state, questions: message.questions };
     case "mcpServers":
       return {
         ...state,
@@ -128,6 +133,7 @@ export function reduce(state: State, message: ServerMessage): State {
         held,
         reviews,
         requests: state.requests.filter((r) => r.threadId !== message.threadId),
+        questions: state.questions.filter((q) => q.threadId !== message.threadId),
       };
     }
     case "projectRemoved": {
@@ -142,6 +148,7 @@ export function reduce(state: State, message: ServerMessage): State {
         held: Object.fromEntries(Object.entries(state.held).filter(([id]) => !gone.has(id))),
         reviews: Object.fromEntries(Object.entries(state.reviews).filter(([id]) => !gone.has(id))),
         requests: state.requests.filter((r) => !gone.has(r.threadId)),
+        questions: state.questions.filter((q) => !gone.has(q.threadId)),
         plan: state.plan.filter((c) => c.projectId !== message.projectId),
         schedules: state.schedules.filter((s) => s.projectId !== message.projectId),
       };
@@ -257,6 +264,7 @@ export const initialState: State = {
   favorites: {},
   coordinator: { routes: {} },
   requests: [],
+  questions: [],
   mcpServers: [],
   mcpSecretsError: null,
   projects: [],

@@ -1,0 +1,384 @@
+/* The decision card, above the composer: same width, same 24px corners, 8px apart.
+   Inside, everything sits on two vertical edges: 16px (tag, question, key caps, preview)
+   and 48px (labels, descriptions, the user's own answer). Rows are 8px inside the card,
+   so their corners are 24 - 8 = 16. Spacing steps: 2, 4, 8, 12, 16. */
+.dcard,
+.dcard-fold {
+  --dc-hi: color-mix(in srgb, var(--fg) 5%, transparent);
+  --dc-ring: color-mix(in srgb, var(--fg) 9%, transparent);
+  --dc-out: cubic-bezier(0.2, 0, 0, 1);
+  width: min(600px, 100%);
+  margin-bottom: 8px;
+  background: var(--surface);
+  border: 1px solid transparent;
+  box-shadow:
+    0 0 0 1px var(--dc-ring),
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 12px 32px -16px rgba(0, 0, 0, 0.18);
+}
+.dcard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 8px;
+  border-radius: 24px;
+  font-size: 14px;
+  line-height: 20px;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .dcard,
+  .dcard-fold {
+    animation: dcard-in 0.3s var(--dc-out) both;
+  }
+  @keyframes dcard-in {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+      filter: blur(4px);
+    }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dcard,
+  .dcard-fold {
+    animation: dcard-fade 0.2s both;
+  }
+  @keyframes dcard-fade {
+    from {
+      opacity: 0;
+    }
+  }
+}
+
+.dcard-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding-inline-start: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--muted);
+}
+.dcard-tag {
+  flex: none;
+  padding: 2px 6px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 13%, transparent);
+}
+.dcard-src {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: start;
+  color: inherit;
+}
+.dcard-src > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button.dcard-src:hover > span:last-child {
+  color: var(--fg);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.dcard-pager {
+  flex: none;
+  display: flex;
+  align-items: center;
+  font-variant-numeric: tabular-nums;
+}
+.dcard-pager > span {
+  padding-inline: 2px;
+}
+.dcard-ib,
+.dcard-later {
+  flex: none;
+  height: 28px;
+  border-radius: 8px;
+  color: var(--muted);
+  transition:
+    background-color 0.12s,
+    scale 0.15s ease-out;
+}
+.dcard-ib {
+  width: 28px;
+  display: grid;
+  place-items: center;
+}
+.dcard-later {
+  padding-inline: 8px;
+}
+button.dcard-ib:active,
+.dcard-later:active {
+  scale: 0.96;
+}
+@media (hover: hover) {
+  button.dcard-ib:hover,
+  .dcard-later:hover {
+    background: var(--dc-hi);
+    color: var(--fg);
+  }
+}
+
+.dcard-q {
+  margin: 0;
+  padding: 8px;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 600;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+
+.dcard-rows {
+  display: grid;
+  gap: 2px;
+}
+.dcard-o {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: start;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px;
+  border-radius: 16px;
+  text-align: start;
+  transition: background-color 0.12s;
+}
+.dcard-k {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  background: var(--sunken);
+  color: var(--muted);
+  font: 500 11px/1 var(--mono);
+  transition:
+    background-color 0.12s,
+    color 0.12s;
+}
+.dcard-ot {
+  display: grid;
+  min-width: 0;
+}
+.dcard-on {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 8px;
+  min-width: 0;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.dcard-od {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 18px;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+.dcard-rec {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 5px;
+  box-shadow: inset 0 0 0 1px var(--line2);
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.dcard-ent {
+  display: none;
+  height: 20px;
+  align-items: center;
+  color: var(--faint);
+}
+.dcard-ent.show {
+  display: flex;
+}
+.dcard-ent.show:disabled {
+  opacity: 0.4;
+}
+.dcard-o.hi {
+  background: var(--dc-hi);
+}
+.dcard-o.hi .dcard-ent {
+  display: flex;
+}
+.dcard-o.hi .dcard-k,
+.dcard-o.on .dcard-k,
+.dcard-t.hi .dcard-k,
+.dcard-t.on .dcard-k {
+  background: var(--fg);
+  color: var(--surface);
+}
+@media (hover: hover) {
+  .dcard-o:hover {
+    background: var(--dc-hi);
+  }
+}
+.dcard-o.own .dcard-on {
+  font-weight: 400;
+  color: var(--faint);
+}
+.dcard-o.own input {
+  width: 100%;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font: inherit;
+  color: var(--fg);
+  caret-color: var(--accent);
+}
+.dcard-o.own input::placeholder {
+  color: var(--faint);
+}
+.dcard-pick {
+  align-self: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--fg);
+  color: var(--surface);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+}
+
+/* Previews: tiles side by side when there is room, else one pane for the row picked. */
+.dcard-tiles {
+  display: grid;
+  grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 8px 10px;
+}
+.dcard-t {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  text-align: start;
+}
+.dcard-pv,
+.dcard-pane {
+  background: var(--sunken);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.dcard-pv {
+  position: relative;
+  aspect-ratio: 3 / 2;
+  padding: 10px 12px;
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: box-shadow 0.12s;
+}
+.dcard-pv pre,
+.dcard-pane pre {
+  margin: 0;
+  font: 10.5px/15px var(--mono);
+  color: var(--muted);
+  white-space: pre;
+}
+.dcard-pv .dcard-rec {
+  position: absolute;
+  inset-inline-end: 6px;
+  bottom: 6px;
+  background: var(--surface);
+}
+.dcard-tn {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  column-gap: 12px;
+  align-items: start;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.dcard-t.hi .dcard-pv,
+.dcard-t.on .dcard-pv {
+  box-shadow: inset 0 0 0 1.5px var(--fg);
+}
+@media (hover: hover) {
+  .dcard-t:not(.hi):not(.on):hover .dcard-pv {
+    box-shadow: inset 0 0 0 1px var(--line2);
+  }
+}
+.dcard-pane {
+  margin: 0 8px 8px;
+  padding: 10px 12px;
+  height: 98px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.dcard-go {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 8px 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Folded: one line, on the same edges. */
+.dcard-fold {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding-inline: 16px 8px;
+  border-radius: 16px;
+  font-size: 13px;
+  text-align: start;
+}
+.dcard-fold-q {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.dcard-fold-n {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.dcard .sr-only,
+.dcard-fold .sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* In the feed: what was asked, and that its answer is given above the composer. */
+.ask-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ask-wait i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: none;
+}
+
+@media (max-width: 640px) {
+  .dcard-o:not(:has(.dcard-od)) {
+    min-height: 44px;
+  }
+}

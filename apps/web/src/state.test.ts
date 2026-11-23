@@ -49,6 +49,7 @@ describe("client state", () => {
         coordinator: { routes: {} },
         favorites: {},
         requests: [],
+        questions: [],
         mcpServers: [],
         agents: [],
         projects: [],
@@ -74,6 +75,7 @@ describe("client state", () => {
         coordinator: { routes: {} },
         favorites: {},
         requests: [],
+        questions: [],
         mcpServers: [],
         agents: [],
         projects: [
