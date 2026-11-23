@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import { threadPullRequest } from "@moonagentic/protocol";
+import { DEFAULT_MAX_TURNS, threadPullRequest } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   AgentSetting,
@@ -72,6 +72,7 @@ import { mcpInfo } from "./mcp.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
+import { TurnLine } from "./turn-line.ts";
 import type { Store } from "./store.ts";
 
 export interface Client {
@@ -190,6 +191,8 @@ export class Hub {
   private readonly turns = new Map<string, Promise<void>>();
   /** Threads whose running turn the user asked to stop. */
   private readonly cancelled = new Set<string>();
+  /** Turns started by a coordinator, a team or a planned task that wait for a place. */
+  private readonly line = new TurnLine();
   /** Kills the agent of each thread asked to stop, if its turn has not ended in time. */
   private readonly forceStops = new Map<string, NodeJS.Timeout>();
   private readonly forceStopMs: number;
@@ -273,6 +276,7 @@ export class Hub {
           isolated: s.isolated,
           title: s.title,
           text: s.text,
+          auto: true,
         }),
       running: (id) => this.turns.has(id),
     });
@@ -561,6 +565,14 @@ export class Hub {
           if (t.kind === "coordinator") this.coordinators.drainLine(t.id);
         }
         return;
+      case "server.setMaxTurns":
+        this.coordinators.setCoordinatorSettings({
+          ...this.coordinators.coordinatorSettings(),
+          maxTurns: message.maxTurns,
+        });
+        // More places: the turns already in line take them now.
+        this.admit();
+        return;
       case "team.start": {
         const id = this.startTeam(message);
         // Kept as the team a coordinator starts when it is asked for one.
@@ -757,6 +769,8 @@ export class Hub {
     taskKey?: string | undefined;
     /** Kept in line: the text is given later, once its coordinator has a place free. */
     held?: boolean | undefined;
+    /** Started by the server itself, a planned task: waits for a place when all are taken. */
+    auto?: boolean | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
@@ -796,7 +810,7 @@ export class Hub {
     if (input.text && !input.held) {
       if (input.openedBy)
         this.coordinators.sendFromCoordinator(thread.id, input.text, input.byTeam);
-      else this.send(thread.id, input.text, undefined, input.byTeam);
+      else this.send(thread.id, input.text, undefined, input.byTeam, undefined, input.auto);
     }
     return thread.id;
   }
@@ -878,9 +892,30 @@ export class Hub {
       .join("\n");
   }
 
+  /** Turns the whole server may run at once. */
+  private maxTurns(): number {
+    return this.coordinators.coordinatorSettings().maxTurns ?? DEFAULT_MAX_TURNS;
+  }
+
+  /** Turns at work now: not those in line, nor those waiting for the user's answer. */
+  private turnsAtWork(): number {
+    let n = 0;
+    for (const id of this.turns.keys()) {
+      if (!this.line.has(id) && this.store.getThread(id)?.status !== "waiting") n += 1;
+    }
+    return n;
+  }
+
+  /** Lets the turns in line through, first come first served, while places are free. */
+  private admit(): void {
+    while (this.line.size && this.turnsAtWork() < this.maxTurns()) this.line.next();
+  }
+
   /**
    * Sends the user's message to the thread's agent; `context` goes before it, unseen.
    * `byTeam` marks a message the team's engine wrote, which the app keeps out of sight.
+   * A message the user did not write themselves (a team's, a coordinator's, or `auto` for
+   * a planned task) waits for a place when the server runs as many turns as it may.
    */
   send(
     threadId: string,
@@ -888,6 +923,7 @@ export class Hub {
     context?: string,
     byTeam?: boolean,
     from?: "coordinator",
+    auto?: boolean,
   ): void {
     const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
@@ -908,9 +944,12 @@ export class Hub {
     this.turnIds.set(threadId, randomUUID());
     this.cancelled.delete(threadId);
     this.pool.clearIdle(threadId);
-    const turn = this.runTurn(thread, text, itemId, context).finally(() => {
+    const queued = !!(byTeam || from || auto);
+    const turn = this.runTurn(thread, text, itemId, context, queued).finally(() => {
       const cancelled = this.cancelled.has(threadId);
       this.turns.delete(threadId);
+      // A place is free for the first turn in line.
+      if (!this.closed) this.admit();
       this.turnIds.delete(threadId);
       this.cancelled.delete(threadId);
       this.toolNames.delete(threadId);
@@ -1012,6 +1051,8 @@ export class Hub {
     // the request, so the turn remembers it and stops before sending its prompt.
     const turn = this.turns.get(threadId);
     if (turn) this.cancelled.add(threadId);
+    // Still in line: it leaves it, and its turn ends there.
+    this.line.leave(threadId);
     this.pool.abortStart(threadId);
     this.settlePermissions(threadId);
     // Armed first: an agent frozen enough may not even read the request.
@@ -1669,6 +1710,11 @@ export class Hub {
     await this.catalog.close();
     // An agent still starting is stopped now rather than waited for, and its turn ends
     // as stopped, not as failed.
+    // A turn in line is stopped too, as one whose agent was starting.
+    for (const threadId of this.line.threads()) {
+      this.cancelled.add(threadId);
+      this.line.leave(threadId);
+    }
     for (const threadId of this.pool.startingThreads()) {
       this.cancelled.add(threadId);
       this.pool.abortStart(threadId);
@@ -1687,8 +1733,20 @@ export class Hub {
     text: string,
     itemId: string,
     context?: string,
+    /** Waits for a place when the server runs as many turns as it may. */
+    queued?: boolean,
   ): Promise<void> {
     try {
+      // Behind those already in line, so none is overtaken.
+      if (queued && (this.line.size > 0 || this.turnsAtWork() >= this.maxTurns())) {
+        this.updateThread(thread.id, { inLine: true });
+        await this.line.wait(thread.id);
+        if (this.store.getThread(thread.id)) this.updateThread(thread.id, { inLine: null });
+        if (this.cancelled.has(thread.id)) {
+          this.updateThread(thread.id, { status: "idle" });
+          return;
+        }
+      }
       const continuing = this.pool.has(thread.id);
       const session = await this.session(thread);
       await this.checkpoint(thread.id, itemId);
@@ -2138,6 +2196,8 @@ export class Hub {
       at: Date.now(),
     });
     this.updateThread(threadId, { status: "waiting" });
+    // Waiting for the user takes no place: the next turn in line may start.
+    this.admit();
     return new Promise((resolve) => {
       this.pendingPermissions.set(id, { threadId, resolve });
       this.broadcastRequests();

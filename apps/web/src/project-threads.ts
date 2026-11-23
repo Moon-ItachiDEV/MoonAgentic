@@ -64,6 +64,7 @@ export function threadLine(thread: Thread, members: readonly Thread[] = []): str
     return pr?.state === "merged" ? `PR #${pr.number} mergée.` : (thread.summary ?? "");
   }
   if (thread.held) return "En file : démarre dès qu'un autre fil du coordinateur se termine.";
+  if (thread.inLine) return "En file : démarre dès qu'une place se libère sur le serveur.";
   if (thread.status === "waiting") return "Attend ta réponse.";
   const asking = members.find((m) => m.status === "waiting" && !m.archived);
   if (asking) return `« ${asking.title} » attend ta réponse.`;

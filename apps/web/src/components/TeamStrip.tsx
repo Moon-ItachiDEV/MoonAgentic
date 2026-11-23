@@ -231,16 +231,20 @@ export function TeamStrip({
     return {
       phase,
       asks: working && thread?.status === "waiting",
-      moving: working && thread?.status === "running",
+      // In line for a place on the server: its agent has not started.
+      moving: working && thread?.status === "running" && !thread.inLine,
+      inLine: working && !!thread?.inLine,
     };
   };
 
   const done = team.tasks.filter((t) => t.status === "done").length;
   const busy = lanes.filter((l) => state(l).moving).length;
   const asking = lanes.filter((l) => state(l).asks).length;
+  const lined = lanes.filter((l) => state(l).inLine).length;
   const summary = running
     ? [
         busy ? `${busy} agent${busy > 1 ? "s" : ""} au travail` : "Personne ne tourne",
+        lined ? `${lined} en file` : "",
         asking ? `${asking} attend${asking > 1 ? "ent" : ""} ton accord` : "",
         `depuis ${span(now - start)}`,
       ]

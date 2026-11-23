@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync } from "node:fs";
 import path from "node:path";
 import type { Store } from "./store.ts";
 
@@ -29,8 +29,13 @@ export function backupNow(
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = path.join(dir, `state-${dayOf(now)}.sqlite`);
   if (existsSync(file)) return undefined;
-  store.backup(file);
-  if (process.platform !== "win32") chmodSync(file, 0o600);
+  // Written beside, then renamed: a power cut in the middle never leaves half a copy under
+  // the day's name.
+  const partial = `${file}.tmp`;
+  rmSync(partial, { force: true });
+  store.backup(partial);
+  if (process.platform !== "win32") chmodSync(partial, 0o600);
+  renameSync(partial, file);
   const copies = readdirSync(dir)
     .filter((name) => BACKUP_FILE.test(name))
     .sort()

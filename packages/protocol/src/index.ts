@@ -341,6 +341,11 @@ export interface Thread {
    * lasted long enough to say so. Past a longer silence the turn is stopped.
    */
   quietSince?: number;
+  /**
+   * Its turn waits for a place: the server already runs as many turns as it may. It starts
+   * by itself once one ends.
+   */
+  inLine?: true;
   /** The coordinator's thread, for a thread it opened. */
   openedBy?: string;
   /** The coordinator's own name for the subject: asked again, it gets this thread back. */
@@ -636,6 +641,13 @@ export type RouteKind = (typeof ROUTE_KINDS)[number];
 /** Threads a coordinator runs at once unless the settings say otherwise, and at most. */
 export const DEFAULT_PARALLEL = 3;
 export const MAX_PARALLEL = 6;
+/**
+ * Turns the whole server runs at once unless the settings say otherwise, and at most. Past
+ * it, what a coordinator, a team or a planned task starts waits in line; what the user sends
+ * themselves always goes.
+ */
+export const DEFAULT_MAX_TURNS = 4;
+export const MAX_MAX_TURNS = 12;
 
 /** A team as the user last set one up: what a coordinator starts when asked for a team. */
 export interface TeamSetup {
@@ -658,6 +670,8 @@ export interface CoordinatorSettings {
   team?: TeamSetup;
   /** Threads a coordinator runs at once, the others waiting in line; 3 when left out. */
   parallel?: number;
+  /** Turns the whole server runs at once, coordinators or not; 4 when left out. */
+  maxTurns?: number;
 }
 
 export interface Snapshot {
@@ -805,6 +819,11 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("coordinator.setParallel"),
     parallel: z.number().int().min(1).max(MAX_PARALLEL),
+  }),
+  /** How many turns the whole server runs at once. */
+  z.object({
+    type: z.literal("server.setMaxTurns"),
+    maxTurns: z.number().int().min(1).max(MAX_MAX_TURNS),
   }),
   z.object({ type: z.literal("workspace.review"), threadId: id }),
   z.object({

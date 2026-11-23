@@ -48,6 +48,7 @@ type ThreadExtra = Pick<
   | "pinned"
   | "unread"
   | "quietSince"
+  | "inLine"
   | "archived"
   | "pr"
   | "summary"
@@ -70,6 +71,7 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.pinned ? { pinned: true } : {}),
     ...(thread.unread ? { unread: true } : {}),
     ...(thread.quietSince ? { quietSince: thread.quietSince } : {}),
+    ...(thread.inLine ? { inLine: true } : {}),
     ...(thread.archived ? { archived: true } : {}),
     ...(thread.pr ? { pr: thread.pr } : {}),
     ...(thread.summary ? { summary: thread.summary } : {}),
@@ -314,9 +316,9 @@ export class Store {
   /** Work that was in flight when the server stopped cannot resume, so settle it. */
   recoverAfterRestart(): void {
     this.db.exec(`UPDATE threads SET status = 'idle' WHERE status IN ('running', 'waiting')`);
-    // A turn cut short is not quiet any more.
+    // A turn cut short is not quiet any more, nor in line.
     this.db.exec(
-      `UPDATE threads SET extra = NULLIF(json_remove(extra, '$.quietSince'), '{}') WHERE json_extract(extra, '$.quietSince') IS NOT NULL`,
+      `UPDATE threads SET extra = NULLIF(json_remove(extra, '$.quietSince', '$.inLine'), '{}') WHERE json_extract(extra, '$.quietSince') IS NOT NULL OR json_extract(extra, '$.inLine') IS NOT NULL`,
     );
     const pending = this.sql(
       `SELECT thread_id, data FROM items WHERE json_extract(data, '$.kind') = 'permission'`,
@@ -410,6 +412,7 @@ export class Store {
     > & {
       held?: string | null;
       quietSince?: number | null;
+      inLine?: true | null;
       error?: string | null;
       pr?: Thread["pr"] | null;
     },
@@ -418,7 +421,7 @@ export class Store {
     if (!current) throw new Error(`Unknown thread ${id}`);
     // Only activity moves a thread up the sidebar, not a settings change.
     const active = patch.status !== undefined || patch.title !== undefined;
-    const { pr, held, quietSince, error: _error, ...rest } = patch;
+    const { pr, held, quietSince, inLine, error: _error, ...rest } = patch;
     const next: Thread = {
       ...current,
       ...rest,
@@ -426,6 +429,8 @@ export class Store {
     };
     if (held === null) delete next.held;
     else if (held) next.held = held;
+    if (inLine === null) delete next.inLine;
+    else if (inLine) next.inLine = true;
     if (quietSince === null) delete next.quietSince;
     else if (quietSince) next.quietSince = quietSince;
     if (pr === null) delete next.pr;
