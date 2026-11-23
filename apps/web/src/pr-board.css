@@ -379,6 +379,8 @@ a.t2-l:hover {
     border-radius: 20px;
     padding: 16px 12px max(12px, env(safe-area-inset-bottom));
     animation-name: prc-up;
+    /* Above the side bar's drawer (45) and its scrim, under the dialogs (50). */
+    z-index: 48;
   }
   .prc-acts .btn {
     height: 44px;

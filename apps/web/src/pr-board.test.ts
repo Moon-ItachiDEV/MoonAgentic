@@ -63,6 +63,15 @@ describe("prBoard", () => {
     expect([board.red, board.green]).toEqual([2, 2]);
   });
 
+  it("leaves out the open pull request of an archived thread", () => {
+    const board = prBoard([
+      thread("gone", pr(3, { checks: "failed" }), { archived: true }),
+      thread("r", pr(4)),
+    ]);
+    expect(board.rows.map((r) => r.thread.id)).toEqual(["r"]);
+    expect([board.red, board.green]).toEqual([0, 1]);
+  });
+
   it("shows a team's pull request once and counts only today's merges", () => {
     const now = new Date(2026, 10, 23, 15).getTime();
     const board = prBoard(
@@ -112,6 +121,8 @@ describe("canMerge", () => {
     expect(canMerge(info({ checks: [{ name: "ci", state: "passed" }] }))).toBe(true);
     expect(canMerge(info({ checks: [{ name: "ci", state: "pending" }] }))).toBe(false);
     expect(canMerge(info({ conflicts: true }))).toBe(false);
+    // GitHub has not worked the conflicts out yet: not before it answers.
+    expect(canMerge(info({ conflicts: null }))).toBe(false);
     expect(canMerge(info({ state: "draft" }))).toBe(false);
   });
 });

@@ -22,7 +22,9 @@ afterEach(() => {
 /** A folder holding these files, with their parent folders made on the way. */
 function folder(files: Record<string, string>): string {
   const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-files-"));
-  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  cleanups.push(() =>
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+  );
   for (const [rel, content] of Object.entries(files)) {
     mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
     writeFileSync(path.join(dir, rel), content);
