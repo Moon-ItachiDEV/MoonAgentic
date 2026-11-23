@@ -11,6 +11,7 @@
   <a href="#ce-que-tu-obtiens">Fonctionnalités</a> ·
   <a href="#agents">Agents</a> ·
   <a href="#tourner-24h24">24h/24</a> ·
+  <a href="#sécurité">Sécurité</a> ·
   <a href="#contribuer">Contribuer</a> ·
   <a href="./LICENSE">MIT</a>
 </p>
@@ -153,6 +154,26 @@ Tout reste sur ta machine, dans `~/.moonagentic/` (droits réservés à ton util
 - `worktrees/` — worktrees git isolés des fils en cours
 - `logs/` — journaux quotidiens rotatifs, jeton masqué (`14` jours)
 - `backups/` — sauvegardes SQLite atomiques quotidiennes (`7` jours)
+
+## Sécurité
+
+MoonAgentic est fait pour **une seule personne, sur ses propres machines**. Qui possède le lien avec jeton pilote tes agents, donc ta machine : traite ce lien comme un mot de passe.
+
+### Ce dont il te protège
+
+- **Quelqu'un d'autre sur ton réseau.** Le serveur écoute sur `127.0.0.1` par défaut. Toute l'API et la connexion WebSocket exigent le jeton, les essais ratés sont limités, et **Renouveler le jeton** coupe toutes les anciennes sessions.
+- **Un site web ouvert dans ton navigateur.** Une page d'un autre site ne peut pas se brancher sur ton serveur : la connexion WebSocket est refusée quand elle ne vient pas de la page de MoonAgentic elle-même, et rien ne répond sans le jeton.
+- **Un dossier piégé que tu viens d'ajouter.** Ajouter un projet, lister ses fichiers pour `@` ou relire ses modifications ne lance aucune commande que le dépôt aurait glissée dans ses réglages git (`core.fsmonitor`, outil de diff externe, convertisseur `textconv`). Les chemins demandés par l'interface ne sortent jamais du dossier, liens symboliques compris.
+- **Une fuite de tes secrets.** Les secrets de tes serveurs MCP et ta connexion GitHub restent sur le serveur, hors de la base et de ses sauvegardes, et ne sont jamais renvoyés au navigateur. Les journaux masquent le jeton. Les fichiers sensibles (`.env`, `*.pem`, `*.key`, `.npmrc`…) sont décochés avant un commit.
+- **Une pièce jointe piégée.** Une image est reconnue à son contenu et non à son nom, le SVG est refusé, et elle n'est relue qu'avec le jeton.
+
+### Ce qu'il ne fait pas à ta place
+
+- **Un agent a tes droits.** Il tourne sous ton compte, sans bac à sable : il peut lire ce que tu peux lire et lancer ce que tu peux lancer. En mode **Supervisé**, il demande avant de modifier ou de lancer quoi que ce soit ; en **Accès complet**, il agit sans demander. Une **Branche à part** isole son travail dans git, pas ta machine.
+- **Un agent obéit à ce qu'il lit.** Un fichier, une page web ou la réponse d'un serveur MCP peut contenir des consignes écrites pour lui. Sur un dépôt que tu ne connais pas, reste en **Supervisé** et ne branche que des serveurs MCP de confiance.
+- **Un dossier où un agent travaille est du code que tu lances.** Ses hooks git, ses filtres (Git LFS…) et ses scripts s'exécutent dès qu'un fil y fait un commit, une branche ou une commande, comme dans ton terminal. N'ajoute que des dossiers en lesquels tu as confiance.
+- **Le réseau local n'est pas chiffré.** Avec `--host 0.0.0.0`, le jeton et tes messages circulent en clair : garde ça pour un réseau à toi, et préfère Tailscale. N'utilise jamais `tailscale funnel`.
+- **Il n'y a ni comptes ni rôles.** Le jeton donne tout. Un autre compte administrateur de la même machine, ou un programme lancé sous ton compte, peut lire `~/.moonagentic`.
 
 ## Contribuer
 

@@ -6,6 +6,7 @@ import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ProjectCommand, Skill } from "@moonagentic/protocol";
+import { GIT_QUIET } from "./git-own.ts";
 
 /** Beyond this many files, the listing stops: `@` then finds only what it saw. */
 export const MAX_FILES = 20_000;
@@ -41,7 +42,15 @@ function gitFiles(dir: string): Promise<string[]> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
-      ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--deduplicate"],
+      [
+        ...GIT_QUIET,
+        "ls-files",
+        "-z",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--deduplicate",
+      ],
       { cwd: dir, maxBuffer: 64 * 1024 * 1024 },
       (error, stdout) => {
         if (error) return reject(error);
