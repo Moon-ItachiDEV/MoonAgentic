@@ -1,3 +1,4 @@
+import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import os from "node:os";
@@ -8,6 +9,7 @@ import type {
   CustomAgentInput,
   AgentSetting,
   ClientMessage,
+  ImageRef,
   Item,
   McpServerInput,
   PendingRequest,
@@ -100,10 +102,15 @@ type TextItem = Extract<Item, { kind: "agent" | "thought" }>;
 /** How often streamed text is written down; viewers get each piece at once. */
 const TEXT_FLUSH_MS = 250;
 
-const titleFrom = (text: string) => {
+const titleFrom = (text: string, images = 0) => {
   const line = text.trim().split("\n")[0] ?? "";
-  return line.length > 60 ? `${line.slice(0, 57).trimEnd()}…` : line || "Nouvelle discussion";
+  if (line.length > 60) return `${line.slice(0, 57).trimEnd()}…`;
+  // A message of images alone has no words to name the conversation with.
+  return line || (images > 1 ? "Images" : images ? "Image" : "Nouvelle discussion");
 };
+
+/** What an agent is told when the message is images alone: it needs some words to answer. */
+const IMAGES_ONLY = "(Message sans texte : regarde l'image jointe.)";
 
 const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolContent[] =>
   (content ?? []).flatMap((c): ToolContent[] => {
@@ -135,6 +142,8 @@ export interface HubOptions {
   quotaReaders?: Record<string, QuotaReader>;
   /** How often every quota is read again; 0 for only when asked or after a turn. */
   quotaEveryMs?: number;
+  /** Where the images sent with messages are kept; beside the worktrees unless given. */
+  attachmentsDir?: string;
 }
 
 /** The setting that lists the projects kept at the top. */
@@ -225,6 +234,8 @@ export class Hub {
 
   /** Where threads with their own branch get their worktree. */
   private readonly worktreesDir: string;
+  /** The images sent with messages. */
+  readonly attachments: Attachments;
   /**
    * Threads busy with their branch or their agent (a push, a step back, a hand-off), with
    * what to answer a message or another such step meanwhile.
@@ -263,6 +274,9 @@ export class Hub {
     this.store = store;
     this.agents = agents;
     this.worktreesDir = options.worktreesDir;
+    this.attachments = new Attachments(
+      options.attachmentsDir ?? path.join(path.dirname(options.worktreesDir), "attachments"),
+    );
     this.forceStopMs = options.forceStopMs ?? FORCE_STOP_MS;
     this.pool = new AgentPool({
       idleMs: options.idleMs,
@@ -555,6 +569,10 @@ export class Hub {
           held ? `${held}\n\n${message.text}` : message.text,
           this.leadContext(message.threadId) ??
             this.coordinators.coordinatorContext(message.threadId),
+          undefined,
+          undefined,
+          undefined,
+          message.attachments,
         );
         // Only once it is sent: a refusal keeps the brief where it was.
         if (held) this.updateThread(message.threadId, { held: null });
@@ -871,13 +889,15 @@ export class Hub {
     held?: boolean | undefined;
     /** Started by the server itself, a planned task: waits for a place when all are taken. */
     auto?: boolean | undefined;
+    /** The images sent with the first message. */
+    attachments?: string[] | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
     this.agents.launch(input.agentId);
     const now = Date.now();
     const id = randomUUID();
-    const title = titleFrom(input.title ?? input.text);
+    const title = titleFrom(input.title ?? input.text, input.attachments?.length);
     // The worktree itself is made when the agent first starts, so creating stays instant.
     const workspace =
       input.isolated && !input.worksIn && this.withGit(project).git
@@ -907,10 +927,28 @@ export class Hub {
     this.store.addThread(thread);
     this.broadcast({ type: "thread", thread });
     // A team's merge thread starts with no message: its branch is filled first.
-    if (input.text && !input.held) {
+    if ((input.text || input.attachments?.length) && !input.held) {
       if (input.openedBy)
         this.coordinators.sendFromCoordinator(thread.id, input.text, input.byTeam);
-      else this.send(thread.id, input.text, undefined, input.byTeam, undefined, input.auto);
+      else {
+        try {
+          this.send(
+            thread.id,
+            input.text,
+            undefined,
+            input.byTeam,
+            undefined,
+            input.auto,
+            input.attachments,
+          );
+        } catch (error) {
+          // An image that is no longer there: no empty conversation is left behind for it.
+          if (!(error instanceof AttachmentRefused)) throw error;
+          this.store.deleteThread(thread.id);
+          this.broadcast({ type: "threadRemoved", threadId: thread.id });
+          throw error;
+        }
+      }
     }
     return thread.id;
   }
@@ -1029,11 +1067,15 @@ export class Hub {
     byTeam?: boolean,
     from?: "coordinator",
     auto?: boolean,
+    /** The images joined to the message, already sent to the server. */
+    attachments?: readonly string[],
   ): void {
     const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
     const busy = this.busy.get(threadId);
     if (busy) throw new Error(busy);
+    // From here the images are the thread's own; one that is missing stops the message.
+    const images = attachments?.length ? this.attachments.bind(threadId, attachments) : [];
     // A step back left over from a failure must never replay over the turns that follow.
     if (this.pendingRestores()[threadId]) this.setPendingRestore(threadId, undefined);
     const itemId = `user:${randomUUID()}`;
@@ -1041,6 +1083,7 @@ export class Hub {
       id: itemId,
       kind: "user",
       text,
+      ...(images.length ? { images } : {}),
       ...(byTeam ? { byTeam: true as const } : {}),
       ...(from ? { from } : {}),
       at: Date.now(),
@@ -1050,7 +1093,7 @@ export class Hub {
     this.cancelled.delete(threadId);
     this.pool.clearIdle(threadId);
     const queued = !!(byTeam || from || auto);
-    const turn = this.runTurn(thread, text, itemId, context, queued).finally(() => {
+    const turn = this.runTurn(thread, text, itemId, context, queued, images).finally(() => {
       const cancelled = this.cancelled.has(threadId);
       this.turns.delete(threadId);
       // A place is free for the first turn in line.
@@ -1485,6 +1528,11 @@ export class Hub {
       this.setPendingRestore(threadId, undefined);
       return { removed, thread };
     });
+    // The images of the messages taken out go too: the composer got them back to send again.
+    this.attachments.remove(
+      threadId,
+      removed.flatMap((i) => (i.kind === "user" ? (i.images ?? []).map((image) => image.id) : [])),
+    );
     this.broadcast({ type: "thread", thread });
     this.sendToViewers(threadId, {
       type: "items",
@@ -1594,6 +1642,7 @@ export class Hub {
       clearTimeout(this.drafts.get(threadId)?.timer);
       this.drafts.delete(threadId);
       this.coordinators.forget(threadId);
+      this.attachments.forget(threadId);
       this.store.deleteThread(threadId);
       this.broadcast({ type: "threadRemoved", threadId });
       this.planner.threadDeleted(threadId);
@@ -1844,6 +1893,7 @@ export class Hub {
     context?: string,
     /** Waits for a place when the server runs as many turns as it may. */
     queued?: boolean,
+    images: readonly ImageRef[] = [],
   ): Promise<void> {
     try {
       // Behind those already in line, so none is overtaken.
@@ -1867,10 +1917,19 @@ export class Hub {
       // the agent could not resume its earlier session.
       const history =
         !continuing && session.fresh
-          ? historyBefore(this.items(thread.id), itemId, this.catalog.name)
+          ? historyBefore(
+              this.items(thread.id),
+              itemId,
+              this.catalog.name,
+              (id) => this.attachments.find(thread.id, id)?.file,
+            )
           : undefined;
-      const prompt = context ? `${context}\n\n${text}` : text;
-      const stopReason = await session.prompt(prompt, history, this.linksFor(session, text));
+      const said = text.trim() || !images.length ? text : IMAGES_ONLY;
+      const prompt = context ? `${context}\n\n${said}` : said;
+      const stopReason = await session.prompt(prompt, history, [
+        ...this.linksFor(session, text),
+        ...this.attachments.blocks(thread.id, images, !!session.promptCapabilities.image),
+      ]);
       const error =
         stopReason === "refusal"
           ? "L'agent a refusé de continuer."

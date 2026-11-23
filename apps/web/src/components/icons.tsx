@@ -314,3 +314,18 @@ export const IconPullRequest = ({ size = 14 }: P) => (
     <path d="M4 5.1v5.8M12 10.9V6.5c0-1.1-.9-2-2-2H7.5M9 3l-1.5 1.5L9 6" />
   </svg>
 );
+
+/** A framed landscape: an image joined to a message. */
+export const IconImage = ({ size = 14 }: P) => (
+  <svg {...base(size)}>
+    <rect x="3" y="4.5" width="18" height="15" rx="3" />
+    <circle cx="8.5" cy="10" r="1.6" />
+    <path d="m4 17 5-4.5 3.5 3 3-2.5L20 17" />
+  </svg>
+);
+export const IconCamera = ({ size = 14 }: P) => (
+  <svg {...base(size)}>
+    <path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.2l1.2-1.8h6.2L16.3 6h1.2A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5Z" />
+    <circle cx="12" cy="12.5" r="3.2" />
+  </svg>
+);
