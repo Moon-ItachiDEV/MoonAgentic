@@ -11,6 +11,7 @@ import {
   needsSignIn,
   PROMPT_INACTIVITY_MS,
   PROMPT_QUIET_MS,
+  settingOptions,
 } from "../src/session.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -603,5 +604,40 @@ describe("electronEnv", () => {
   it("leaves the environment as is outside the desktop app", () => {
     const plain = { PATH: "/bin" };
     expect(electronEnv("/usr/local/bin/agy", plain, "/usr/bin/node")).toBe(plain);
+  });
+});
+
+describe("settingOptions", () => {
+  const select = (
+    id: string,
+    category: acp.SessionConfigOption["category"],
+    values: string[],
+  ): acp.SessionConfigOption => ({
+    id,
+    name: id,
+    ...(category !== undefined ? { category } : {}),
+    type: "select",
+    currentValue: values[0]!,
+    options: values.map((value) => ({ value, name: value })),
+  });
+
+  it("recognizes mode and thought_level categories, plus effort ids when category is other/model_config/omitted", () => {
+    const parsed = settingOptions([
+      select("model", "model", ["gemini-4-neon"]),
+      select("mode", "mode", ["default", "plan"]),
+      select("thought_level", "thought_level", ["low", "medium", "high"]),
+      select("thinking_level", "model_config", ["low", "high"]),
+      select("reasoning_effort", "other", ["minimal", "max"]),
+      select("effort", undefined, ["bas", "haut"]),
+      // A model selector whose id happens to match a setting name is never treated as effort.
+      select("effort", "model", ["a", "b"]),
+    ]);
+    expect(parsed.map((s) => ({ id: s.id, kind: s.kind }))).toEqual([
+      { id: "mode", kind: "mode" },
+      { id: "thought_level", kind: "effort" },
+      { id: "thinking_level", kind: "effort" },
+      { id: "reasoning_effort", kind: "effort" },
+      { id: "effort", kind: "effort" },
+    ]);
   });
 });

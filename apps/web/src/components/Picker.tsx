@@ -1,9 +1,10 @@
-import type {
-  AgentInfo,
-  AgentQuota,
-  AgentSetting,
-  Favorites,
-  ModelChoice,
+import {
+  agentSettingsFor,
+  type AgentInfo,
+  type AgentQuota,
+  type AgentSetting,
+  type Favorites,
+  type ModelChoice,
 } from "@moonagentic/protocol";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { connection } from "../connection.ts";
@@ -57,9 +58,12 @@ export function Picker(props: {
     setView(next);
   };
 
-  // Settings missing from an older cache are learned the same way.
+  // Settings missing from an older cache (or before per-model settings existed) are learned the same way.
   const asking = (a: AgentInfo | undefined) =>
-    !!a?.available && (!a.models || !a.settings) && !a.modelsError && !!props.projectId;
+    !!a?.available &&
+    (!a.models || !a.settings || (a.models.length > 0 && !a.modelSettings)) &&
+    !a.modelsError &&
+    !!props.projectId;
   const discover = (a: AgentInfo | undefined) => {
     if (a && props.projectId)
       connection.send({ type: "agent.discover", agentId: a.id, projectId: props.projectId });
@@ -80,11 +84,10 @@ export function Picker(props: {
     });
   };
 
-  const effort = agent?.available ? agent.settings?.find((s) => s.kind === "effort") : undefined;
+  const agentSettings = agent?.available ? agentSettingsFor(agent, props.model) : [];
+  const effort = agentSettings.find((s) => s.kind === "effort");
   const modelName = agent?.models?.find((m) => m.id === props.model)?.name ?? props.model;
-  const otherSettings = agent?.available
-    ? (agent.settings ?? []).filter((s) => s.kind !== "effort")
-    : [];
+  const otherSettings = agentSettings.filter((s) => s.kind !== "effort");
 
   const close = (
     <button className="ib" aria-label="Fermer" onClick={props.onClose}>

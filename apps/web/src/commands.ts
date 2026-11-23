@@ -1,6 +1,12 @@
 // The `/` commands the composer offers, and the `@` / `$` / `/` word being typed.
 // Pure functions, so the priority rule between same-named commands is easy to test.
-import type { AgentCommand, AgentInfo, AgentSetting, ProjectCommand } from "@moonagentic/protocol";
+import {
+  agentSettingsFor,
+  type AgentCommand,
+  type AgentInfo,
+  type AgentSetting,
+  type ProjectCommand,
+} from "@moonagentic/protocol";
 
 /** Things MoonAgentic does itself rather than send to the agent. */
 export type AppAction =
@@ -83,16 +89,17 @@ export function planModes(
 /** Every command on offer, one per name, the winner of each name keeping who it hides. */
 export function composerCommands(options: {
   agent: AgentInfo | undefined;
+  model?: string | undefined;
   /** The thread's own list, which beats the agent's last known one. */
   agentCommands: AgentCommand[] | undefined;
   projectCommands: ProjectCommand[];
   inThread: boolean;
 }): ComposerCommand[] {
-  const { agent, inThread } = options;
+  const { agent, model, inThread } = options;
   const app: ComposerCommand[] = [];
   const add = (name: string, description: string, action: AppAction) =>
     app.push({ name, description, source: "app", by: "MoonAgentic", action });
-  if (planModes(agent?.settings)) {
+  if (planModes(agentSettingsFor(agent, model))) {
     add("plan", "Mode plan : l'agent propose avant de modifier", "plan");
     add("agent", "Revenir au mode habituel de l'agent", "agent");
   }

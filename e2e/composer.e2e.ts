@@ -943,4 +943,81 @@ describe("composer", () => {
     await expect.poll(() => row("Résumé quotidien").count()).toBe(0);
     await page.close();
   });
+
+  it("stacks tray popups above the composer, updates effort per model, and renders agent logos", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    await page.locator(".tray .tb").first().waitFor();
+
+    // Open the project menu from the sunken tray and verify its top items paint above `.composer`.
+    await page.locator(".tray .tb").first().click();
+    const projectMenu = page.getByRole("menu", { name: "Projet" });
+    await projectMenu.waitFor();
+    const projectHit = await projectMenu.evaluate((menu) => {
+      const target = menu.querySelector(".menu-h") ?? menu.querySelector("button");
+      if (!target) return false;
+      const box = target.getBoundingClientRect();
+      const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return !!top && menu.contains(top);
+    });
+    expect(projectHit).toBe(true);
+    await shot(page, "c21-tray-projet");
+
+    // Pick the git repo `equipe`, then check the branch popup from the tray stacks above `.composer` too.
+    await projectMenu.getByRole("menuitemradio", { name: /equipe/ }).click();
+    await page
+      .locator(".tray")
+      .getByRole("button", { name: /branche à part|dans ton dossier/ })
+      .click();
+    const branchMenu = page.getByRole("menu", { name: "Branche" });
+    await branchMenu.waitFor();
+    const branchHit = await branchMenu.evaluate((menu) => {
+      const target = menu.querySelector(".menu-h") ?? menu.querySelector("button");
+      if (!target) return false;
+      const box = target.getBoundingClientRect();
+      const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return !!top && menu.contains(top);
+    });
+    expect(branchHit).toBe(true);
+    await page.keyboard.press("Escape");
+
+    // Built-in agents render their official logos in Options, and demo models switch effort stops cleanly.
+    await pickAgent(page, /Agent de démo/);
+    const logos = await page.locator(".mp-agent .ag.logo img").evaluateAll((imgs) =>
+      imgs.map((img) => ({
+        agent: img.closest(".ag")?.getAttribute("data-agent"),
+        src: img.getAttribute("src"),
+      })),
+    );
+    expect(logos).toEqual(
+      expect.arrayContaining([
+        { agent: "claude", src: "/agents/claude.svg" },
+        { agent: "codex", src: "/agents/codex.svg" },
+        { agent: "antigravity", src: "/agents/antigravity.svg" },
+        { agent: "cursor", src: "/agents/cursor.svg" },
+        { agent: "hermes", src: "/agents/hermes.png" },
+      ]),
+    );
+    await shot(page, "c22-agent-logos");
+
+    // Back to « Tous » to pick Démo rapide (3 effort stops: max index 2), then Démo précis (4 stops: max index 3).
+    const demoSection = page
+      .locator(".al")
+      .filter({ has: page.locator(".al-h", { hasText: /Agent de démo/ }) })
+      .first();
+    await page.getByRole("button", { name: "Retour" }).click();
+    await demoSection.getByRole("menuitemradio", { name: /Démo rapide/ }).click();
+    await page.locator(".agentchip").click();
+    await expect
+      .poll(() => page.getByRole("slider", { name: /Effort/ }).getAttribute("aria-valuemax"))
+      .toBe("2");
+
+    await page.getByRole("button", { name: "Tous", exact: true }).click();
+    await demoSection.getByRole("menuitemradio", { name: /Démo précis/ }).click();
+    await page.locator(".agentchip").click();
+    await expect
+      .poll(() => page.getByRole("slider", { name: /Effort/ }).getAttribute("aria-valuemax"))
+      .toBe("3");
+    await page.close();
+  });
 });

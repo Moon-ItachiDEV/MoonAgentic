@@ -70,16 +70,26 @@ export function modelOption(options: acp.SessionConfigOption[]): ModelOption | u
   };
 }
 
-const SETTING_KINDS = { mode: "mode", thought_level: "effort" } as const;
+const SETTING_KINDS: Readonly<Record<string, AgentSetting["kind"]>> = {
+  mode: "mode",
+  thought_level: "effort",
+  thinking_level: "effort",
+  reasoning_effort: "effort",
+  effort: "effort",
+};
+
+function settingKind(option: acp.SessionConfigOption): AgentSetting["kind"] | undefined {
+  if (option.category === "model") return undefined;
+  if (option.category && Object.hasOwn(SETTING_KINDS, option.category)) {
+    return SETTING_KINDS[option.category];
+  }
+  return Object.hasOwn(SETTING_KINDS, option.id) ? SETTING_KINDS[option.id] : undefined;
+}
 
 /** Reads the agent's mode and reasoning effort selectors, if it has them. */
 export function settingOptions(options: acp.SessionConfigOption[]): AgentSetting[] {
   return options.flatMap((o): AgentSetting[] => {
-    // Older adapters may leave the category out and only name the option.
-    const key = o.category ?? o.id;
-    const kind = Object.hasOwn(SETTING_KINDS, key)
-      ? SETTING_KINDS[key as keyof typeof SETTING_KINDS]
-      : undefined;
+    const kind = settingKind(o);
     if (!kind || o.type !== "select") return [];
     const flat = o.options.flatMap((c) => ("group" in c ? c.options : [c]));
     return [

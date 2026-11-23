@@ -78,6 +78,18 @@ describe("composer commands", () => {
     });
     expect(noPlan.some((c) => c.name === "compact")).toBe(true);
     expect(planModes(agent.settings)).toMatchObject({ plan: "plan", normal: "default" });
+    const perModel = composerCommands({
+      agent: {
+        ...agent,
+        settings: [],
+        modelSettings: { "with-plan": agent.settings!, "no-plan": [] },
+      },
+      model: "with-plan",
+      agentCommands: undefined,
+      projectCommands: [],
+      inThread: false,
+    });
+    expect(perModel.some((c) => c.name === "plan")).toBe(true);
   });
 
   it("matches the start of a name before its middle", () => {
