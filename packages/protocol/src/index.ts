@@ -683,9 +683,10 @@ export type Item =
       byTeam?: true;
       /**
        * Not typed by the user: written by the project's coordinator, an agent, or sent by
-       * the server to take the thread's goal one turn further, or to fix its pull request.
+       * the server to take the thread's goal one turn further, to fix its pull request, or
+       * with the review remarks the user picked on GitHub.
        */
-      from?: "coordinator" | "goal" | "pr";
+      from?: "coordinator" | "goal" | "pr" | "remarks";
       /** The thread's files just before this message, for threads with their own branch. */
       checkpoint?: string;
       at: number;
@@ -787,8 +788,8 @@ export interface Schedule {
   createdAt: number;
 }
 
-export type { PullRequestCheck, PullRequestInfo } from "./pull-request.ts";
-import type { PullRequestInfo } from "./pull-request.ts";
+export type { PullRequestCheck, PullRequestInfo, PullRequestRemark } from "./pull-request.ts";
+import type { PullRequestInfo, PullRequestRemark } from "./pull-request.ts";
 
 /**
  * What MoonAgentic knows of GitHub on the machine running it: the account signed in from
@@ -1178,6 +1179,14 @@ export type ServerMessage =
    * GitHub (no `gh`, no GitHub remote); `error` says why when asking failed.
    */
   | { type: "pullRequest"; requestId: string; pr?: PullRequestInfo; error?: string }
+  /** Reply to `workspace.prRemarks`: the pull request's open remarks; `error` when asking failed. */
+  | {
+      type: "prRemarks";
+      requestId: string;
+      number?: number;
+      remarks: PullRequestRemark[];
+      error?: string;
+    }
   /** Reply to a create request, so the client can navigate to what it made. */
   | { type: "created"; requestId: string; id: string }
   /** Reply to a request that makes nothing new, once it succeeded. */
@@ -1688,6 +1697,18 @@ export const ClientMessage = z.discriminatedUnion("type", [
     threadId: id,
     number: z.number().int().positive(),
     head: z.string().regex(/^[0-9a-f]{40,64}$/),
+  }),
+  /** The open review remarks of the pull request of a thread's branch, as GitHub has them. */
+  z.object({ type: z.literal("workspace.prRemarks"), requestId: id, threadId: id }),
+  /**
+   * Sends the thread's agent the review remarks picked among those, by GitHub's ids: the
+   * server reads them again from GitHub rather than take their words from the client.
+   */
+  z.object({
+    type: z.literal("workspace.sendRemarks"),
+    requestId: id,
+    threadId: id,
+    ids: z.array(z.string().min(1).max(200)).min(1).max(100),
   }),
   /** Asks GitHub for the state of the pull request at this address, to draw its link. */
   z.object({

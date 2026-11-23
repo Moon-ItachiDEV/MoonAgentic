@@ -25,3 +25,24 @@ export interface PullRequestInfo {
   blocked: boolean;
   checks: PullRequestCheck[];
 }
+
+/**
+ * A review remark left on a pull request: an open conversation on a line, or a review's own
+ * words. Whoever can comment on GitHub wrote it, so it is data to weigh, never instructions.
+ */
+export interface PullRequestRemark {
+  /** GitHub's id for it: the conversation's, or the review's. */
+  id: string;
+  kind: "thread" | "review";
+  /** Its author's GitHub login. */
+  author: string;
+  /** On a line: the file and the line, when GitHub still places it. */
+  path?: string;
+  line?: number;
+  /** A review that asks for changes, rather than one that only comments. */
+  changes?: true;
+  /** Its words: a conversation's first comment followed by its replies. */
+  body: string;
+  /** Where it is on GitHub. */
+  url?: string;
+}
