@@ -80,6 +80,18 @@ Sans Tailscale, le trafic n'est pas chiffré : reste sur un réseau de confiance
 
 ## Tourner 24h/24
 
+### App de bureau (Windows, Mac)
+
+L'app de bureau lance le même serveur et la même interface, dans une fenêtre, avec une icône près de l'horloge (dans la barre de menus sur Mac). Fermer la fenêtre ne l'arrête pas : tes agents continuent, l'icône la rouvre. Elle n'a pas besoin de Node.js ni de pnpm.
+
+- **Télécharger** : dans [Releases](https://github.com/Moon-ItachiDEV/MoonAgentic/releases), `MoonAgentic-<version>-windows-x64.exe` (Windows 11) ou `MoonAgentic-<version>-mac-arm64.dmg` (Mac Apple Silicon).
+- **Pas encore signée** : sur Windows, SmartScreen affiche « Windows a protégé votre ordinateur » → **Informations complémentaires → Exécuter quand même**. Sur Mac, fais un clic droit sur l'app → **Ouvrir** la première fois ; si macOS dit qu'elle est endommagée, lance `xattr -cr /Applications/MoonAgentic.app` dans un terminal.
+- **Menu de l'icône** : **Lancer avec Windows** (ou **Ouvrir à la connexion** sur Mac) la démarre cachée à l'ouverture de session ; **Empêcher la mise en veille** (activé par défaut) garde l'ordinateur éveillé tant qu'elle tourne ; **Redémarrer le serveur**, **Ouvrir le dossier des journaux**, **Ouvrir dans le navigateur** et **Quitter MoonAgentic**, qui arrête d'abord les agents.
+- **Mêmes données que `pnpm start`** : `~/.moonagentic` (jeton, fils, réglages) et le port `4747`. Ne lance pas les deux en même temps : l'app attend que le port se libère et réessaie seule. `tailscale serve --bg 4747` marche tel quel.
+- **Pas de mise à jour automatique** : télécharge la nouvelle version et installe-la par-dessus.
+
+Pour publier une version : monte `version` dans `apps/desktop/package.json`, puis pousse le tag correspondant (`git tag v0.1.0 && git push origin v0.1.0`). Le workflow **Desktop** construit les deux installeurs et les attache à la Release. Pour essayer l'app depuis un clone : `pnpm build`, puis `pnpm --filter @moonagentic/desktop dev`.
+
 ### Mini-PC Windows 11 + Tailscale
 
 Un mini-PC garde tes agents en marche ; ton PC principal et ton téléphone s'y connectent en HTTPS par [Tailscale](https://tailscale.com/download), sans ouvrir de port sur ta box.
@@ -95,7 +107,7 @@ Un mini-PC garde tes agents en marche ; ton PC principal et ton téléphone s'y 
    Si `tailscale` n'est pas reconnu, utilise `& "C:\Program Files\Tailscale\tailscale.exe" serve --bg 4747`. La première fois, Tailscale peut te demander d'activer HTTPS pour ton réseau : suis le lien qu'il affiche.
 
 4. **Ouvre Réglages → Accès distant** sur le mini-PC : l'adresse `https://<mini-pc>.<ton-réseau>.ts.net` y apparaît avec son QR code. Scanne-le avec ton téléphone, copie le lien sur ton PC principal, puis ajoute la page à l'écran d'accueil.
-5. **Pour qu'il tourne sans toi** : dans Windows, _Paramètres → Système → Alimentation_, mets la mise en veille sur « Jamais ». Pour lancer MoonAgentic à chaque ouverture de session, fais `Win + R`, tape `shell:startup`, et crée `MoonAgentic.cmd` (remplace le chemin par celui de ton clone) :
+5. **Pour qu'il tourne sans toi** : le plus simple est l'[app de bureau](#app-de-bureau-windows-mac) avec **Lancer avec Windows** et **Empêcher la mise en veille** cochés. Sans elle : dans Windows, _Paramètres → Système → Alimentation_, mets la mise en veille sur « Jamais ». Pour lancer MoonAgentic à chaque ouverture de session, fais `Win + R`, tape `shell:startup`, et crée `MoonAgentic.cmd` (remplace le chemin par celui de ton clone) :
 
    ```bat
    @echo off

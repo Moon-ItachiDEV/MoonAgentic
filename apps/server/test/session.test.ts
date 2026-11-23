@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   agentEnv,
   AgentSession,
+  electronEnv,
   jsonLines,
   needsSignIn,
   PROMPT_INACTIVITY_MS,
@@ -588,5 +589,19 @@ describe("agentEnv", () => {
     });
     await session.prompt("check env");
     expect(JSON.parse(reply)).toEqual([]);
+  });
+});
+
+describe("electronEnv", () => {
+  const env = { PATH: "/bin", ELECTRON_RUN_AS_NODE: "1" };
+
+  it("keeps ELECTRON_RUN_AS_NODE only for adapters run by the app's own program", () => {
+    expect(electronEnv("/app/MoonAgentic", env, "/app/MoonAgentic")).toEqual(env);
+    expect(electronEnv("/usr/local/bin/agy", env, "/app/MoonAgentic")).toEqual({ PATH: "/bin" });
+  });
+
+  it("leaves the environment as is outside the desktop app", () => {
+    const plain = { PATH: "/bin" };
+    expect(electronEnv("/usr/local/bin/agy", plain, "/usr/bin/node")).toBe(plain);
   });
 });
