@@ -283,7 +283,7 @@ export function ProjectPage(props: {
             <dd>
               {props.settings?.team
                 ? "Celle que tu as lancée en dernier sert de modèle."
-                : "Aucune pour l'instant : lance-en une avec /equipe, elle servira de modèle."}
+                : "L'équipe « Équilibrée » par défaut, tant que tu n'en as pas lancé une avec /equipe."}
             </dd>
             {props.onOpenSettings && (
               <dd className="pp-ctx-go">
