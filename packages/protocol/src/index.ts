@@ -42,7 +42,26 @@ export interface AgentInfo {
   custom?: boolean;
   /** What the last check found: the agent answered and opened a session, or why not. */
   check?: AgentCheck;
+  /** The moon that stands for the agent while it works, when it has one. */
+  mascot?: Mascot;
+  /** Hermes and the user's own Hermes bots: the only agents that can have a moon. */
+  mascotAllowed?: true;
 }
+
+/** The moon's outline: a crescent, a cratered full moon or a smooth orb. */
+export const MASCOT_SHAPES = ["crescent", "full", "orb"] as const;
+/** The moon's tint and the sky behind it. */
+export const MASCOT_COLORS = ["ice", "violet", "pink", "mint", "amber", "silver"] as const;
+
+export interface Mascot {
+  shape: (typeof MASCOT_SHAPES)[number];
+  color: (typeof MASCOT_COLORS)[number];
+}
+
+/** Mascots agents have until the user picks another one, or none. */
+export const DEFAULT_MASCOTS: Readonly<Record<AgentId, Mascot>> = {
+  hermes: { shape: "crescent", color: "ice" },
+};
 
 export interface AgentCheck {
   at: number;
@@ -1423,6 +1442,15 @@ export const ClientMessage = z.discriminatedUnion("type", [
     agentId: id,
     model: id,
     starred: z.boolean(),
+  }),
+  /** Gives the agent its moon, or none (`null`): it then keeps its logo or letters. */
+  z.object({
+    type: z.literal("agent.setMascot"),
+    agentId: id,
+    mascot: z
+      .object({ shape: z.enum(MASCOT_SHAPES), color: z.enum(MASCOT_COLORS) })
+      .strict()
+      .nullable(),
   }),
   z.object({ type: z.literal("mcp.add"), requestId: id, server: McpServerInput }),
   z.object({ type: z.literal("mcp.setEnabled"), id, enabled: z.boolean() }),

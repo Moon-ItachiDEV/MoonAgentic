@@ -17,6 +17,7 @@ import type {
   ClientMessage,
   ImageRef,
   Item,
+  Mascot,
   McpServerInput,
   PendingQuestion,
   PendingRequest,
@@ -901,6 +902,9 @@ export class Hub {
           requestId: message.requestId,
           hits: (this.flushAll(), this.store.searchItems(message.query)),
         });
+        return;
+      case "agent.setMascot":
+        this.setMascot(message.agentId, message.mascot);
         return;
       case "favorites.toggle":
         this.catalog.toggleFavorite(message.agentId, message.model, message.starred);
@@ -2370,6 +2374,10 @@ export class Hub {
 
   addMcpServer(input: McpServerInput): Promise<string> {
     return this.catalog.addMcpServer(input);
+  }
+
+  setMascot(agentId: string, mascot: Mascot | null): void {
+    this.catalog.setMascot(agentId, mascot);
   }
 
   toggleFavorite(agentId: string, model: string, starred: boolean): void {

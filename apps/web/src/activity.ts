@@ -9,7 +9,7 @@ import type { FeedBlock } from "./team-feed.ts";
 const PLAN_MODE = /^(?:run\s+)?(?:enter|exit)_plan_mode$/i;
 
 /** A command that runs tests: `pnpm test`, `vitest`, `pytest`, `jest`, `cargo test`… */
-const TEST_CMD = /\b(?:test\w*|vitest|pytest|jest|rspec|mocha|playwright)\b/i;
+export const TEST_CMD = /\b(?:test\w*|vitest|pytest|jest|rspec|mocha|playwright)\b/i;
 
 export const isPlanModeSwitch = (item: Item | undefined) =>
   item?.kind === "tool" && PLAN_MODE.test(item.title.trim());

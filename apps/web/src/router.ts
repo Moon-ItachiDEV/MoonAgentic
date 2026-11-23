@@ -4,6 +4,7 @@ export type SettingsSection =
   | "general"
   | "appearance"
   | "agents"
+  | "mascots"
   | "models"
   | "subscriptions"
   | "coordinator"
@@ -13,6 +14,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   "general",
   "appearance",
   "agents",
+  "mascots",
   "models",
   "subscriptions",
   "coordinator",
