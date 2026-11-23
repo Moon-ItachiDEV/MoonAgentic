@@ -1,10 +1,25 @@
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 
 const serverPort = process.env.MOONAGENTIC_PORT ?? "4747";
 
+/**
+ * Marks each build in the app's page, so the server can tell an open tab that a newer one
+ * is served (see src/update.ts). The dev server gets no mark: it reloads by itself.
+ */
+const buildId = (): Plugin => {
+  const id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return {
+    name: "moonagentic-build-id",
+    apply: "build",
+    transformIndexHtml: () => [
+      { tag: "meta", attrs: { name: "moonagentic-build", content: id }, injectTo: "head" },
+    ],
+  };
+};
+
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), buildId()],
   build: {
     rolldownOptions: {
       output: {

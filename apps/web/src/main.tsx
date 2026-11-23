@@ -13,14 +13,17 @@ import "./pull-request.css";
 import "./composer.css";
 import "./project.css";
 import "./phone.css";
+import "./update.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import { startUpdateBanner } from "./components/UpdateBanner.tsx";
 import { startNotifications } from "./notifications.ts";
 import { applyTheme } from "./theme.ts";
 
 applyTheme();
 startNotifications();
+startUpdateBanner();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

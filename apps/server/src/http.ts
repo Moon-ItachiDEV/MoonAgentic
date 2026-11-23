@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { createReadStream, statSync } from "node:fs";
+import { createReadStream, readFileSync, statSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { ClientMessage, type RemoteAccess, type ServerMessage } from "@moonagentic/protocol";
@@ -44,11 +44,16 @@ const parseUrl = (raw: string): URL | undefined => {
   }
 };
 
+/** What `staticFile` answers for a built file that is not there (an old tab's asset). */
+export const MISSING = Symbol("missing");
+
 /**
  * The file of the built web app a request asks for, or the app's page for any other path
- * (the app has its own routes). Undefined when the address cannot be read.
+ * (the app has its own routes). A missing file under `/assets/` is `MISSING`, never the page:
+ * a tab left open across an update asks for its old chunks, and HTML in their place would
+ * break it in ways no one can read. Undefined when the address cannot be read.
  */
-export function staticFile(webDir: string, rawUrl: string): string | undefined {
+export function staticFile(webDir: string, rawUrl: string): string | typeof MISSING | undefined {
   const url = parseUrl(rawUrl);
   if (!url) return undefined;
   let pathname: string;
@@ -60,9 +65,34 @@ export function staticFile(webDir: string, rawUrl: string): string | undefined {
   if (pathname.includes("\0")) return undefined;
   const requested = path.join(webDir, path.normalize(pathname));
   const inside = requested.startsWith(webDir + path.sep);
-  return inside && statSync(requested, { throwIfNoEntry: false })?.isFile()
-    ? requested
-    : path.join(webDir, "index.html");
+  if (inside && statSync(requested, { throwIfNoEntry: false })?.isFile()) return requested;
+  if (inside && requested.startsWith(path.join(webDir, "assets") + path.sep)) return MISSING;
+  return path.join(webDir, "index.html");
+}
+
+let builtPage: { file: string; stamp: string; id: string | null } | undefined;
+/**
+ * The id the build wrote in the app's page (`<meta name="moonagentic-build">`), read again
+ * only when the page changes on disk. Null without a built page or without the mark.
+ */
+export function buildId(webDir: string): string | null {
+  const file = path.join(webDir, "index.html");
+  const stat = statSync(file, { throwIfNoEntry: false });
+  if (!stat?.isFile()) return null;
+  const stamp = `${stat.mtimeMs}:${stat.size}`;
+  if (builtPage?.file === file && builtPage.stamp === stamp) return builtPage.id;
+  let id: string | null = null;
+  try {
+    const found = /<meta\s+name="moonagentic-build"\s+content="([\w.-]{1,64})"/.exec(
+      readFileSync(file, "utf8"),
+    );
+    id = found?.[1] ?? null;
+  } catch {
+    // Being rewritten by a build: asked again on the next call.
+    return null;
+  }
+  builtPage = { file, stamp, id };
+  return id;
 }
 
 /**
@@ -231,9 +261,19 @@ export function createHttpServer(options: {
       res.writeHead(404).end();
       return;
     }
+    if (req.url === "/api/build") {
+      // Which version of the app is built here, so a tab opened before an update offers to
+      // reload. It says no more than the page itself, which anyone reaching the server reads.
+      json(res, 200, { id: buildId(webDir) });
+      return;
+    }
     const file = staticFile(webDir, req.url ?? "/");
     if (!file) {
       res.writeHead(400).end();
+      return;
+    }
+    if (file === MISSING) {
+      res.writeHead(404, { "cache-control": "no-store" }).end();
       return;
     }
     const stream = createReadStream(file);
