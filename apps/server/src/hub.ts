@@ -82,9 +82,13 @@ import type { Store } from "./store.ts";
 
 export interface Client {
   send(message: ServerMessage): void;
-  /** The thread whose timeline this client is showing. */
-  openThreadId?: string;
+  /** The threads whose timelines this client is showing: a coordinator's, and one beside it. */
+  openThreadIds?: Set<string>;
 }
+
+const watch = (client: Client, threadId: string): void => {
+  (client.openThreadIds ??= new Set()).add(threadId);
+};
 
 type ToolItem = Extract<Item, { kind: "tool" }>;
 type TextItem = Extract<Item, { kind: "agent" | "thought" }>;
@@ -446,13 +450,13 @@ export class Hub {
         return;
       case "thread.create": {
         const id = this.createThread(message);
-        client.openThreadId = id;
+        watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
         client.send({ type: "items", threadId: id, items: this.items(id) });
         return;
       }
       case "thread.leave":
-        if (client.openThreadId === message.threadId) delete client.openThreadId;
+        client.openThreadIds?.delete(message.threadId);
         return;
       case "thread.setUnread":
         this.requireThread(message.threadId);
@@ -466,7 +470,7 @@ export class Hub {
         }
         return;
       case "thread.open":
-        client.openThreadId = message.threadId;
+        watch(client, message.threadId);
         // Opened: read.
         if (this.store.getThread(message.threadId)?.unread) {
           this.updateThread(message.threadId, { unread: false });
@@ -492,7 +496,7 @@ export class Hub {
       }
       case "coordinator.open": {
         const id = this.openCoordinator(message.projectId, message.agentId, message.model);
-        client.openThreadId = id;
+        watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
         client.send({ type: "items", threadId: id, items: this.items(id) });
         return;
@@ -586,7 +590,7 @@ export class Hub {
             ...(message.autoShip === false ? { autoShip: false } : {}),
           } as TeamSetup,
         });
-        client.openThreadId = id;
+        watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
         client.send({ type: "items", threadId: id, items: this.items(id) });
         return;
@@ -1313,7 +1317,7 @@ export class Hub {
         if (summary && now && now.summary !== summary) this.updateThread(threadId, { summary });
         // Answered with no window on it: unread, until it is opened. A team's members are
         // read through their lead, and a coordinator on its project's page.
-        const seen = [...this.clients].some((c) => c.openThreadId === threadId);
+        const seen = [...this.clients].some((c) => c.openThreadIds?.has(threadId));
         if (summary && now && !seen && !cancelled && !now.parentId && now.kind !== "coordinator") {
           this.updateThread(threadId, { unread: true });
         }
@@ -2594,7 +2598,8 @@ export class Hub {
   }
 
   private sendToViewers(threadId: string, message: ServerMessage): void {
-    for (const client of this.clients) if (client.openThreadId === threadId) client.send(message);
+    for (const client of this.clients)
+      if (client.openThreadIds?.has(threadId)) client.send(message);
   }
 
   private broadcast(message: ServerMessage): void {

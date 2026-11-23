@@ -15,7 +15,8 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
 export type Route =
   | { name: "home" }
   | { name: "planner" }
-  | { name: "project"; projectId: string }
+  /** A project's page, with one of its threads open beside its coordinator when given. */
+  | { name: "project"; projectId: string; threadId?: string }
   | { name: "thread"; threadId: string }
   | { name: "settings"; section: SettingsSection };
 
@@ -31,9 +32,15 @@ const parse = (pathname: string): Route => {
   } catch {
     // an address no thread can have
   }
-  const project = /^\/p\/([^/]+)$/.exec(pathname);
+  const project = /^\/p\/([^/]+)(?:\/f\/([^/]+))?$/.exec(pathname);
   try {
-    if (project?.[1]) return { name: "project", projectId: decodeURIComponent(project[1]) };
+    if (project?.[1]) {
+      return {
+        name: "project",
+        projectId: decodeURIComponent(project[1]),
+        ...(project[2] ? { threadId: decodeURIComponent(project[2]) } : {}),
+      };
+    }
   } catch {
     // an address no project can have
   }
@@ -53,7 +60,9 @@ export function navigate(route: Route, options: { replace?: boolean } = {}): voi
     route.name === "thread"
       ? `/t/${encodeURIComponent(route.threadId)}`
       : route.name === "project"
-        ? `/p/${encodeURIComponent(route.projectId)}`
+        ? `/p/${encodeURIComponent(route.projectId)}${
+            route.threadId ? `/f/${encodeURIComponent(route.threadId)}` : ""
+          }`
         : route.name === "planner"
           ? "/planner"
           : route.name === "settings"
