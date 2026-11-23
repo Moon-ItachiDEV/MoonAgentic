@@ -17,6 +17,7 @@ import { Hub } from "../src/hub.ts";
 import {
   encryptPayload,
   knownPushService,
+  MAX_PAYLOAD,
   MAX_SUBSCRIPTIONS,
   Push,
   type PushSend,
@@ -227,6 +228,34 @@ describe("web push", () => {
     push.threadChanged(thread({ id: "t2", status: "waiting" }));
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(svc.sent).toHaveLength(1);
+  });
+
+  it("keeps a message within one record, a long title cut", async () => {
+    const b = browser();
+    expect(() => encryptPayload(Buffer.alloc(MAX_PAYLOAD), b.p256dh, b.auth)).not.toThrow();
+    expect(encryptPayload(Buffer.alloc(MAX_PAYLOAD), b.p256dh, b.auth)).toHaveLength(4096);
+    expect(() => encryptPayload(Buffer.alloc(MAX_PAYLOAD + 1), b.p256dh, b.auth)).toThrow(/long/);
+    const s = store();
+    const svc = service();
+    const push = new Push(s, { send: svc.send });
+    push.subscribe({ endpoint: ENDPOINT, ...b, muted: [] }, undefined);
+    await push.deliver(
+      { tag: "t:waiting", threadId: "t", title: "a", body: "é".repeat(5000) },
+      "p",
+    );
+    const sent = JSON.parse(b.decrypt(svc.sent[0]!.body)) as { body: string };
+    expect(sent.body).toHaveLength(200);
+    expect(sent.body.endsWith("…")).toBe(true);
+  });
+
+  it("forgets the computer's browsers when asked, and leaves the devices'", () => {
+    const s = store();
+    const push = new Push(s, { send: service().send });
+    const b = browser();
+    push.subscribe({ endpoint: ENDPOINT, ...b, muted: [] }, undefined);
+    push.subscribe({ endpoint: `${ENDPOINT}-tel`, ...b, muted: [] }, "telephone");
+    push.forget((deviceId) => deviceId === undefined);
+    expect(s.listPushSubscriptions().map((r) => r.endpoint)).toEqual([`${ENDPOINT}-tel`]);
   });
 
   it("forgets a browser the push service says is gone", async () => {

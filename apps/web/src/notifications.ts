@@ -72,7 +72,7 @@ export async function showNotice(notice: Notice): Promise<boolean> {
   const options = {
     body: notice.body,
     tag: notice.tag,
-    icon: "/icon.svg",
+    icon: "/icon-192.png",
     data: { threadId: notice.threadId },
   };
   try {

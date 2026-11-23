@@ -10,7 +10,8 @@ self.addEventListener("notificationclick", (event) => {
   event.waitUntil(
     (async () => {
       const pages = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      const page = pages[0];
+      // A tab showing an artifact's PDF is not the app: it would not hear the message.
+      const page = pages.find((p) => !new URL(p.url).pathname.startsWith("/api/"));
       if (!page) return self.clients.openWindow(path);
       page.postMessage({ type: "moonagentic.open", threadId });
       return page.focus();
@@ -30,15 +31,18 @@ self.addEventListener("push", (event) => {
     (async () => {
       const pages = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const inFront = pages.some((p) => p.visibilityState === "visible" && p.focused);
-      // Safari stops the push of a site that receives one and shows nothing: it always shows.
-      const safari = /^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(
-        self.navigator.userAgent,
-      );
-      if (inFront && !safari) return;
+      // Apple's WebKit stops the push of a site that receives one and shows nothing: there it
+      // always shows. An app on an iPhone's home screen, the only place it has push, does not
+      // say « Safari », and an iPad says it is a Mac.
+      const ua = self.navigator.userAgent;
+      const apple =
+        /iphone|ipad|ipod/i.test(ua) ||
+        (/applewebkit/i.test(ua) && !/chrome|chromium|android|crios|fxios|edg/i.test(ua));
+      if (inFront && !apple) return;
       await self.registration.showNotification(notice.title || "MoonAgentic", {
         body: notice.body || "",
         tag: notice.tag || undefined,
-        icon: "/icon.svg",
+        icon: "/icon-192.png",
         data: { threadId: typeof notice.threadId === "string" ? notice.threadId : "" },
       });
     })(),

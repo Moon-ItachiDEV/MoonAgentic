@@ -31,7 +31,8 @@ export function mutedProjects(): string[] {
 
 /** A base64url key as the browser takes it. */
 export function keyBytes(key: string): Uint8Array<ArrayBuffer> {
-  const text = atob(key.replaceAll("-", "+").replaceAll("_", "/"));
+  const padded = key + "=".repeat((4 - (key.length % 4)) % 4);
+  const text = atob(padded.replaceAll("-", "+").replaceAll("_", "/"));
   const bytes = new Uint8Array(new ArrayBuffer(text.length));
   for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
   return bytes;

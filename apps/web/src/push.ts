@@ -61,36 +61,54 @@ export async function disablePush(): Promise<void> {
   await sub.unsubscribe();
 }
 
-/** Whether the server reaches this browser now. */
+/** The last time this browser was said again to the server, while it is under way. */
+let syncing: Promise<void> | undefined;
+
+/**
+ * Whether the server reaches this browser now, once a subscription under way has ended. When
+ * it does not, this device no longer counts on it: the page's own notifications come back.
+ */
 export async function pushReached(): Promise<boolean> {
   if (pushSupport() !== "ok") return false;
+  await syncing;
   const sub = await (await pushManager()).getSubscription();
-  if (!sub) return false;
-  const state = await connection.ask({
-    type: "push.state",
-    requestId: newId(),
-    endpoint: sub.endpoint,
-  });
-  return state.subscribed;
+  const reached =
+    !!sub &&
+    (
+      await connection.ask({
+        type: "push.state",
+        requestId: newId(),
+        endpoint: sub.endpoint,
+      })
+    ).subscribed;
+  if (!reached) writePref("notifications.push", "false");
+  return reached;
 }
 
 /**
  * Says again where this browser is reached and what it mutes: after a project is muted, and
- * once connected, as the browser may have changed its address meanwhile.
+ * at each connection, as the browser may have changed its address meanwhile, or the server
+ * forgotten the computer's browsers when its token was renewed.
  */
 export function syncPush(): void {
   if (!pushOn() || !notificationsOn() || pushSupport() !== "ok") return;
-  subscribe().catch(() => undefined);
+  const run = subscribe()
+    .catch(() => undefined)
+    .finally(() => {
+      if (syncing === run) syncing = undefined;
+    });
+  syncing = run;
 }
 
 let started = false;
-/** Says it once the server answers, at each start of the app. */
+/** Says it each time the connection opens. */
 export function startPush(): void {
   if (started) return;
   started = true;
-  const stop = connection.subscribe(() => {
-    if (!connection.getState().ready) return;
-    stop();
-    syncPush();
+  let open = false;
+  connection.subscribe(() => {
+    const now = connection.getState().status === "open" && connection.getState().ready;
+    if (now && !open) syncPush();
+    open = now;
   });
 }

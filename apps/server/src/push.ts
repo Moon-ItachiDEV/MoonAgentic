@@ -33,6 +33,10 @@ const TTL_SECONDS = 24 * 60 * 60;
 /** Who to reach about this server's messages, as push services ask: the project, no person. */
 const SUBJECT = "https://github.com/Moon-ItachiDEV/MoonAgentic";
 const SEND_TIMEOUT_MS = 15_000;
+/** What one encrypted record holds, the 4096 bytes of a push less its header, tag and end. */
+export const MAX_PAYLOAD = 4096 - 86 - 16 - 1;
+/** A thread's title is cut there in a notice: a notification shows less anyway. */
+const MAX_BODY = 200;
 
 /**
  * The push services browsers use. Only those are written to: the address comes from a
@@ -81,6 +85,7 @@ export function encryptPayload(
   /** The salt and key pair a test gives, to compare with the RFC's own example. */
   fixed?: { salt: Buffer; asPrivate: Buffer },
 ): Buffer {
+  if (payload.length > MAX_PAYLOAD) throw new Error("Message push trop long.");
   const uaPublic = unb64(p256dh);
   const authSecret = unb64(auth);
   if (uaPublic.length !== 65 || uaPublic[0] !== 4 || authSecret.length !== 16) {
@@ -187,7 +192,17 @@ export class Push {
     this.storage = storage;
     this.send =
       options.send ??
-      ((url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(SEND_TIMEOUT_MS) }));
+      (async (url, init) => {
+        // A push service that answers with a redirect would send the signed header elsewhere.
+        const res = await fetch(url, {
+          ...init,
+          redirect: "error",
+          signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+        });
+        // Only its status is read: what it says beside is let go.
+        await res.body?.cancel().catch(() => undefined);
+        return res;
+      });
     this.onError = options.onError ?? (() => undefined);
   }
 
@@ -220,6 +235,16 @@ export class Push {
       muted: [...new Set(sub.muted)].slice(0, 500),
       createdAt: known?.createdAt ?? now,
     });
+  }
+
+  /**
+   * Forgets the browsers of the devices `whose` names: the computer's own, when its token is
+   * renewed, as one who had the old token may have subscribed a browser of theirs.
+   */
+  forget(whose: (deviceId: string | undefined) => boolean): void {
+    for (const sub of this.storage.listPushSubscriptions()) {
+      if (whose(sub.deviceId)) this.storage.removePushSubscription(sub.endpoint);
+    }
   }
 
   /** Forgets a browser, when it was this device's. */
@@ -259,7 +284,7 @@ export class Push {
     this.keys ??= vapidKeys(this.storage);
     const message: PushMessage = {
       title: notice.title,
-      body: notice.body,
+      body: notice.body.length > MAX_BODY ? `${notice.body.slice(0, MAX_BODY - 1)}…` : notice.body,
       tag: notice.tag,
       threadId: notice.threadId,
     };
