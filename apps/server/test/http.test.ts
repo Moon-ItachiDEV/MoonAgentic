@@ -563,7 +563,7 @@ describe("the HTTP server", () => {
     expect(read.status).toBe(200);
     expect(read.headers.get("content-type")).toBe("image/png");
     expect(read.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(read.headers.get("cache-control")).toContain("private");
+    expect(read.headers.get("cache-control")).toBe("private, no-store");
     expect(Buffer.from(await read.arrayBuffer())).toEqual(png);
     // A locked project's thread shows none of its images.
     const hidden = ((await (await post(png)).json()) as { id: string }).id;

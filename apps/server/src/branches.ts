@@ -17,6 +17,7 @@ export interface BranchOwner {
   id: string;
   title: string;
   archived?: boolean;
+  locked?: boolean;
   branch: string;
 }
 
@@ -62,7 +63,9 @@ export async function projectBranches(
     moonBranchRefs(dir),
     checkedOutBranches(dir),
   ]);
-  const branches = await eachAtMost(refs, AT_ONCE, async (ref): Promise<MoonBranch> => {
+  const lockedBranches = new Set(owners.filter((o) => o.locked).map((o) => o.branch));
+  const visibleRefs = refs.filter((ref) => !lockedBranches.has(ref.name));
+  const branches = await eachAtMost(visibleRefs, AT_ONCE, async (ref): Promise<MoonBranch> => {
     const owner = owners.find((o) => o.branch === ref.name);
     const thread = owner && {
       id: owner.id,

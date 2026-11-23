@@ -820,8 +820,8 @@ export function createHttpServer(options: {
           res.writeHead(200, {
             "content-type": found.image.mime,
             "content-length": found.image.size,
-            // An image never changes once sent; kept by the browser, never by a proxy.
-            "cache-control": "private, max-age=31536000, immutable",
+            // Never kept in browser disk cache so locking a project leaves nothing readable behind.
+            "cache-control": "private, no-store",
             "content-disposition": "inline",
             "cross-origin-resource-policy": "same-origin",
           });

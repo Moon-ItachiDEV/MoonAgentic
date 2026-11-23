@@ -1,11 +1,18 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ServerMessage } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { type Client, Hub } from "../src/hub.ts";
-import { type LockStorage, MAX_TRIES, ProjectLocks, TRIES_WINDOW_MS } from "../src/locks.ts";
+import {
+  COMPUTER_ACTOR,
+  type LockStorage,
+  MAX_TRIES,
+  ProjectLocks,
+  TRIES_WINDOW_MS,
+} from "../src/locks.ts";
 import { Store } from "../src/store.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -104,11 +111,61 @@ describe("project locks", () => {
     for (let i = 0; i < MAX_TRIES - 1; i++) expect(() => locks.unlock("p1", "000000")).toThrow();
     locks.unlock("p1", "123456");
   });
+
+  it("isolates failed PIN attempts per device and supports legacy failure arrays", () => {
+    const storage = memory();
+    const now = () => 1_000_000;
+    const locks = new ProjectLocks(storage, now);
+    locks.setPin("123456");
+    locks.lock("p1");
+    for (let i = 0; i < MAX_TRIES; i++) {
+      expect(() => locks.unlock("p1", "000000", "phone-1")).toThrow(/incorrect/);
+    }
+    // phone-1 is rate-limited, but another phone and the computer are unaffected.
+    expect(() => locks.unlock("p1", "123456", "phone-1")).toThrow(/Réessaie/);
+    locks.unlock("p1", "123456", "phone-2");
+    expect(locks.isLocked("p1")).toBe(false);
+    locks.lock("p1");
+    locks.unlock("p1", "123456", COMPUTER_ACTOR);
+    expect(locks.isLocked("p1")).toBe(false);
+
+    // Legacy array persisted by an older server version migrates into the computer bucket.
+    const legacy = memory();
+    legacy.setSetting("lock.failures", [1_000_000, 1_000_001, 1_000_002, 1_000_003, 1_000_004]);
+    const migrated = new ProjectLocks(legacy, () => 1_000_010);
+    migrated.setPin("123456");
+    migrated.lock("p1");
+    expect(() => migrated.unlock("p1", "123456", COMPUTER_ACTOR)).toThrow(/Réessaie/);
+    migrated.unlock("p1", "123456", "phone-2");
+    expect(migrated.isLocked("p1")).toBe(false);
+  });
+
+  it("resets the PIN, unlocks all projects, and clears failure buckets", () => {
+    const storage = memory();
+    const locks = new ProjectLocks(storage, () => 1_000_000);
+    locks.setPin("123456");
+    locks.lock("p1");
+    locks.lock("p2");
+    for (let i = 0; i < MAX_TRIES; i++) {
+      expect(() => locks.unlock("p1", "000000", "phone-1")).toThrow();
+    }
+    locks.reset();
+    expect(locks.hasPin()).toBe(false);
+    expect(locks.any()).toBe(false);
+    expect(locks.lockedProjects()).toEqual([]);
+    const reloaded = new ProjectLocks(storage, () => 1_000_000);
+    expect(reloaded.hasPin()).toBe(false);
+    expect(reloaded.any()).toBe(false);
+  });
 });
 
 class TestClient implements Client {
+  readonly deviceId?: string;
   openThreadIds?: Set<string>;
   readonly messages: ServerMessage[] = [];
+  constructor(deviceId?: string) {
+    if (deviceId) this.deviceId = deviceId;
+  }
   send(message: ServerMessage): void {
     this.messages.push(message);
   }
@@ -267,5 +324,325 @@ describe("a locked project on the wire", () => {
     await expect(
       hub.handle(client, { type: "project.remove", requestId: "r5", projectId: secret }),
     ).rejects.toThrow(/verrouillé/);
+  });
+
+  it("reserves lock PIN/reset, custom agents, and MCP configuration to the computer", async () => {
+    const { hub, client, secret, open, thread } = setup();
+    const phone = new TestClient("phone-1");
+    hub.connect(phone);
+
+    // Paired devices cannot set the initial PIN, change it, reset it, or register host commands/MCP.
+    await expect(
+      hub.handle(phone, { type: "lock.setPin", requestId: "p1", pin: "123456" }),
+    ).rejects.toThrow(/Seul l'ordinateur/);
+    await expect(hub.handle(phone, { type: "lock.reset", requestId: "p2" })).rejects.toThrow(
+      /Seul l'ordinateur/,
+    );
+    await expect(
+      hub.handle(phone, {
+        type: "agent.addCustom",
+        requestId: "p3",
+        agent: { name: "evil", command: "node", args: ["-e", "1"] },
+      }),
+    ).rejects.toThrow(/Seul l'ordinateur/);
+    await expect(
+      hub.handle(phone, { type: "agent.removeCustom", agentId: "custom-1" }),
+    ).rejects.toThrow(/Seul l'ordinateur/);
+    await expect(
+      hub.handle(phone, {
+        type: "mcp.add",
+        requestId: "p4",
+        server: {
+          name: "evil-mcp",
+          transport: { type: "stdio", command: "node", args: ["-e", "1"], env: [] },
+        },
+      }),
+    ).rejects.toThrow(/Seul l'ordinateur/);
+    await expect(
+      hub.handle(phone, { type: "mcp.setEnabled", id: "m1", enabled: false }),
+    ).rejects.toThrow(/Seul l'ordinateur/);
+    await expect(
+      hub.handle(phone, { type: "mcp.setScope", id: "m1", projectIds: null, allRoles: false }),
+    ).rejects.toThrow(/Seul l'ordinateur/);
+    await expect(hub.handle(phone, { type: "mcp.remove", id: "m1" })).rejects.toThrow(
+      /Seul l'ordinateur/,
+    );
+
+    // The computer sets the PIN, locks a project; failed phone tries do not block the computer.
+    const hidden = thread(secret, "secret-fil");
+    await hub.handle(client, { type: "lock.setPin", requestId: "c1", pin: "123456" });
+    await hub.handle(client, { type: "lock.project", requestId: "c2", projectId: secret });
+    for (let i = 0; i < MAX_TRIES; i++) {
+      await expect(
+        hub.handle(phone, {
+          type: "lock.unlock",
+          requestId: `bad-${i}`,
+          projectId: secret,
+          pin: "000000",
+        }),
+      ).rejects.toThrow(/incorrect/);
+    }
+    await expect(
+      hub.handle(phone, {
+        type: "lock.unlock",
+        requestId: "blocked",
+        projectId: secret,
+        pin: "123456",
+      }),
+    ).rejects.toThrow(/Réessaie/);
+
+    // The computer can reset the PIN and unlock all projects cleanly.
+    await hub.handle(client, { type: "lock.reset", requestId: "c3" });
+    expect(client.last("snapshot").snapshot.lockPin).toBeUndefined();
+    expect(client.last("snapshot").snapshot.threads.map((t) => t.id)).toContain(hidden);
+    expect(phone.last("snapshot").snapshot.threads.map((t) => t.id)).toContain(hidden);
+
+    // Locking open still works only after computer sets a new PIN.
+    await expect(
+      hub.handle(client, { type: "lock.project", requestId: "c4", projectId: open }),
+    ).rejects.toThrow(/code/);
+  });
+
+  it("blocks /lock bypasses via overlapping paths, symlinks, shared git repos, and dataDir", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-lock-paths-"));
+    const dataDir = path.join(dir, "moon-data");
+    const projectsRoot = path.join(dir, "projects");
+    const repoDir = path.join(projectsRoot, "secret-repo");
+    const subDir = path.join(repoDir, "packages", "app");
+    const wtDir = path.join(projectsRoot, "secret-wt");
+    const safeDir = path.join(projectsRoot, "safe");
+    mkdirSync(path.join(dataDir, "worktrees"), { recursive: true });
+    mkdirSync(subDir, { recursive: true });
+    mkdirSync(safeDir, { recursive: true });
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", args, { cwd, stdio: "ignore", windowsHide: true });
+    git(repoDir, "init", "-b", "main");
+    git(repoDir, "config", "user.name", "Test");
+    git(repoDir, "config", "user.email", "test@example.com");
+    writeFileSync(path.join(repoDir, "README.md"), "secret\n");
+    git(repoDir, "add", ".");
+    git(repoDir, "commit", "-m", "init");
+    git(repoDir, "worktree", "add", "-b", "side", wtDir);
+
+    const store = new Store(path.join(dataDir, "state.sqlite"));
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      dataDir,
+      worktreesDir: path.join(dataDir, "worktrees"),
+      homeDir: path.join(dir, ".home"),
+    });
+    const client = new TestClient();
+    hub.connect(client);
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    });
+
+    // MoonAgentic's own dataDir, its parent, and its subdirectories can never be added as projects.
+    expect(() => hub.createProject("data", dataDir)).toThrow(/données internes/);
+    expect(() => hub.createProject("parent", dir)).toThrow(/données internes/);
+    expect(() => hub.createProject("wt", path.join(dataDir, "worktrees"))).toThrow(
+      /données internes|appartient à MoonAgentic/,
+    );
+
+    const secretId = hub.createProject("secret-repo", repoDir);
+    await hub.handle(client, { type: "lock.setPin", requestId: "l1", pin: "123456" });
+    await hub.handle(client, { type: "lock.project", requestId: "l2", projectId: secretId });
+
+    // Re-adding the locked folder, its parent, a subfolder, a symlink, or another git worktree fails.
+    expect(() => hub.createProject("same", repoDir)).toThrow(/verrouillé/);
+    expect(() => hub.createProject("sub", subDir)).toThrow(/verrouillé/);
+    expect(() => hub.createProject("parent", projectsRoot)).toThrow(/verrouillé/);
+    expect(() => hub.createProject("other-wt", wtDir)).toThrow(/dépôt git.*verrouillé/);
+    if (process.platform !== "win32") {
+      const link = path.join(projectsRoot, "alias");
+      symlinkSync(repoDir, link);
+      expect(() => hub.createProject("alias", link)).toThrow(/verrouillé/);
+    }
+
+    // Unrelated sibling folders remain allowed.
+    expect(hub.createProject("safe", safeDir)).toBeTruthy();
+
+    // After unlocking, subfolder can be opened normally.
+    await hub.handle(client, {
+      type: "lock.unlock",
+      requestId: "l3",
+      projectId: secretId,
+      pin: "123456",
+    });
+    expect(hub.createProject("sub", subDir)).toBeTruthy();
+  });
+
+  it("blocks MCP mutations that touch a locked project while allowing open-only MCP servers", async () => {
+    const { hub, client, secret, open } = setup();
+    const stdio = { type: "stdio" as const, command: "node", args: [], env: [] };
+    // Register one global server and one scoped to `open` before locking.
+    await hub.handle(client, {
+      type: "mcp.add",
+      requestId: "m1",
+      server: { name: "global-srv", transport: stdio },
+    });
+    const globalId = client.last("created").id;
+    await hub.handle(client, {
+      type: "mcp.add",
+      requestId: "m2",
+      server: { name: "open-srv", transport: stdio, projectIds: [open] },
+    });
+    const openId = client.last("created").id;
+
+    await hub.handle(client, { type: "lock.setPin", requestId: "l1", pin: "123456" });
+    await hub.handle(client, { type: "lock.project", requestId: "l2", projectId: secret });
+
+    // Adding a global server or one targeting the locked project is refused.
+    await expect(
+      hub.handle(client, {
+        type: "mcp.add",
+        requestId: "m3",
+        server: { name: "g2", transport: stdio },
+      }),
+    ).rejects.toThrow(/verrouillé/);
+    await expect(
+      hub.handle(client, {
+        type: "mcp.add",
+        requestId: "m4",
+        server: { name: "s2", transport: stdio, projectIds: [secret] },
+      }),
+    ).rejects.toThrow(/verrouillé/);
+
+    // Modifying or deleting the global server, or widening open-srv to locked/global, is refused.
+    await expect(
+      hub.handle(client, { type: "mcp.setEnabled", id: globalId, enabled: false }),
+    ).rejects.toThrow(/verrouillé/);
+    await expect(hub.handle(client, { type: "mcp.remove", id: globalId })).rejects.toThrow(
+      /verrouillé/,
+    );
+    await expect(
+      hub.handle(client, {
+        type: "mcp.setScope",
+        id: openId,
+        projectIds: [open, secret],
+        allRoles: false,
+      }),
+    ).rejects.toThrow(/verrouillé/);
+    await expect(
+      hub.handle(client, { type: "mcp.setScope", id: openId, projectIds: null, allRoles: false }),
+    ).rejects.toThrow(/verrouillé/);
+
+    // Scoped operations on open-only servers still work.
+    await hub.handle(client, { type: "mcp.setEnabled", id: openId, enabled: false });
+    await hub.handle(client, { type: "mcp.remove", id: openId });
+  });
+
+  it("excludes locked projects in SQL search before LIMIT so visible hits are never crowded out", async () => {
+    const { hub, store, client, secret, open } = setup();
+    const now = Date.now();
+    store.addThread({
+      id: "t-open",
+      projectId: open,
+      title: "Public",
+      agentId: "demo",
+      status: "idle",
+      permissionMode: "full",
+      createdAt: now,
+      updatedAt: now,
+    });
+    store.addThread({
+      id: "t-secret",
+      projectId: secret,
+      title: "Secret",
+      agentId: "demo",
+      status: "idle",
+      permissionMode: "full",
+      createdAt: now + 1,
+      updatedAt: now + 1,
+    });
+    store.putItem("t-open", {
+      id: "u-open",
+      kind: "user",
+      text: "motclef commun visible",
+      at: now,
+    });
+    // Write 35 newer matching messages in the secret project (> default LIMIT 30).
+    for (let i = 0; i < 35; i++) {
+      store.putItem("t-secret", {
+        id: `u-sec-${i}`,
+        kind: "user",
+        text: `motclef commun cache ${i}`,
+        at: now + 10 + i,
+      });
+    }
+    await hub.handle(client, { type: "lock.setPin", requestId: "l1", pin: "123456" });
+    await hub.handle(client, { type: "lock.project", requestId: "l2", projectId: secret });
+    await hub.handle(client, { type: "search", requestId: "s1", query: "motclef" });
+    expect(client.last("searched").hits.map((h) => h.threadId)).toEqual(["t-open"]);
+  });
+
+  it("hides and protects locked project branches on a shared git repository", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-lock-branches-"));
+    const repo = path.join(dir, "repo");
+    const secretSub = path.join(repo, "secret");
+    const openSub = path.join(repo, "open");
+    mkdirSync(secretSub, { recursive: true });
+    mkdirSync(openSub, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd: repo, stdio: "ignore", windowsHide: true });
+    git("init", "-b", "main");
+    git("config", "user.name", "Test");
+    git("config", "user.email", "test@example.com");
+    writeFileSync(path.join(repo, "README.md"), "shared\n");
+    git("add", ".");
+    git("commit", "-m", "init");
+
+    const store = new Store(path.join(dir, "state.sqlite"));
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(dir, ".worktrees"),
+      homeDir: path.join(dir, ".home"),
+    });
+    const client = new TestClient();
+    hub.connect(client);
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    });
+
+    // Both projects exist in the same repo before locking.
+    const secretId = hub.createProject("secret", secretSub);
+    const openId = hub.createProject("open", openSub);
+    const secretThread = hub.createThread({
+      projectId: secretId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: true,
+      title: "Titre Top Secret",
+      text: "x",
+    });
+    await hub.whenIdle(secretThread);
+    const secretBranch = store.getThread(secretThread)!.workspace!.branch;
+    await hub.setArchived(secretThread, true);
+
+    await hub.handle(client, { type: "lock.setPin", requestId: "l1", pin: "123456" });
+    await hub.handle(client, { type: "lock.project", requestId: "l2", projectId: secretId });
+
+    // Listing branches on `open` leaks neither the locked branch name nor its thread title.
+    await hub.handle(client, { type: "project.branches", requestId: "b1", projectId: openId });
+    const listed = client.last("projectBranches");
+    expect(listed.branches.map((b) => b.name)).not.toContain(secretBranch);
+    expect(JSON.stringify(listed)).not.toContain("Titre Top Secret");
+
+    // Trying to delete the locked project's branch via `open` is refused and leaves git untouched.
+    await hub.handle(client, {
+      type: "project.deleteBranches",
+      requestId: "b2",
+      projectId: openId,
+      branches: [secretBranch],
+    });
+    expect(client.last("branchesDeleted").deleted).toEqual([]);
+    const refs = execFileSync("git", ["branch", "--list", secretBranch], {
+      cwd: repo,
+      encoding: "utf8",
+      windowsHide: true,
+    });
+    expect(refs).toContain(secretBranch);
   });
 });
