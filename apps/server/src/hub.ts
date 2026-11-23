@@ -92,7 +92,13 @@ import { AgentPool } from "./sessions.ts";
 import { light, TimelineLog } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
 import type { Store } from "./store.ts";
-import { forecastFor, rejectReviewFile, syncWorkspace } from "./workspace.ts";
+import {
+  forecastFor,
+  readWorktreeFile,
+  rejectReviewFile,
+  syncWorkspace,
+  worktreeFiles,
+} from "./workspace.ts";
 
 export interface Client {
   send(message: ServerMessage): void;
@@ -942,6 +948,26 @@ export class Hub {
           requestId: message.requestId,
           threadId: message.threadId,
           ...(await this.forecast(message.threadId)),
+        });
+        return;
+      case "workspace.files":
+        client.send({
+          type: "worktreeFiles",
+          requestId: message.requestId,
+          threadId: message.threadId,
+          ...(await worktreeFiles(this.requireLiveThread(message.threadId).workspace)),
+        });
+        return;
+      case "workspace.readFile":
+        client.send({
+          type: "worktreeFile",
+          requestId: message.requestId,
+          threadId: message.threadId,
+          path: message.path,
+          ...(await readWorktreeFile(
+            this.requireLiveThread(message.threadId).workspace,
+            message.path,
+          )),
         });
         return;
       case "workspace.sync":

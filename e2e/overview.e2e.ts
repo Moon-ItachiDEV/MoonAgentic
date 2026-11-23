@@ -84,6 +84,9 @@ describe("home overview", () => {
     await page.keyboard.press("Escape");
     await composer.fill("Bonjour");
     await page.keyboard.press("Enter");
+    // The thread made and open first: before that, nothing is at work yet, so the wait below
+    // would pass at once, and the thread opening later would take the page off the home.
+    await page.waitForURL(/\/t\//);
     await expect.poll(() => page.locator(".working").count(), { timeout: 30_000 }).toBe(0);
 
     await page.getByRole("button", { name: "Nouvelle discussion" }).first().click();

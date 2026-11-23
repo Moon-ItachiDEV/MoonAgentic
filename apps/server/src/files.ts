@@ -38,28 +38,30 @@ export function listFiles(dir: string): Promise<string[]> {
   return files;
 }
 
-function gitFiles(dir: string): Promise<string[]> {
+/** Runs `git ls-files` with these options, and gives the paths it lists. */
+function lsFiles(dir: string, options: string[]): Promise<string[]> {
   return new Promise((resolve, reject) => {
     execFile(
       "git",
-      [
-        ...GIT_QUIET,
-        "ls-files",
-        "-z",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-        "--deduplicate",
-      ],
+      [...GIT_QUIET, "ls-files", "-z", ...options],
       // A listing that hangs falls back to walking the folder; no console window on Windows.
       { cwd: dir, maxBuffer: 64 * 1024 * 1024, timeout: 30_000, windowsHide: true },
-      (error, stdout) => {
-        if (error) return reject(error);
-        const files = stdout.split("\0").filter(Boolean);
-        resolve(files.slice(0, MAX_FILES));
-      },
+      (error, stdout) => (error ? reject(error) : resolve(stdout.split("\0").filter(Boolean))),
     );
   });
+}
+
+/**
+ * The files git sees in the folder, ignored ones left out: tracked ones still on disk (one
+ * removed but not yet committed is gone), and new ones. Fails rather than guess when git does.
+ */
+export async function gitFiles(dir: string): Promise<string[]> {
+  const [files, deleted] = await Promise.all([
+    lsFiles(dir, ["--cached", "--others", "--exclude-standard", "--deduplicate"]),
+    lsFiles(dir, ["--deleted"]),
+  ]);
+  const gone = new Set(deleted);
+  return files.filter((f) => !gone.has(f)).slice(0, MAX_FILES);
 }
 
 function walk(dir: string): string[] {

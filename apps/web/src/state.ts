@@ -220,6 +220,8 @@ export function reduce(state: State, message: ServerMessage): State {
     case "localClones":
     case "pullRequest":
     case "forecast":
+    case "worktreeFiles":
+    case "worktreeFile":
     case "pong":
       return state;
   }

@@ -114,7 +114,11 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
                         ? Extract<ServerMessage, { type: "pullRequest" }>
                         : T extends "workspace.forecast"
                           ? Extract<ServerMessage, { type: "forecast" }>
-                          : ServerMessage;
+                          : T extends "workspace.files"
+                            ? Extract<ServerMessage, { type: "worktreeFiles" }>
+                            : T extends "workspace.readFile"
+                              ? Extract<ServerMessage, { type: "worktreeFile" }>
+                              : ServerMessage;
 
 export class Connection {
   private state: State = initialState;
