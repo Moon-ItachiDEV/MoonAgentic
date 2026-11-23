@@ -102,7 +102,13 @@ export async function deleteMergedBranches(
     if (!branch) {
       kept.push({ name, reason: "Cette branche n'existe plus." });
     } else if (branch.state === "inUse") {
-      kept.push({ name, reason: "Un fil travaille encore dessus." });
+      kept.push({
+        name,
+        reason:
+          branch.thread && !branch.thread.archived
+            ? "Un fil travaille encore dessus."
+            : "Elle est ouverte dans un dossier de travail.",
+      });
     } else if (branch.state === "unmerged") {
       kept.push({ name, reason: "Elle a du travail qui n'est pas fusionné." });
     } else {

@@ -1,5 +1,5 @@
 import type { MoonBranch, Project } from "@moonagentic/protocol";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { branchNote, branches, deletedLine, targetsLabel } from "../branch-cleanup.ts";
 import { connection, newId } from "../connection.ts";
 import { shortAgo } from "../project-threads.ts";
@@ -56,16 +56,25 @@ export function BranchCleanup({ project, onClose }: { project: Project; onClose:
   const [result, setResult] = useState<Result | null>(null);
   const [now] = useState(() => Date.now());
 
+  // Once the box is closed, a late answer changes nothing.
+  const live = useRef(true);
+  useEffect(
+    () => () => {
+      live.current = false;
+    },
+    [],
+  );
   const load = useCallback(() => {
     setError(null);
     return connection
       .ask({ type: "project.branches", requestId: newId(), projectId: project.id })
       .then(
         (reply) => {
+          if (!live.current) return;
           setListing({ targets: reply.targets, branches: reply.branches });
           setPicked(new Set(reply.branches.filter((b) => b.state === "merged").map((b) => b.name)));
         },
-        (e: unknown) => setError(message(e)),
+        (e: unknown) => live.current && setError(message(e)),
       );
   }, [project.id]);
   useEffect(() => void load(), [load]);

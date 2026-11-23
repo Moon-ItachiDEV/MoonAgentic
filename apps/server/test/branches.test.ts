@@ -105,6 +105,7 @@ describe("the moon/* branches of a project", { timeout: 40_000 }, () => {
     branchWith(repo, "moon/later-bbbbbb", "b.txt");
     git(repo, "merge", "-q", "--no-ff", "-m", "merge b", "moon/later-bbbbbb");
     git(repo, "branch", "moon/live-cccccc");
+    git(repo, "worktree", "add", "-q", "-b", "moon/wt-eeeeee", path.join(root, "wt"));
     // Listed merged, then given a new commit before the user confirmed.
     git(repo, "checkout", "-q", "moon/later-bbbbbb");
     writeFileSync(path.join(repo, "b2.txt"), "encore\n");
@@ -118,6 +119,7 @@ describe("the moon/* branches of a project", { timeout: 40_000 }, () => {
       "moon/later-bbbbbb",
       "moon/live-cccccc",
       "moon/nope-dddddd",
+      "moon/wt-eeeeee",
       "main",
     ]);
     expect(result.deleted).toEqual(["moon/merged-aaaaaa"]);
@@ -125,10 +127,16 @@ describe("the moon/* branches of a project", { timeout: 40_000 }, () => {
       "moon/later-bbbbbb": expect.stringMatching(/pas fusionné/),
       "moon/live-cccccc": expect.stringMatching(/fil travaille/),
       "moon/nope-dddddd": expect.stringMatching(/n'existe plus/),
+      "moon/wt-eeeeee": expect.stringMatching(/dossier de travail/),
       // Only moon/* branches are ever listed, so another name is never deleted.
       main: expect.stringMatching(/n'existe plus/),
     });
-    expect(branchList(repo)).toEqual(["main", "moon/later-bbbbbb", "moon/live-cccccc"]);
+    expect(branchList(repo)).toEqual([
+      "main",
+      "moon/later-bbbbbb",
+      "moon/live-cccccc",
+      "moon/wt-eeeeee",
+    ]);
   });
 
   it("counts a branch merged on the remote as merged, while main is behind", async () => {

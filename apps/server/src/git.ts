@@ -964,7 +964,7 @@ export async function moonBranchRefs(
     "refs/heads/moon/",
   ]);
   return out
-    .split("\n")
+    .split(/\r?\n/)
     .filter(Boolean)
     .map((line) => {
       const [ref = "", commit = "", at = "0"] = line.split("\0");
@@ -978,7 +978,7 @@ export async function checkedOutBranches(dir: string): Promise<Set<string>> {
   const prefix = "branch refs/heads/";
   return new Set(
     out
-      .split("\n")
+      .split(/\r?\n/)
       .filter((line) => line.startsWith(prefix))
       .map((line) => line.slice(prefix.length)),
   );
@@ -1002,7 +1002,13 @@ export async function commitsAhead(dir: string, branch: string, target: string):
   return out.code === 0 ? Number(out.stdout.trim()) || 0 : 0;
 }
 
-/** Deletes a local branch, merged or not in git's own eyes: the caller checked it is. */
-export async function deleteBranch(dir: string, branch: string): Promise<void> {
-  await git(dir, ["branch", "-D", branch]);
+/**
+ * Deletes a local branch, merged or not in git's own eyes: the caller checked it is. Waits
+ * for the worktree changes on the repository, so a thread coming back from the archive at
+ * that moment either finds its branch, or makes it again from where it started.
+ */
+export function deleteBranch(dir: string, branch: string): Promise<void> {
+  return oneAtATime(dir, async () => {
+    await git(dir, ["branch", "-D", "--", branch]);
+  });
 }
