@@ -8,6 +8,23 @@ const TOKEN_KEY = "moonagentic.token";
 /** The code the server closes a connection with when its token was replaced. */
 const TOKEN_RENEWED = 4001;
 export const ASK_TIMEOUT_MS = 60_000;
+/**
+ * What the server may work on for longer than that: a clone, a push, a merge. The page
+ * waits a little more than the server gives the work, rather than say that nothing came
+ * while it still runs, which invites doing it a second time.
+ */
+export const LONG_ASKS_MS: Readonly<Record<string, number>> = {
+  // The server gives a clone 15 minutes.
+  "project.clone": 16 * 60_000,
+  // A commit, a push the server gives 5 minutes, then the pull request.
+  "workspace.ship": 7 * 60_000,
+  "team.ship": 7 * 60_000,
+  // GitHub has 2 minutes to merge, and is then asked how the pull request stands.
+  "workspace.mergePr": 3 * 60_000,
+};
+/** How long the page waits for the answer to a request of this type. */
+export const askTimeoutFor = (type: string, usual: number = ASK_TIMEOUT_MS): number =>
+  Math.max(usual, LONG_ASKS_MS[type] ?? 0);
 /** How often the server is pinged while the connection is open. */
 export const PING_MS = 20_000;
 /** A ping with no answer after this long means a dead connection: it is opened again. */
@@ -202,7 +219,7 @@ export class Connection {
   /** Sends a request and resolves with the server's reply to it. */
   ask<T extends Request>(
     message: T,
-    timeoutMs: number = this.askTimeoutMs,
+    timeoutMs: number = askTimeoutFor(message.type, this.askTimeoutMs),
   ): Promise<ReplyTo<T["type"]>> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {

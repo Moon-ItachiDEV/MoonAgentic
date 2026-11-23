@@ -10,6 +10,7 @@ import {
   reviewMessage,
   rowPlace,
 } from "../diff.ts";
+import { readReviewDrafts, writeReviewDrafts } from "../review-drafts.ts";
 import { IconBranch, IconChevron, IconX } from "./icons.tsx";
 import { PullRequestStatus, usePullRequest } from "./PullRequestStatus.tsx";
 
@@ -238,7 +239,9 @@ export function ReviewPanel({
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
   /** Files the user folded or unfolded, by path; the others follow the size of the change. */
   const [opened, setOpened] = useState<Record<string, boolean>>({});
-  const [comments, setComments] = useState<LineComment[]>([]);
+  // Kept on this device until they are sent: closing the panel does not lose them.
+  const [comments, setComments] = useState<LineComment[]>(() => readReviewDrafts(thread.id));
+  useEffect(() => writeReviewDrafts(thread.id, comments), [thread.id, comments]);
   /** The remarks just sent, until the agent's turn starts; they come back if it does not. */
   const [sending, setSending] = useState<string[] | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);

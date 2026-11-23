@@ -1,17 +1,23 @@
 import DOMPurify from "dompurify";
 import { marked } from "marked";
-import { memo, useLayoutEffect, useRef, useSyncExternalStore } from "react";
+import { memo, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { prStates } from "../pr-states.ts";
 import { pullRequestUrl } from "../pull-request.ts";
 
 /** Renders agent Markdown; links open outside the app. */
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  const html = DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }), {
-    // An answer is text to read: nothing in it should look like part of the app or submit anything.
-    FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style"],
-    // Nor should it place itself over the app, which a style of its own would allow.
-    FORBID_ATTR: ["style"],
-  });
+  // Worked out once per text: a pull request's state, when it comes, redraws every answer
+  // on the page, and none of them should be parsed and cleaned again for that.
+  const html = useMemo(
+    () =>
+      DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }), {
+        // An answer is text to read: nothing in it should look like part of the app or submit anything.
+        FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style"],
+        // Nor should it place itself over the app, which a style of its own would allow.
+        FORBID_ATTR: ["style"],
+      }),
+    [text],
+  );
   const root = useRef<HTMLDivElement>(null);
   const states = useSyncExternalStore(prStates.subscribe, prStates.version);
   // Links to pull requests take the color of their state on GitHub, once it is known.
