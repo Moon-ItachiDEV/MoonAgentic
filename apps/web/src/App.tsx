@@ -1,4 +1,4 @@
-import type { Item, Schedule, Thread } from "@moonagentic/protocol";
+import type { Item, Project, Schedule, Thread } from "@moonagentic/protocol";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Composer as PlainComposer, useNarrow } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
@@ -23,9 +23,11 @@ import {
   IconClose,
   IconFolder,
   IconInbox,
+  IconLock,
   IconPin,
   IconPlug,
 } from "./components/icons.tsx";
+import { LockSheet } from "./components/LockSheet.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
@@ -49,6 +51,7 @@ import { connection, newId } from "./connection.ts";
 import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
 import { waits } from "./decision.ts";
 import { focusItem } from "./focus.ts";
+import { askUnlock, lockProject } from "./lock.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { navigate, useRoute } from "./router.ts";
 
@@ -119,6 +122,23 @@ export function App() {
     document.addEventListener("keydown", open);
     return () => document.removeEventListener("keydown", open);
   }, []);
+  // Ctrl Maj L (⌘ ⇧ L) locks the project open, or asks for the code when it is locked.
+  const lockShortcut = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    const lock = (event: KeyboardEvent) => {
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.shiftKey &&
+        !event.altKey &&
+        event.key.toLowerCase() === "l"
+      ) {
+        event.preventDefault();
+        lockShortcut.current();
+      }
+    };
+    document.addEventListener("keydown", lock);
+    return () => document.removeEventListener("keydown", lock);
+  }, []);
 
   const wide = useWide();
   /** On a narrow screen, what the project's page shows: the coordinator or the threads. */
@@ -160,10 +180,12 @@ export function App() {
   // A project's page shows that project; elsewhere, the open thread's or the one last picked.
   const routeProject =
     route.name === "project" ? state.projects.find((p) => p.id === route.projectId) : undefined;
+  // A locked project is never the one new conversations start in.
+  const openProjects = state.projects.filter((p) => !p.locked);
   const project =
     routeProject ??
-    state.projects.find((p) => p.id === (thread?.projectId ?? pickedProjectId)) ??
-    state.projects[0];
+    openProjects.find((p) => p.id === (thread?.projectId ?? pickedProjectId)) ??
+    openProjects[0];
 
   // On a project's page, the conversation is its coordinator's, once it has one.
   const coordinator = routeProject ? coordinatorOf(state.threads, routeProject.id) : undefined;
@@ -179,6 +201,22 @@ export function App() {
             t.id !== coordinator.id,
         )
       : undefined;
+  /** Locks it; a thread of it open here goes, as nothing of it is shown any more. */
+  const lockOne = (p: Project) =>
+    lockProject(p, state.lockPin, () => {
+      if (route.name === "thread" && thread?.projectId === p.id) go({ name: "home" });
+    });
+  const toggleLockOf = (id: string) => {
+    const p = state.projects.find((x) => x.id === id);
+    if (!p) return;
+    setDrawer(false);
+    if (p.locked) askUnlock(p);
+    else lockOne(p);
+  };
+  lockShortcut.current = () => {
+    if (project?.locked) askUnlock(project);
+    else if (project) lockOne(project);
+  };
   const pickProject = (id: string) => {
     setPickedProjectId(id);
     writePref("project", id);
@@ -316,6 +354,15 @@ export function App() {
       run: () => setRequestsOpen(true),
     },
     { label: "Planner", icon: <IconBoard size={15} />, run: openPlanner },
+    ...(project && !project.locked
+      ? [
+          {
+            label: `Verrouiller le projet ${project.name}`,
+            icon: <IconLock size={15} />,
+            run: () => lockOne(project),
+          },
+        ]
+      : []),
     {
       label: "Tâches planifiées",
       icon: <IconClock size={15} />,
@@ -391,7 +438,7 @@ export function App() {
           {...(placeholder ? { placeholder } : {})}
           onNewProject={() => setCreatingProject(true)}
           {...(state.ready && !state.projects.length ? { onNeedProject: needDiscussions } : {})}
-          projects={state.projects}
+          projects={openProjects}
           onPickProject={pickProject}
           mcpServers={state.mcpServers}
           onMcp={() => setMcpOpen(true)}
@@ -403,6 +450,7 @@ export function App() {
           onArchive={() => t && setArchived(t.id, true)}
           onDelete={() => t && askDeleteThread(t)}
           onTeam={(task) => setTeamTask(task)}
+          onLock={lockOne}
           onSchedule={(text) => setScheduling({ text })}
           onSettings={() => go({ name: "settings", section: "general" })}
           onSubscriptions={() => go({ name: "settings", section: "subscriptions" })}
@@ -508,6 +556,7 @@ export function App() {
             setDrawer(false);
             askRemoveProject(id);
           }}
+          onToggleLock={toggleLockOf}
           onOpenSettings={() => go({ name: "settings", section: "general" })}
           onOpenSubscriptions={() => {
             setDrawer(false);
@@ -608,6 +657,7 @@ export function App() {
                 favorites={state.favorites}
                 coordinator={state.coordinator}
                 projects={state.projects}
+                lockPin={state.lockPin}
                 projectId={project?.id}
                 mcpServers={state.mcpServers}
                 mcpSecretsError={state.mcpSecretsError}
@@ -630,12 +680,34 @@ export function App() {
           ) : (
             <div className="view">
               <div className="home">
-                <p className="greet-sub">{state.ready ? "Ce fil n'existe plus." : "Chargement…"}</p>
+                <p className="greet-sub">
+                  {!state.ready
+                    ? "Chargement…"
+                    : state.projects.some((p) => p.locked)
+                      ? "Ce fil n'existe plus, ou son projet est verrouillé."
+                      : "Ce fil n'existe plus."}
+                </p>
               </div>
             </div>
           )
         ) : route.name === "project" ? (
-          routeProject ? (
+          routeProject?.locked ? (
+            <div className="view">
+              <div className="lk-page">
+                <span className="lk-ic">
+                  <IconLock size={20} />
+                </span>
+                <b className="lk-ttl">{routeProject.name} est verrouillé</b>
+                <p>
+                  Les agents continuent de travailler. Ses discussions, ses cartes et ses fichiers
+                  restent masqués sur tous tes appareils tant que le code n'est pas saisi.
+                </p>
+                <button className="btn" onClick={() => askUnlock(routeProject)}>
+                  Déverrouiller
+                </button>
+              </div>
+            </div>
+          ) : routeProject ? (
             (() => {
               const page = (panel: boolean) => (
                 <ProjectPage
@@ -659,6 +731,7 @@ export function App() {
                     openPlanner();
                   }}
                   onRemoveProject={() => askRemoveProject(routeProject.id)}
+                  onLock={() => lockOne(routeProject)}
                   coordinator={coordinator}
                   settings={state.coordinator}
                   onOpenSettings={() => go({ name: "settings", section: "coordinator" })}
@@ -884,6 +957,8 @@ export function App() {
         {route.name !== "settings" &&
           route.name !== "planner" &&
           route.name !== "artifacts" &&
+          // A locked project's page has nothing to write to until the code is given.
+          !routeProject?.locked &&
           // Under the « Fils » tab the coordinator's conversation is out of sight: so is its composer.
           // A thread shown alone on a narrow screen brings its own.
           // Beside its threads, the coordinator's is under its own conversation.
@@ -980,6 +1055,7 @@ export function App() {
           onClose={() => setRequestsOpen(false)}
         />
       </Presence>
+      <LockSheet />
       <Presence show={!!confirm}>
         {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
       </Presence>

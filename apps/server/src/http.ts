@@ -801,7 +801,10 @@ export function createHttpServer(options: {
         return;
       }
       if (parts.length === 2 && req.method === "GET") {
-        const found = hub.attachments.find(parts[0]!, parts[1]!);
+        // A locked project's images stay on this computer, like the rest of its threads.
+        const found = hub.lockedThread(parts[0]!)
+          ? undefined
+          : hub.attachments.find(parts[0]!, parts[1]!);
         if (!found) {
           res.writeHead(404, { "cache-control": "no-store" }).end();
           return;

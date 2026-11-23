@@ -24,6 +24,7 @@ import {
   notificationsOn,
   showNotice,
 } from "../notifications.ts";
+import { lockSheet, toggleLock } from "../lock.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { disablePush, enablePush, pushOn, pushReached, pushSupport } from "../push.ts";
 import type { SettingsSection } from "../router.ts";
@@ -37,6 +38,7 @@ import {
   IconFolder,
   IconGauge,
   IconGear,
+  IconLock,
   IconMoon,
   IconSearch,
   IconSun,
@@ -330,6 +332,63 @@ function NotificationsRow() {
 }
 
 /**
+ * /lock: the code, kept on the computer, and the projects it hides. Locking or opening one
+ * here does it for every device.
+ */
+function LockCard(props: { projects: Project[]; lockPin: boolean }) {
+  const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  return (
+    <>
+      <h3 className="lk-h">Verrouillage des projets</h3>
+      <div className="set-card">
+        <Row
+          title="Code de verrouillage"
+          text={
+            props.lockPin
+              ? "Un code à 6 chiffres est défini. Il est demandé pour rouvrir un projet verrouillé."
+              : "Aucun code pour l'instant. Il te sera demandé au premier verrouillage."
+          }
+        >
+          <button
+            className="btn sm"
+            onClick={() => lockSheet.open(props.lockPin ? { kind: "change" } : { kind: "set" })}
+          >
+            {props.lockPin ? "Changer le code" : "Définir le code"}
+          </button>
+        </Row>
+        {props.projects.length > 0 && (
+          <Row
+            title="Projets verrouillés"
+            text="Leurs discussions sont masquées sur tous tes appareils. Les agents continuent de travailler."
+          >
+            <span className="lk-chips">
+              {props.projects.map((p) => (
+                <button
+                  key={p.id}
+                  className="lk-chip"
+                  aria-pressed={!!p.locked}
+                  title={p.locked ? `Déverrouiller ${p.name}` : `Verrouiller ${p.name}`}
+                  onClick={() => toggleLock(p, props.lockPin)}
+                >
+                  <IconLock size={12} />
+                  {p.name}
+                </button>
+              ))}
+            </span>
+          </Row>
+        )}
+        <Row
+          title="Raccourci"
+          text="Verrouille le projet ouvert. La commande /lock fait la même chose."
+        >
+          <kbd>{mac ? "⌘ ⇧ L" : "Ctrl Maj L"}</kbd>
+        </Row>
+      </div>
+    </>
+  );
+}
+
+/**
  * The single agent + model menu of one coordinator route: the favorites (or every model when
  * there are none), grouped by agent, with the chosen agent's badge beside it.
  */
@@ -381,6 +440,8 @@ export function SettingsPage(props: {
   favorites: Favorites;
   coordinator: CoordinatorSettings;
   projects: Project[];
+  /** Whether a code for /lock is set. */
+  lockPin: boolean;
   projectId: string | undefined;
   mcpServers: McpServerInfo[];
   mcpSecretsError?: string | null;
@@ -401,63 +462,71 @@ export function SettingsPage(props: {
   switch (props.section) {
     case "general":
       body = (
-        <div className="set-card">
-          <Row title="Projet par défaut" text="Les nouvelles discussions démarrent dans ce projet.">
-            {props.projects.length ? (
-              <label className="set-select">
-                <IconFolder size={14} />
-                <select
-                  aria-label="Projet par défaut"
-                  value={props.projectId ?? ""}
-                  onChange={(e) => props.onPickProject(e.target.value)}
-                >
-                  {props.projects.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ) : (
-              <span className="set-note">Aucun projet</span>
-            )}
-          </Row>
-          <Row
-            title="Autorisations par défaut"
-            text={
-              mode === "full"
-                ? "Accès complet : l'agent agit sans demander."
-                : "Supervisé : l'agent demande avant de modifier ou de lancer quoi que ce soit."
-            }
-          >
-            <Seg
-              label="Autorisations par défaut"
-              value={mode}
-              choices={[
-                { id: "supervised", name: "Supervisé" },
-                { id: "full", name: "Accès complet" },
-              ]}
-              onPick={(value) => {
-                setMode(value);
-                writePref("permissionMode", value);
-              }}
-            />
-          </Row>
-          <Row
-            title="Branche à part"
-            text="Dans un projet git, chaque nouvelle discussion travaille sur sa propre branche, dans une copie à part."
-          >
-            <Toggle
-              label="Branche à part"
-              on={isolated}
-              onChange={(on) => {
-                setIsolated(on);
-                writePref("isolated", String(on));
-              }}
-            />
-          </Row>
-          <NotificationsRow />
-        </div>
+        <>
+          <div className="set-card">
+            <Row
+              title="Projet par défaut"
+              text="Les nouvelles discussions démarrent dans ce projet."
+            >
+              {props.projects.some((p) => !p.locked) ? (
+                <label className="set-select">
+                  <IconFolder size={14} />
+                  <select
+                    aria-label="Projet par défaut"
+                    value={props.projectId ?? ""}
+                    onChange={(e) => props.onPickProject(e.target.value)}
+                  >
+                    {props.projects
+                      .filter((p) => !p.locked)
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              ) : (
+                <span className="set-note">Aucun projet</span>
+              )}
+            </Row>
+            <Row
+              title="Autorisations par défaut"
+              text={
+                mode === "full"
+                  ? "Accès complet : l'agent agit sans demander."
+                  : "Supervisé : l'agent demande avant de modifier ou de lancer quoi que ce soit."
+              }
+            >
+              <Seg
+                label="Autorisations par défaut"
+                value={mode}
+                choices={[
+                  { id: "supervised", name: "Supervisé" },
+                  { id: "full", name: "Accès complet" },
+                ]}
+                onPick={(value) => {
+                  setMode(value);
+                  writePref("permissionMode", value);
+                }}
+              />
+            </Row>
+            <Row
+              title="Branche à part"
+              text="Dans un projet git, chaque nouvelle discussion travaille sur sa propre branche, dans une copie à part."
+            >
+              <Toggle
+                label="Branche à part"
+                on={isolated}
+                onChange={(on) => {
+                  setIsolated(on);
+                  writePref("isolated", String(on));
+                }}
+              />
+            </Row>
+            <NotificationsRow />
+          </div>
+          <LockCard projects={props.projects} lockPin={props.lockPin} />
+        </>
       );
       break;
     case "appearance":

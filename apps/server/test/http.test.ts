@@ -48,6 +48,7 @@ async function serve(
     attachments: images,
     artifactLinks: links,
     push,
+    lockedThread: (threadId: string) => threadId === "verrouille",
     connect: () => {
       connected += 1;
       return () => undefined;
@@ -564,6 +565,11 @@ describe("the HTTP server", () => {
     expect(read.headers.get("x-content-type-options")).toBe("nosniff");
     expect(read.headers.get("cache-control")).toContain("private");
     expect(Buffer.from(await read.arrayBuffer())).toEqual(png);
+    // A locked project's thread shows none of its images.
+    const hidden = ((await (await post(png)).json()) as { id: string }).id;
+    images.bind("verrouille", [hidden]);
+    expect(images.find("verrouille", hidden)).toBeDefined();
+    expect((await fetch(address("verrouille", hidden), { headers: auth })).status).toBe(404);
     // Gone between the look and the read, as when its thread is deleted: not there, said so.
     const found = images.find("fil-1", image.id)!;
     vi.spyOn(images, "find").mockReturnValueOnce({ ...found, file: `${found.file}.parti` });

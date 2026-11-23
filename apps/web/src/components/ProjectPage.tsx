@@ -54,6 +54,8 @@ export function ProjectPage(props: {
   onDeleteThread: (thread: Thread) => void;
   onOpenPlanner: () => void;
   onRemoveProject: () => void;
+  /** Locks it with the code: its threads leave every screen until the code is given. */
+  onLock: () => void;
   /** Beside the coordinator's conversation: the list alone, without the project's heading. */
   panel?: boolean;
   /** The project's coordinator and what it is set to, shown under « Contexte ». */
@@ -195,6 +197,7 @@ export function ProjectPage(props: {
                 ...(props.project.git
                   ? [{ label: "Nettoyer les branches…", run: () => setCleaning(true) }]
                   : []),
+                { label: "Verrouiller par code", run: props.onLock },
                 { label: "Retirer de MoonAgentic…", danger: true, run: props.onRemoveProject },
               ]}
             />

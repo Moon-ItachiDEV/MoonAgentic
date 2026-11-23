@@ -181,13 +181,19 @@ export class Push {
   private readonly storage: PushStorage;
   private readonly send: PushSend;
   private readonly onError: (error: unknown) => void;
+  private readonly quiet: (projectId: string) => boolean;
   private keys: VapidKeys | undefined;
   /** Each thread as last seen, to tell what changed. */
   private readonly seen = new Map<string, Thread>();
 
   constructor(
     storage: PushStorage,
-    options: { send?: PushSend; onError?: (error: unknown) => void } = {},
+    options: {
+      send?: PushSend;
+      onError?: (error: unknown) => void;
+      /** A project nothing is said of for now: one locked with /lock. */
+      quiet?: (projectId: string) => boolean;
+    } = {},
   ) {
     this.storage = storage;
     this.send =
@@ -204,6 +210,7 @@ export class Push {
         return res;
       });
     this.onError = options.onError ?? (() => undefined);
+    this.quiet = options.quiet ?? (() => false);
   }
 
   publicKey(): string {
@@ -264,7 +271,7 @@ export class Push {
   threadChanged(thread: Thread): void {
     const was = this.seen.get(thread.id);
     this.seen.set(thread.id, thread);
-    if (!was) return;
+    if (!was || this.quiet(thread.projectId)) return;
     for (const notice of noticesFor([was], [thread])) void this.deliver(notice, thread.projectId);
   }
 

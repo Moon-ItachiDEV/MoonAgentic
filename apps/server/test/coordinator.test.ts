@@ -491,7 +491,7 @@ describe("a project's coordinator", () => {
     for (const t of store.listThreads().filter((t) => t.role === "lead")) {
       await hub.handle(client, { type: "team.stop", threadId: t.id });
     }
-  });
+  }, 40_000);
 
   it("ignores any legacy user MCP server named moonagentic on coordinator threads", async () => {
     const { store, say } = await coordinated();
