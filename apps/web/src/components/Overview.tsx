@@ -37,10 +37,13 @@ const agentOf = (agents: AgentInfo[], id: string) =>
  * Messages per day, asked of the server when the home page opens and again a moment after a
  * thread moves (an answer just ended), so today's cell keeps up.
  */
-function useActivity(days: number, latest: number) {
+function useActivity(days: number, latest: number, online: boolean) {
   const [data, setData] = useState<{ days: ActivityDay[]; firstAt?: number } | null>(null);
   const first = useRef(true);
   useEffect(() => {
+    // Asked only once the connection is open, and asked again when it opens anew: a request
+    // sent while it reconnects would fail and leave the map empty.
+    if (!online) return;
     let current = true;
     const ask = () =>
       connection
@@ -58,7 +61,7 @@ function useActivity(days: number, latest: number) {
       current = false;
       clearTimeout(timer);
     };
-  }, [days, latest]);
+  }, [days, latest, online]);
   return data;
 }
 
@@ -142,15 +145,16 @@ export function Overview(props: {
   const { state, narrow } = props;
   const weeks = narrow ? WEEKS_NARROW : WEEKS_WIDE;
   const latest = state.threads.reduce((m, t) => Math.max(m, t.updatedAt), 0);
-  const activity = useActivity(weeks * 7, latest);
-  const cards = useMemo(() => byUrgency(homeCards(state, 4)), [state]);
-  const pills = brief(homeCards(state, 50), state.quotas);
+  const activity = useActivity(weeks * 7, latest, state.status === "open");
+  // Sorted by urgency before it is cut, so an older thread that waits for the user still
+  // shows; « autres » counts the cards left out, never threads at rest.
+  const all = useMemo(() => byUrgency(homeCards(state, 50)), [state]);
+  const cards = all.slice(0, 4);
+  const pills = brief(all, state.quotas);
   const prs = pullRequests(state.threads.filter((t) => !t.archived || t.pr));
   const next = upcoming(state.schedules, state.plan);
   const map = heatmap(activity?.days ?? [], weeks, activity?.firstAt);
-  const more =
-    state.threads.filter((t) => !t.parentId && !t.archived && t.kind !== "coordinator").length -
-    cards.length;
+  const more = all.length - cards.length;
   const quotaAgent = pills.quota && state.agents.find((a) => a.id === pills.quota!.agentId);
 
   return (

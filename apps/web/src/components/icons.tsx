@@ -329,3 +329,62 @@ export const IconCamera = ({ size = 14 }: P) => (
     <circle cx="12" cy="12.5" r="3.2" />
   </svg>
 );
+
+/** A raised hand: the agent asks before it acts. */
+export const IconHand = ({ size = 15 }: P) => (
+  <svg {...fine(size)} strokeWidth={1.3}>
+    <path d="M5.5 8V3.3a1 1 0 0 1 2 0V7.5M7.5 7V2.3a1 1 0 0 1 2 0V7.5M9.5 7.5V3.3a1 1 0 0 1 2 0V9c0 3-1.8 5-4.4 5-1.7 0-2.7-.8-3.6-2.2L2 9.3a1 1 0 0 1 1.6-1.2L5.5 10" />
+  </svg>
+);
+/** A lightning bolt: full access, the agent acts without asking. */
+export const IconBolt = ({ size = 15 }: P) => (
+  <svg {...fine(size)}>
+    <path d="M9 1.8 3.5 9h4l-1 5.2L12.5 7h-4z" />
+  </svg>
+);
+/** A small caret under a chip that opens a menu. */
+export const IconCaret = ({ size = 10 }: P) => (
+  <svg {...fine(size)} viewBox="0 0 10 10" className="caret">
+    <path d="m2.5 3.8 2.5 2.5 2.5-2.5" />
+  </svg>
+);
+/** Lines with a plus: put in line, sent once the agent is done. */
+export const IconQueue = ({ size = 16 }: P) => (
+  <svg {...fine(size)} strokeWidth={1.6}>
+    <path d="M3 4.5h10M3 8h6M3 11.5h4M11 9.5v4M9 11.5h4" />
+  </svg>
+);
+/** Two arrows crossing: hand over to another agent. */
+export const IconSwap = ({ size = 13 }: P) => (
+  <svg {...fine(size)} strokeWidth={1.5}>
+    <path d="M3 5.5h9.5M10 3l2.5 2.5L10 8M13 10.5H3.5M6 8l-2.5 2.5L6 13" />
+  </svg>
+);
+/** A four-pointed star: the « Galaxie » effort. */
+export const IconSparkle = ({ size = 11 }: P) => (
+  <svg width={size} height={size} viewBox="0 0 12 12" fill="currentColor" aria-hidden>
+    <path d="M6 .5 7.2 4.8 11.5 6 7.2 7.2 6 11.5 4.8 7.2.5 6l4.3-1.2z" />
+  </svg>
+);
+/** A crescent with its orbit: the effort slider's thumb, as on the logo. */
+export const IconOrbit = ({ size = 16 }: P) => (
+  <svg width={size} height={size} viewBox="0 0 16 16" fill="none" aria-hidden>
+    <path d="M10.6 3.3A5 5 0 1 0 12.7 9 4 4 0 0 1 10.6 3.3z" fill="currentColor" />
+    <ellipse
+      cx="8"
+      cy="8"
+      rx="7"
+      ry="2.6"
+      transform="rotate(-24 8 8)"
+      stroke="currentColor"
+      strokeWidth="1"
+      opacity=".7"
+    />
+  </svg>
+);
+/** A folder on the 16 px grid, for the tray under the composer. */
+export const IconFolderFine = ({ size = 14 }: P) => (
+  <svg {...fine(size)}>
+    <path d="M2 4.2c0-.6.5-1.1 1.1-1.1h3l1.5 1.6h5.3c.6 0 1.1.5 1.1 1.1v6.3c0 .6-.5 1.1-1.1 1.1H3.1c-.6 0-1.1-.5-1.1-1.1z" />
+  </svg>
+);

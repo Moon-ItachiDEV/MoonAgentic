@@ -123,6 +123,22 @@ describe("activity per day", () => {
     expect(store.firstThreadAt()).toBe(Date.UTC(2026, 10, 21, 8));
     store.close();
   });
+
+  it("counts from its own index, without reading the messages", () => {
+    const store = new Store(":memory:");
+    const plan = store.db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT CAST((json_extract(data, '$.at') - 0) / 86400000 AS INTEGER) AS day, COUNT(*)
+           FROM items
+           WHERE json_extract(data, '$.kind') IN ('user', 'agent')
+             AND json_extract(data, '$.byTeam') IS NOT 1
+             AND json_extract(data, '$.at') >= 0
+           GROUP BY day`,
+      )
+      .all() as { detail: string }[];
+    expect(plan.map((row) => row.detail).join(" | ")).toContain("items_activity_at");
+    store.close();
+  });
 });
 
 /** A store with one project and two threads, the second one the latest to move. */

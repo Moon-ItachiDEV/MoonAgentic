@@ -167,7 +167,8 @@ describe("composer", () => {
     await composer(page).press("Tab");
     expect(await composer(page).inputValue()).toBe("Lis @src/app.ts avec $revue ");
 
-    await page.getByRole("button", { name: "Supervisé" }).click();
+    await page.getByRole("button", { name: /Mode d'accès/ }).click();
+    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
     await composer(page).press("Enter");
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
     // The agent's plan is one card: every step done, it folds to its title and its footer.

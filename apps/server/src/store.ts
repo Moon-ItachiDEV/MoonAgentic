@@ -248,6 +248,16 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
           ORDER BY json_extract(data, '$.at'), rowid;
     `);
   },
+  // 5. The home page's activity map counts messages per day: an index of when each message
+  // was written, holding only what the user or an agent said, so counting reads that index
+  // alone, never the messages themselves.
+  (db) => {
+    db.exec(`
+      CREATE INDEX items_activity_at ON items(json_extract(data, '$.at'))
+        WHERE json_extract(data, '$.kind') IN ('user', 'agent')
+          AND json_extract(data, '$.byTeam') IS NOT 1;
+    `);
+  },
 ];
 
 /** How many messages the search's index takes in one write. */
@@ -612,6 +622,7 @@ export class Store {
    * they fall on once shifted by `offsetMs` (the client's time zone). A team's own briefs
    * are left out, as in search.
    */
+  /** Messages per day since `since`, read from `items_activity_at` (its conditions, word for word). */
   activityDays(since: number, offsetMs: number): ActivityDay[] {
     const rows = this.sql(
       `SELECT CAST((json_extract(data, '$.at') - ?) / 86400000 AS INTEGER) AS day, COUNT(*) AS count

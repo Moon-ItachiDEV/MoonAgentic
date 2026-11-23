@@ -319,6 +319,10 @@ export function App() {
         project={project}
         {...(placeholder ? { placeholder } : {})}
         onNewProject={() => setCreatingProject(true)}
+        projects={state.projects}
+        onPickProject={pickProject}
+        mcpServers={state.mcpServers}
+        onMcp={() => setMcpOpen(true)}
         onCreated={(id) => navigate({ name: "thread", threadId: id })}
         onExport={() => exportThread(t)}
         onSearch={() => setSearchOpen(true)}
