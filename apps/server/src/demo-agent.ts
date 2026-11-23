@@ -402,6 +402,60 @@ const app = acp
       await say("Je réfléchis…", "agent_message_chunk");
       await new Promise(() => undefined);
     }
+    if (ask.trim() === "/choix" || ask.trim() === "/apercus") {
+      // As Claude Code asks: a tool call, then a form the turn waits on; the answer comes
+      // back as the form's content and the turn goes on.
+      const previews = ask.trim() === "/apercus";
+      const call = { toolCallId: `choice-${randomUUID()}`, title: "AskUserQuestion" };
+      await update({ sessionUpdate: "tool_call", ...call, kind: "other", status: "pending" });
+      const option = (label: string, description: string, preview?: string) => ({
+        const: label,
+        title: label,
+        ...(previews ? {} : { description }),
+        ...(previews && preview ? { _meta: { "_claude/askUserQuestionOption": { preview } } } : {}),
+      });
+      const answer: acp.CreateElicitationResponse = await client.request("elicitation/create", {
+        mode: "form",
+        sessionId,
+        toolCallId: call.toolCallId,
+        message: previews ? "Quelle forme pour l'appel d'envoi ?" : "Quelle file de messages ?",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            question_0: {
+              type: "string",
+              oneOf: previews
+                ? [
+                    option("Fonction simple", "", 'await send(\n  "ingest",\n  event,\n)'),
+                    option(
+                      "Client typé (Recommandé)",
+                      "",
+                      'const q = queue("ingest")\n\nawait q.send(event)\nawait q.flush()',
+                    ),
+                    option("Par lot", "", 'await sendMany(\n  "ingest",\n  events,\n)'),
+                  ]
+                : [
+                    option("Kafka (Recommandé)", "Journal durable, un jour d'événements à rejouer"),
+                    option("SQS", "Géré, rien à faire tourner, mais pas de rejeu"),
+                    option("File Postgres", "La base que tu as déjà, elle ne tiendra pas les pics"),
+                  ],
+            },
+            question_0_custom: { type: "string", title: "Other" },
+          },
+        },
+      } as acp.CreateElicitationRequest);
+      if (cancelled.has(sessionId) || answer.action === "cancel") {
+        return { stopReason: "cancelled" };
+      }
+      await update({ sessionUpdate: "tool_call_update", ...call, status: "completed" });
+      const content: Record<string, unknown> =
+        (answer.action === "accept"
+          ? (answer as { content?: Record<string, unknown> | null }).content
+          : null) ?? {};
+      const said = [content.question_0, content.question_0_custom].filter(Boolean).join(" · ");
+      await say(said ? `Compris : ${said}.` : "Pas de réponse.", "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
     if (ask.trim() === "/question") {
       // As Antigravity asks: a tool call left unfinished, the question as text, and the
       // turn ends; the answer is the next message.

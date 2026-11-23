@@ -506,6 +506,24 @@ export interface ToolQuestion {
   options: string[];
   /** Several options may be picked. */
   multi?: boolean;
+  /** What each option means, in the order of `options`; "" for one that says nothing more. */
+  descriptions?: string[];
+  /** What each option would look like (code, a sketch in text), in the order of `options`. */
+  previews?: string[];
+}
+
+/** The answer to one question: the options picked, and the user's own words if any. */
+export interface QuestionAnswer {
+  picks: string[];
+  text?: string;
+}
+
+/** A question an agent stopped its turn on, waiting for an answer, in any thread. */
+export interface PendingQuestion {
+  threadId: string;
+  itemId: string;
+  questions: ToolQuestion[];
+  at: number;
 }
 
 /** The kinds of image a message can carry. SVG is left out: it can carry scripts. */
@@ -557,6 +575,13 @@ export type Item =
       omitted?: number;
       /** What the tool asks the user, when it is a question. */
       questions?: ToolQuestion[];
+      /**
+       * Set when the agent holds its turn until the question is answered (`question.respond`),
+       * rather than ending the turn and reading the next message.
+       */
+      form?: "open" | "answered" | "cancelled";
+      /** What the user answered to each question, once `form` is "answered". */
+      answers?: string[];
       at: number;
     }
   | {
@@ -789,6 +814,8 @@ export interface Snapshot {
   coordinator: CoordinatorSettings;
   favorites: Favorites;
   requests: PendingRequest[];
+  /** Questions agents hold their turn on, in every thread. */
+  questions: PendingQuestion[];
   mcpServers: McpServerInfo[];
   /** Set when MCP secrets could not be decrypted/read from disk (e.g. DPAPI vault moved machines). */
   mcpSecretsError?: string;
@@ -818,6 +845,8 @@ export type ServerMessage =
   | { type: "coordinatorSettings"; settings: CoordinatorSettings }
   /** Every permission request still waiting, after one is added or answered. */
   | { type: "requests"; requests: PendingRequest[] }
+  /** Every question an agent holds its turn on, after one is asked or answered. */
+  | { type: "questions"; questions: PendingQuestion[] }
   | { type: "mcpServers"; servers: McpServerInfo[]; error?: string }
   | { type: "project"; project: Project }
   | { type: "thread"; thread: Thread }
@@ -1263,11 +1292,32 @@ export const ClientMessage = z.discriminatedUnion("type", [
     parent: z.string().trim().min(1).max(4096),
     name: z.string().trim().min(1).max(120).optional(),
   }),
+  /**
+   * Answers a permission request. `followUp` is what the user says with a refusal: the
+   * server sends it as their next message once the turn that asked is over, since no
+   * message can go to an agent still at work.
+   */
   z.object({
     type: z.literal("permission.respond"),
     threadId: id,
     itemId: id,
     optionId: id,
+    followUp: z.string().trim().min(1).max(4000).optional(),
+  }),
+  /** Answers a question the agent holds its turn on: one answer per question, in order. */
+  z.object({
+    type: z.literal("question.respond"),
+    threadId: id,
+    itemId: id,
+    answers: z
+      .array(
+        z.object({
+          picks: z.array(z.string().max(500)).max(12),
+          text: z.string().max(4000).optional(),
+        }),
+      )
+      .min(1)
+      .max(8),
   }),
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;
