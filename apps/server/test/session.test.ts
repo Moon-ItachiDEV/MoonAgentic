@@ -3,7 +3,13 @@ import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AgentSession, jsonLines, needsSignIn, PROMPT_INACTIVITY_MS } from "../src/session.ts";
+import {
+  AgentSession,
+  jsonLines,
+  needsSignIn,
+  PROMPT_INACTIVITY_MS,
+  PROMPT_QUIET_MS,
+} from "../src/session.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -210,6 +216,8 @@ describe("an agent started with an overlapped stdin (Hermes)", () => {
 describe("prompt inactivity watchdog", () => {
   async function startMockAgent(options: {
     inactivityMs?: number;
+    quietMs?: number;
+    onQuiet?: (since: number | undefined) => void;
     onUpdate?: (update: acp.SessionUpdate) => void;
     onConfig?: (config: { model: unknown; settings: unknown }) => void;
     requestPermission?: (
@@ -340,8 +348,10 @@ describe("prompt inactivity watchdog", () => {
       cwd: dir,
       previousSessionId: null,
       ...(options.inactivityMs !== undefined ? { inactivityMs: options.inactivityMs } : {}),
+      ...(options.quietMs !== undefined ? { quietMs: options.quietMs } : {}),
       handlers: {
         onUpdate: (u) => options.onUpdate?.(u),
+        onQuiet: (since) => options.onQuiet?.(since),
         onConfig: (c) => options.onConfig?.(c),
         requestPermission:
           options.requestPermission ?? (async () => ({ outcome: { outcome: "cancelled" } })),
@@ -351,8 +361,41 @@ describe("prompt inactivity watchdog", () => {
     return { session, exitPromise };
   }
 
-  it("defaults to 10 minutes (600 000 ms)", () => {
-    expect(PROMPT_INACTIVITY_MS).toBe(600_000);
+  it("warns after 10 minutes of silence and stops after 30", () => {
+    expect(PROMPT_QUIET_MS).toBe(600_000);
+    expect(PROMPT_INACTIVITY_MS).toBe(1_800_000);
+  });
+
+  it("says when a prompt goes quiet, then that it is over once the prompt fails", async () => {
+    const quiet: (number | undefined)[] = [];
+    const started = Date.now();
+    const { session, exitPromise } = await startMockAgent({
+      inactivityMs: 400,
+      quietMs: 150,
+      onQuiet: (since) => quiet.push(since),
+    });
+    await expect(session.prompt("hang")).rejects.toThrow(/inactivité/i);
+    expect(quiet).toHaveLength(2);
+    // Quiet since the prompt was sent, not since the warning.
+    expect(quiet[0]).toBeGreaterThanOrEqual(started);
+    expect(Date.now() - (quiet[0] ?? 0)).toBeGreaterThanOrEqual(380);
+    expect(quiet[1]).toBeUndefined();
+    await exitPromise;
+  });
+
+  it("is not quiet while the user is asked for permission", async () => {
+    const quiet: (number | undefined)[] = [];
+    const { session } = await startMockAgent({
+      inactivityMs: 1_000,
+      quietMs: 150,
+      onQuiet: (since) => quiet.push(since),
+      requestPermission: async () => {
+        await new Promise((r) => setTimeout(r, 400));
+        return { outcome: { outcome: "selected", optionId: "allow" } };
+      },
+    });
+    expect(await session.prompt("permission-finish")).toBe("end_turn");
+    expect(quiet).toEqual([]);
   });
 
   it("cancels and closes the session when no progress arrives before the deadline", async () => {

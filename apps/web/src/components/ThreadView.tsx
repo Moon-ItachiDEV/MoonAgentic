@@ -1,4 +1,5 @@
 import {
+  AGENT_SILENCE_STOP_MS,
   threadGroup,
   type AgentInfo,
   type Item,
@@ -199,6 +200,13 @@ export function ThreadView({
             {agent?.name ?? "L'agent"} travaille…
           </div>
         )}
+        {working && thread.quietSince && (
+          <QuietNotice
+            since={thread.quietSince}
+            name={agent?.name ?? "L'agent"}
+            threadId={thread.id}
+          />
+        )}
         {thread.status === "error" && thread.error && (
           <div className="failed" role="alert">
             <b>Le tour s'est arrêté</b>
@@ -206,6 +214,31 @@ export function ThreadView({
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Says an agent at work has given no sign of progress for a while, as the server saw it,
+ * and when it will be stopped; « Arrêter » is at hand.
+ */
+function QuietNotice({ since, name, threadId }: { since: number; name: string; threadId: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(tick);
+  }, []);
+  const minutes = Math.max(1, Math.floor((now - since) / 60_000));
+  const left = Math.max(1, Math.ceil((since + AGENT_SILENCE_STOP_MS - now) / 60_000));
+  return (
+    <div className="quiet" role="status">
+      <span>
+        <b>
+          {name} ne donne plus signe de vie depuis {minutes} min.
+        </b>
+        Sans nouvelles, il sera arrêté dans {left} min.
+      </span>
+      <button onClick={() => connection.send({ type: "thread.cancel", threadId })}>Arrêter</button>
     </div>
   );
 }

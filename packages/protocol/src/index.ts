@@ -291,6 +291,11 @@ export interface Team {
   error?: string;
 }
 
+/** An agent's turn with no sign of progress for this long is said to be quiet. */
+export const AGENT_QUIET_MS = 10 * 60_000;
+/** An agent's turn with no sign of progress for this long is stopped. */
+export const AGENT_SILENCE_STOP_MS = 30 * 60_000;
+
 export interface Thread {
   id: string;
   projectId: string;
@@ -331,6 +336,11 @@ export interface Thread {
    * it is opened.
    */
   unread?: boolean;
+  /**
+   * While its agent works: since when (ms) it has given no sign of progress, once that has
+   * lasted long enough to say so. Past a longer silence the turn is stopped.
+   */
+  quietSince?: number;
   /** The coordinator's thread, for a thread it opened. */
   openedBy?: string;
   /** The coordinator's own name for the subject: asked again, it gets this thread back. */

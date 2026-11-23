@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
-import type { AgentSetting } from "@moonagentic/protocol";
+import { AGENT_QUIET_MS, AGENT_SILENCE_STOP_MS, type AgentSetting } from "@moonagentic/protocol";
 import type { AgentLaunch } from "./agents.ts";
 import type { PromptLink } from "./files.ts";
 import { acpMcpServers, type McpServerRecord } from "./mcp.ts";
@@ -15,6 +15,11 @@ export interface SessionHandlers {
   ): Promise<acp.RequestPermissionResponse>;
   /** The agent process ended; `reason` carries its last stderr lines when it failed. */
   onExit(reason: string | undefined): void;
+  /**
+   * The running prompt has made no real progress since `since` (a time in ms), or makes
+   * some again (`undefined`).
+   */
+  onQuiet?(since: number | undefined): void;
   /** The agent changed its settings (model, mode, effort…) on its own. */
   onConfig?(config: { model: ModelOption | undefined; settings: AgentSetting[] }): void;
 }
@@ -210,7 +215,9 @@ export function jsonLines(onOther: (line: string) => void): TransformStream<Uint
 }
 
 /** Fails a prompt that makes no real progress for this long. */
-export const PROMPT_INACTIVITY_MS = 10 * 60_000;
+export const PROMPT_INACTIVITY_MS = AGENT_SILENCE_STOP_MS;
+/** Warns that a prompt has made no real progress for this long, well before it fails. */
+export const PROMPT_QUIET_MS = AGENT_QUIET_MS;
 
 const PROGRESS_UPDATES = new Set<acp.SessionUpdate["sessionUpdate"]>([
   "agent_message_chunk",
@@ -220,15 +227,28 @@ const PROGRESS_UPDATES = new Set<acp.SessionUpdate["sessionUpdate"]>([
   "plan",
 ]);
 
+/**
+ * Watches a prompt for real progress: says when it has gone quiet, and gives up on it after
+ * a longer silence. Paused while the agent waits for the user, who is not the one silent.
+ */
 class InactivityWatchdog {
   private timer: NodeJS.Timeout | undefined;
-  private active: { ms: number; onTimeout: () => void } | null = null;
+  private quietTimer: NodeJS.Timeout | undefined;
+  private active: { ms: number; quietMs: number; onTimeout: () => void } | null = null;
   private pauses = 0;
+  /** Since when the prompt has been quiet, once it was said to be. */
+  private quietSince: number | undefined;
+  private lastProgress = 0;
+  private readonly onQuiet: ((since: number | undefined) => void) | undefined;
 
-  start(ms: number, onTimeout: () => void): void {
+  constructor(onQuiet?: (since: number | undefined) => void) {
+    this.onQuiet = onQuiet;
+  }
+
+  start(ms: number, quietMs: number, onTimeout: () => void): void {
     this.stop();
     if (!Number.isFinite(ms) || ms <= 0) return;
-    this.active = { ms, onTimeout };
+    this.active = { ms, quietMs, onTimeout };
     if (this.pauses === 0) this.arm();
   }
 
@@ -239,8 +259,9 @@ class InactivityWatchdog {
 
   pause(): void {
     this.pauses += 1;
-    clearTimeout(this.timer);
-    this.timer = undefined;
+    this.clearTimers();
+    // Waiting for the user is not silence.
+    this.loud();
   }
 
   resume(): void {
@@ -251,17 +272,42 @@ class InactivityWatchdog {
 
   stop(): void {
     this.active = null;
+    this.clearTimers();
+    this.loud();
+  }
+
+  private clearTimers(): void {
     clearTimeout(this.timer);
+    clearTimeout(this.quietTimer);
     this.timer = undefined;
+    this.quietTimer = undefined;
+  }
+
+  /** The prompt is not quiet any more, if it was said to be. */
+  private loud(): void {
+    if (this.quietSince === undefined) return;
+    this.quietSince = undefined;
+    this.onQuiet?.(undefined);
   }
 
   private arm(): void {
-    clearTimeout(this.timer);
+    this.clearTimers();
+    this.loud();
     const active = this.active;
     if (!active) return;
+    this.lastProgress = Date.now();
+    if (active.quietMs > 0 && active.quietMs < active.ms) {
+      this.quietTimer = setTimeout(() => {
+        this.quietTimer = undefined;
+        this.quietSince = this.lastProgress;
+        this.onQuiet?.(this.quietSince);
+      }, active.quietMs);
+    }
     this.timer = setTimeout(() => {
       // Disarm before firing so late updates arriving during cancel/close cannot re-arm.
       this.timer = undefined;
+      clearTimeout(this.quietTimer);
+      this.quietTimer = undefined;
       this.active = null;
       active.onTimeout();
     }, active.ms);
@@ -284,6 +330,7 @@ export class AgentSession {
   private readonly state: SessionState;
   private readonly watchdog: InactivityWatchdog;
   private readonly inactivityMs: number;
+  private readonly quietMs: number;
 
   private constructor(options: {
     sessionId: string;
@@ -292,6 +339,7 @@ export class AgentSession {
     state: SessionState;
     watchdog: InactivityWatchdog;
     inactivityMs: number;
+    quietMs: number;
     fresh: boolean;
     cwd: string;
     promptCapabilities: acp.PromptCapabilities;
@@ -307,6 +355,7 @@ export class AgentSession {
     this.state = options.state;
     this.watchdog = options.watchdog;
     this.inactivityMs = options.inactivityMs;
+    this.quietMs = options.quietMs;
   }
 
   get model(): ModelOption | undefined {
@@ -366,6 +415,8 @@ export class AgentSession {
     mcpServers?: McpServerRecord[];
     /** Fails a prompt that makes no real progress within this duration. */
     inactivityMs?: number;
+    /** Says a prompt is quiet once it has made no real progress for this long. */
+    quietMs?: number;
   }): Promise<AgentSession> {
     const { launch, cwd, handlers, signal } = options;
     signal?.throwIfAborted();
@@ -434,7 +485,9 @@ export class AgentSession {
     const early: acp.SessionNotification[] = [];
     // Settings seen while starting are the agent's own; the caller then applies the thread's.
     let started = false;
-    const watchdog = new InactivityWatchdog();
+    const watchdog = new InactivityWatchdog(
+      handlers.onQuiet && ((since) => handlers.onQuiet?.(since)),
+    );
     const dispatch = (params: acp.SessionNotification) => {
       if (params.sessionId !== sessionId) return;
       const update = params.update;
@@ -604,6 +657,7 @@ export class AgentSession {
         state,
         watchdog,
         inactivityMs: options.inactivityMs ?? PROMPT_INACTIVITY_MS,
+        quietMs: options.quietMs ?? PROMPT_QUIET_MS,
         fresh,
         cwd,
         promptCapabilities: caps?.promptCapabilities ?? {},
@@ -659,7 +713,7 @@ export class AgentSession {
     // Avoid an unhandled rejection if the watchdog closes the connection after timing out.
     request.catch(() => undefined);
 
-    this.watchdog.start(inactivityMs, onTimeout);
+    this.watchdog.start(inactivityMs, this.quietMs, onTimeout);
     try {
       const response = await Promise.race([request, timeout]);
       return response.stopReason;

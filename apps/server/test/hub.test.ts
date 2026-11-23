@@ -30,7 +30,7 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-function setup(options: { idleMs?: number; maxLiveAgents?: number } = {}) {
+function setup(options: { idleMs?: number; maxLiveAgents?: number; forceStopMs?: number } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-test-"));
   mkdirSync(path.join(dir, ".home"));
   const store = new Store(path.join(dir, "state.sqlite"));
@@ -219,6 +219,32 @@ describe("Hub with the demo agent", () => {
     await hub.cancel(threadId);
     await hub.whenIdle(threadId);
     expect(store.getThread(threadId)?.status).toBe("idle");
+  });
+
+  it("kills an agent that does not stop after « Arrêter », and keeps the thread usable", async () => {
+    const { hub, store, projectId } = setup({ forceStopMs: 300 });
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "/fige",
+    });
+    await expect
+      .poll(() => lastTurnSaid(store.listItems(threadId)), { timeout: 10_000 })
+      .toContain("Je réfléchis");
+    const asked = Date.now();
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+
+    expect(Date.now() - asked).toBeGreaterThanOrEqual(250);
+    expect(store.getThread(threadId)).toMatchObject({ status: "idle" });
+    expect(store.getThread(threadId)?.error).toBeUndefined();
+    expect(hub.liveAgents).toBe(0);
+
+    // The next message starts the agent again.
+    hub.send(threadId, "/compact");
+    await hub.whenIdle(threadId);
+    expect(lastTurnSaid(store.listItems(threadId))).toContain("Contexte compacté.");
   });
 
   it("settles an open permission request as cancelled when the turn is cancelled", async () => {
@@ -714,10 +740,37 @@ describe("Store.recoverAfterRestart", () => {
       outcome: null,
       at: 1,
     });
+    store.addThread({
+      id: "quiet",
+      projectId: "p",
+      title: "quiet",
+      agentId: "demo",
+      status: "running",
+      permissionMode: "supervised",
+      quietSince: 5,
+      pinned: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    store.addThread({
+      id: "only-quiet",
+      projectId: "p",
+      title: "only quiet",
+      agentId: "demo",
+      status: "running",
+      permissionMode: "supervised",
+      quietSince: 5,
+      createdAt: 1,
+      updatedAt: 1,
+    });
     store.recoverAfterRestart();
 
     expect(store.getThread("t")?.status).toBe("idle");
     expect(store.getItem("t", "perm")).toMatchObject({ outcome: "cancelled" });
+    // A turn cut short is not quiet any more, and keeps the rest of its state.
+    expect(store.getThread("quiet")).toMatchObject({ status: "idle", pinned: true });
+    expect(store.getThread("quiet")?.quietSince).toBeUndefined();
+    expect(store.getThread("only-quiet")?.quietSince).toBeUndefined();
     store.close();
   });
 });
