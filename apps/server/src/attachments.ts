@@ -207,6 +207,17 @@ export class Attachments {
     }
   }
 
+  /** Throws away the images of messages taken out of a thread, such as by a step back. */
+  remove(threadId: string, ids: readonly string[]): void {
+    for (const id of ids) {
+      try {
+        for (const file of this.allFiles(this.folder(threadId), id)) rmSync(file, { force: true });
+      } catch {
+        // Still being read (Windows), or not an id of ours: it goes with the thread.
+      }
+    }
+  }
+
   /** The thread is deleted: its images go with it. */
   forget(threadId: string): void {
     if (!SAFE_NAME.test(threadId) || threadId === PENDING) return;

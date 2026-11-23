@@ -255,7 +255,8 @@ export function securityHeaders(host: string | undefined): Record<string, string
   return {
     "content-security-policy": [
       "default-src 'self'",
-      "img-src 'self' data:",
+      // `blob:` is an image this page read itself, with the token: one joined to a message.
+      "img-src 'self' data: blob:",
       "style-src 'self' 'unsafe-inline'",
       `connect-src 'self'${sockets}`,
       "object-src 'none'",

@@ -66,4 +66,32 @@ describe("thread export", () => {
     );
     expect(exportFileName("Corrige l'écran « Réglages »")).toBe("corrige-l-ecran-reglages.md");
   });
+
+  it("names the images of a message, with or without text", () => {
+    const image = { id: "i1", name: "maquette.png", mime: "image/png" as const, size: 12 };
+    const md = threadMarkdown(
+      { id: "t", title: "Image", agentId: "a" } as Thread,
+      [
+        { id: "1", kind: "user", text: "Regarde", images: [image], at: 1 },
+        { id: "2", kind: "user", text: "", images: [image], at: 2 },
+      ],
+      [],
+    );
+    expect(md).toBe(
+      [
+        "# Image",
+        "",
+        "## Toi",
+        "",
+        "Regarde",
+        "",
+        "*Image jointe : maquette.png*",
+        "",
+        "## Toi",
+        "",
+        "*Image jointe : maquette.png*",
+        "",
+      ].join("\n"),
+    );
+  });
 });
