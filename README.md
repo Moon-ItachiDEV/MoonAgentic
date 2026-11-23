@@ -47,7 +47,7 @@ pnpm build
 pnpm start
 ```
 
-Ouvre le lien affiché dans le terminal (`http://127.0.0.1:4747/?token=…`).
+Ouvre le lien affiché dans le terminal (`http://127.0.0.1:4747/#token=…`).
 
 Pour passer une option au démarrage, utilise `pnpm start <options>` ou lance directement `node apps/server/src/bin.ts <options>` :
 

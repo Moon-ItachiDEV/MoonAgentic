@@ -266,6 +266,7 @@ export function SettingsPage(props: {
   projects: Project[];
   projectId: string | undefined;
   mcpServers: McpServerInfo[];
+  mcpSecretsError?: string | null;
   onPickProject: (id: string) => void;
   onOpenConnections: () => void;
   onOpenMcp: () => void;
@@ -573,6 +574,7 @@ export function SettingsPage(props: {
     case "mcp":
       body = (
         <>
+          {props.mcpSecretsError && <p className="error">{props.mcpSecretsError}</p>}
           {props.mcpServers.length ? (
             <div className="set-card">
               {props.mcpServers.map((s) => (

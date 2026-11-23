@@ -396,6 +396,15 @@ describe("git helpers", () => {
       expect(githubRepo(url)).toBe("moon/app");
     expect(githubRepo("https://gitlab.com/moon/app.git")).toBeUndefined();
     expect(githubRepo("/tmp/remote.git")).toBeUndefined();
+    for (const bad of [
+      "https://github.com/-evil/app.git",
+      "https://github.com/moon/..",
+      "https://github.com/moon/.",
+      "https://github.com/moon/...git",
+      "https://github.com/moon/app?x=1",
+      "https://github.com/a b/c d",
+    ])
+      expect(githubRepo(bad)).toBeUndefined();
   });
 
   it("makes a one-line pull request title GitHub takes, from a long task over several lines", () => {

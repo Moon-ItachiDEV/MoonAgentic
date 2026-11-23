@@ -64,7 +64,7 @@ beforeAll(async () => {
     let out = "";
     server.stdout?.on("data", (chunk: Buffer) => {
       out += chunk.toString();
-      const found = /http:\/\/\S+\?token=\S+/.exec(out);
+      const found = /http:\/\/\S+#token=\S+/.exec(out);
       if (found) resolve(found[0]);
     });
     server.stderr?.on("data", (chunk: Buffer) => process.stderr.write(chunk));
@@ -95,7 +95,7 @@ describe("Réglages → Accès distant", () => {
     "shows the real address with its link and QR code, and renews the token",
     async () => {
       const opened = new URL(url);
-      const token = opened.searchParams.get("token") ?? "";
+      const token = new URLSearchParams(opened.hash.replace(/^#/, "")).get("token") ?? "";
       const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
       const page = await context.newPage();
       const errors: Error[] = [];
@@ -125,7 +125,7 @@ describe("Réglages → Accès distant", () => {
       const link = page.getByLabel("Lien de connexion", { exact: true });
       await expect
         .poll(() => link.textContent())
-        .toBe(`https://mini.tail1234.ts.net/?token=${token}`);
+        .toBe(`https://mini.tail1234.ts.net/#token=${token}`);
       await page.getByRole("img", { name: "QR code du lien de connexion" }).waitFor();
       // Nothing is wider than the phone's screen.
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
@@ -136,7 +136,8 @@ describe("Réglages → Accès distant", () => {
       await page.getByRole("button", { name: "Renouveler", exact: true }).click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Renouveler" }).click();
       await expect.poll(() => link.textContent()).not.toContain(token);
-      const renewed = new URL((await link.textContent()) ?? "").searchParams.get("token") ?? "";
+      const renewedUrl = new URL((await link.textContent()) ?? "");
+      const renewed = new URLSearchParams(renewedUrl.hash.replace(/^#/, "")).get("token") ?? "";
       expect(renewed).toBe(readFileSync(path.join(dir, "data", "token"), "utf8"));
       const auth = (given: string) =>
         fetch(new URL("/api/auth", url), { headers: { authorization: `Bearer ${given}` } }).then(

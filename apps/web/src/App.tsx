@@ -514,6 +514,7 @@ export function App() {
                 projects={state.projects}
                 projectId={project?.id}
                 mcpServers={state.mcpServers}
+                mcpSecretsError={state.mcpSecretsError}
                 onPickProject={pickProject}
                 onOpenConnections={() => setConnectionsOpen(true)}
                 onOpenMcp={() => setMcpOpen(true)}
@@ -837,6 +838,7 @@ export function App() {
         <ConnectionsDialog
           agents={state.agents}
           mcpServers={state.mcpServers}
+          mcpSecretsError={state.mcpSecretsError}
           onOpenMcp={() => {
             setConnectionsOpen(false);
             setMcpOpen(true);
@@ -860,7 +862,11 @@ export function App() {
         {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
       </Presence>
       <Presence show={mcpOpen}>
-        <McpDialog servers={state.mcpServers} onClose={() => setMcpOpen(false)} />
+        <McpDialog
+          servers={state.mcpServers}
+          secretsError={state.mcpSecretsError}
+          onClose={() => setMcpOpen(false)}
+        />
       </Presence>
       {searchOpen && (
         <QuickSearch
@@ -902,7 +908,7 @@ function Unauthorized() {
         <h1>Lien de connexion requis</h1>
         <p>
           Ouvre MoonAgentic avec le lien affiché par le serveur au démarrage, celui qui finit par{" "}
-          <code>?token=…</code>.
+          <code>#token=…</code>.
         </p>
       </div>
     </div>

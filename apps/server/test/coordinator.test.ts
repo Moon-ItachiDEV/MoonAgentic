@@ -374,7 +374,8 @@ describe("a project's coordinator", () => {
   }, 90_000);
 
   it("sends each kind of work where the settings say, and starts the team the user set up", async () => {
-    const { hub, store, projectId, coordinatorId, tokens, post, say, hold } = await coordinated();
+    const { hub, store, projectId, coordinatorId, tokens, post, say, hold, release } =
+      await coordinated();
     const client: Client = { send: () => undefined };
     expect(THREAD_KINDS).toEqual(WORK_KINDS);
     await hub.handle(client, {
@@ -404,12 +405,17 @@ describe("a project's coordinator", () => {
     });
     expect(store.getThread(other.result!.opened.id)).toMatchObject({ agentId: "demo" });
 
-    // No team was ever set up: the first preset, on the agents at hand, and it is told so.
+    // No team was ever set up: the first preset, on the agents at hand, inheriting the
+    // coordinator's supervised mode rather than escalating to full.
     const auto = (await call("start_team", { task_key: "auto", task: "Fais tout" })) as {
       result?: { opened: { id: string }; team?: string };
     };
     expect(auto.result?.team).toContain("Équipe par défaut");
     expect(store.getThread(auto.result!.opened.id)).toMatchObject({ role: "lead" });
+    expect(store.getThread(auto.result!.opened.id)!.team).toMatchObject({
+      coders: 2,
+      permissionMode: "supervised",
+    });
     // It is not kept as the user's own team.
     expect(hub.snapshot().coordinator.team).toBeUndefined();
     const member = { agentId: "demo" };
@@ -424,7 +430,48 @@ describe("a project's coordinator", () => {
       permissionMode: "full",
     });
     expect(hub.snapshot().coordinator.team).toMatchObject({ coders: 2, permissionMode: "full" });
-    const team = await call("start_team", { task_key: "gros", task: "Refais tout" });
+    // While the coordinator stays supervised, replaying a saved full team asks the user ONCE:
+    // 1. Refusing cancels start_team without opening any team.
+    const refusedReq = post(tokens[0]!, {
+      tool: "start_team",
+      args: { task_key: "refuse", task: "Tâche refusée" },
+    });
+    const askRefuse = () =>
+      store
+        .listItems(coordinatorId)
+        .find(
+          (i) => i.kind === "permission" && i.title.includes("accès complet") && i.outcome === null,
+        );
+    await soon(askRefuse).toBeTruthy();
+    hub.respondToPermission(coordinatorId, askRefuse()!.id, "reject");
+    expect((await refusedReq).status).toBe(400);
+    expect(store.listThreads().some((t) => t.taskKey === "refuse")).toBe(false);
+
+    // 2. Picking « Lancer en supervisé » launches the team in supervised mode.
+    const supReq = post(tokens[0]!, {
+      tool: "start_team",
+      args: { task_key: "sup", task: "En supervisé" },
+    });
+    await soon(askRefuse).toBeTruthy();
+    hub.respondToPermission(coordinatorId, askRefuse()!.id, "supervised");
+    const supRes = (await (await supReq).json()) as { result: { opened: { id: string } } };
+    expect(store.getThread(supRes.result.opened.id)!.team).toMatchObject({
+      coders: 2,
+      permissionMode: "supervised",
+    });
+
+    // 3. Picking « Autoriser en accès complet » launches the team in full mode with that single click.
+    await release();
+    await hold();
+    const approvedReq = post(tokens[0]!, {
+      tool: "start_team",
+      args: { task_key: "gros", task: "Refais tout" },
+    });
+    await soon(askRefuse).toBeTruthy();
+    hub.respondToPermission(coordinatorId, askRefuse()!.id, "full");
+    const team = (await (await approvedReq).json()) as {
+      result?: { opened: { id: string }; already_open?: boolean };
+    };
     const lead = store.getThread(team.result!.opened.id)!;
     expect(lead).toMatchObject({ role: "lead", openedBy: coordinatorId, taskKey: "gros" });
     expect(lead.team).toMatchObject({ coders: 2, permissionMode: "full" });
@@ -432,9 +479,33 @@ describe("a project's coordinator", () => {
     expect(
       (await call("start_team", { task_key: "gros", task: "Refais tout" })).result,
     ).toMatchObject({ already_open: true });
+
+    // Once the user explicitly puts the coordinator in full mode, start_team runs autonomously 24/7
+    // without asking for confirmation.
+    hub.setPermissionMode(coordinatorId, "full");
+    const fullTeam = await call("start_team", { task_key: "complet", task: "Mode complet" });
+    expect(store.getThread(fullTeam.result!.opened.id)!.team).toMatchObject({
+      coders: 2,
+      permissionMode: "full",
+    });
     for (const t of store.listThreads().filter((t) => t.role === "lead")) {
       await hub.handle(client, { type: "team.stop", threadId: t.id });
     }
+  });
+
+  it("ignores any legacy user MCP server named moonagentic on coordinator threads", async () => {
+    const { store, say } = await coordinated();
+    // Simulate a pre-hardening database that already saved a user MCP server called "moonagentic".
+    store.setSetting("mcpServers", [
+      {
+        id: "legacy-collision",
+        name: "MoonAgentic",
+        enabled: true,
+        transport: { type: "stdio", command: "false", args: [], env: [] },
+      },
+    ]);
+    // The real internal bridge still wins with no duplicate shadowing.
+    expect(await say("/fils")).toBe("Ce projet a 0 fil.");
   });
 
   it("keeps the threads past what it may run at once in line, and starts them as places free", async () => {
@@ -514,7 +585,7 @@ describe("a project's coordinator", () => {
       lead: member,
       coder: member,
       coders: 1,
-      permissionMode: "full",
+      permissionMode: "supervised",
     });
     for (const t of store.listThreads().filter((t) => t.role === "lead")) {
       await hub.handle(client, { type: "team.stop", threadId: t.id });

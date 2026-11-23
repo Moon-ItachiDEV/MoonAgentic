@@ -1,6 +1,9 @@
 import type * as acp from "@agentclientprotocol/sdk";
 import type { McpServerInfo, McpServerInput } from "@moonagentic/protocol";
 
+/** Reserved for MoonAgentic's internal coordinator bridge: user MCP servers cannot take it. */
+export const RESERVED_MCP_NAME = "moonagentic";
+
 /** An MCP server as kept on disk, secrets included. */
 export interface McpServerRecord extends McpServerInput {
   id: string;

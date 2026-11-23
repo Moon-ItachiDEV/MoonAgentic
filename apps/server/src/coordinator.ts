@@ -5,6 +5,7 @@ import type {
   CoordinatorSettings,
   Item,
   PendingRequest,
+  PermissionMode,
   ServerMessage,
   TeamSetup,
   Thread,
@@ -91,6 +92,15 @@ export interface CoordinatorHost extends Pick<
   putItem(threadId: string, item: Item): void;
   requireThread(threadId: string): Thread;
   pendingRequests(): PendingRequest[];
+  /**
+   * Asks the user once before a supervised coordinator launches a saved full-access team.
+   * Resolves to `"full"`, `"supervised"`, or `null` if refused/cancelled.
+   */
+  confirmTeamPermission(
+    coordinatorId: string,
+    task: string,
+    signal?: AbortSignal,
+  ): Promise<PermissionMode | null>;
 }
 
 /**
@@ -211,7 +221,10 @@ export class Coordinators {
   }
 
   /** The first preset's team on the agents at hand, their models asked for if need be. */
-  private async presetTeam(projectId: string): Promise<TeamSetup | undefined> {
+  private async presetTeam(
+    projectId: string,
+    permissionMode: PermissionMode,
+  ): Promise<TeamSetup | undefined> {
     const unknown = this.host.catalog
       .list()
       .filter((a) => a.available && !a.models && !a.modelsError);
@@ -220,7 +233,7 @@ export class Coordinators {
       new Promise((resolve) => setTimeout(resolve, PRESET_DISCOVERY_MS)),
     ]);
     const members = defaultTeam(this.host.catalog.list());
-    return members && { ...members, coders: 2, permissionMode: "full" };
+    return members && { ...members, coders: 2, permissionMode };
   }
 
   /** Forgets every access given to a coordinator's bridge so far. */
@@ -382,7 +395,12 @@ export class Coordinators {
    * One tool call of a coordinator, from its bridge. The token says which project it may
    * touch: a thread of another project, a team's member or a coordinator is never reached.
    */
-  async coordinatorCall(token: string, tool: string, args: unknown): Promise<unknown> {
+  async coordinatorCall(
+    token: string,
+    tool: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     const scope = this.tokens.get(token);
     const coordinator = scope && this.store.getThread(scope.threadId);
     if (!scope || coordinator?.kind !== "coordinator") throw new CoordinatorRefused();
@@ -521,7 +539,7 @@ export class Coordinators {
         if (known) return { already_open: true, opened: this.threadForCoordinator(known) };
         const saved = this.coordinatorSettings().team;
         // Never set up by hand: the first preset, on the agents at hand, rather than failing.
-        const setup = saved ?? (await this.presetTeam(scope.projectId));
+        const setup = saved ?? (await this.presetTeam(scope.projectId, coordinator.permissionMode));
         if (!setup)
           throw new Error(
             "Aucun agent n'est prêt pour former une équipe. Dis-le tout de suite à l'utilisateur, en une phrase, sans réessayer.",
@@ -531,8 +549,20 @@ export class Coordinators {
           throw new Error(
             `Tu as déjà ouvert ${opened} fils pour ce message : demande à l'utilisateur avant d'en ouvrir d'autres.`,
           );
+        // A supervised coordinator never escalates silently to full access: when the saved team
+        // runs in full access, ask the user once (full, supervised, or cancel). Once the
+        // coordinator itself is in full access, it launches autonomously 24/7.
+        let permissionMode: PermissionMode = setup.permissionMode;
+        if (coordinator.permissionMode !== "full" && setup.permissionMode === "full") {
+          const chosen = await this.host.confirmTeamPermission(coordinator.id, task, signal);
+          if (!chosen) {
+            throw new Error("L'utilisateur a refusé de lancer l'équipe en accès complet.");
+          }
+          permissionMode = chosen;
+        }
         const id = this.host.startTeam({
           ...setup,
+          permissionMode,
           projectId: scope.projectId,
           task: withOrigin(task, this.askedSince(coordinator.id)),
           openedBy: coordinator.id,
