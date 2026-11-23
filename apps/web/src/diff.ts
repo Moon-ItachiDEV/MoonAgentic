@@ -124,3 +124,14 @@ export function reviewMessage(comments: LineComment[]): string {
   });
   return `Relecture de tes modifications. Corrige ces points :\n\n${parts.join("\n")}`;
 }
+
+/**
+ * The remarks left once a file's changes were dropped: those on it, under its name now or
+ * before a rename, have no line left to be about.
+ */
+export function withoutFile<C extends Pick<LineComment, "path">>(
+  comments: C[],
+  file: { path: string; from?: string },
+): C[] {
+  return comments.filter((c) => c.path !== file.path && c.path !== file.from);
+}

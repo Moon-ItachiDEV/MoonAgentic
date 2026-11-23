@@ -975,6 +975,43 @@ export type ServerMessage =
       /** Files left out of the list because there are too many to show. */
       omitted?: number;
     }
+  /**
+   * What merging the branch the thread started from into its own would do now: how many
+   * commits it is behind, and the files that would conflict. `target` is the branch it is
+   * compared with, `origin/main` when the remote is ahead of the local `main`.
+   */
+  | {
+      type: "forecast";
+      requestId: string;
+      threadId: string;
+      target: string;
+      behind: number;
+      conflicts: string[];
+    }
+  /**
+   * The files of a thread's own folder, as the « Fichiers » tab lists them: tracked ones and
+   * new ones git does not ignore. `capped` when there were more than the list holds.
+   */
+  | {
+      type: "worktreeFiles";
+      requestId: string;
+      threadId: string;
+      files: string[];
+      capped: boolean;
+    }
+  /**
+   * One file of a thread's folder, to read: its text, or why it is not shown (`binary`, or
+   * `size` in bytes past what is shown).
+   */
+  | {
+      type: "worktreeFile";
+      requestId: string;
+      threadId: string;
+      path: string;
+      text?: string;
+      binary?: boolean;
+      size?: number;
+    }
   /** Project files matching what follows an `@`, best first. */
   | { type: "files"; requestId: string; files: string[] }
   /** What `$` and `/` can offer in a thread's folder, beyond the agent's own commands. */
@@ -1134,6 +1171,30 @@ export const ClientMessage = z.discriminatedUnion("type", [
     maxTurns: z.number().int().min(1).max(MAX_MAX_TURNS),
   }),
   z.object({ type: z.literal("workspace.review"), threadId: id }),
+  /**
+   * Puts one file of the review back as it was where the branch started: its changes are
+   * dropped, committed ones too. For a rename, `from` comes back as well.
+   */
+  z.object({
+    type: z.literal("workspace.rejectFile"),
+    requestId: id,
+    threadId: id,
+    path: z.string().min(1).max(4096),
+    from: z.string().min(1).max(4096).optional(),
+  }),
+  /** Asks what merging the branch the thread started from would do now; see `forecast`. */
+  z.object({ type: z.literal("workspace.forecast"), requestId: id, threadId: id }),
+  /** Merges the branch the thread started from into its own, only when nothing conflicts. */
+  z.object({ type: z.literal("workspace.sync"), requestId: id, threadId: id }),
+  /** Lists the files of the thread's own folder; see `worktreeFiles`. */
+  z.object({ type: z.literal("workspace.files"), requestId: id, threadId: id }),
+  /** Reads one file of the thread's own folder, by its path in the list; see `worktreeFile`. */
+  z.object({
+    type: z.literal("workspace.readFile"),
+    requestId: id,
+    threadId: id,
+    path: z.string().min(1).max(4096),
+  }),
   z.object({
     type: z.literal("workspace.ship"),
     requestId: id,

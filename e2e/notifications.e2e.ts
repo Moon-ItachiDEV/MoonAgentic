@@ -142,6 +142,9 @@ describe("browser notifications", () => {
     // The user looks elsewhere: the next thread that waits tells them, once.
     await inFront(page, false);
     await page.getByRole("button", { name: "Nouvelle discussion" }).first().click();
+    // On the home page before writing: typed into the thread still at work, the message
+    // would wait in its queue and nothing would ask for an answer.
+    await page.waitForURL((u) => !u.pathname.includes("/t/"));
     await composer.fill("Corrige encore");
     await composer.press("Enter");
     await expect.poll(() => waiting(page)).toMatchObject([{ body: "Corrige encore" }]);
@@ -155,6 +158,7 @@ describe("browser notifications", () => {
     await other.goto(new URL("/", url).href);
     await other.getByRole("button", { name: "Nouvelle discussion" }).first().waitFor();
     await page.getByRole("button", { name: "Nouvelle discussion" }).first().click();
+    await page.waitForURL((u) => !u.pathname.includes("/t/"));
     await composer.fill("Corrige une troisième fois");
     await composer.press("Enter");
     await page.getByRole("button", { name: "Autoriser" }).waitFor();

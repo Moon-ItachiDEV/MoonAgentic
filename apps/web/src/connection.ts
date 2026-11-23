@@ -21,6 +21,9 @@ export const LONG_ASKS_MS: Readonly<Record<string, number>> = {
   "team.ship": 7 * 60_000,
   // GitHub has 2 minutes to merge, and is then asked how the pull request stands.
   "workspace.mergePr": 3 * 60_000,
+  // The remote is asked for its branch first, then git merges.
+  "workspace.forecast": 2 * 60_000,
+  "workspace.sync": 3 * 60_000,
 };
 /** How long the page waits for the answer to a request of this type. */
 export const askTimeoutFor = (type: string, usual: number = ASK_TIMEOUT_MS): number =>
@@ -109,7 +112,13 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
                       ? Extract<ServerMessage, { type: "localClones" }>
                       : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
                         ? Extract<ServerMessage, { type: "pullRequest" }>
-                        : ServerMessage;
+                        : T extends "workspace.forecast"
+                          ? Extract<ServerMessage, { type: "forecast" }>
+                          : T extends "workspace.files"
+                            ? Extract<ServerMessage, { type: "worktreeFiles" }>
+                            : T extends "workspace.readFile"
+                              ? Extract<ServerMessage, { type: "worktreeFile" }>
+                              : ServerMessage;
 
 export class Connection {
   private state: State = initialState;

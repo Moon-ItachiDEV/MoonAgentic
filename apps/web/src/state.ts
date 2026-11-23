@@ -219,6 +219,9 @@ export function reduce(state: State, message: ServerMessage): State {
     case "githubDevice":
     case "localClones":
     case "pullRequest":
+    case "forecast":
+    case "worktreeFiles":
+    case "worktreeFile":
     case "pong":
       return state;
   }

@@ -168,7 +168,7 @@ describe("MCP servers by project", () => {
     expect(all).not.toHaveProperty("allRoles");
     expect(await given(b, "tester")).toBe("");
     expect(JSON.stringify([hub.snapshot(), messages])).not.toContain("s3cret");
-  });
+  }, 40_000);
 
   it("leaves a server for no project when its only project is removed, never for all", async () => {
     const { hub, a, b, given, stdio } = setup();

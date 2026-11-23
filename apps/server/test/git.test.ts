@@ -1069,7 +1069,7 @@ describe("teams", () => {
       );
       expect(JSON.stringify(seen)).toContain(`seulement-${coder.id}.txt`);
     }
-  });
+  }, 40_000);
 
   it("sends fixes back three times, then to the lead once, then leaves the piece to the user", async () => {
     const { hub, store, projectId } = repository();

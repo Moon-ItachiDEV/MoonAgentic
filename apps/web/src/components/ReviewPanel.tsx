@@ -9,10 +9,13 @@ import {
   placeComments,
   reviewMessage,
   rowPlace,
+  withoutFile,
 } from "../diff.ts";
+import { conflictRequest, type Forecast, forecastLine } from "../forecast.ts";
 import { readReviewDrafts, writeReviewDrafts } from "../review-drafts.ts";
-import { IconBranch, IconChevron, IconX } from "./icons.tsx";
+import { IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { PullRequestStatus, usePullRequest } from "./PullRequestStatus.tsx";
+import { WorktreeFiles } from "./WorktreeFiles.tsx";
 
 const STATUS: Record<ReviewFile["status"], { letter: string; label: string }> = {
   added: { letter: "A", label: "nouveau" },
@@ -49,12 +52,15 @@ function FileCard(props: {
   open: boolean;
   ticked: boolean;
   canComment: boolean;
+  /** Its changes can be dropped now: the agent is not at work. */
+  canReject: boolean;
   /** This file's remarks, by row of its diff as it is now. */
   comments: Map<number, LineComment> | undefined;
   onToggle: () => void;
   onTick: (ticked: boolean) => void;
   onComment: (comment: LineComment) => void;
   onRemove: (id: string) => void;
+  onReject: () => Promise<void>;
 }) {
   const { file } = props;
   const lines = useMemo(() => (props.open ? parsePatch(file.patch) : []), [props.open, file.patch]);
@@ -63,6 +69,21 @@ function FileCard(props: {
   const editRow = editing ? findRow(lines, editing) : -1;
   const status = STATUS[file.status];
   const secret = looksSecret(file.path);
+  /** Asking before the changes go, then while they go. */
+  const [rejecting, setRejecting] = useState<"ask" | "busy" | null>(null);
+  const [rejectError, setRejectError] = useState<string | null>(null);
+
+  const reject = async () => {
+    setRejecting("busy");
+    setRejectError(null);
+    try {
+      await props.onReject();
+    } catch (e) {
+      setRejectError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRejecting(null);
+    }
+  };
 
   const edit = (line: DiffLine, comment: LineComment | undefined) => {
     const place = rowPlace(line);
@@ -108,6 +129,17 @@ function FileCard(props: {
             <span className="n-del">−{file.removed}</span>
           </span>
         )}
+        {props.canReject && (
+          <button
+            className="ib rvf-rj"
+            aria-label={`Annuler les changements de ${file.path}`}
+            title="Annuler les changements de ce fichier"
+            disabled={rejecting !== null}
+            onClick={() => setRejecting("ask")}
+          >
+            <IconUndo />
+          </button>
+        )}
         <input
           type="checkbox"
           checked={props.ticked}
@@ -116,6 +148,32 @@ function FileCard(props: {
           onChange={(e) => props.onTick(e.target.checked)}
         />
       </header>
+      {rejecting && (
+        <div className="rvf-ask" role="alert">
+          <span>
+            {file.status === "added"
+              ? "Supprimer ce nouveau fichier ? "
+              : "Remettre ce fichier comme au départ de la branche ? "}
+            Ses changements seront perdus, même ceux déjà commités.
+          </span>
+          <span className="grow" />
+          <button
+            className="btn quiet sm"
+            disabled={rejecting === "busy"}
+            onClick={() => setRejecting(null)}
+          >
+            Garder
+          </button>
+          <button
+            className="btn danger sm"
+            disabled={rejecting === "busy"}
+            onClick={() => void reject()}
+          >
+            {rejecting === "busy" ? "Annulation…" : "Annuler les changements"}
+          </button>
+        </div>
+      )}
+      {rejectError && <p className="rvf-secret">{rejectError}</p>}
       {secret && (
         <p className="rvf-secret">Peut contenir un secret : coche-le seulement si tu en es sûr.</p>
       )}
@@ -229,6 +287,8 @@ export function ReviewPanel({
   const workspace = thread.workspace;
   const running = thread.status === "running" || thread.status === "waiting";
   const [message, setMessage] = useState(thread.title);
+  /** The tab shown: the branch's changes, or every file of its folder. */
+  const [tab, setTab] = useState<"changes" | "files">("changes");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pushed, setPushed] = useState(false);
@@ -246,6 +306,13 @@ export function ReviewPanel({
   const [sending, setSending] = useState<string[] | null>(null);
   const [sendError, setSendError] = useState<string | null>(null);
   const sendTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  /** Where the branch stands against the one it started from, asked again after each turn. */
+  const [forecast, setForecast] = useState<Forecast | null>(null);
+  const [forecastError, setForecastError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  /** Why the last merge or request to the agent did not go. */
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const [asks, setAsks] = useState(0);
   const ticked = (f: ReviewFile) => ticks[f.path] ?? !looksSecret(f.path);
   const picked = files?.filter(ticked) ?? [];
   const totalLines = files?.reduce((n, f) => n + (f.added ?? 0) + (f.removed ?? 0), 0) ?? 0;
@@ -256,11 +323,75 @@ export function ReviewPanel({
   const remarks = placed.all;
   const lost = remarks.filter((c) => c.lost);
 
-  // The server holds the files; ask on opening, once the branch exists, and whenever a
-  // turn starts or ends.
+  // The server holds the files; ask on opening, once the branch exists, whenever a
+  // turn starts or ends, and on each change of tab: files written meanwhile show up.
   useEffect(() => {
     connection.send({ type: "workspace.review", threadId: thread.id });
-  }, [thread.id, running, workspace?.base]);
+  }, [thread.id, running, workspace?.base, tab]);
+
+  const canForecast = !!workspace?.base && !!workspace.baseBranch && !thread.archived;
+  useEffect(() => {
+    if (!canForecast || running) return;
+    let live = true;
+    connection.ask({ type: "workspace.forecast", requestId: newId(), threadId: thread.id }).then(
+      (reply) => {
+        if (!live) return;
+        setForecast({ target: reply.target, behind: reply.behind, conflicts: reply.conflicts });
+        setForecastError(null);
+      },
+      (e: unknown) => live && setForecastError(e instanceof Error ? e.message : String(e)),
+    );
+    return () => {
+      live = false;
+    };
+  }, [thread.id, canForecast, running, workspace?.base, asks]);
+
+  const refresh = () => {
+    connection.send({ type: "workspace.review", threadId: thread.id });
+    setAsks((n) => n + 1);
+  };
+
+  const sync = async () => {
+    setSyncing(true);
+    setSyncError(null);
+    try {
+      await connection.request({ type: "workspace.sync", requestId: newId(), threadId: thread.id });
+    } catch (e) {
+      setSyncError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSyncing(false);
+      refresh();
+    }
+  };
+
+  const askMerge = () => {
+    if (!forecast || running) return;
+    setSyncError(null);
+    if (
+      !connection.send({
+        type: "thread.send",
+        threadId: thread.id,
+        text: conflictRequest(forecast),
+      })
+    )
+      setSyncError("Pas de connexion au serveur.");
+  };
+
+  const rejectFile = async (f: ReviewFile) => {
+    try {
+      await connection.request({
+        type: "workspace.rejectFile",
+        requestId: newId(),
+        threadId: thread.id,
+        path: f.path,
+        ...(f.from ? { from: f.from } : {}),
+      });
+      // Its remarks have nothing left to be about: they would reach the agent as lost.
+      setComments((c) => withoutFile(c, f));
+    } finally {
+      refresh();
+    }
+  };
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
@@ -324,7 +455,8 @@ export function ReviewPanel({
 
   const added = files?.reduce((n, f) => n + (f.added ?? 0), 0) ?? 0;
   const removed = files?.reduce((n, f) => n + (f.removed ?? 0), 0) ?? 0;
-  const canShip = !busy && !running && !!message.trim() && picked.length > 0;
+  // One change to the branch at a time: no push while it merges, and the other way round.
+  const canShip = !busy && !syncing && !running && !!message.trim() && picked.length > 0;
 
   return (
     <>
@@ -332,9 +464,24 @@ export function ReviewPanel({
       <aside className="rv-panel" aria-label="À revoir">
         <div className="rv-top">
           <div className="rv-tabs" role="tablist">
-            <span className="rv-tab on" role="tab" aria-selected>
+            <button
+              className={`rv-tab${tab === "changes" ? " on" : ""}`}
+              role="tab"
+              aria-selected={tab === "changes"}
+              onClick={() => setTab("changes")}
+            >
               Modifications {!!files?.length && <b>{files.length}</b>}
-            </span>
+            </button>
+            {!!workspace?.base && !thread.archived && (
+              <button
+                className={`rv-tab${tab === "files" ? " on" : ""}`}
+                role="tab"
+                aria-selected={tab === "files"}
+                onClick={() => setTab("files")}
+              >
+                Fichiers
+              </button>
+            )}
           </div>
           <span className="grow" />
           <button className="ib" aria-label="Fermer la revue" onClick={onClose}>
@@ -348,8 +495,61 @@ export function ReviewPanel({
             {workspace.baseBranch && <span className="rv-chip">depuis {workspace.baseBranch}</span>}
           </p>
         )}
+        {canForecast && (forecast || forecastError) && (
+          <div
+            className={`rv-sync${forecast?.conflicts.length ? " conflict" : forecast?.behind ? " behind" : ""}`}
+            role="status"
+          >
+            {forecastError ? (
+              <span className="rv-sync-t">{forecastError}</span>
+            ) : (
+              forecast && (
+                <>
+                  {!forecast.behind && <IconCheck size={12} />}
+                  <span
+                    className="rv-sync-t"
+                    title={forecast.conflicts.length ? forecast.conflicts.join("\n") : undefined}
+                  >
+                    {forecastLine(forecast)}
+                  </span>
+                  <span className="grow" />
+                  {forecast.behind > 0 &&
+                    (forecast.conflicts.length ? (
+                      <button
+                        className="btn quiet sm"
+                        disabled={running || syncing || busy}
+                        title={running ? "L'agent travaille encore" : undefined}
+                        onClick={askMerge}
+                      >
+                        Demander à l'agent
+                      </button>
+                    ) : (
+                      <button
+                        className="btn quiet sm"
+                        disabled={running || syncing || busy}
+                        title={running ? "L'agent travaille encore" : undefined}
+                        onClick={() => void sync()}
+                      >
+                        {syncing ? "Synchronisation…" : "Synchroniser"}
+                      </button>
+                    ))}
+                </>
+              )
+            )}
+          </div>
+        )}
+        {syncError && <p className="rv-msg error rv-sync-e">{syncError}</p>}
         <div className="rv-scroll">
-          {!workspace?.base ? (
+          {tab === "files" && workspace?.base && !thread.archived ? (
+            <WorktreeFiles
+              thread={thread}
+              files={files}
+              onShowChange={(path) => {
+                setTab("changes");
+                setOpened((o) => ({ ...o, [path]: true }));
+              }}
+            />
+          ) : !workspace?.base ? (
             <p className="rv-msg">La branche sera créée quand l'agent démarrera.</p>
           ) : review?.error ? (
             <p className="rv-msg error">Impossible de lire les changements : {review.error}</p>
@@ -389,6 +589,7 @@ export function ReviewPanel({
                   open={isOpen(f, i)}
                   ticked={ticked(f)}
                   canComment={!thread.archived}
+                  canReject={!thread.archived && !running && !syncing && !busy}
                   comments={placed.rows.get(f.path)}
                   onToggle={() => setOpened((o) => ({ ...o, [f.path]: !isOpen(f, i) }))}
                   onTick={(on) => setTicks((t) => ({ ...t, [f.path]: on }))}
@@ -400,6 +601,7 @@ export function ReviewPanel({
                     )
                   }
                   onRemove={(id) => setComments((c) => c.filter((x) => x.id !== id))}
+                  onReject={() => rejectFile(f)}
                 />
               ))}
               {!!review?.omitted && (

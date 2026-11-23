@@ -5,6 +5,8 @@ import "./styles.css";
 import "./picker.css";
 import "./planner.css";
 import "./review.css";
+import "./review-sync.css";
+import "./worktree-files.css";
 import "./settings.css";
 import "./sidebar.css";
 import "./github.css";
