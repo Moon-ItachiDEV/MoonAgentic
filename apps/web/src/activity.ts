@@ -1,4 +1,5 @@
 import type { Item } from "@moonagentic/protocol";
+import type { GlyphKind } from "./glyphs.ts";
 import type { FeedBlock } from "./team-feed.ts";
 
 /**
@@ -6,6 +7,9 @@ import type { FeedBlock } from "./team-feed.ts";
  * reads, so they are not shown at all.
  */
 const PLAN_MODE = /^(?:run\s+)?(?:enter|exit)_plan_mode$/i;
+
+/** A command that runs tests: `pnpm test`, `vitest`, `pytest`, `jest`, `cargo test`… */
+const TEST_CMD = /\b(?:test\w*|vitest|pytest|jest|rspec|mocha|playwright)\b/i;
 
 export const isPlanModeSwitch = (item: Item | undefined) =>
   item?.kind === "tool" && PLAN_MODE.test(item.title.trim());
@@ -75,7 +79,7 @@ export function activityLabel(item: Item | undefined): string {
         case "search":
           return "Cherche dans le code…";
         case "execute":
-          return /\btest/i.test(item.title) ? "Lance les tests…" : "Lance une commande…";
+          return TEST_CMD.test(item.title) ? "Lance les tests…" : "Lance une commande…";
         case "fetch":
           return "Consulte le web…";
         case "think":
@@ -86,6 +90,41 @@ export function activityLabel(item: Item | undefined): string {
     }
     default:
       return "Travaille…";
+  }
+}
+
+/** The picture of what the agent is doing, from the same item as its label. */
+export function activityGlyph(item: Item | undefined): GlyphKind {
+  if (!item || item.kind === "user") return "demarre";
+  switch (item.kind) {
+    case "thought":
+      return "pense";
+    case "agent":
+      return "ecrit";
+    case "permission":
+      return item.outcome === null ? "attend" : "travaille";
+    case "tool":
+      if (item.questions) return "attend";
+      switch (item.toolKind) {
+        case "read":
+          return "lit";
+        case "edit":
+        case "delete":
+        case "move":
+          return "modifie";
+        case "search":
+          return "cherche";
+        case "execute":
+          return TEST_CMD.test(item.title) ? "tests" : "commande";
+        case "fetch":
+          return "web";
+        case "think":
+          return "pense";
+        default:
+          return "travaille";
+      }
+    default:
+      return "travaille";
   }
 }
 

@@ -21,6 +21,9 @@ describe("lineStatus", () => {
     ).toBe("waiting");
     expect(lineStatus(lead, [thread("c1", { status: "error" })])).toBe("error");
     expect(lineStatus(lead, [thread("c1")])).toBeUndefined();
+    const queued = thread("q", { status: "running", inLine: true });
+    expect(lineStatus(lead, [queued])).toBe("queued");
+    expect(lineStatus(lead, [queued, thread("c2", { status: "running" })])).toBe("running");
   });
 
   it("keeps a running team at work between two of its agents", () => {

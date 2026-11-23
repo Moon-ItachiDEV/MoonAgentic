@@ -32,6 +32,7 @@ import {
 } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
 import { Presence } from "./Presence.tsx";
+import { StateGlyph } from "./StateGlyph.tsx";
 
 /** A menu this tall always fits: it opens upwards when the row is that close to the bottom. */
 const MENU_ROOM = 150;
@@ -39,9 +40,9 @@ const MENU_ROOM = 150;
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
 function ThreadStatus({ status }: { status: LineStatus }) {
-  if (status === "running") return <span className="spin" aria-label="En cours" />;
-  if (status === "waiting")
-    return <span className="dot" title="Attend ta réponse" aria-label="Attend ta réponse" />;
+  if (status === "running") return <StateGlyph kind="travaille" size={14} label="En cours" />;
+  if (status === "queued") return <StateGlyph kind="file" size={14} label="En file" />;
+  if (status === "waiting") return <StateGlyph kind="attend" size={14} label="Attend ta réponse" />;
   if (status === "error") return <span className="dot err" title="Erreur" aria-label="Erreur" />;
   return null;
 }

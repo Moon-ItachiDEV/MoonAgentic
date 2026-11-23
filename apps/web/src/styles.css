@@ -968,6 +968,56 @@ svg {
     transform: rotate(360deg);
   }
 }
+
+/* The agent's state in dots (StateGlyph): drawn in the text colour, so it follows the theme. */
+.glyph {
+  display: block;
+  flex: none;
+  color: var(--fg);
+}
+.glyph.g-attend {
+  color: var(--warn);
+}
+/* The live label shines while the state lasts. */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted) 0%,
+    var(--muted) 40%,
+    var(--fg) 50%,
+    var(--muted) 60%,
+    var(--muted) 100%
+  );
+  /* One whole tile per loop: 200 % wide, moved by exactly its width, so it never jumps. */
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: shimmer 2.2s linear infinite;
+}
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+/* The live line's label is as wide as its words, so the shine crosses them, not empty space;
+   the step count stays on the right. */
+.team-detail-h .nm.shimmer {
+  flex: 0 1 auto;
+}
+.team-detail-h .nm.shimmer + .meta {
+  margin-left: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer {
+    animation: none;
+    background: none;
+    color: inherit;
+  }
+}
 .ok-ic {
   color: var(--ok);
 }

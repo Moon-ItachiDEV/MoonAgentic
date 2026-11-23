@@ -20,7 +20,21 @@ import { TeamCard } from "./TeamCard.tsx";
 import { TeamStrip } from "./TeamStrip.tsx";
 import { withoutTeamJson } from "../team-json.ts";
 import { isTeamThread, teamFeed } from "../team-feed.ts";
-import { activityFeed, activityLabel, activitySteps } from "../activity.ts";
+import {
+  activityFeed,
+  activityGlyph,
+  activityLabel,
+  activitySteps,
+  isPlanModeSwitch,
+} from "../activity.ts";
+import { StateGlyph } from "./StateGlyph.tsx";
+import type { GlyphKind } from "../glyphs.ts";
+
+/** The working line's verb, when the agent's name stands before it. */
+const WORKING_VERB: Partial<Record<GlyphKind, string>> = {
+  demarre: "démarre…",
+  ecrit: "écrit…",
+};
 
 export function ThreadView({
   thread,
@@ -120,6 +134,8 @@ export function ThreadView({
 
   const team = isTeamThread(thread);
   const blocks = items ? (team ? teamFeed(thread, items) : activityFeed(items)) : [];
+  // What the agent does now, from the last item shown (plan mode switches are not shown).
+  const lastGlyph = activityGlyph(items?.findLast((i) => !isPlanModeSwitch(i)));
 
   const renderItem = (i: number, clamp?: boolean, showBy?: boolean) => {
     const item = items![i]!;
@@ -209,13 +225,16 @@ export function ThreadView({
         {/* The live line of the stretch at work says what the agent does: no second line. */}
         {thread.status === "running" && thread.inLine && (
           <div className="working">
+            <StateGlyph kind="file" size={18} />
             En file : démarre dès qu'une place se libère sur le serveur.
           </div>
         )}
         {thread.status === "running" && !thread.inLine && blocks.at(-1)?.kind !== "detail" && (
           <div className="working">
-            <span className="spin" />
-            {agent?.name ?? "L'agent"} travaille…
+            <StateGlyph kind={lastGlyph} size={18} />
+            <span className="shimmer">
+              {agent?.name ?? "L'agent"} {WORKING_VERB[lastGlyph] ?? "travaille…"}
+            </span>
           </div>
         )}
         {working && thread.quietSince && (
@@ -451,7 +470,8 @@ function ActivityDetail({
   const [opened, setOpened] = useState(false);
   const open = opened || revealed;
   const { steps, failed } = activitySteps(items, indices);
-  const label = live ? activityLabel(items[indices.at(-1)!]) : "Voir le détail";
+  const last = items[indices.at(-1)!];
+  const label = live ? activityLabel(last) : "Voir le détail";
   return (
     <div className={`team-detail${open ? " open" : ""}`}>
       <button
@@ -462,8 +482,8 @@ function ActivityDetail({
           setOpened(!open);
         }}
       >
-        {live ? <span className="spin" /> : <IconChevron />}
-        <span className="nm">{label}</span>
+        {live ? <StateGlyph kind={activityGlyph(last)} size={18} /> : <IconChevron />}
+        <span className={live ? "nm shimmer" : "nm"}>{label}</span>
         {steps > 0 && (
           <span className="meta">
             {steps} {steps > 1 ? "étapes" : "étape"}
@@ -659,7 +679,10 @@ function ToolRow({ item, live }: { item: Extract<Item, { kind: "tool" }>; live: 
         onClick={() => hasBody && setOpen((o) => !o)}
         aria-expanded={hasBody ? open : undefined}
       >
-        <ToolStatusIcon status={item.status === "in_progress" && !live ? "pending" : item.status} />
+        <ToolStatusIcon
+          status={item.status === "in_progress" && !live ? "pending" : item.status}
+          glyph={activityGlyph(item)}
+        />
         <span className="nm">{item.title}</span>
         <span className="meta">{TOOL_KIND[item.toolKind] ?? ""}</span>
         {hasBody && <IconChevron />}
@@ -675,7 +698,7 @@ function ToolRow({ item, live }: { item: Extract<Item, { kind: "tool" }>; live: 
   );
 }
 
-function ToolStatusIcon({ status }: { status: string }) {
+function ToolStatusIcon({ status, glyph }: { status: string; glyph: GlyphKind }) {
   if (status === "completed")
     return (
       <span className="ok-ic">
@@ -688,7 +711,7 @@ function ToolStatusIcon({ status }: { status: string }) {
         <IconX />
       </span>
     );
-  if (status === "in_progress") return <span className="spin" />;
+  if (status === "in_progress") return <StateGlyph kind={glyph} size={14} label="En cours" />;
   return <span className="pend-ic" />;
 }
 
