@@ -38,4 +38,14 @@ describe("team presets", () => {
     expect(pick("economique", "reviewer")).toEqual({ agentId: "claude", model: "claude opus 5.5" });
     expect(pickMember([agent("x", [], false)], [/opus/i])).toBeUndefined();
   });
+
+  it("skips an agent installed but unable to give its models, as one not signed in", () => {
+    const claude = { ...agent("claude", []), modelsError: "Connecte-toi d'abord." } as AgentInfo;
+    const agy = agent("antigravity", ["Gemini 4 Neon"]);
+    // Neither has Fable: the first agent able to work leads, not the one signed out.
+    expect(pickMember([claude, agy], [/fable/i])).toEqual({
+      agentId: "antigravity",
+      model: "gemini 4 neon",
+    });
+  });
 });

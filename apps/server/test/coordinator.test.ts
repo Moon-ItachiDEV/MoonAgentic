@@ -150,6 +150,53 @@ describe("a project's coordinator", () => {
     expect(((await late.json()) as { error: string }).error).toContain("pendant qu'il répond");
   });
 
+  it("joins every message of the user since the last thread it opened, not only the last", async () => {
+    const { store, tokens, post, say, hold, release } = await coordinated();
+    await say("/fils");
+    await say("/fils");
+    await hold();
+    const open = async (key: string) => {
+      const res = (await (
+        await post(tokens[0]!, {
+          tool: "open_thread",
+          args: { task_key: key, title: "T", brief: "B" },
+        })
+      ).json()) as { result: { opened: { id: string } } };
+      return store.listItems(res.result.opened.id)[0];
+    };
+    const first = await open("un");
+    expect(first).toMatchObject({ kind: "user" });
+    expect(first?.kind === "user" && first.text).toContain("> /fils\n> \n> /fils\n> \n> Regarde");
+    // A second thread for the same message gets that message too.
+    const second = await open("deux");
+    expect(second?.kind === "user" && second.text).toContain("> /fils\n> \n> /fils\n> \n> Regarde");
+    // The next message starts after the threads already opened.
+    await release();
+    await hold();
+    const third = await open("trois");
+    expect(third?.kind === "user" && third.text).toMatch(/d'origine[^]*:\n\n> Regarde$/);
+    expect(third?.kind === "user" && third.text).not.toContain("/fils");
+  });
+
+  it("lets its own tools through when its agent names them only in the title", async () => {
+    const { store, coordinatorId, say } = await coordinated();
+    // As Antigravity asks: "Run mcp_moonagentic_list_threads", with no tool name besides.
+    expect(await say("/fils-agy")).toBe("Liste lue.");
+    expect(store.listItems(coordinatorId).some((i) => i.kind === "permission")).toBe(false);
+  });
+
+  it("still asks the user for a command that only takes the title of its own tools", async () => {
+    const { hub, store, coordinatorId } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await hub.handle(client, {
+      type: "thread.send",
+      threadId: coordinatorId,
+      text: "/fils-agy commande",
+    });
+    await soon(() => store.getThread(coordinatorId)!.status).toBe("waiting");
+    expect(store.listItems(coordinatorId).some((i) => i.kind === "permission")).toBe(true);
+  });
+
   it("reaches its own project only, with its own token only", async () => {
     const { hub, otherId, tokens, post, say, hold } = await coordinated();
     const elsewhere = hub.createThread({
@@ -357,10 +404,14 @@ describe("a project's coordinator", () => {
     });
     expect(store.getThread(other.result!.opened.id)).toMatchObject({ agentId: "demo" });
 
-    // No team was ever set up: it says so rather than making one up.
-    expect((await call("start_team", { task_key: "gros", task: "Refais tout" })).error).toContain(
-      "Aucune équipe",
-    );
+    // No team was ever set up: the first preset, on the agents at hand, and it is told so.
+    const auto = (await call("start_team", { task_key: "auto", task: "Fais tout" })) as {
+      result?: { opened: { id: string }; team?: string };
+    };
+    expect(auto.result?.team).toContain("Équipe par défaut");
+    expect(store.getThread(auto.result!.opened.id)).toMatchObject({ role: "lead" });
+    // It is not kept as the user's own team.
+    expect(hub.snapshot().coordinator.team).toBeUndefined();
     const member = { agentId: "demo" };
     await hub.handle(client, {
       type: "team.start",
