@@ -93,7 +93,14 @@ describe("reading review remarks from gh", () => {
             },
             { id: "R2", state: "APPROVED", body: "Parfait", author: { login: "a" } },
             { id: "R3", state: "COMMENTED", body: "", author: { login: "b" } },
-            { id: "R4", state: "COMMENTED", body: "Une idée pour plus tard.", author: null },
+            {
+              id: "R4",
+              state: "COMMENTED",
+              body: "Une idée pour plus tard.",
+              // Shown as a link on the page: only GitHub's are kept.
+              url: "javascript:alert(1)",
+              author: null,
+            },
           ],
         },
       }),
@@ -346,5 +353,45 @@ describe("a thread sent its pull request's remarks", { timeout: 90_000 }, () => 
     await expect(hub.sendRemarks(threadId, ["T1"])).rejects.toThrow(/travaille encore/);
     await hub.whenIdle(threadId);
     expect(store.getThread(threadId)?.status).toBe("idle");
+  });
+
+  it("looks at the thread again once GitHub answers: at work or locked meanwhile, nothing goes", async () => {
+    const { hub, github, threadId, sent } = await setup();
+    github.remarks = [{ id: "T1", kind: "thread", author: "neon", body: "Titre ?" }];
+    // GitHub answers only when told to.
+    let answer = () => {};
+    let waiting = false;
+    const slow: PullRequests = {
+      find: async () => pr,
+      merge: async () => undefined,
+      remarks: () =>
+        new Promise((resolve) => {
+          waiting = true;
+          answer = () => {
+            waiting = false;
+            resolve(github.remarks);
+          };
+        }),
+    };
+    (hub as unknown as { pullRequests: () => PullRequests }).pullRequests = () => slow;
+    const client: Client = { send: () => undefined };
+
+    // A turn started while GitHub was asked.
+    const atWork = hub.sendRemarks(threadId, ["T1"]);
+    await expect.poll(() => waiting, { timeout: 10_000 }).toBe(true);
+    hub.send(threadId, "Un autre tour");
+    answer();
+    await expect(atWork).rejects.toThrow(/travaille encore/);
+    await hub.whenIdle(threadId);
+
+    // The project locked while GitHub was asked.
+    const locked = hub.sendRemarks(threadId, ["T1"]);
+    await expect.poll(() => waiting, { timeout: 10_000 }).toBe(true);
+    await hub.handle(client, { type: "lock.setPin", requestId: "p", pin: "123456" });
+    const projectId = hub.snapshot().threads.find((t) => t.id === threadId)!.projectId;
+    await hub.handle(client, { type: "lock.project", requestId: "l", projectId });
+    answer();
+    await expect(locked).rejects.toThrow(/verrouillé/);
+    expect(sent()).toEqual([]);
   });
 });

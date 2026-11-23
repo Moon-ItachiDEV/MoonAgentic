@@ -2352,6 +2352,14 @@ export class Hub {
     if (!picked.length) {
       throw new Error("Ces remarques ne sont plus ouvertes sur GitHub : actualise la liste.");
     }
+    // GitHub took its time: the thread may have been locked, archived, removed or set to
+    // work since, and is looked at again before anything is sent.
+    if (this.closed) throw new Error("MoonAgentic s'arrête.");
+    if (this.lockedThread(threadId)) {
+      throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    }
+    this.requireLiveThread(threadId);
+    if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
     const { text, context } = remarksMessage(found.pr, picked);
     this.send(threadId, text, context, undefined, "remarks");
   }

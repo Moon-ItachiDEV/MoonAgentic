@@ -190,7 +190,11 @@ export function PullRequestStatus(props: {
       <PrTimeline pr={pr} />
       {live && props.onWatch && <WatchRow watch={props.watch} onWatch={props.onWatch} />}
       {live && props.remarks && (
-        <PrRemarks threadId={props.remarks.threadId} busy={props.remarks.busy} />
+        <PrRemarks
+          key={props.remarks.threadId}
+          threadId={props.remarks.threadId}
+          busy={props.remarks.busy}
+        />
       )}
       {/* Only what can be done from here: a merge GitHub would refuse is not offered. */}
       {canMerge(pr) && (

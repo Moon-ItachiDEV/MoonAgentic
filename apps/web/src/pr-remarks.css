@@ -1,37 +1,37 @@
 /* The pull request's review remarks in the review panel: picked, then sent to the agent. */
-.prr {
+.prrm {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
-.prr.open {
+.prrm.prrm-open {
   display: grid;
   gap: 8px;
   padding: 10px;
   border-radius: 12px;
   background: var(--sunken);
 }
-.prr-h {
+.prrm-h {
   display: flex;
   align-items: center;
   gap: 6px;
 }
-.prr-h b {
+.prrm-h b {
   flex: 1;
   font-weight: 500;
 }
-.prr-note {
+.prrm-note {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
 }
-.prr-err {
+.prrm-err {
   margin: 0;
   color: var(--err-tx, var(--err));
   font-size: 12px;
 }
-.prr-list {
+.prrm-list {
   display: grid;
   gap: 4px;
   margin: 0;
@@ -40,7 +40,7 @@
   max-height: 320px;
   overflow-y: auto;
 }
-.prr-list li {
+.prrm-list li {
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -48,43 +48,43 @@
   border-radius: 9px;
   background: var(--surface);
 }
-.prr-list label {
+.prrm-list label {
   display: flex;
   flex: 1;
   min-width: 0;
   gap: 8px;
   cursor: pointer;
 }
-.prr-list input {
+.prrm-list input {
   margin-top: 2px;
   flex: none;
 }
-.prr-list a {
+.prrm-list a {
   flex: none;
   color: var(--muted);
   font-size: 12px;
 }
-.prr-t {
+.prrm-t {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
-.prr-w {
+.prrm-w {
   display: flex;
   gap: 6px;
   min-width: 0;
   font-size: 12px;
 }
-.prr-w b {
+.prrm-w b {
   font-weight: 500;
 }
-.prr-w span {
+.prrm-w span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
 }
-.prr-b {
+.prrm-b {
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -94,7 +94,7 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.prr-f {
+.prrm-f {
   display: flex;
   flex-wrap: wrap;
   align-items: center;

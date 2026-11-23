@@ -71,24 +71,24 @@ export function PrRemarks(props: { threadId: string; busy: boolean }) {
 
   if (!loaded) {
     return (
-      <div className="prr">
+      <div className="prrm">
         <button className="btn sm" disabled={reading} onClick={() => void read()}>
           {reading ? "Lecture sur GitHub…" : "Remarques de relecture"}
         </button>
         {sent !== null && (
-          <span className="prr-note" role="status">
+          <span className="prrm-note" role="status">
             {sent > 1 ? `${sent} remarques envoyées à l'agent.` : "Remarque envoyée à l'agent."}
           </span>
         )}
-        {error && <span className="prr-err">{error}</span>}
+        {error && <span className="prrm-err">{error}</span>}
       </div>
     );
   }
 
   const count = loaded.picked.size;
   return (
-    <div className="prr open" aria-label="Remarques de relecture">
-      <div className="prr-h">
+    <div className="prrm prrm-open" aria-label="Remarques de relecture">
+      <div className="prrm-h">
         <b>Remarques de relecture</b>
         <button className="btn quiet sm" disabled={reading} onClick={() => void read()}>
           {reading ? "…" : "Actualiser"}
@@ -97,12 +97,12 @@ export function PrRemarks(props: { threadId: string; busy: boolean }) {
           Fermer
         </button>
       </div>
-      {error && <p className="prr-err">{error}</p>}
+      {error && <p className="prrm-err">{error}</p>}
       {!loaded.remarks.length && !error && (
-        <p className="prr-note">Aucune remarque ouverte sur GitHub.</p>
+        <p className="prrm-note">Aucune remarque ouverte sur GitHub.</p>
       )}
       {loaded.remarks.length > 0 && (
-        <ul className="prr-list">
+        <ul className="prrm-list">
           {loaded.remarks.map((remark) => (
             <li key={remark.id}>
               <label>
@@ -111,12 +111,12 @@ export function PrRemarks(props: { threadId: string; busy: boolean }) {
                   checked={loaded.picked.has(remark.id)}
                   onChange={(e) => pick(remark.id, e.target.checked)}
                 />
-                <span className="prr-t">
-                  <span className="prr-w">
+                <span className="prrm-t">
+                  <span className="prrm-w">
                     <b>@{remark.author}</b>
                     <span>{remarkPlace(remark)}</span>
                   </span>
-                  <span className="prr-b">{remark.body}</span>
+                  <span className="prrm-b">{remark.body}</span>
                 </span>
               </label>
               {remark.url && (
@@ -129,8 +129,8 @@ export function PrRemarks(props: { threadId: string; busy: boolean }) {
         </ul>
       )}
       {loaded.remarks.length > 0 && (
-        <div className="prr-f">
-          <span className="prr-note">
+        <div className="prrm-f">
+          <span className="prrm-note">
             {props.busy
               ? "L'agent travaille : tu pourras envoyer quand il aura fini."
               : "L'agent les vérifie dans le code et corrige ce qui est fondé."}

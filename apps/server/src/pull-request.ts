@@ -126,6 +126,9 @@ const REMARKS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   }
 }`;
 
+/** A link kept only when it leads to github.com: the page shows it, the agent may read it. */
+const githubLink = (url: string) => (/^https:\/\/github\.com\/[^\s]*$/.test(url) ? url : "");
+
 const cut = (body: string) =>
   body.length > REMARK_MAX ? `${body.slice(0, REMARK_MAX - 1)}…` : body;
 const login = (author: unknown) => (isRecord(author) ? text(author.login) : "") || "inconnu";
@@ -160,7 +163,7 @@ export function parseRemarks(json: string): PullRequestRemark[] {
       .map((c) => `@${login(c.author)} : ${text(c.body).trim()}`);
     const path = text(thread.path);
     const line = typeof thread.line === "number" ? thread.line : undefined;
-    const url = text(first.url);
+    const url = githubLink(text(first.url));
     remarks.push({
       id: text(thread.id),
       kind: "thread",
@@ -175,7 +178,7 @@ export function parseRemarks(json: string): PullRequestRemark[] {
     if (!isRecord(review) || !text(review.id) || !text(review.body).trim()) continue;
     const state = text(review.state);
     if (state !== "CHANGES_REQUESTED" && state !== "COMMENTED") continue;
-    const url = text(review.url);
+    const url = githubLink(text(review.url));
     remarks.push({
       id: text(review.id),
       kind: "review",
