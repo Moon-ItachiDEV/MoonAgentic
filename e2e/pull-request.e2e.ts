@@ -267,7 +267,10 @@ describe("pull requests", () => {
       await pr.getByText("1 correction sur 3 (dernière : conflits).").waitFor();
       expect(await watch.getAttribute("aria-checked")).toBe("true");
       await page.getByText("Pull request · correction automatique").waitFor();
-      await page.getByText("La pull request #42 a des conflits avec main : corrige-les.").waitFor();
+      // The task as the user sees it in the thread (the demo agent then names its plan after it).
+      await page
+        .locator(".u", { hasText: "La pull request #42 a des conflits avec main : corrige-les." })
+        .waitFor();
       await idle();
       // Once the agent is done, MoonAgentic pushes the branch.
       await expect
