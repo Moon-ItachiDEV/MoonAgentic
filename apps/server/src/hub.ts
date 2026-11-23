@@ -1751,6 +1751,8 @@ export class Hub {
   async forecast(threadId: string): Promise<MergeForecast> {
     const workspace = this.requireLiveThread(threadId).workspace;
     const { base, ...forecast } = await forecastFor(workspace);
+    // The server closed meanwhile: its store is no longer there to write to.
+    if (this.closed) return forecast;
     const now = this.store.getThread(threadId)?.workspace;
     // Only over the start it was worked out from: a sync meanwhile has the last word.
     if (now && workspace && now.base === workspace.base && base !== now.base) {

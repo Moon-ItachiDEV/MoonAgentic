@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { Hub } from "../src/hub.ts";
+import { syncWithBranch } from "../src/git.ts";
 import { Store } from "../src/store.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -47,9 +48,14 @@ async function threadOnBranch() {
   const hub = new Hub(store, new Agents({ demo: true }), {
     worktreesDir: path.join(root, "worktrees"),
   });
+  let storeOpen = true;
+  const closeStore = () => {
+    if (storeOpen) store.close();
+    storeOpen = false;
+  };
   cleanups.push(async () => {
     await hub.close();
-    store.close();
+    closeStore();
     rmSync(root, { recursive: true, force: true });
   });
   const projectId = hub.createProject("demo", repo);
@@ -62,7 +68,7 @@ async function threadOnBranch() {
   });
   await hub.whenIdle(threadId);
   const workspace = () => store.getThread(threadId)!.workspace!;
-  return { root, repo, remote, hub, threadId, workspace, dir: workspace().path };
+  return { root, repo, remote, hub, threadId, workspace, dir: workspace().path, closeStore };
 }
 
 // Many git commands each: Windows runners are slow at them.
@@ -190,6 +196,42 @@ describe("keeping up with the branch it started from", { timeout: 40_000 }, () =
     expect(workspace().base).not.toBe(before);
     // Only the thread's work shows, not notes.md that came from main.
     expect((await hub.review(threadId)).files.map((f) => f.path)).toEqual(["README.md"]);
+  });
+
+  it("names a file in conflict as it is, accents included", async () => {
+    const { repo, hub, threadId, dir } = await threadOnBranch();
+    writeFileSync(path.join(dir, "résumé.md"), "côté fil\n");
+    writeFileSync(path.join(repo, "résumé.md"), "côté main\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "main avance");
+    expect(await hub.forecast(threadId)).toMatchObject({ conflicts: ["résumé.md"] });
+  });
+
+  it("puts all back as it was when the work not committed clashes with the merge", async () => {
+    const { repo, dir } = await threadOnBranch();
+    // Called directly, without the forecast that would have said so first.
+    writeFileSync(path.join(dir, "notes.md"), "notes\ntravail en cours\n");
+    writeFileSync(path.join(repo, "notes.md"), "notes\nde main\n");
+    git(repo, "commit", "-q", "-am", "main avance");
+    const head = git(dir, "rev-parse", "HEAD");
+    await expect(syncWithBranch(dir, "main", "Fusion de main")).rejects.toThrow(
+      /travail non commité sur notes\.md : rien n'a changé/,
+    );
+    expect(git(dir, "rev-parse", "HEAD")).toBe(head);
+    expect(read(path.join(dir, "notes.md"))).toBe("notes\ntravail en cours\n");
+    expect(git(dir, "stash", "list")).toBe("");
+    expect(git(dir, "ls-files", "-u")).toBe("");
+  });
+
+  it("answers a forecast that ends after the server closed, without writing", async () => {
+    const { repo, hub, threadId, closeStore } = await threadOnBranch();
+    writeFileSync(path.join(repo, "notes.md"), "notes\nde main\n");
+    git(repo, "commit", "-q", "-am", "main avance");
+    const asked = hub.forecast(threadId);
+    // As the server stops: the hub, then its store.
+    await hub.close();
+    closeStore();
+    await expect(asked).resolves.toMatchObject({ behind: 1 });
   });
 
   it("compares with the remote's main when a merge landed there first", async () => {

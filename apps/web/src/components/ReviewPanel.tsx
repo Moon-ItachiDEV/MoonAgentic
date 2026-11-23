@@ -9,6 +9,7 @@ import {
   placeComments,
   reviewMessage,
   rowPlace,
+  withoutFile,
 } from "../diff.ts";
 import { conflictRequest, type Forecast, forecastLine } from "../forecast.ts";
 import { readReviewDrafts, writeReviewDrafts } from "../review-drafts.ts";
@@ -385,6 +386,8 @@ export function ReviewPanel({
         path: f.path,
         ...(f.from ? { from: f.from } : {}),
       });
+      // Its remarks have nothing left to be about: they would reach the agent as lost.
+      setComments((c) => withoutFile(c, f));
     } finally {
       refresh();
     }
@@ -452,7 +455,8 @@ export function ReviewPanel({
 
   const added = files?.reduce((n, f) => n + (f.added ?? 0), 0) ?? 0;
   const removed = files?.reduce((n, f) => n + (f.removed ?? 0), 0) ?? 0;
-  const canShip = !busy && !running && !!message.trim() && picked.length > 0;
+  // One change to the branch at a time: no push while it merges, and the other way round.
+  const canShip = !busy && !syncing && !running && !!message.trim() && picked.length > 0;
 
   return (
     <>
@@ -513,7 +517,7 @@ export function ReviewPanel({
                     (forecast.conflicts.length ? (
                       <button
                         className="btn quiet sm"
-                        disabled={running || syncing}
+                        disabled={running || syncing || busy}
                         title={running ? "L'agent travaille encore" : undefined}
                         onClick={askMerge}
                       >
@@ -522,7 +526,7 @@ export function ReviewPanel({
                     ) : (
                       <button
                         className="btn quiet sm"
-                        disabled={running || syncing}
+                        disabled={running || syncing || busy}
                         title={running ? "L'agent travaille encore" : undefined}
                         onClick={() => void sync()}
                       >
@@ -585,7 +589,7 @@ export function ReviewPanel({
                   open={isOpen(f, i)}
                   ticked={ticked(f)}
                   canComment={!thread.archived}
-                  canReject={!thread.archived && !running}
+                  canReject={!thread.archived && !running && !syncing && !busy}
                   comments={placed.rows.get(f.path)}
                   onToggle={() => setOpened((o) => ({ ...o, [f.path]: !isOpen(f, i) }))}
                   onTick={(on) => setTicks((t) => ({ ...t, [f.path]: on }))}
