@@ -253,11 +253,19 @@ function readExpression(name: string, seconds: number, reduced: boolean): Face {
   }
 }
 
-function renderSurface(shape: Shape, palette: Palette, crescentPath: Path2D): Surface {
+/**
+ * Draws the moon once per shape, colour and scale: at 2 for a large moon, at 1 (a quarter
+ * of the pixels to work through) for one shown at 420 device pixels or less.
+ */
+function renderSurface(
+  shape: Shape,
+  palette: Palette,
+  crescentPath: Path2D,
+  scale: 1 | 2,
+): Surface {
   const { outline, craters, frostX, maria, polished } = shape;
   const { tint, shade, glow: glowColor } = palette;
   const texture = document.createElement("canvas");
-  const scale = 2;
   const width = size * scale;
   texture.width = texture.height = width;
   const context = texture.getContext("2d")!;
@@ -298,6 +306,8 @@ function renderSurface(shape: Shape, palette: Palette, crescentPath: Path2D): Su
   }
 
   const spherical = outline !== crescentPath;
+  // How far apart the bevel's slope is read: 7 units of the drawing, whatever the scale.
+  const reach = 7 * scale;
   const radius = polished ? 143 : 152;
   const centerY = polished ? 212 : 207;
   let seed = 7234;
@@ -322,8 +332,9 @@ function renderSurface(shape: Shape, palette: Palette, crescentPath: Path2D): Su
       let nx = (x / scale - 210) / radius;
       let ny = (y / scale - centerY) / radius;
       if (!spherical) {
-        nx = 0.35 * nx + (bevel * (d(index - 14) - d(index + 14))) / 28;
-        ny = 0.35 * ny + (bevel * (d(index - width * 14) - d(index + width * 14))) / 28;
+        nx = 0.35 * nx + (bevel * (d(index - reach) - d(index + reach))) / (2 * reach);
+        ny =
+          0.35 * ny + (bevel * (d(index - width * reach) - d(index + width * reach))) / (2 * reach);
       }
       const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
       const diffuse = clamp(-0.48 * nx - 0.62 * ny + 0.62 * nz);
@@ -466,31 +477,42 @@ function drawEye(
   context.restore();
 }
 
+/** The texture's scale for a canvas of this many device pixels. */
+const surfaceScale = (pixels: number): 1 | 2 => (pixels > size ? 2 : 1);
+
 const DEFAULT_LABEL = "Faire un clin d’œil à la mascotte";
 
 class MoonMascot extends HTMLElement {
-  static observedAttributes = ["shape", "color", "label", "expression"];
+  static observedAttributes = ["shape", "color", "label", "expression", "decorative", "still"];
 
+  #root: ShadowRoot;
   #canvas: HTMLCanvasElement;
   #context: CanvasRenderingContext2D | null;
   #button: HTMLButtonElement;
   #frame = 0;
+  #last = 0;
   #bounds: ResizeObserver | undefined;
+  #seen: IntersectionObserver | undefined;
+  #visible = true;
   #start = 0;
   #wink = -Infinity;
+  /** Where the pointer last was on the page, read against the moon once per frame. */
+  #client: { x: number; y: number } | undefined;
   #pointerX = 0;
   #pointerY = 0;
   #gazeX = 0;
   #gazeY = 0;
-  #appearance: { geometry: Shape; palette: Palette; surface: Surface; lunar: boolean } | undefined;
+  #appearance:
+    | { geometry: Shape; palette: Palette; surface: Surface; lunar: boolean; scale: 1 | 2 }
+    | undefined;
   #expression = "idle";
   #expressionStart = 0;
   #motion = matchMedia("(prefers-reduced-motion: reduce)");
 
   constructor() {
     super();
-    const root = this.attachShadow({ mode: "open" });
-    root.innerHTML = `
+    this.#root = this.attachShadow({ mode: "open" });
+    this.#root.innerHTML = `
       <style>
         :host { display: block; inline-size: min(100%, 420px); aspect-ratio: 1; }
         button {
@@ -500,12 +522,12 @@ class MoonMascot extends HTMLElement {
         }
         button:focus-visible { outline: 2px solid #edfbff; outline-offset: 4px; }
         canvas { display: block; inline-size: 100%; block-size: 100%; }
-      </style>
-      <button type="button">
-        <canvas width="840" height="840" aria-hidden="true"></canvas>
-      </button>`;
-    this.#button = root.querySelector("button")!;
-    this.#canvas = root.querySelector("canvas")!;
+      </style>`;
+    this.#canvas = document.createElement("canvas");
+    this.#canvas.width = this.#canvas.height = 840;
+    this.#canvas.setAttribute("aria-hidden", "true");
+    this.#button = document.createElement("button");
+    this.#button.type = "button";
     this.#context = this.#canvas.getContext("2d");
     this.#button.addEventListener("click", () => {
       this.#wink = performance.now();
@@ -513,18 +535,53 @@ class MoonMascot extends HTMLElement {
     });
   }
 
+  /** A decorative moon (inside another control, say) has no button of its own and ignores the pointer. */
+  get #decorative() {
+    return this.hasAttribute("decorative");
+  }
+
+  /** A still moon is drawn once, as with reduced motion: for a state that is over. */
+  get #still() {
+    return this.hasAttribute("still") || this.#motion.matches;
+  }
+
+  /** Puts the canvas in its button, or alone when decorative, and follows the pointer only when it can wink. */
+  #mount() {
+    if (this.#decorative) {
+      this.#button.remove();
+      this.#root.append(this.#canvas);
+    } else {
+      this.#button.append(this.#canvas);
+      this.#root.append(this.#button);
+      this.#button.setAttribute("aria-label", this.getAttribute("label") || DEFAULT_LABEL);
+    }
+    window.removeEventListener("pointermove", this.#track);
+    window.removeEventListener("pointerout", this.#leave);
+    this.#client = undefined;
+    this.#pointerX = this.#pointerY = 0;
+    if (!this.#decorative && !this.#still) {
+      window.addEventListener("pointermove", this.#track, { passive: true });
+      window.addEventListener("pointerout", this.#leave);
+    }
+  }
+
   connectedCallback() {
     if (!this.#context) return;
-    this.#button.setAttribute("aria-label", this.getAttribute("label") || DEFAULT_LABEL);
     this.#expression = this.getAttribute("expression") ?? "idle";
     this.#start = performance.now();
     this.#expressionStart = this.#start;
+    this.#mount();
     this.#bounds = new ResizeObserver(this.#measure);
     this.#bounds.observe(this);
+    // Off screen or in a hidden tab, nothing is drawn: the loop starts again when seen.
+    this.#seen = new IntersectionObserver(([entry]) => {
+      this.#visible = entry?.isIntersecting ?? true;
+      this.#requestFrame();
+    });
+    this.#seen.observe(this);
+    document.addEventListener("visibilitychange", this.#requestFrame);
     this.#measure();
-    window.addEventListener("pointermove", this.#track, { passive: true });
-    window.addEventListener("pointerout", this.#leave);
-    this.#motion.addEventListener("change", this.#requestFrame);
+    this.#motion.addEventListener("change", this.#restyle);
     this.#requestFrame();
   }
 
@@ -534,7 +591,9 @@ class MoonMascot extends HTMLElement {
       this.#button.setAttribute("aria-label", value || DEFAULT_LABEL);
       return;
     }
-    if (name === "expression") {
+    if (name === "decorative" || name === "still") {
+      if (this.isConnected) this.#mount();
+    } else if (name === "expression") {
       this.#expression = value ?? "idle";
       this.#expressionStart = performance.now();
     } else {
@@ -547,32 +606,39 @@ class MoonMascot extends HTMLElement {
     cancelAnimationFrame(this.#frame);
     this.#frame = 0;
     this.#bounds?.disconnect();
+    this.#seen?.disconnect();
+    document.removeEventListener("visibilitychange", this.#requestFrame);
     window.removeEventListener("pointermove", this.#track);
     window.removeEventListener("pointerout", this.#leave);
-    this.#motion.removeEventListener("change", this.#requestFrame);
+    this.#motion.removeEventListener("change", this.#restyle);
   }
+
+  #restyle = () => {
+    this.#mount();
+    this.#requestFrame();
+  };
 
   #measure = () => {
     const pixels = Math.min(840, Math.max(64, Math.round(this.clientWidth * devicePixelRatio)));
     if (this.#canvas.width !== pixels) this.#canvas.width = this.#canvas.height = pixels;
+    // A moon that grew past what its texture was drawn for gets a finer one.
+    if (this.#appearance && this.#appearance.scale !== surfaceScale(pixels))
+      this.#appearance = undefined;
     this.#requestFrame();
   };
 
   #track = (event: PointerEvent) => {
-    if (event.pointerType === "touch" || this.#motion.matches) return;
-    const box = this.getBoundingClientRect();
-    const range = Math.max(110, box.width * 0.65);
-    this.#pointerX = clamp((event.clientX - box.left - box.width * 0.35) / range, -1, 1);
-    this.#pointerY = clamp((event.clientY - box.top - box.height * 0.48) / range, -1, 1);
+    if (event.pointerType === "touch") return;
+    this.#client = { x: event.clientX, y: event.clientY };
   };
 
   #leave = (event: PointerEvent) => {
     if (event.relatedTarget) return;
-    this.#pointerX = this.#pointerY = 0;
+    this.#client = undefined;
   };
 
   #requestFrame = () => {
-    if (!this.#frame && this.isConnected && this.#context) {
+    if (!this.#frame && this.isConnected && this.#context && this.#visible && !document.hidden) {
       this.#frame = requestAnimationFrame(this.#draw);
     }
   };
@@ -583,22 +649,45 @@ class MoonMascot extends HTMLElement {
     const color = this.getAttribute("color") ?? "";
     const shapeName = all.has(shape) ? shape : "crescent";
     const paletteName = palettes.has(color) ? color : "ice";
-    const key = `${shapeName}:${paletteName}`;
+    const scale = surfaceScale(this.#canvas.width);
+    const key = `${shapeName}:${paletteName}:${scale}`;
     const geometryOf = all.get(shapeName)!;
     const palette = palettes.get(paletteName)!;
     let surface = surfaces.get(key);
     if (!surface) {
-      surface = renderSurface(geometryOf, palette, crescentPath);
+      surface = renderSurface(geometryOf, palette, crescentPath, scale);
       if (surfaces.size >= 6) surfaces.delete(surfaces.keys().next().value!);
       surfaces.set(key, surface);
     }
-    return { geometry: geometryOf, palette, surface, lunar: geometryOf.outline === crescentPath };
+    return {
+      geometry: geometryOf,
+      palette,
+      surface,
+      lunar: geometryOf.outline === crescentPath,
+      scale,
+    };
   }
 
   #draw = (now: number) => {
     this.#frame = 0;
     const context = this.#context;
     if (!context) return;
+    const reduced = this.#still;
+    // At most 60 frames a second, on a 120 or 240 Hz screen too.
+    const dt = now - this.#last;
+    if (!reduced && dt < 15) {
+      this.#requestFrame();
+      return;
+    }
+    this.#last = now;
+    if (this.#client) {
+      const box = this.getBoundingClientRect();
+      const range = Math.max(110, box.width * 0.65);
+      this.#pointerX = clamp((this.#client.x - box.left - box.width * 0.35) / range, -1, 1);
+      this.#pointerY = clamp((this.#client.y - box.top - box.height * 0.48) / range, -1, 1);
+    } else {
+      this.#pointerX = this.#pointerY = 0;
+    }
     const {
       geometry: shape,
       palette,
@@ -606,7 +695,6 @@ class MoonMascot extends HTMLElement {
       lunar,
     } = (this.#appearance ??= this.#getAppearance());
     const scale = this.#canvas.width / size;
-    const reduced = this.#motion.matches;
     const elapsed = now - this.#start;
     const moodTime = reduced ? 0 : Math.max(0, now - this.#expressionStart) / 1000;
     const winkTime = Math.max(0, now - this.#wink);
@@ -623,8 +711,10 @@ class MoonMascot extends HTMLElement {
       !reduced && this.#pointerX === 0 && this.#pointerY === 0
         ? Math.sin(elapsed / 1100) * Math.max(0, Math.sin(elapsed / 1820)) * 0.48
         : 0;
-    this.#gazeX = reduced ? 0 : this.#gazeX + (this.#pointerX - this.#gazeX) * 0.1;
-    this.#gazeY = reduced ? 0 : this.#gazeY + (this.#pointerY - this.#gazeY) * 0.1;
+    // The eyes catch up a tenth of the way every 60th of a second, whatever the frame rate.
+    const ease = 1 - 0.9 ** (Math.min(dt, 100) / (1000 / 60));
+    this.#gazeX = reduced ? 0 : this.#gazeX + (this.#pointerX - this.#gazeX) * ease;
+    this.#gazeY = reduced ? 0 : this.#gazeY + (this.#pointerY - this.#gazeY) * ease;
 
     context.setTransform(scale, 0, 0, scale, 0, 0);
     context.clearRect(0, 0, size, size);

@@ -447,7 +447,9 @@ function Conversation({
         )}
         {thread.status === "error" && thread.error && (
           <div className={mascot ? "failed with-mascot" : "failed"} role="alert">
-            {mascot && agent && <Mascot mascot={mascot} expression="error" name={agent.name} />}
+            {mascot && agent && (
+              <Mascot mascot={mascot} expression="error" name={agent.name} still />
+            )}
             <span>
               <b>Le tour s'est arrêté</b>
               {thread.error}
