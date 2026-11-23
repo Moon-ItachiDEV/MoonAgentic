@@ -1,10 +1,12 @@
-import type {
-  AgentInfo,
-  PrReview,
-  PrReviewer,
-  ReviewPoint,
-  ReviewSeverity,
-  Thread,
+import {
+  reviewAtWork,
+  type AgentInfo,
+  type PrJudge,
+  type PrReview,
+  type PrReviewer,
+  type ReviewPoint,
+  type ReviewSeverity,
+  type Thread,
 } from "@moonagentic/protocol";
 import { useState } from "react";
 import { connection, newId } from "../connection.ts";
@@ -34,6 +36,13 @@ export function reviewHeadline(review: PrReview): string {
       return "Récupération de la PR…";
     case "reviewing":
       return `Relecture en cours · ${done} sur ${n}`;
+    case "debating": {
+      const weighed = review.reviewers.filter((r) => r.debate && r.debate !== "running").length;
+      const all = review.reviewers.filter((r) => r.debate).length;
+      return `Confrontation · ${weighed} sur ${all}`;
+    }
+    case "judging":
+      return "L'arbitre tranche…";
     case "done":
       return done === n ? "Relue par les " + n : `Relue par ${done} sur ${n}`;
     case "failed":
@@ -44,6 +53,12 @@ export function reviewHeadline(review: PrReview): string {
 }
 
 function reviewerState(r: PrReviewer, thread: Thread | undefined): { text: string; tone: string } {
+  if (r.debate === "running") {
+    if (thread?.status === "waiting") return { text: "T'attend", tone: "warn" };
+    if (thread?.inLine) return { text: "Attend une place", tone: "muted" };
+    return { text: "Confronte", tone: "work" };
+  }
+  if (r.debate === "failed") return { text: "Confrontation en échec", tone: "err" };
   switch (r.status) {
     case "waiting":
       return { text: "Démarre", tone: "work" };
@@ -63,6 +78,40 @@ function reviewerState(r: PrReviewer, thread: Thread | undefined): { text: strin
   }
 }
 
+function judgeState(
+  judge: PrJudge,
+  review: PrReview,
+  thread: Thread | undefined,
+): { text: string; tone: string } {
+  switch (judge.status) {
+    case undefined:
+      return reviewAtWork(review)
+        ? { text: "Tranche s'il reste un désaccord", tone: "muted" }
+        : { text: "Aucun désaccord à trancher", tone: "muted" };
+    case "running":
+      if (thread?.status === "waiting") return { text: "T'attend", tone: "warn" };
+      if (thread?.inLine) return { text: "Attend une place", tone: "muted" };
+      return { text: "Tranche", tone: "work" };
+    case "done": {
+      const n = judge.rulings?.length ?? 0;
+      return { text: `${plural(n, "point tranché", "points tranchés")}`, tone: "ok" };
+    }
+    case "failed":
+      return { text: "Échec", tone: "err" };
+    case "stopped":
+      return { text: "Arrêté", tone: "muted" };
+  }
+}
+
+const VERDICT: Record<string, string> = {
+  agree: "d'accord",
+  disagree: "pas d'accord",
+  withdraw: "retire son constat",
+};
+
+/** Points that still stand: neither taken back by who found them nor rejected by the judge. */
+const stands = (p: ReviewPoint) => p.outcome !== "withdrawn" && p.outcome !== "rejected";
+
 const where = (p: Pick<ReviewPoint, "file" | "line">) =>
   p.file ? `${p.file}${p.line ? `:${p.line}` : ""}` : undefined;
 
@@ -72,13 +121,14 @@ export function fixMessage(review: PrReview, name: (i: number) => string): strin
     `Voici la synthèse de la relecture de la PR #${review.number} par ${review.reviewers.length} agents. Vérifie chaque point dans le code, corrige ceux qui sont réels, lance les tests, puis committe. Dis-moi ceux que tu écartes et pourquoi.`,
     "",
   ];
-  for (const p of review.points ?? []) {
+  for (const p of (review.points ?? []).filter(stands)) {
     const at = where(p);
     lines.push(
       `- [${SEVERITY[p.severity]}]${at ? ` ${at}` : ""} : ${p.title} (vu par ${p.by.map(name).join(", ")})`,
     );
     for (const note of p.notes)
       if (note.detail) lines.push(`  - ${name(note.by)} : ${note.detail}`);
+    if (p.ruling?.reason) lines.push(`  - Arbitre : ${p.ruling.reason}`);
   }
   return lines.join("\n");
 }
@@ -94,7 +144,12 @@ function Point({
 }) {
   const [open, setOpen] = useState(false);
   const at = where(point);
-  const said = point.notes.some((n) => n.detail || n.title !== point.title);
+  const notes = point.notes.filter((n) => n.detail || n.title !== point.title);
+  // A finder agreeing with its own point says nothing new.
+  const votes = (point.votes ?? []).filter(
+    (v) => !point.by.includes(v.by) || v.verdict !== "agree" || v.severity,
+  );
+  const said = notes.length > 0 || votes.length > 0;
   return (
     <li className={`prr-pt${open ? " open" : ""}`}>
       <button
@@ -125,13 +180,28 @@ function Point({
             .join(" · ")}
         </span>
       )}
+      {point.ruling && (
+        <span className={`prr-ruling${point.ruling.real ? "" : " off"}`}>
+          <b>Arbitre : {point.ruling.real ? "réel" : "écarté"}</b>
+          {point.ruling.reason && ` · ${point.ruling.reason}`}
+        </span>
+      )}
       {open && (
         <ul className="prr-notes">
-          {point.notes.map((n) => (
+          {notes.map((n) => (
             <li key={n.by}>
               <b>{name(n.by)}</b>
               {n.title !== point.title && <span>{n.title}</span>}
               {n.detail && <p>{n.detail}</p>}
+            </li>
+          ))}
+          {votes.map((v) => (
+            <li key={`v${v.by}`} className={`prr-vote ${v.verdict}`}>
+              <b>
+                {name(v.by)} : {VERDICT[v.verdict]}
+                {v.severity && ` (${SEVERITY[v.severity].toLowerCase()})`}
+              </b>
+              {v.reason && <p>{v.reason}</p>}
             </li>
           ))}
         </ul>
@@ -173,10 +243,29 @@ export function ReviewCard({
     const r = review.reviewers[i];
     return r ? (MAKER[r.agentId] ?? agents.find((a) => a.id === r.agentId)?.name ?? r.agentId) : "";
   };
-  const atWork = review.phase === "preparing" || review.phase === "reviewing";
+  const atWork = reviewAtWork(review);
   const points = review.points ?? [];
-  const common = points.filter((p) => p.by.length > 1);
-  const single = points.filter((p) => p.by.length === 1);
+  // While they weigh each other's points, what was found is shown as found.
+  const debated = review.phase !== "debating" && points.some((p) => p.outcome);
+  // Before the confrontation: by how many found each point; after it, by where it ended up.
+  const groups: { key: string; title: string; points: ReviewPoint[] }[] = debated
+    ? [
+        {
+          key: "ok",
+          title: "Confirmés",
+          points: points.filter((p) => p.outcome === "confirmed"),
+        },
+        { key: "dis", title: "Contestés", points: points.filter((p) => p.outcome === "disputed") },
+        { key: "open", title: "Non discutés", points: points.filter((p) => p.outcome === "open") },
+        { key: "off", title: "Écartés", points: points.filter((p) => !stands(p)) },
+      ]
+    : [
+        { key: "c", title: "Vus par plusieurs", points: points.filter((p) => p.by.length > 1) },
+        { key: "s", title: "Vus par un seul", points: points.filter((p) => p.by.length === 1) },
+      ];
+  const judge = review.judge;
+  const judgeThread = judge?.threadId ? threads.find((t) => t.id === judge.threadId) : undefined;
+  const judgeAgent = judge && agents.find((a) => a.id === judge.agentId);
   const anyDone = review.reviewers.some((r) => r.status === "done");
   // The thread whose branch is this pull request, to have the points fixed there.
   const owner = threads.find(
@@ -256,6 +345,33 @@ export function ReviewCard({
             </li>
           );
         })}
+        {judge &&
+          (() => {
+            const state = judgeState(judge, review, judgeThread);
+            return (
+              <li className="prr-judge">
+                <AgentBadge agent={judgeAgent ?? { id: judge.agentId, short: "?" }} small />
+                <span className="prr-rev-n">
+                  <b>Arbitre</b>
+                  <span>{modelName({ ...judge, status: "done" })}</span>
+                </span>
+                <span className={`prr-state ${state.tone}`}>
+                  {state.tone === "work" ? <StateGlyph kind="lit" size={13} /> : <i aria-hidden />}
+                  {state.text}
+                </span>
+                {judgeThread && (
+                  <button
+                    type="button"
+                    className="btn prr-btn ghost"
+                    onClick={() => onOpenThread(judgeThread.id)}
+                  >
+                    Ouvrir
+                  </button>
+                )}
+                {judge.error && <span className="prr-rev-err">{judge.error}</span>}
+              </li>
+            );
+          })()}
       </ul>
 
       {anyDone && (
@@ -263,32 +379,20 @@ export function ReviewCard({
           {points.length === 0 ? (
             <p className="prr-none">Aucun problème relevé.</p>
           ) : (
-            <>
-              {common.length > 0 && (
-                <>
+            groups
+              .filter((g) => g.points.length > 0)
+              .map((g) => (
+                <div key={g.key} className={`prr-group ${g.key}`}>
                   <h4>
-                    Vus par plusieurs <span>{common.length}</span>
+                    {g.title} <span>{g.points.length}</span>
                   </h4>
                   <ul className="prr-pts">
-                    {common.map((p, k) => (
-                      <Point key={`c${k}`} point={p} name={name} agentOf={agentOf} />
+                    {g.points.map((p) => (
+                      <Point key={points.indexOf(p)} point={p} name={name} agentOf={agentOf} />
                     ))}
                   </ul>
-                </>
-              )}
-              {single.length > 0 && (
-                <>
-                  <h4>
-                    Vus par un seul <span>{single.length}</span>
-                  </h4>
-                  <ul className="prr-pts">
-                    {single.map((p, k) => (
-                      <Point key={`s${k}`} point={p} name={name} agentOf={agentOf} />
-                    ))}
-                  </ul>
-                </>
-              )}
-            </>
+                </div>
+              ))
           )}
         </div>
       )}
@@ -304,7 +408,7 @@ export function ReviewCard({
             Arrêter la revue
           </button>
         )}
-        {!atWork && points.length > 0 && owner && !sent && (
+        {!atWork && points.some(stands) && owner && !sent && (
           <button
             type="button"
             className="btn prr-btn acc"

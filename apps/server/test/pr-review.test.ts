@@ -5,6 +5,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import {
+  applyRulings,
+  applyVotes,
   normalPath,
   REVIEW_SLOTS,
   severityOf,
@@ -17,7 +19,14 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { type Client, Hub } from "../src/hub.ts";
-import { readFindings, reviewPrompt, reviewStatus } from "../src/pr-review.ts";
+import {
+  debatePrompt,
+  readFindings,
+  readRulings,
+  readVerdicts,
+  reviewPrompt,
+  reviewStatus,
+} from "../src/pr-review.ts";
 import type { PullRequests } from "../src/pull-request.ts";
 import { Store } from "../src/store.ts";
 
@@ -183,6 +192,97 @@ describe("the reviewer's brief", () => {
   });
 });
 
+describe("the confrontation", () => {
+  const point = (by: number[]) => ({
+    severity: "major" as const,
+    file: "a.ts",
+    line: 3,
+    title: "Erreur",
+    by,
+    notes: by.map((b) => ({ by: b, severity: "major" as const, title: "Erreur" })),
+  });
+
+  it("weighs each point by what the reviewers said of it", () => {
+    const points = [point([0, 1]), point([0]), point([1]), point([2]), point([0])];
+    const out = applyVotes(points, [
+      {
+        debate: "done",
+        verdicts: [
+          { point: 2, verdict: "disagree", reason: "Faux" },
+          { point: 4, verdict: "disagree" },
+        ],
+      },
+      { debate: "done", verdicts: [{ point: 1, verdict: "agree", severity: "critical" }] },
+      { debate: "failed" },
+    ]);
+    expect(out.map((p) => p.outcome)).toEqual([
+      "confirmed",
+      "confirmed",
+      "disputed",
+      "open",
+      // Its own finder disagreeing with it takes it back.
+      "withdrawn",
+    ]);
+    expect(out[1]).toMatchObject({ divergent: true, votes: [{ by: 1, severity: "critical" }] });
+    // No confrontation yet: the points stay as they are.
+    expect(applyVotes(points, [{}, {}])).toEqual(points);
+  });
+
+  it("lets the judge settle the disputed points only", () => {
+    const disputed = { ...point([0]), outcome: "disputed" as const };
+    const open = { ...point([1]), outcome: "open" as const };
+    const out = applyRulings(
+      [disputed, open, disputed],
+      [
+        { point: 0, real: true, severity: "minor", reason: "Rare" },
+        { point: 1, real: false },
+        { point: 2, real: false, reason: "Impossible" },
+      ],
+    );
+    expect(out.map((p) => [p.outcome, p.severity])).toEqual([
+      ["confirmed", "minor"],
+      ["open", "major"],
+      ["rejected", "major"],
+    ]);
+    expect(out[0]!.ruling).toEqual({ real: true, severity: "minor", reason: "Rare" });
+  });
+
+  it("reads verdicts and rulings by point number, once each, within range", () => {
+    expect(
+      readVerdicts(
+        '```json\n{"verdicts": [{"point": 1, "verdict": "Désaccord", "reason": "Non\\nvrai"}, {"point": 1, "verdict": "accord"}, {"point": 9}, {"point": "2", "verdict": "retiré", "severity": "mineur"}]}\n```',
+        3,
+      ),
+    ).toEqual([
+      { point: 0, verdict: "disagree", reason: "Non vrai" },
+      { point: 1, verdict: "withdraw", severity: "minor" },
+    ]);
+    expect(readVerdicts("Je suis d'accord avec tout.", 2)).toBeUndefined();
+    expect(
+      readRulings(
+        '{"rulings": [{"point": 2, "verdict": "écarté", "severity": "critique"}, {"point": 3, "verdict": "réel", "severity": "majeur"}, {"point": 1, "verdict": "réel"}]}',
+        [1, 2],
+      ),
+    ).toEqual([
+      { point: 1, real: false },
+      { point: 2, real: true, severity: "major" },
+    ]);
+  });
+
+  it("tells each reviewer who found what, itself as « toi »", () => {
+    const text = debatePrompt(
+      [point([0, 1])],
+      [
+        { agentId: "codex", status: "done" },
+        { agentId: "claude", status: "done" },
+      ],
+      1,
+    );
+    expect(text).toContain("1. [majeur] a.ts:3, relevé par OpenAI, toi");
+    expect(text).toContain('{"verdicts": [');
+  });
+});
+
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
     .toString()
@@ -281,6 +381,13 @@ describe("a review of a pull request", { timeout: 40_000 }, () => {
       ["minor", "README.md", [1]],
     ]);
     expect(done.points?.[0]?.divergent).toBe(true);
+    // Then they weighed each other's points: the fast one disputes the one it did not find.
+    expect(done.reviewers.map((r) => r.debate)).toEqual(["done", "done"]);
+    expect(done.points?.map((p) => p.outcome)).toEqual(["confirmed", "disputed"]);
+    expect(done.points?.[1]?.votes).toEqual([
+      { by: 0, verdict: "disagree", reason: "Ce cas ne peut pas arriver ici." },
+      { by: 1, verdict: "agree", reason: "Je le vois aussi dans le code." },
+    ]);
     // The kept reviewers start the next one.
     expect(hub.coordinatorSettings().review).toEqual([
       { agentId: "demo", model: "rapide" },
@@ -289,6 +396,34 @@ describe("a review of a pull request", { timeout: 40_000 }, () => {
     expect(reviewStatus(done)).toContain("[critique] README.md:1");
     // Nothing of it is pushed.
     await expect(hub.ship(thread.id, "x", true)).rejects.toThrow("rien à pousser");
+  });
+
+  it("has the judge settle what the reviewers still disagree on", async () => {
+    const { hub, store, projectId, client } = repository();
+    await hub.handle(client, {
+      type: "review.start",
+      requestId: "r1",
+      projectId,
+      pr: "42",
+      reviewers: [
+        { agentId: "demo", model: "rapide" },
+        { agentId: "demo-2", model: "precis" },
+      ],
+      judge: { agentId: "demo", model: "precis" },
+    });
+    const thread = store.listThreads().find((t) => t.prReview)!;
+    const review = () => store.getThread(thread.id)!.prReview as PrReview;
+    await expect.poll(() => review().phase, { timeout: 30_000 }).toBe("done");
+    const done = review();
+    expect(done.judge).toMatchObject({ status: "done", rulings: [{ point: 1, real: true }] });
+    expect(done.points?.map((p) => [p.outcome, p.severity])).toEqual([
+      ["confirmed", "critical"],
+      ["confirmed", "minor"],
+    ]);
+    expect(done.points?.[1]?.ruling?.reason).toBe("Le cas arrive bien, mais sans gros impact.");
+    const judge = store.getThread(done.judge!.threadId!)!;
+    expect(judge).toMatchObject({ role: "reviewer", parentId: thread.id, worksIn: thread.id });
+    expect(hub.coordinatorSettings().reviewJudge).toEqual({ agentId: "demo", model: "precis" });
   });
 
   it("says why it could not start", async () => {

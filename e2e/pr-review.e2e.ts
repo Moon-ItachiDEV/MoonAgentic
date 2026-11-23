@@ -161,6 +161,7 @@ describe("/revue", () => {
       await pick("Relecteur OpenAI", "demo\nrapide");
       await pick("Relecteur Anthropic", "demo-2\nprecis");
       await pick("Relecteur Google", "demo-2\nrapide");
+      await pick("Arbitre", "demo\nprecis");
       await shot("r1-dialogue");
       await dialog.getByRole("button", { name: "Lancer la revue" }).click();
 
@@ -170,9 +171,15 @@ describe("/revue", () => {
       await card.getByText(/Relecture en cours/).waitFor();
       await shot("r2-en-cours");
 
+      // Then they weigh each other's points, and the judge settles the one still disputed.
+      await card.getByText(/Confrontation ·/).waitFor({ timeout: 30_000 });
+      await shot("r3-confrontation");
       await card.getByText("Relue par les 3").waitFor({ timeout: 30_000 });
-      await card.getByText("Vus par plusieurs").waitFor();
-      await card.getByText("Vus par un seul").waitFor();
+      await card.getByText("1 point tranché").waitFor();
+      await card.getByText("Confirmés").waitFor();
+      const ruled = card.locator(".prr-pt", { has: page.locator(".prr-ruling") });
+      expect(await ruled.locator(".prr-ruling").textContent()).toContain("Arbitre : réel");
+      expect(await ruled.locator(".prr-sev").textContent()).toBe("Mineur");
       // Lines 1 and 2 of the file changed are one point, seen by all three, worst first.
       const first = card.locator(".prr-pt").first();
       expect(await first.locator(".prr-sev").textContent()).toBe("Critique");
@@ -181,7 +188,9 @@ describe("/revue", () => {
       await first.getByText(/Gravité discutée/).waitFor();
       await first.locator(".prr-pt-h").click();
       await first.locator(".prr-notes li").first().waitFor();
-      await shot("r3-synthese");
+      await ruled.locator(".prr-pt-h").click();
+      await ruled.locator(".prr-vote.disagree").first().waitFor();
+      await shot("r4-synthese");
 
       // Each reviewer has its own thread, which leads back to the review.
       await card.getByRole("button", { name: "Ouvrir" }).first().click();
@@ -189,7 +198,7 @@ describe("/revue", () => {
       await card.waitFor();
 
       await page.emulateMedia({ colorScheme: "dark" });
-      await shot("r4-synthese-sombre");
+      await shot("r5-synthese-sombre");
       await page.emulateMedia({ colorScheme: "light" });
 
       await page.setViewportSize({ width: 390, height: 844 });
@@ -197,7 +206,7 @@ describe("/revue", () => {
       await card.getByText("Relue par les 3").waitFor();
       const width = await page.evaluate(() => document.documentElement.scrollWidth);
       expect(width).toBeLessThanOrEqual(390);
-      await shot("r5-mobile");
+      await shot("r6-mobile");
 
       expect(errors).toEqual([]);
       await page.close();

@@ -30,6 +30,31 @@ export interface PrReviewer extends TeamMember {
   reasked?: true;
   findings?: ReviewFinding[];
   error?: string;
+  /**
+   * Its part in the confrontation, once every reviewer is done: it reads the points of the
+   * others and says what it makes of each one.
+   */
+  debate?: "running" | "done" | "failed" | "stopped";
+  /** True once it was asked again for the verdicts block it left out. */
+  debateReasked?: true;
+  /** What it said of each point, by the point's index. */
+  verdicts?: ReviewVerdict[];
+}
+
+/** What a reviewer makes of a point in the confrontation. */
+export interface ReviewVerdict {
+  /** The point's index in the synthesis. */
+  point: number;
+  /** `withdraw` only counts from a reviewer who found the point itself. */
+  verdict: "agree" | "disagree" | "withdraw";
+  /** The severity it would give, when it differs. */
+  severity?: ReviewSeverity;
+  reason?: string;
+}
+
+/** A reviewer's verdict on a point, kept on the point. */
+export interface ReviewVote extends Omit<ReviewVerdict, "point"> {
+  by: number;
 }
 
 /** What one reviewer said of a point, in its own words. */
@@ -56,10 +81,41 @@ export interface ReviewPoint {
   notes: ReviewNote[];
   /** The reviewers who found it gave it different severities. */
   divergent?: true;
+  /** What the reviewers said of it in the confrontation. */
+  votes?: ReviewVote[];
+  /**
+   * After the confrontation: `confirmed` when found by several, or agreed with and contested
+   * by none; `disputed` when one disagrees; `withdrawn` when all who found it took it back;
+   * `open` when nobody weighed in. Once the judge rules on a disputed point, `confirmed` or
+   * `rejected`.
+   */
+  outcome?: "confirmed" | "disputed" | "withdrawn" | "open" | "rejected";
+  /** The judge's ruling, on a point the reviewers did not agree on. */
+  ruling?: Omit<ReviewRuling, "point">;
+}
+
+/** The judge's ruling on a disputed point. */
+export interface ReviewRuling {
+  point: number;
+  /** Whether the problem is real. */
+  real: boolean;
+  /** The severity it settles on, when real. */
+  severity?: ReviewSeverity;
+  reason?: string;
+}
+
+/** Who settles the points the reviewers still disagree on once they have weighed them. */
+export interface PrJudge extends TeamMember {
+  threadId?: string;
+  status?: "running" | "done" | "failed" | "stopped";
+  reasked?: true;
+  rulings?: ReviewRuling[];
+  error?: string;
 }
 
 /** Where a review is, as a whole. */
-export type PrReviewPhase = "preparing" | "reviewing" | "done" | "failed" | "stopped";
+export type PrReviewPhase =
+  "preparing" | "reviewing" | "debating" | "judging" | "done" | "failed" | "stopped";
 
 /** A review of a pull request by several agents, kept on its own thread by the server. */
 export interface PrReview {
@@ -73,6 +129,8 @@ export interface PrReview {
   head?: string;
   base?: string;
   reviewers: PrReviewer[];
+  /** Settles the points still disputed after the confrontation; none, and they stay so. */
+  judge?: PrJudge;
   /** Put together from the reviewers done so far. */
   points?: ReviewPoint[];
   /** Why it could not start, or what stopped it. */
@@ -106,6 +164,17 @@ export const REVIEW_SLOTS: readonly ReviewSlot[] = [
   },
   { vendor: "google", label: "Google", agentId: "antigravity", prefer: [/argon/i, /neon/i] },
 ];
+
+/**
+ * The judge by default: Claude Fable 5.2, the strongest at reasoning about code (1st on
+ * SWE-Bench Pro, 93 %), and none of the three reviewers. Opus next.
+ */
+export const REVIEW_JUDGE: ReviewSlot = {
+  vendor: "anthropic",
+  label: "Arbitre",
+  agentId: "claude",
+  prefer: [/fable/i, /opus/i],
+};
 
 /** Models picked from a list ordered as they come: newest last is not assumed. */
 const firstMatching = (agent: AgentInfo, patterns: RegExp[]) => {
@@ -246,4 +315,83 @@ export function synthesize(reviewers: readonly Pick<PrReviewer, "findings">[]): 
 
 /** Phases in which one of the review's agents works, or is about to. */
 export const reviewAtWork = (review: PrReview | undefined): boolean =>
-  review?.phase === "preparing" || review?.phase === "reviewing";
+  review?.phase === "preparing" ||
+  review?.phase === "reviewing" ||
+  review?.phase === "debating" ||
+  review?.phase === "judging";
+
+/**
+ * The points once the judge has ruled: a disputed point it finds real is confirmed at the
+ * severity it settles on; one it finds unfounded is rejected.
+ */
+export function applyRulings(
+  points: readonly ReviewPoint[],
+  rulings: readonly ReviewRuling[] | undefined,
+): ReviewPoint[] {
+  if (!rulings?.length) return [...points];
+  return points.map((point, index) => {
+    const ruling = rulings.find((r) => r.point === index);
+    if (!ruling || point.outcome !== "disputed") return point;
+    const { point: _index, ...kept } = ruling;
+    return {
+      ...point,
+      ruling: kept,
+      outcome: ruling.real ? "confirmed" : "rejected",
+      ...(ruling.real && ruling.severity ? { severity: ruling.severity } : {}),
+    };
+  });
+}
+
+/** What a reviewer wrote as its verdict, whatever the words. */
+export function verdictOf(raw: unknown): ReviewVerdict["verdict"] {
+  const text = typeof raw === "string" ? raw.toLowerCase() : "";
+  if (/retir|withdr|abandon/.test(text)) return "withdraw";
+  if (/d[ée]saccord|disagree|conteste|faux|invalid|non\b|reject/.test(text)) return "disagree";
+  return "agree";
+}
+
+/**
+ * The points with what each reviewer said of them in the confrontation, and where each one
+ * ends up. A finder's own `disagree` counts as taking it back; a `withdraw` from someone
+ * who did not find it counts as disagreeing. A severity a voter proposes that differs from
+ * the point's marks it as discussed.
+ */
+export function applyVotes(
+  points: readonly ReviewPoint[],
+  reviewers: readonly Pick<PrReviewer, "verdicts" | "debate">[],
+): ReviewPoint[] {
+  const debated = reviewers.some((r) => r.debate !== undefined);
+  return points.map((point, index) => {
+    const votes: ReviewVote[] = [];
+    reviewers.forEach((r, by) => {
+      const said = r.verdicts?.find((v) => v.point === index);
+      if (!said) return;
+      const finder = point.by.includes(by);
+      const verdict = said.verdict === "agree" ? "agree" : finder ? "withdraw" : "disagree";
+      votes.push({
+        by,
+        verdict,
+        ...(said.severity ? { severity: said.severity } : {}),
+        ...(said.reason ? { reason: said.reason } : {}),
+      });
+    });
+    if (!debated) return point;
+    const withdrawn = votes.filter((v) => v.verdict === "withdraw").map((v) => v.by);
+    const kept = point.by.filter((b) => !withdrawn.includes(b));
+    const outcome: ReviewPoint["outcome"] =
+      kept.length === 0
+        ? "withdrawn"
+        : votes.some((v) => v.verdict === "disagree")
+          ? "disputed"
+          : kept.length > 1 || votes.some((v) => v.verdict === "agree" && !point.by.includes(v.by))
+            ? "confirmed"
+            : "open";
+    const regraded = votes.some((v) => v.severity && v.severity !== point.severity);
+    return {
+      ...point,
+      ...(votes.length ? { votes } : {}),
+      outcome,
+      ...(regraded ? { divergent: true as const } : {}),
+    };
+  });
+}

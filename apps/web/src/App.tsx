@@ -1016,6 +1016,7 @@ export function App() {
             agents={state.agents}
             favorites={state.favorites}
             saved={state.coordinator.review}
+            savedJudge={state.coordinator.reviewJudge}
             pr={reviewPr}
             onClose={() => setReviewPr(null)}
             onStarted={(id) => {

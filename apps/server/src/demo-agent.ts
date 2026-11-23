@@ -546,6 +546,32 @@ const app = acp
           ];
       return answer("J'ai relu la PR.\n\n```json\n" + JSON.stringify({ findings }) + "\n```");
     }
+    // The confrontation: the fast model disputes what it did not find, the precise one agrees.
+    if (ask.startsWith("Les autres relecteurs ont fini.")) {
+      const precise = models.get(sessionId) === "precis";
+      const verdicts = [...ask.matchAll(/^(\d+)\. \[[^\]]+\] .*, relevé par (.*)$/gm)].map((m) => {
+        const mine = /\btoi\b/.test(m[2] ?? "");
+        return {
+          point: Number(m[1]),
+          verdict: precise || mine ? "accord" : "désaccord",
+          reason:
+            precise || mine ? "Je le vois aussi dans le code." : "Ce cas ne peut pas arriver ici.",
+        };
+      });
+      return answer(
+        "Mon avis sur chaque point.\n\n```json\n" + JSON.stringify({ verdicts }) + "\n```",
+      );
+    }
+    // As the judge, it finds each disputed point real, but minor.
+    if (ask.startsWith("Tu es l'arbitre")) {
+      const rulings = [...ask.matchAll(/^(\d+)\. \[/gm)].map((m) => ({
+        point: Number(m[1]),
+        verdict: "réel",
+        severity: "mineur",
+        reason: "Le cas arrive bien, mais sans gros impact.",
+      }));
+      return answer("J'ai tranché.\n\n```json\n" + JSON.stringify({ rulings }) + "\n```");
+    }
     if (ask.startsWith("Je n'ai pas trouvé ton bloc de constats")) {
       return answer('```json\n{"findings": []}\n```');
     }

@@ -1055,6 +1055,12 @@ export class Hub {
             agentId: r.agentId,
             ...(r.model ? { model: r.model } : {}),
           })),
+          reviewJudge: message.judge
+            ? {
+                agentId: message.judge.agentId,
+                ...(message.judge.model ? { model: message.judge.model } : {}),
+              }
+            : null,
         });
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
@@ -1471,6 +1477,7 @@ export class Hub {
     projectId: string;
     pr: string;
     reviewers: { agentId: string; model?: string | undefined }[];
+    judge?: { agentId: string; model?: string | undefined } | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project) throw new Error("Projet introuvable.");
@@ -1492,6 +1499,7 @@ export class Hub {
       };
     });
     const first = reviewers[0]!;
+    if (input.judge) this.agents.launch(input.judge.agentId);
     const id = this.createThread({
       projectId: project.id,
       // Its own agent answers what the user asks about the review, given what was found.
@@ -1508,6 +1516,14 @@ export class Hub {
         repo: at?.repo ?? "",
         number,
         reviewers,
+        ...(input.judge
+          ? {
+              judge: {
+                agentId: input.judge.agentId,
+                ...(input.judge.model ? { model: input.judge.model } : {}),
+              },
+            }
+          : {}),
         startedAt: Date.now(),
       },
     });

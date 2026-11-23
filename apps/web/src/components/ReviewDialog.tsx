@@ -1,4 +1,5 @@
 import {
+  REVIEW_JUDGE,
   REVIEW_SLOTS,
   slotReviewer,
   type AgentInfo,
@@ -22,6 +23,7 @@ export function ReviewDialog({
   agents,
   favorites,
   saved,
+  savedJudge,
   pr: initialPr,
   onClose,
   onStarted,
@@ -31,6 +33,8 @@ export function ReviewDialog({
   favorites: Favorites;
   /** The reviewers of the last review started, kept by the server. */
   saved: TeamMember[] | undefined;
+  /** Its judge; `null` when the user chose none. */
+  savedJudge: TeamMember | null | undefined;
   pr: string;
   onClose: () => void;
   onStarted: (threadId: string) => void;
@@ -51,6 +55,15 @@ export function ReviewDialog({
     return slotReviewer(REVIEW_SLOTS[i]!, agents, favorites);
   };
   const reviewers = REVIEW_SLOTS.map((_, i) => reviewer(i));
+  const [judgeChoice, setJudgeChoice] = useState<TeamMember | null | undefined>(undefined);
+  const judge: TeamMember | undefined =
+    judgeChoice !== undefined
+      ? (judgeChoice ?? undefined)
+      : savedJudge === null
+        ? undefined
+        : savedJudge && agents.some((a) => a.id === savedJudge.agentId && a.available)
+          ? savedJudge
+          : slotReviewer(REVIEW_JUDGE, agents, favorites);
   const picked = reviewers.filter((r): r is TeamMember => !!r);
   const valid = /^#?\d{1,9}$/.test(pr) || /^https:\/\/github\.com\/[^\s]+\/pull\/\d+/.test(pr);
 
@@ -83,6 +96,7 @@ export function ReviewDialog({
         projectId: project.id,
         pr: pr.replace(/^#/, ""),
         reviewers: picked,
+        ...(judge && picked.length > 1 ? { judge } : {}),
       });
       onStarted(id);
     } catch (e) {
@@ -102,8 +116,8 @@ export function ReviewDialog({
       >
         <h2 id="prr-title">Relire une PR à {picked.length || 3}</h2>
         <p>
-          Chaque agent lit la PR dans son propre fil, sans rien modifier. Leurs constats sont
-          regroupés : points communs, points vus par un seul, gravité et fichier:ligne.
+          Chaque agent lit la PR dans son fil, sans rien modifier, puis juge les constats des
+          autres. L'arbitre tranche ce qui reste contesté.
         </p>
         <label className="field">
           Pull request
@@ -139,6 +153,21 @@ export function ReviewDialog({
               />
             </div>
           ))}
+          {picked.length > 1 && (
+            <div className="prr-slot">
+              <span className="prr-maker">Arbitre</span>
+              <ModelSelect
+                className="prr-pick"
+                label="Arbitre"
+                agents={agents}
+                favorites={favorites}
+                value={judge}
+                showAll={showAll}
+                none="Personne"
+                onChange={(m) => setJudgeChoice(m ?? null)}
+              />
+            </div>
+          )}
           <button type="button" className="prr-all" onClick={() => setShowAll((s) => !s)}>
             {showAll ? "Seulement mes favoris" : "Afficher tous les modèles"}
           </button>

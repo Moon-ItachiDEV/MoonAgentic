@@ -4,6 +4,10 @@ export type { PairedDevice, RemoteAccess, RemoteAddress } from "./remote.ts";
 export { type Notice, noticesFor, settledTags, waitingTag } from "./notices.ts";
 export { defaultTeam, pickMember, TEAM_PRESETS, type TeamPreset } from "./team-presets.ts";
 export {
+  applyRulings,
+  applyVotes,
+  REVIEW_JUDGE,
+  verdictOf,
   normalPath,
   REVIEW_SEVERITIES,
   REVIEW_SLOTS,
@@ -19,6 +23,10 @@ export {
   type ReviewPoint,
   type ReviewSeverity,
   type ReviewSlot,
+  type ReviewVerdict,
+  type ReviewVote,
+  type ReviewRuling,
+  type PrJudge,
 } from "./pr-review.ts";
 import { reviewAtWork, type PrReview } from "./pr-review.ts";
 
@@ -919,6 +927,8 @@ export interface CoordinatorSettings {
   team?: TeamSetup;
   /** Kept from the last « /revue » the user started: its reviewers, in order. */
   review?: TeamMember[];
+  /** And its judge; `null` when the user chose none. */
+  reviewJudge?: TeamMember | null;
   /** Threads a coordinator runs at once, the others waiting in line; 3 when left out. */
   parallel?: number;
   /** Turns the whole server runs at once, coordinators or not; 4 when left out. */
@@ -1477,6 +1487,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
       .array(z.object({ agentId: id, model: id.optional() }))
       .min(1)
       .max(3),
+    /** Settles the points still disputed after the reviewers weighed each other's. */
+    judge: z.object({ agentId: id, model: id.optional() }).optional(),
   }),
   /** Stops every reviewer still reading. */
   z.object({ type: z.literal("review.stop"), threadId: id }),

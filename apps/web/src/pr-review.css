@@ -382,3 +382,43 @@ a.prr-num:hover {
     width: 64px;
   }
 }
+
+/* The confrontation: what each reviewer said of a point, and the judge's ruling. */
+.prr-ruling {
+  display: block;
+  margin: 0 10px 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--prr-acc);
+  color: var(--fg);
+}
+.prr-ruling b {
+  font-weight: 500;
+  color: var(--accent);
+}
+.prr-ruling.off b {
+  color: var(--muted);
+}
+.prr-notes li.prr-vote.disagree b,
+.prr-notes li.prr-vote.withdraw b {
+  color: var(--err);
+}
+.prr-notes li.prr-vote.agree b {
+  color: var(--ok);
+}
+.prr-group {
+  display: grid;
+  gap: 8px;
+}
+.prr-group.off .prr-pt {
+  opacity: 0.72;
+}
+.prr-group.off .prr-pt-title {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent);
+}
+.prr-judge {
+  margin-top: 4px;
+}
