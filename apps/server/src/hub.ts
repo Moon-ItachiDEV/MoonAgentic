@@ -1556,6 +1556,8 @@ export class Hub {
   watchPr(threadId: string, on: boolean): void {
     const thread = this.requireLiveThread(threadId);
     if (!on) {
+      // A fix under way is no longer pushed when its turn ends.
+      this.prFixing.delete(threadId);
       this.updateThread(threadId, { prWatch: null });
       return;
     }
@@ -1603,20 +1605,22 @@ export class Hub {
   /** Pushes what the agent did to fix its pull request, then lets the thread go on. */
   private async pushFix(threadId: string): Promise<void> {
     const watch = this.store.getThread(threadId)?.prWatch;
-    try {
-      await this.ship(
-        threadId,
-        watch?.last === "conflict"
-          ? "Fusion de la branche de base et résolution des conflits"
-          : "Correction de la CI",
-        false,
-      );
-    } catch (error) {
-      const now = this.store.getThread(threadId)?.prWatch;
-      if (now) this.updateThread(threadId, { prWatch: { ...now, error: describe(error) } });
+    // Turned off while the agent worked: what it did stays on the thread's branch, unpushed.
+    if (watch) {
+      try {
+        await this.ship(
+          threadId,
+          watch.last === "conflict"
+            ? "Fusion de la branche de base et résolution des conflits"
+            : "Correction de la CI",
+          false,
+        );
+      } catch (error) {
+        const now = this.store.getThread(threadId)?.prWatch;
+        if (now) this.updateThread(threadId, { prWatch: { ...now, error: describe(error) } });
+      }
     }
-    if (this.closed || this.turns.has(threadId)) return;
-    if (!this.sendNextQueued(threadId, false)) this.continueGoal(threadId);
+    this.goOn(threadId, false, false, false);
   }
 
   /**
@@ -1864,28 +1868,37 @@ export class Hub {
       // Unless they stopped it for a message that waits to go now.
       const failed = this.store.getThread(threadId)?.status === "error";
       const atOnce = this.sendAfterStop.delete(threadId);
-      // The goal learns what this turn said; it goes on after the messages that wait.
-      if (!this.closed) this.settleGoal(threadId, cancelled && !atOnce, failed);
+      // A fix of the pull request whose words after a refusal go on in a new turn is pushed
+      // when that one ends.
+      if (this.prFixing.has(threadId) && this.turns.has(threadId)) return;
+      const fixing = this.prFixing.delete(threadId);
+      // The goal learns what this turn said, unless the turn was the pull request's fix;
+      // it goes on after the messages that wait.
+      if (!this.closed && !fixing) this.settleGoal(threadId, cancelled && !atOnce, failed);
       // A fix of the pull request is pushed before anything else goes on.
-      if (this.prFixing.delete(threadId) && !this.closed && !cancelled && !failed) {
+      if (fixing && !this.closed && !cancelled && !failed) {
         const pushed = this.pushFix(threadId);
         this.steps.add(pushed);
         void pushed.finally(() => this.steps.delete(pushed));
         return;
       }
-      if (
-        !this.closed &&
-        (atOnce || !cancelled) &&
-        this.sendNextQueued(threadId, failed && !atOnce)
-      )
-        return;
-      if (!this.closed && this.continueGoal(threadId)) return;
-      // A place is free: the next thread in line behind the same coordinator starts.
-      const openedBy = this.closed ? undefined : this.store.getThread(threadId)?.openedBy;
-      if (openedBy) this.coordinators.drainLine(openedBy);
-      if (openedBy && !cancelled) void this.reportResult(threadId);
+      this.goOn(threadId, cancelled, failed, atOnce);
     });
     this.turns.set(threadId, turn);
+  }
+
+  /**
+   * What follows a turn: the messages that wait, else the goal's next turn, else the next
+   * thread in line behind the same coordinator, which also hears what this one did.
+   */
+  private goOn(threadId: string, cancelled: boolean, failed: boolean, atOnce: boolean): void {
+    if (this.closed || this.turns.has(threadId)) return;
+    if ((atOnce || !cancelled) && this.sendNextQueued(threadId, failed && !atOnce)) return;
+    if (this.continueGoal(threadId)) return;
+    // A place is free: the next thread in line behind the same coordinator starts.
+    const openedBy = this.store.getThread(threadId)?.openedBy;
+    if (openedBy) this.coordinators.drainLine(openedBy);
+    if (openedBy && !cancelled) void this.reportResult(threadId);
   }
 
   /**
