@@ -103,6 +103,13 @@ const toThread = (row: ThreadRow): Thread => ({
   updatedAt: row.updated_at,
 });
 
+/** How many items of a timeline a screen gets at a time. */
+export const PAGE_ITEMS = 120;
+/** How far back a page may start to begin with the user's message of its first turn. */
+const PAGE_TURN_REACH = 400;
+/** How many items come with the one a page was asked to reach, before it. */
+const PAGE_BEFORE_REACHED = 10;
+
 /** Text kept before and after a match: little before, so the match shows on one line. */
 const SNIPPET_BEFORE = 30;
 const SNIPPET_AFTER = 90;
@@ -533,12 +540,67 @@ export class Store {
     return rows.map((r) => JSON.parse(r.data) as Item);
   }
 
+  /**
+   * The end of the timeline, or the stretch that ends just before the item numbered
+   * `before`: about a page of items, starting where a turn starts when that is near, and
+   * going back as far as the item `reach` when one is given. `earlier` counts what is
+   * before it.
+   */
+  pageItems(
+    threadId: string,
+    before: number = Number.MAX_SAFE_INTEGER,
+    reach?: string,
+  ): { items: Item[]; first: number; earlier: number } {
+    const seqOf = (sql: string, ...params: (string | number)[]) =>
+      (this.sql(sql).get(...params) as { seq: number | null } | undefined)?.seq ?? undefined;
+    // The first item of a page of them; none when there is less than a page.
+    let from =
+      seqOf(
+        `SELECT seq FROM items WHERE thread_id = ? AND seq < ? ORDER BY seq DESC LIMIT 1 OFFSET ?`,
+        threadId,
+        before,
+        PAGE_ITEMS - 1,
+      ) ?? 0;
+    if (reach !== undefined) {
+      const reached = seqOf(
+        `SELECT seq FROM items WHERE thread_id = ? AND id = ?`,
+        threadId,
+        reach,
+      );
+      // With a little of what was said just before it.
+      if (reached !== undefined) from = Math.min(from, reached - PAGE_BEFORE_REACHED);
+    }
+    // A page that starts with the user's message reads better than one cut inside a turn.
+    from =
+      seqOf(
+        `SELECT MAX(seq) AS seq FROM items WHERE thread_id = ? AND seq <= ? AND seq > ?
+           AND json_extract(data, '$.kind') = 'user'`,
+        threadId,
+        from,
+        from - PAGE_TURN_REACH,
+      ) ?? from;
+    const rows = this.sql(
+      `SELECT seq, data FROM items WHERE thread_id = ? AND seq >= ? AND seq < ? ORDER BY seq`,
+    ).all(threadId, from, before) as { seq: number; data: string }[];
+    const first = rows[0]?.seq ?? (before === Number.MAX_SAFE_INTEGER ? 0 : before);
+    const { n } = this.sql(`SELECT count(*) AS n FROM items WHERE thread_id = ? AND seq < ?`).get(
+      threadId,
+      first,
+    ) as { n: number };
+    return { items: rows.map((r) => JSON.parse(r.data) as Item), first, earlier: n };
+  }
+
   getItem(threadId: string, id: string): Item | undefined {
-    const row = this.sql(`SELECT data FROM items WHERE thread_id = ? AND id = ?`).get(
+    return this.getItemAt(threadId, id)?.item;
+  }
+
+  /** The item and its number in the timeline. */
+  getItemAt(threadId: string, id: string): { item: Item; seq: number } | undefined {
+    const row = this.sql(`SELECT seq, data FROM items WHERE thread_id = ? AND id = ?`).get(
       threadId,
       id,
-    ) as { data: string } | undefined;
-    return row && (JSON.parse(row.data) as Item);
+    ) as { seq: number; data: string } | undefined;
+    return row && { item: JSON.parse(row.data) as Item, seq: row.seq };
   }
 
   lastItem(threadId: string): Item | undefined {
@@ -548,13 +610,18 @@ export class Store {
     return row && (JSON.parse(row.data) as Item);
   }
 
-  /** Inserts the item at the end of the timeline, or replaces it in place. */
-  putItem(threadId: string, item: Item): void {
-    this.sql(
+  /**
+   * Inserts the item at the end of the timeline, or replaces it in place; returns its
+   * number in the timeline.
+   */
+  putItem(threadId: string, item: Item): number {
+    const row = this.sql(
       `INSERT INTO items (thread_id, id, seq, data)
          VALUES (?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM items WHERE thread_id = ?), ?)
-         ON CONFLICT (thread_id, id) DO UPDATE SET data = excluded.data`,
-    ).run(threadId, item.id, threadId, JSON.stringify(item));
+         ON CONFLICT (thread_id, id) DO UPDATE SET data = excluded.data
+         RETURNING seq`,
+    ).get(threadId, item.id, threadId, JSON.stringify(item)) as { seq: number };
+    return row.seq;
   }
 
   /**

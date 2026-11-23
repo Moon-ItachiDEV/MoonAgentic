@@ -1,4 +1,4 @@
-import type { Schedule, Thread } from "@moonagentic/protocol";
+import type { Item, Schedule, Thread } from "@moonagentic/protocol";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Composer as PlainComposer, useNarrow } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
@@ -129,7 +129,7 @@ export function App() {
     [state, listedThreadsNow],
   );
   // The side bar shows no message: text being written does not change what it is given.
-  const { items: _items, reviews: _reviews, ...lists } = state;
+  const { items: _items, held: _held, reviews: _reviews, ...lists } = state;
   const sideState = useSame({ ...lists, threads: listedThreadsNow });
   // A coordinator lives on its project's page: its own address, reached from a notification
   // or an old link, leads there, and « back » does not come here again.
@@ -203,7 +203,16 @@ export function App() {
   const exportThread = (t: Thread | undefined = spoken) => {
     const items = t && state.items[t.id];
     if (!t || !items) return;
-    downloadMarkdown(exportFileName(t.title), threadMarkdown(t, items, state.agents));
+    const save = (all: Item[]) =>
+      downloadMarkdown(exportFileName(t.title), threadMarkdown(t, all, state.agents));
+    if (!state.held[t.id]?.earlier) return save(items);
+    // Only the end of a long thread is here: the whole of it is asked for.
+    connection
+      .ask({ type: "thread.read", requestId: newId(), threadId: t.id })
+      .then((reply) => save(reply.items))
+      .catch((error: unknown) =>
+        connection.notify(error instanceof Error ? error.message : String(error)),
+      );
   };
   const setArchived = (id: string, archived: boolean) =>
     connection.send({ type: "thread.setArchived", threadId: id, archived });
@@ -549,6 +558,7 @@ export function App() {
             <ThreadView
               thread={thread}
               items={state.items[thread.id]}
+              held={state.held[thread.id]}
               agents={state.agents}
               threads={state.threads}
               onOpenThread={(id) => navigate({ name: "thread", threadId: id })}
@@ -645,6 +655,7 @@ export function App() {
                   key={coordinator.id}
                   thread={coordinator}
                   items={state.items[coordinator.id]}
+                  held={state.held[coordinator.id]}
                   agents={state.agents}
                   threads={state.threads}
                   onOpenThread={openThread}
@@ -698,6 +709,7 @@ export function App() {
                     key={beside.id}
                     thread={beside}
                     items={state.items[beside.id]}
+                    held={state.held[beside.id]}
                     agents={state.agents}
                     threads={state.threads}
                     onOpenThread={openThread}

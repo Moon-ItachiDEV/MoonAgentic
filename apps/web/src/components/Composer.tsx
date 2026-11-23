@@ -565,16 +565,17 @@ export function Composer(props: {
   const submit = async (to?: string) => {
     const typed = text.trim();
     if ((!typed && !images.drafts.length) || busy) return;
-    // While the agent works, what is typed waits in line rather than being refused.
-    if (running && typed && !images.drafts.length) {
-      enqueue();
-      return;
-    }
-    // MoonAgentic's own commands run here; the rest of the line stays in the composer.
+    // MoonAgentic's own commands run here, even while the agent works; the rest of the line
+    // stays in the composer.
     const submission = resolveSubmission(typed, commands);
     if (submission.kind === "action") {
       putText(submission.rest, submission.rest.length);
       runAction(submission.action, submission.rest);
+      return;
+    }
+    // While the agent works, what is typed waits in line rather than being refused.
+    if (running && typed && !images.drafts.length) {
+      enqueue();
       return;
     }
     const sendTo = to ?? agentId;
