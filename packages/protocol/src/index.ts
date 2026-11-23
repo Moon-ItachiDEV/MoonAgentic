@@ -925,8 +925,11 @@ export interface CoordinatorSettings {
   routes: Partial<Record<RouteKind, TeamMember>>;
   /** Kept from the last team the user started by hand. */
   team?: TeamSetup;
-  /** Kept from the last « /revue » the user started: its reviewers, in order. */
-  review?: TeamMember[];
+  /**
+   * Kept from the last « /revue » the user started: one per maker, in the order of
+   * `REVIEW_SLOTS`, `null` for a maker the user left out.
+   */
+  review?: (TeamMember | null)[];
   /** And its judge; `null` when the user chose none. */
   reviewJudge?: TeamMember | null;
   /** Threads a coordinator runs at once, the others waiting in line; 3 when left out. */
@@ -1489,6 +1492,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
       .max(3),
     /** Settles the points still disputed after the reviewers weighed each other's. */
     judge: z.object({ agentId: id, model: id.optional() }).optional(),
+    /** What each maker's menu holds, `null` for nobody: kept for the next review. */
+    slots: z
+      .array(z.object({ agentId: id, model: id.optional() }).nullable())
+      .max(3)
+      .optional(),
+    /** Every command of the reviewers and the judge waits for the user's yes. */
+    supervised: z.boolean().optional(),
   }),
   /** Stops every reviewer still reading. */
   z.object({ type: z.literal("review.stop"), threadId: id }),

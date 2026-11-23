@@ -32,8 +32,8 @@ export function ReviewDialog({
   project: Project;
   agents: AgentInfo[];
   favorites: Favorites;
-  /** The reviewers of the last review started, kept by the server. */
-  saved: TeamMember[] | undefined;
+  /** The menus of the last review started, one per maker, kept by the server. */
+  saved: (TeamMember | null)[] | undefined;
   /** Its judge; `null` when the user chose none. */
   savedJudge: TeamMember | null | undefined;
   pr: string;
@@ -45,13 +45,16 @@ export function ReviewDialog({
   // once the user said nobody.
   const [choices, setChoices] = useState<(TeamMember | null | undefined)[]>([]);
   const [showAll, setShowAll] = useState(false);
+  const [supervised, setSupervised] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const reviewer = (i: number): TeamMember | undefined => {
     const chosen = choices[i];
     if (chosen !== undefined) return chosen ?? undefined;
-    const kept = saved?.[i];
+    // Kept one per maker; an older list, only of those picked, says nothing of which slot.
+    const kept = saved?.length === REVIEW_SLOTS.length ? saved[i] : undefined;
+    if (kept === null) return undefined;
     if (kept && agents.some((a) => a.id === kept.agentId && a.available)) return kept;
     return slotReviewer(REVIEW_SLOTS[i]!, agents, favorites);
   };
@@ -97,6 +100,8 @@ export function ReviewDialog({
         projectId: project.id,
         pr: pr.replace(/^#/, ""),
         reviewers: picked,
+        slots: reviewers.map((r) => r ?? null),
+        ...(supervised ? { supervised: true } : {}),
         ...(judge && picked.length > 1 ? { judge } : {}),
       });
       onStarted(id);
@@ -125,7 +130,6 @@ export function ReviewDialog({
           <input
             autoFocus={!pr}
             required
-            inputMode="numeric"
             value={pr}
             placeholder="113"
             aria-label="Numéro ou adresse de la PR"
@@ -173,6 +177,20 @@ export function ReviewDialog({
             {showAll ? "Seulement mes favoris" : "Afficher tous les modèles"}
           </button>
         </div>
+        <label className="field team-ship">
+          <input
+            type="checkbox"
+            checked={supervised}
+            onChange={(e) => setSupervised(e.target.checked)}
+          />
+          <span>
+            Accès supervisé
+            <small>
+              Pour la PR de quelqu'un d'autre : chaque commande des relecteurs attend ton accord, au
+              cas où le code leur dirait d'en lancer une.
+            </small>
+          </span>
+        </label>
         {!project.git && (
           <p className="error">« {project.name} » n'est pas un dépôt git relié à GitHub.</p>
         )}

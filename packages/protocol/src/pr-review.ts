@@ -131,6 +131,8 @@ export interface PrReview {
   reviewers: PrReviewer[];
   /** Settles the points still disputed after the confrontation; none, and they stay so. */
   judge?: PrJudge;
+  /** Its reviewers and judge ask before each command: for a pull request from someone else. */
+  supervised?: true;
   /** Put together from the reviewers done so far. */
   points?: ReviewPoint[];
   /** Why it could not start, or what stopped it. */

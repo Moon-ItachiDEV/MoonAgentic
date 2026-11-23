@@ -62,6 +62,7 @@ import {
   forkPoint,
   githubRemote,
   removeWorktree,
+  deleteBranch,
   worktreeStart,
   branchName,
   dropCheckpoints,
@@ -1120,10 +1121,9 @@ export class Hub {
         const id = this.startPrReview(message);
         this.coordinators.setCoordinatorSettings({
           ...this.coordinators.coordinatorSettings(),
-          review: message.reviewers.map((r) => ({
-            agentId: r.agentId,
-            ...(r.model ? { model: r.model } : {}),
-          })),
+          review: (message.slots ?? message.reviewers).map((r) =>
+            r ? { agentId: r.agentId, ...(r.model ? { model: r.model } : {}) } : null,
+          ),
           reviewJudge: message.judge
             ? {
                 agentId: message.judge.agentId,
@@ -1593,6 +1593,7 @@ export class Hub {
     pr: string;
     reviewers: { agentId: string; model?: string | undefined }[];
     judge?: { agentId: string; model?: string | undefined } | undefined;
+    supervised?: boolean | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project) throw new Error("Projet introuvable.");
@@ -1639,6 +1640,7 @@ export class Hub {
               },
             }
           : {}),
+        ...(input.supervised ? { supervised: true as const } : {}),
         startedAt: Date.now(),
       },
     });
@@ -1687,10 +1689,21 @@ export class Hub {
       ...(start.subdir ? { subdir: start.subdir } : {}),
     };
     await ensureWorktree(project.path, workspace.path, workspace.branch, head);
-    const changes = await reviewChanges(workspace.path, mergeBase);
-    if (this.closed || !this.store.getThread(threadId)) return;
+    // Until the thread keeps it, the folder and its branch are nobody's: dropped when the
+    // review was stopped, deleted or failed meanwhile, or they would stay on disk.
+    const drop = async () => {
+      await removeWorktree(project.path, workspace.path).catch(() => undefined);
+      await deleteBranch(project.path, workspace.branch).catch(() => undefined);
+    };
+    let changes: Awaited<ReturnType<typeof reviewChanges>>;
+    try {
+      changes = await reviewChanges(workspace.path, mergeBase);
+    } catch (error) {
+      await drop();
+      throw error;
+    }
     const review = this.store.getThread(threadId)?.prReview;
-    if (!review || review.phase !== "preparing") return;
+    if (this.closed || !review || review.phase !== "preparing") return drop();
     this.updateThread(threadId, {
       workspace,
       prReview: {

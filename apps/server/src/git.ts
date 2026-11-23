@@ -1121,7 +1121,7 @@ const safeBranch = (name: string) =>
 /**
  * Brings a pull request's commits into the repository, under refs no branch list shows, and
  * says where its changes start: the merge base of its last commit with its base branch.
- * Commits already there (a branch of this repository) need no network.
+ * Its base is fetched each time, its last commit only when it is not here yet.
  */
 export async function fetchPullRequest(
   dir: string,
@@ -1136,20 +1136,17 @@ export async function fetchPullRequest(
   const ref = `refs/moonagentic/review/${number}`;
   const has = async (what: string) =>
     (await gitCode(dir, ["rev-parse", "-q", "--verify", `${what}^{commit}`])).code === 0;
-  // Commits already here, a branch of this repository, need no network.
-  if (remote && !(await has(head))) {
+  // The base is always fetched, as it moves on GitHub: an old one here would show changes
+  // that are not the pull request's. The head is fetched only when its commit is not here.
+  const wanted = [
+    ...((await has(head)) ? [] : [`+refs/pull/${number}/head:${ref}/head`]),
+    ...(branch ? [`+refs/heads/${branch}:${ref}/base`] : []),
+  ];
+  if (remote && wanted.length) {
     const auth = await githubGitAuth().catch(() => ({ args: [] as string[], env: {} }));
     await git(
       dir,
-      [
-        ...auth.args,
-        "fetch",
-        "-q",
-        "--no-tags",
-        remote,
-        `+refs/pull/${number}/head:${ref}/head`,
-        ...(branch ? [`+refs/heads/${branch}:${ref}/base`] : []),
-      ],
+      [...auth.args, "fetch", "-q", "--no-tags", remote, ...wanted],
       auth.env,
       NETWORK_TIMEOUT_MS,
     ).catch(() => undefined);

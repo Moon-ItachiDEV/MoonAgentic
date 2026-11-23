@@ -73,6 +73,8 @@ a.prr-num:hover {
 }
 .prr-phase.preparing,
 .prr-phase.reviewing,
+.prr-phase.debating,
+.prr-phase.judging,
 .prr-state.work {
   background: var(--prr-acc);
   color: var(--accent);
