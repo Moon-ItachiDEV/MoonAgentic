@@ -953,3 +953,56 @@ export async function syncTarget(dir: string, baseBranch: string): Promise<strin
   const ahead = await gitCode(dir, ["merge-base", "--is-ancestor", baseBranch, remoteRef]);
   return ahead.code === 0 ? remoteRef : baseBranch;
 }
+
+/** The repository's own `moon/*` branches: name, commit, and when that commit was made. */
+export async function moonBranchRefs(
+  dir: string,
+): Promise<{ name: string; commit: string; at: number }[]> {
+  const out = await git(dir, [
+    "for-each-ref",
+    "--format=%(refname)%00%(objectname)%00%(committerdate:unix)",
+    "refs/heads/moon/",
+  ]);
+  return out
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const [ref = "", commit = "", at = "0"] = line.split("\0");
+      return { name: ref.slice("refs/heads/".length), commit, at: Number(at) * 1000 };
+    });
+}
+
+/** The branches checked out in one of the repository's worktrees, which git will not delete. */
+export async function checkedOutBranches(dir: string): Promise<Set<string>> {
+  const out = await git(dir, ["worktree", "list", "--porcelain"]);
+  const prefix = "branch refs/heads/";
+  return new Set(
+    out
+      .split("\n")
+      .filter((line) => line.startsWith(prefix))
+      .map((line) => line.slice(prefix.length)),
+  );
+}
+
+/**
+ * Whether everything `branch` brings is already in `target`: merged into it, or squashed or
+ * picked onto it, so that merging it again would change nothing.
+ */
+export async function mergedInto(dir: string, branch: string, target: string): Promise<boolean> {
+  if ((await gitCode(dir, ["merge-base", "--is-ancestor", branch, target])).code === 0) return true;
+  const merge = await gitCode(dir, ["merge-tree", "--write-tree", "--no-messages", target, branch]);
+  if (merge.code !== 0) return false;
+  const tree = await gitCode(dir, ["rev-parse", `${target}^{tree}`]);
+  return tree.code === 0 && merge.stdout.split("\n")[0]?.trim() === tree.stdout.trim();
+}
+
+/** How many commits `branch` has that `target` has not. */
+export async function commitsAhead(dir: string, branch: string, target: string): Promise<number> {
+  const out = await gitCode(dir, ["rev-list", "--count", `${target}..${branch}`]);
+  return out.code === 0 ? Number(out.stdout.trim()) || 0 : 0;
+}
+
+/** Deletes a local branch, merged or not in git's own eyes: the caller checked it is. */
+export async function deleteBranch(dir: string, branch: string): Promise<void> {
+  await git(dir, ["branch", "-D", branch]);
+}

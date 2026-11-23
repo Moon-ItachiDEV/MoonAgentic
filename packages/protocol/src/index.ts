@@ -906,6 +906,22 @@ export interface TimelineMark {
   rev: number;
 }
 
+/**
+ * One of the project repository's `moon/*` branches, the ones MoonAgentic makes for its threads.
+ * `merged` when all it brings is already in the branch it is compared with, and no thread uses
+ * it: only those can be deleted. `inUse` when a thread still works on it, or a worktree has it.
+ */
+export interface MoonBranch {
+  name: string;
+  /** When its last commit was made, in milliseconds. */
+  at: number;
+  state: "merged" | "inUse" | "unmerged";
+  /** Commits it has that the branch it is compared with has not; 0 when merged. */
+  ahead: number;
+  /** The thread it was made for, when that thread is still there. */
+  thread?: { id: string; title: string; archived?: boolean };
+}
+
 export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "agents"; agents: AgentInfo[] }
@@ -981,6 +997,25 @@ export type ServerMessage =
       threadId: string;
       files: string[];
       capped: boolean;
+    }
+  /**
+   * The project repository's own `moon/*` branches, as « Nettoyer les branches » lists them,
+   * with the branches they were compared with (the current one, and its remote copy).
+   */
+  | {
+      type: "projectBranches";
+      requestId: string;
+      projectId: string;
+      targets: string[];
+      branches: MoonBranch[];
+    }
+  /** What deleting merged branches did: those deleted, and those kept with why. */
+  | {
+      type: "branchesDeleted";
+      requestId: string;
+      projectId: string;
+      deleted: string[];
+      kept: { name: string; reason: string }[];
     }
   /**
    * One file of a thread's folder, to read: its text, or why it is not shown (`binary`, or
@@ -1388,6 +1423,18 @@ export const ClientMessage = z.discriminatedUnion("type", [
     name: z.string().trim().min(1).max(120),
   }),
   z.object({ type: z.literal("project.setPinned"), projectId: id, pinned: z.boolean() }),
+  /** Lists the project repository's `moon/*` branches; see `projectBranches`. */
+  z.object({ type: z.literal("project.branches"), requestId: id, projectId: id }),
+  /**
+   * Deletes these `moon/*` branches, each only if it is still merged and no thread uses it
+   * when the server looks again; see `branchesDeleted`.
+   */
+  z.object({
+    type: z.literal("project.deleteBranches"),
+    requestId: id,
+    projectId: id,
+    branches: z.array(z.string().min(1).max(300)).min(1).max(500),
+  }),
   /** Looks for project files to mention with `@`, in the thread's folder when given. */
   z.object({
     type: z.literal("files.search"),
