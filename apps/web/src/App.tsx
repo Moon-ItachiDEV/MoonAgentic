@@ -6,6 +6,7 @@ import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Home } from "./components/Home.tsx";
 import {
+  IconBack,
   IconCode,
   IconShield,
   IconArrowLeft,
@@ -21,6 +22,7 @@ import {
   IconPin,
   IconPlug,
 } from "./components/icons.tsx";
+import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
@@ -42,6 +44,8 @@ import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
 import { focusItem } from "./focus.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { navigate, useRoute } from "./router.ts";
+
+export { ErrorBoundary };
 
 // The planner and the settings are loaded on demand, so they stay out of the main chunk.
 const Planner = lazy(() =>
@@ -269,14 +273,32 @@ export function App() {
       className={`app${drawer ? " drawer" : ""}${sideOff && route.name !== "settings" ? " side-off" : ""}${route.name === "home" ? " home-route" : ""}${route.name === "thread" ? " in-thread" : ""}${reviewing ? " reviewing" : ""}`}
     >
       {route.name === "settings" ? (
-        // Until the settings arrive, an empty side bar keeps the layout in place.
-        <Suspense fallback={<aside className="side set-side" aria-label="Réglages" />}>
-          <SettingsNav
-            section={route.section}
-            onPick={(section) => go({ name: "settings", section })}
-            onBack={() => go({ name: "home" })}
-          />
-        </Suspense>
+        <ErrorBoundary
+          key="settings-nav"
+          fallback={(_error, reload) => (
+            <aside className="side set-side" aria-label="Réglages">
+              <button className="set-back" onClick={() => go({ name: "home" })}>
+                <IconBack />
+                Retour
+              </button>
+              <div className="empty-note">
+                <p>Impossible d'afficher le menu.</p>
+                <button className="btn sm" type="button" onClick={reload}>
+                  Recharger
+                </button>
+              </div>
+            </aside>
+          )}
+        >
+          {/* Until the settings arrive, an empty side bar keeps the layout in place. */}
+          <Suspense fallback={<aside className="side set-side" aria-label="Réglages" />}>
+            <SettingsNav
+              section={route.section}
+              onPick={(section) => go({ name: "settings", section })}
+              onBack={() => go({ name: "home" })}
+            />
+          </Suspense>
+        </ErrorBoundary>
       ) : (
         <Sidebar
           state={listed}
@@ -412,20 +434,22 @@ export function App() {
           )}
         </header>
         {route.name === "settings" ? (
-          <Suspense fallback={<div className="view" />}>
-            <SettingsPage
-              section={route.section}
-              agents={state.agents}
-              favorites={state.favorites}
-              coordinator={state.coordinator}
-              projects={state.projects}
-              projectId={project?.id}
-              mcpServers={state.mcpServers}
-              onPickProject={pickProject}
-              onOpenConnections={() => setConnectionsOpen(true)}
-              onOpenMcp={() => setMcpOpen(true)}
-            />
-          </Suspense>
+          <ErrorBoundary key="settings">
+            <Suspense fallback={<div className="view" />}>
+              <SettingsPage
+                section={route.section}
+                agents={state.agents}
+                favorites={state.favorites}
+                coordinator={state.coordinator}
+                projects={state.projects}
+                projectId={project?.id}
+                mcpServers={state.mcpServers}
+                onPickProject={pickProject}
+                onOpenConnections={() => setConnectionsOpen(true)}
+                onOpenMcp={() => setMcpOpen(true)}
+              />
+            </Suspense>
+          </ErrorBoundary>
         ) : route.name === "thread" ? (
           thread ? (
             <ThreadView
@@ -533,21 +557,23 @@ export function App() {
             </div>
           )
         ) : route.name === "planner" ? (
-          <Suspense fallback={<div className="view" />}>
-            <Planner
-              key={`${project?.id}:${plannerShown}`}
-              project={project}
-              plan={state.plan}
-              schedules={state.schedules}
-              onSchedule={(schedule) =>
-                setScheduling(schedule ? { text: "", schedule } : { text: "" })
-              }
-              threads={state.threads}
-              agents={state.agents}
-              onOpenThread={(id) => go({ name: "thread", threadId: id })}
-              onNewProject={() => setCreatingProject(true)}
-            />
-          </Suspense>
+          <ErrorBoundary key={`planner:${project?.id ?? ""}`}>
+            <Suspense fallback={<div className="view" />}>
+              <Planner
+                key={`${project?.id}:${plannerShown}`}
+                project={project}
+                plan={state.plan}
+                schedules={state.schedules}
+                onSchedule={(schedule) =>
+                  setScheduling(schedule ? { text: "", schedule } : { text: "" })
+                }
+                threads={state.threads}
+                agents={state.agents}
+                onOpenThread={(id) => go({ name: "thread", threadId: id })}
+                onNewProject={() => setCreatingProject(true)}
+              />
+            </Suspense>
+          </ErrorBoundary>
         ) : (
           <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
         )}
