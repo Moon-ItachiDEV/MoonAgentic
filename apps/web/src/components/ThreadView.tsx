@@ -21,6 +21,7 @@ import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { useLiveText } from "../live-text.ts";
+import type { Held } from "../state.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { AgentPlan } from "./AgentPlan.tsx";
 import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
@@ -48,9 +49,13 @@ const WORKING_VERB: Partial<Record<GlyphKind, string>> = {
   ecrit: "écrit…",
 };
 
+/** How far above what is shown the earlier messages start to be fetched, in pixels. */
+const EARLIER_MARGIN = 600;
+
 export function ThreadView({
   thread,
   items,
+  held,
   agents,
   threads,
   onOpenThread: openThread,
@@ -59,7 +64,10 @@ export function ThreadView({
   /** Shown above the conversation, such as a coordinator's ways to start. */
   intro?: ReactNode;
   thread: Thread;
+  /** The end of the thread's timeline, and the pages before it already fetched. */
   items: Item[] | undefined;
+  /** Where those items start in the timeline, and how many are before them. */
+  held: Held | undefined;
   agents: AgentInfo[];
   /** Every thread, for a team's progress and a coder's lead. */
   threads: Thread[];
@@ -104,7 +112,94 @@ export function ThreadView({
   useLayoutEffect(() => {
     pinned.current = !hasFocus(thread.id);
     scrolledTo.current = 0;
+    anchor.current = undefined;
+    seeking.current = undefined;
   }, [thread.id]);
+
+  // A long thread comes by its end: the messages before it are fetched a page at a time,
+  // when the reader goes up to them or asks for one of them.
+  const first = held?.first;
+  const earlier = (items && held?.earlier) || 0;
+  const [paging, setPaging] = useState<{ threadId: string; state: "busy" | "failed" }>();
+  const pagingState = paging?.threadId === thread.id ? paging.state : undefined;
+  /** The thread a page is being asked for: one at a time. */
+  const asking = useRef<string>(undefined);
+  /** Asks for the page before what is held, back to the item `reach` if given. */
+  const loadEarlier = (reach?: string) => {
+    const threadId = thread.id;
+    if (asking.current === threadId || first === undefined || !earlier) return undefined;
+    asking.current = threadId;
+    setPaging({ threadId, state: "busy" });
+    return connection
+      .ask({
+        type: "thread.page",
+        requestId: newId(),
+        threadId,
+        before: first,
+        ...(reach ? { reach } : {}),
+      })
+      .then(
+        (page) => {
+          setPaging((now) => (now?.threadId === threadId ? undefined : now));
+          return page;
+        },
+        () => {
+          setPaging({ threadId, state: "failed" });
+          return undefined;
+        },
+      )
+      .finally(() => {
+        if (asking.current === threadId) asking.current = undefined;
+      });
+  };
+  const loader = useRef(loadEarlier);
+  useLayoutEffect(() => {
+    loader.current = loadEarlier;
+  });
+  // The first message shown and where it was on screen: it stays put when a page comes in
+  // above it.
+  const top = useRef<HTMLDivElement>(null);
+  const anchor = useRef<{ el: Element; top: number; fromEnd: number }>(undefined);
+  const markAnchor = () => {
+    const el = top.current?.nextElementSibling;
+    const scroller = view.current;
+    anchor.current =
+      el && scroller
+        ? {
+            el,
+            top: el.getBoundingClientRect().top,
+            fromEnd: scroller.scrollHeight - scroller.scrollTop,
+          }
+        : undefined;
+  };
+  const firstShown = useRef(first);
+  useLayoutEffect(() => {
+    const grewUp = first !== undefined && firstShown.current !== undefined;
+    const before = grewUp && first < firstShown.current!;
+    firstShown.current = first;
+    const scroller = view.current;
+    const was = anchor.current;
+    if (before && scroller && was) {
+      // The block it was may have joined the page's last turn: then by the distance to the end.
+      if (was.el.isConnected) scroller.scrollTop += was.el.getBoundingClientRect().top - was.top;
+      else scroller.scrollTop = scroller.scrollHeight - was.fromEnd;
+    }
+    if (earlier) markAnchor();
+    else anchor.current = undefined;
+  }, [first, earlier, thread.id]);
+  // Going up near the first message shown fetches the page before it.
+  const more = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!earlier || typeof IntersectionObserver === "undefined" || !more.current) return;
+    const near = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void loader.current();
+      },
+      { root: view.current, rootMargin: `${EARLIER_MARGIN}px 0px 0px 0px` },
+    );
+    near.observe(more.current);
+    return () => near.disconnect();
+  }, [first, earlier > 0, thread.id]);
 
   // A message picked in the quick search is shown once the timeline is here.
   const [focusTick, setFocusTick] = useState(0);
@@ -112,26 +207,48 @@ export function ThreadView({
   // A message folded in a team's detail opens it first, then is shown on the next pass.
   const [reveal, setReveal] = useState<string>();
   const revealing = useRef<string>(undefined);
+  // A message from before what is held is fetched first, with all that follows it.
+  const seeking = useRef<{ id: string; asked: boolean }>(undefined);
   useLayoutEffect(() => {
     if (!items) return;
-    const itemId = takeFocus(thread.id) ?? revealing.current;
+    const taken = takeFocus(thread.id);
+    if (taken) seeking.current = undefined;
+    const itemId = taken ?? revealing.current ?? seeking.current?.id;
     revealing.current = undefined;
     const el =
       itemId && view.current?.querySelector<HTMLElement>(`[data-item="${CSS.escape(itemId)}"]`);
     if (!el) {
-      if (itemId && itemId !== reveal && items.some((i) => i.id === itemId)) {
-        revealing.current = itemId;
-        setReveal(itemId);
-      }
+      if (!itemId) return;
+      if (items.some((i) => i.id === itemId)) {
+        seeking.current = undefined;
+        if (itemId !== reveal) {
+          revealing.current = itemId;
+          setReveal(itemId);
+        }
+      } else if (earlier && !seeking.current?.asked) {
+        // Not at the end while it is on its way: the page must not follow what is written.
+        pinned.current = false;
+        const asked = loader.current(itemId);
+        seeking.current = { id: itemId, asked: !!asked };
+        void asked?.then((page) => {
+          if (seeking.current?.id !== itemId) return;
+          // Reached but not taken in, when the timeline was sent again meanwhile: once more.
+          const reached = page?.items.some((i) => i.id === itemId);
+          const here = connection.getState().items[thread.id]?.some((i) => i.id === itemId);
+          seeking.current = reached && !here ? { id: itemId, asked: false } : undefined;
+          if (seeking.current) setFocusTick((n) => n + 1);
+        });
+      } else if (!earlier) seeking.current = undefined;
       return;
     }
+    seeking.current = undefined;
     pinned.current = false;
     el.scrollIntoView({ block: "center" });
     el.classList.remove("flash");
     // Restarts the highlight when the same message is picked twice.
     void el.offsetWidth;
     el.classList.add("flash");
-  }, [items, thread.id, focusTick, reveal]);
+  }, [items, earlier, thread.id, focusTick, reveal]);
 
   // Keep following new output while the reader is at the bottom: at once for a new message
   // or another thread...
@@ -147,6 +264,7 @@ export function ThreadView({
     const grown = new ResizeObserver(() => {
       const el = view.current;
       if (el && pinned.current) el.scrollTop = el.scrollHeight;
+      if (anchor.current) markAnchor();
     });
     grown.observe(feed.current);
     return () => grown.disconnect();
@@ -169,7 +287,7 @@ export function ThreadView({
   const firstNew = items?.findIndex((i, n) => n > lastOwn && i.kind === "result") ?? -1;
 
   const team = isTeamThread(thread);
-  const blocks = items ? (team ? teamFeed(thread, items) : activityFeed(items)) : [];
+  const blocks = items ? (team ? teamFeed(thread, items, earlier > 0) : activityFeed(items)) : [];
   // What the agent does now, from the last item shown (plan mode switches are not shown).
   const lastGlyph = activityGlyph(items?.findLast((i) => !isPlanModeSwitch(i)));
 
@@ -217,6 +335,7 @@ export function ThreadView({
         if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) pinned.current = true;
         else if (el.scrollTop < scrolledTo.current) pinned.current = false;
         scrolledTo.current = el.scrollTop;
+        if (anchor.current) markAnchor();
       }}
     >
       <div className="feed" ref={feed}>
@@ -246,6 +365,21 @@ export function ThreadView({
             Sous-tâche de l'équipe « {lead.title.replace(/^Équipe : /, "")} »
           </button>
         )}
+        {earlier > 0 && (
+          <button
+            ref={more}
+            className="earlier"
+            disabled={pagingState === "busy"}
+            onClick={() => void loadEarlier()}
+          >
+            {pagingState === "busy"
+              ? "Chargement des messages précédents…"
+              : pagingState === "failed"
+                ? "Les messages précédents ne sont pas arrivés. Réessayer"
+                : "Afficher les messages précédents"}
+          </button>
+        )}
+        <div ref={top} className="feed-top" />
         {blocks.map((block, b) => {
           if (block.kind === "detail") {
             return (

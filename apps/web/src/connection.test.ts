@@ -347,19 +347,82 @@ describe("Connection", () => {
     socket.emitMessage(JSON.stringify({ type: "searched", requestId: "req-after", hits: [] }));
     await expect(promise).resolves.toEqual({ type: "searched", requestId: "req-after", hits: [] });
   });
+  it("comes back to a thread with the mark of what it holds, and takes what changed", async () => {
+    const { conn, socket } = await setupConnection();
+    socket.open();
+    const sent = (s: FakeWebSocket) => s.sent.map((raw) => JSON.parse(raw) as object);
+    conn.send({ type: "thread.open", threadId: "t1" });
+    // Nothing held yet: the timeline is asked for.
+    expect(sent(socket)).toEqual([{ type: "thread.open", threadId: "t1" }]);
+    const said = (id: string, text: string) => ({ id, kind: "agent", text, at: 1 });
+    socket.emitMessage(
+      JSON.stringify({
+        type: "items",
+        threadId: "t1",
+        items: [said("i8", "Huit"), said("i9", "Neuf")],
+        first: 8,
+        earlier: 7,
+        epoch: "e1",
+        rev: 3,
+      }),
+    );
+    socket.emitMessage(
+      JSON.stringify({ type: "append", threadId: "t1", itemId: "i9", text: " !", rev: 4 }),
+    );
+
+    // The connection drops and comes back: the thread is opened again from where it was.
+    socket.closeNow();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const again = FakeWebSocket.instances.at(-1)!;
+    expect(again).not.toBe(socket);
+    again.open();
+    expect(sent(again)).toEqual([
+      { type: "thread.open", threadId: "t1", since: { epoch: "e1", rev: 4, first: 8 } },
+    ]);
+    again.emitMessage(
+      JSON.stringify({
+        type: "changes",
+        threadId: "t1",
+        items: [{ item: said("i10", "Dix"), seq: 10 }],
+        rev: 6,
+      }),
+    );
+    const texts = conn.getState().items["t1"]!.map((i) => (i as { text: string }).text);
+    expect(texts).toEqual(["Huit", "Neuf !", "Dix"]);
+    expect(conn.getState().held["t1"]).toEqual({ first: 8, earlier: 7, epoch: "e1", rev: 6 });
+    // Shown again later on the same connection, it is asked for the same way.
+    conn.send({ type: "thread.leave", threadId: "t1" });
+    conn.send({ type: "thread.open", threadId: "t1" });
+    expect(sent(again).at(-1)).toEqual({
+      type: "thread.open",
+      threadId: "t1",
+      since: { epoch: "e1", rev: 6, first: 8 },
+    });
+  });
+
   it("tells the page once per frame while an agent writes, and at once for anything else", async () => {
     const { conn, socket } = await setupConnection();
     socket.open();
     const thread = { id: "t1", title: "Fil", status: "running" };
     const answer = { id: "i1", kind: "agent", text: "" };
-    socket.emitMessage(JSON.stringify({ type: "items", threadId: "t1", items: [answer] }));
+    socket.emitMessage(
+      JSON.stringify({
+        type: "items",
+        threadId: "t1",
+        items: [answer],
+        first: 1,
+        earlier: 0,
+        epoch: "e1",
+        rev: 0,
+      }),
+    );
     let told = 0;
     conn.subscribe(() => (told += 1));
     const text = () => (conn.getState().items["t1"]![0] as { text: string }).text;
 
     for (const piece of ["Bon", "jour", " à", " toi"]) {
       socket.emitMessage(
-        JSON.stringify({ type: "append", threadId: "t1", itemId: "i1", text: piece }),
+        JSON.stringify({ type: "append", threadId: "t1", itemId: "i1", text: piece, rev: 1 }),
       );
     }
     // What was written is known at once; the page hears of it at the next frame, once.
@@ -371,7 +434,9 @@ describe("Connection", () => {
     expect(told).toBe(1);
 
     // The end of the turn does not wait for a frame, and the frame it overtook says nothing more.
-    socket.emitMessage(JSON.stringify({ type: "append", threadId: "t1", itemId: "i1", text: "." }));
+    socket.emitMessage(
+      JSON.stringify({ type: "append", threadId: "t1", itemId: "i1", text: ".", rev: 2 }),
+    );
     socket.emitMessage(JSON.stringify({ type: "thread", thread: { ...thread, status: "idle" } }));
     expect(told).toBe(2);
     expect(text()).toBe("Bonjour à toi.");
