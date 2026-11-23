@@ -550,6 +550,11 @@ export type Item =
       toolKind: string;
       status: ToolStatus;
       content: ToolContent[];
+      /**
+       * How many characters of `content` are left out of this copy: a large result does not
+       * travel with the timeline, it is asked for with `item.get` when its line is opened.
+       */
+      omitted?: number;
       /** What the tool asks the user, when it is a question. */
       questions?: ToolQuestion[];
       at: number;
@@ -843,6 +848,8 @@ export type ServerMessage =
       days: ActivityDay[];
       firstAt?: number;
     }
+  /** An item whole, with what its copy in the timeline left out. */
+  | { type: "fullItem"; requestId: string; threadId: string; item: Item }
   | {
       type: "shipped";
       requestId: string;
@@ -994,6 +1001,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread.cancel"), threadId: id }),
   /** Puts the files back as they were before this message and forgets what came after. */
   z.object({ type: z.literal("thread.restore"), requestId: id, threadId: id, itemId: id }),
+  /** Asks for an item whole: a tool's large result, when its line is opened. */
+  z.object({ type: z.literal("item.get"), requestId: id, threadId: id, itemId: id }),
   /** Hands the thread to another agent, which gets the conversation so far. */
   z.object({ type: z.literal("thread.switchAgent"), threadId: id, agentId: id }),
   z.object({

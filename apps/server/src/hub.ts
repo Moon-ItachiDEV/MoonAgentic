@@ -78,6 +78,7 @@ import { type QuotaReader, Quotas } from "./quotas.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
+import { light } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
 import type { Store } from "./store.ts";
 
@@ -101,6 +102,12 @@ type TextItem = Extract<Item, { kind: "agent" | "thought" }>;
 
 /** How often streamed text is written down; viewers get each piece at once. */
 const TEXT_FLUSH_MS = 250;
+/**
+ * The search's index is filled a short stretch at a time, with a pause in between, so the
+ * server keeps answering while a long history is taken in.
+ */
+const INDEX_STRETCH_MS = 20;
+const INDEX_PAUSE_MS = 50;
 
 const titleFrom = (text: string, images = 0) => {
   const line = text.trim().split("\n")[0] ?? "";
@@ -251,6 +258,7 @@ export class Hub {
     { item: TextItem; dirty: boolean; timer?: NodeJS.Timeout }
   >();
   private closed = false;
+  private indexTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
@@ -382,6 +390,8 @@ export class Hub {
         this.confirmTeamPermission(coordinatorId, task, signal),
     });
     store.recoverAfterRestart();
+    // Messages the index does not have yet: all of them, the first time after an update.
+    this.indexSearchSoon();
     this.teams.recover();
     this.recovered = this.finishRestores();
     // Tasks that were due while the server was off start once what was interrupted is put right.
@@ -532,7 +542,7 @@ export class Hub {
         const id = this.createThread(message);
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.items(id) });
+        client.send({ type: "items", threadId: id, items: this.timeline(id) });
         return;
       }
       case "thread.leave":
@@ -558,7 +568,7 @@ export class Hub {
         client.send({
           type: "items",
           threadId: message.threadId,
-          items: this.items(message.threadId),
+          items: this.timeline(message.threadId),
         });
         return;
       case "thread.send": {
@@ -582,12 +592,24 @@ export class Hub {
         const id = this.openCoordinator(message.projectId, message.agentId, message.model);
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.items(id) });
+        client.send({ type: "items", threadId: id, items: this.timeline(id) });
         return;
       }
       case "thread.cancel":
         await this.cancel(message.threadId);
         return;
+      case "item.get": {
+        this.requireThread(message.threadId);
+        const item = this.store.getItem(message.threadId, message.itemId);
+        if (!item) throw new Error("Cet élément n'est plus dans le fil.");
+        client.send({
+          type: "fullItem",
+          requestId: message.requestId,
+          threadId: message.threadId,
+          item,
+        });
+        return;
+      }
       case "thread.restore":
         await this.restore(message.threadId, message.itemId);
         client.send({ type: "done", requestId: message.requestId });
@@ -686,7 +708,7 @@ export class Hub {
         });
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.items(id) });
+        client.send({ type: "items", threadId: id, items: this.timeline(id) });
         return;
       }
       case "team.stop":
@@ -1096,6 +1118,8 @@ export class Hub {
     const turn = this.runTurn(thread, text, itemId, context, queued, images).finally(() => {
       const cancelled = this.cancelled.has(threadId);
       this.turns.delete(threadId);
+      // What was said in this turn can be searched for without waiting on a search.
+      this.indexSearchSoon();
       // A place is free for the first turn in line.
       if (!this.closed) this.admit();
       this.turnIds.delete(threadId);
@@ -1537,7 +1561,7 @@ export class Hub {
     this.sendToViewers(threadId, {
       type: "items",
       threadId,
-      items: this.items(threadId),
+      items: this.timeline(threadId),
     });
     // A ref left behind only keeps an old tree alive, so failing here is harmless.
     await dropCheckpoints(
@@ -1719,7 +1743,7 @@ export class Hub {
         this.sendToViewers(threadId, {
           type: "items",
           threadId,
-          items: this.items(threadId),
+          items: this.timeline(threadId),
         });
       } else if (last?.kind === "handoff") {
         this.putItem(threadId, { ...last, to: agentId });
@@ -1849,9 +1873,26 @@ export class Hub {
     this.catalog.toggleFavorite(agentId, model, starred);
   }
 
+  /** Brings the search's index up to date in the background, a stretch at a time. */
+  private indexSearchSoon(): void {
+    if (this.indexTimer || this.closed) return;
+    this.indexTimer = setTimeout(() => {
+      this.indexTimer = undefined;
+      if (this.closed) return;
+      try {
+        if (this.store.indexSearch(INDEX_STRETCH_MS)) this.indexSearchSoon();
+      } catch (error) {
+        // The search fills its index itself before it answers: nothing is lost here.
+        console.warn("Index de recherche :", error);
+      }
+    }, INDEX_PAUSE_MS);
+    this.indexTimer.unref();
+  }
+
   /** Stops every agent and resolves once their turns have ended. */
   async close(): Promise<void> {
     this.closed = true;
+    clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
     this.quotas.close();
     this.scheduler.close();
@@ -2304,6 +2345,11 @@ export class Hub {
     return this.store.listItems(threadId);
   }
 
+  /** The thread's items as a screen gets them: large tool results stay here until asked for. */
+  private timeline(threadId: string): Item[] {
+    return this.items(threadId).map(light);
+  }
+
   private upsertTool(threadId: string, update: acp.ToolCall | acp.ToolCallUpdate): void {
     // Agents may number their tool calls from scratch on every turn or session, so the turn
     // is part of the item's id: a later call never replaces an earlier turn's card.
@@ -2487,7 +2533,7 @@ export class Hub {
     // Another item ends the text being streamed, which keeps its place before it.
     if (this.drafts.get(threadId)?.item.id !== item.id) this.flushText(threadId);
     this.store.putItem(threadId, item);
-    this.sendToViewers(threadId, { type: "item", threadId, item });
+    this.sendToViewers(threadId, { type: "item", threadId, item: light(item) });
   }
 
   private updateThread(threadId: string, patch: Parameters<Store["updateThread"]>[1]): void {

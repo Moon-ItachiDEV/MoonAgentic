@@ -165,6 +165,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "catalog":
     case "searched":
     case "activity":
+    case "fullItem":
     case "github":
     case "githubRepos":
     case "githubDevice":

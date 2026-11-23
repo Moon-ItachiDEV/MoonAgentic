@@ -1,0 +1,30 @@
+/* Long threads: what is fetched or drawn only when asked for. */
+
+/* A tool's large result on its way from the server, or the reason it did not come. */
+.tool-wait {
+  margin: 0;
+  color: var(--faint);
+  font-size: 12.5px;
+}
+.tool-wait[role="alert"] {
+  color: var(--err);
+}
+/* « Afficher tout », under the first lines of a long result. */
+.tool-more {
+  justify-self: start;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.tool-more:hover {
+  color: var(--fg);
+  border-color: var(--line2);
+}
+.diff > .tool-more {
+  margin: 6px 8px 8px;
+}
