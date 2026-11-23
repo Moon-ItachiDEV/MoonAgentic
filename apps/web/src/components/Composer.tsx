@@ -533,6 +533,25 @@ export function Composer(props: {
       runAction(submission.action, submission.rest);
       return;
     }
+    // While the agent works, what is written waits for the end of its turn.
+    if (thread && running) {
+      if (!submission.text.trim()) return;
+      if (images.drafts.length) {
+        connection.notify("Une image part avec un message envoyé entre deux réponses.");
+        return;
+      }
+      // Taken at once, so the next one can be written straight away: it comes back
+      // if the server refuses it and nothing was typed meanwhile.
+      const queued = submission.text;
+      setText("");
+      connection
+        .request({ type: "thread.queue", requestId: newId(), threadId: thread.id, text: queued })
+        .catch((e: unknown) => {
+          connection.notify(e instanceof Error ? e.message : String(e));
+          setText((now) => now || queued);
+        });
+      return;
+    }
     if (!canSend || !agentId || !project) return;
     const value = submission.text;
     const attachments = images.ready.length ? { attachments: images.ready.map((i) => i.id) } : {};
@@ -659,9 +678,11 @@ export function Composer(props: {
     ? "Crée d'abord un projet pour parler à un agent"
     : props.placeholder
       ? props.placeholder
-      : thread
-        ? `Répondre à ${agent?.name ?? "l'agent"}…${hints}`
-        : `Demande n'importe quoi à tes agents…${hints}`;
+      : thread && running
+        ? "Écris la suite : elle partira à la fin du tour…"
+        : thread
+          ? `Répondre à ${agent?.name ?? "l'agent"}…${hints}`
+          : `Demande n'importe quoi à tes agents…${hints}`;
 
   // On a phone the composer is one line until it is used, as in the mockup.
   const hasImages = images.drafts.length > 0;
@@ -964,15 +985,27 @@ export function Composer(props: {
               </span>
             </button>
           ) : running ? (
-            <button
-              className="send stop"
-              aria-label="Arrêter"
-              onClick={() =>
-                thread && connection.send({ type: "thread.cancel", threadId: thread.id })
-              }
-            >
-              <IconStop />
-            </button>
+            <>
+              {text.trim() && (
+                <button
+                  className="send later"
+                  aria-label="Envoyer à la fin du tour"
+                  title="Envoyer à la fin du tour (Entrée)"
+                  onClick={() => void submit()}
+                >
+                  <IconArrowUp />
+                </button>
+              )}
+              <button
+                className="send stop"
+                aria-label="Arrêter"
+                onClick={() =>
+                  thread && connection.send({ type: "thread.cancel", threadId: thread.id })
+                }
+              >
+                <IconStop />
+              </button>
+            </>
           ) : !text.trim() && !hasImages && canDictate ? (
             <button
               className="send"

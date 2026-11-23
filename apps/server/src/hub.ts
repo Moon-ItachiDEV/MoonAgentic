@@ -4,7 +4,7 @@ import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import { DEFAULT_MAX_TURNS, threadPullRequest } from "@moonagentic/protocol";
+import { DEFAULT_MAX_TURNS, MAX_QUEUED_MESSAGES, threadPullRequest } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   AgentSetting,
@@ -18,6 +18,7 @@ import type {
   PermissionMode,
   Project,
   PullRequestInfo,
+  QueuedMessage,
   ReviewFile,
   ServerMessage,
   Snapshot,
@@ -398,6 +399,7 @@ export class Hub {
       createThread: (input) => this.createThread(input),
       startTeam: (input) => this.startTeam(input),
       send: (...args) => this.send(...args),
+      queueMessage: (...args) => this.queueMessage(...args),
       cancel: (id) => this.cancel(id),
       whenIdle: (id) => this.whenIdle(id),
       setArchived: (id, archived) => this.setArchived(id, archived),
@@ -609,23 +611,23 @@ export class Hub {
           items: this.items(message.threadId).map(light),
         });
         return;
-      case "thread.send": {
-        // Written to by hand, a thread waiting in line starts now, its brief first.
-        const held = this.store.getThread(message.threadId)?.held;
-        this.send(
-          message.threadId,
-          held ? `${held}\n\n${message.text}` : message.text,
-          this.leadContext(message.threadId) ??
-            this.coordinators.coordinatorContext(message.threadId),
-          undefined,
-          undefined,
-          undefined,
-          message.attachments,
-        );
-        // Only once it is sent: a refusal keeps the brief where it was.
-        if (held) this.updateThread(message.threadId, { held: null });
+      case "thread.send":
+        this.sendByUser(message.threadId, message.text, message.attachments);
         return;
-      }
+      case "thread.queue":
+        this.queueMessage(message.threadId, message.text);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "thread.queueEdit":
+        this.editQueued(message.threadId, message.id, message.text);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "thread.queueSend":
+        if (this.turns.has(message.threadId))
+          throw new Error("L'agent travaille encore sur ce fil.");
+        this.sendNextQueued(message.threadId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "coordinator.open": {
         const id = this.openCoordinator(message.projectId, message.agentId, message.model);
         watch(client, id);
@@ -1117,6 +1119,87 @@ export class Hub {
    * A message the user did not write themselves (a team's, a coordinator's, or `auto` for
    * a planned task) waits for a place when the server runs as many turns as it may.
    */
+  /** A message the user wrote, sent to the thread as theirs. */
+  private sendByUser(threadId: string, text: string, attachments?: readonly string[]): void {
+    // Written to by hand, a thread waiting in line starts now, its brief first.
+    const held = this.store.getThread(threadId)?.held;
+    this.send(
+      threadId,
+      held ? `${held}\n\n${text}` : text,
+      this.leadContext(threadId) ?? this.coordinators.coordinatorContext(threadId),
+      undefined,
+      undefined,
+      undefined,
+      attachments,
+    );
+    // Only once it is sent: a refusal keeps the brief where it was.
+    if (held) this.updateThread(threadId, { held: null });
+  }
+
+  /**
+   * Keeps a message for after the turn under way: the user's, or one the project's
+   * coordinator leaves. With the thread free and nothing waiting before it, it is sent at
+   * once: its turn ended while it was being written.
+   */
+  queueMessage(threadId: string, text: string, from?: "coordinator"): void {
+    const thread = this.requireLiveThread(threadId);
+    const queue = thread.queue ?? [];
+    if (!this.turns.has(threadId) && queue.length === 0) {
+      this.sendQueued(threadId, { text, ...(from ? { from } : {}) });
+      return;
+    }
+    if (queue.length >= MAX_QUEUED_MESSAGES) {
+      throw new Error(`${MAX_QUEUED_MESSAGES} messages attendent déjà : retires-en un d'abord.`);
+    }
+    this.updateThread(threadId, {
+      queue: [...queue, { id: randomUUID(), text, ...(from ? { from } : {}), at: Date.now() }],
+    });
+  }
+
+  /** Sends a message that waited as what it is: the user's own, or the coordinator's. */
+  private sendQueued(threadId: string, message: Pick<QueuedMessage, "text" | "from">): void {
+    if (message.from === "coordinator") {
+      this.coordinators.sendFromCoordinator(threadId, message.text);
+    } else this.sendByUser(threadId, message.text);
+  }
+
+  /** Changes a message that waits; an empty text takes it out. */
+  editQueued(threadId: string, id: string, text: string): void {
+    const queue = this.requireThread(threadId).queue ?? [];
+    // Sent meanwhile: there is nothing left to change, and the screen already shows it.
+    if (!queue.some((m) => m.id === id)) throw new Error("Ce message est déjà parti.");
+    const next = text.trim()
+      ? queue.map((m) => (m.id === id ? { ...m, text: text.trim() } : m))
+      : queue.filter((m) => m.id !== id);
+    this.updateThread(threadId, { queue: next });
+  }
+
+  /**
+   * Sends the first message that waits, as a turn of its own. Called when a turn ends by
+   * itself, and when the user asks. One that cannot go now keeps its place. `afterError`:
+   * the turn ended on an error, which the user looks at before their own messages go on;
+   * what a coordinator left still goes, as nobody may be there to send it.
+   */
+  private sendNextQueued(threadId: string, afterError = false): boolean {
+    const thread = this.store.getThread(threadId);
+    const queue = thread?.queue ?? [];
+    const first = queue[0];
+    if (!thread || !first || thread.archived || this.turns.has(threadId)) return false;
+    if (afterError && first.from !== "coordinator") return false;
+    // What a coordinator left in a row is one message, as it always was.
+    const run = first.from === "coordinator" ? queue.findIndex((m) => !m.from) : 1;
+    const taken = queue.slice(0, run < 0 ? queue.length : run);
+    try {
+      this.sendQueued(threadId, { ...first, text: taken.map((m) => m.text).join("\n\n") });
+    } catch (error) {
+      // Busy for a moment, with a team, a step back or a change of setting.
+      if (!this.closed) console.error("File de messages :", error);
+      return false;
+    }
+    this.updateThread(threadId, { queue: queue.slice(taken.length) });
+    return true;
+  }
+
   send(
     threadId: string,
     text: string,
@@ -1199,7 +1282,9 @@ export class Hub {
         }
       }
       // A turn the user stopped starts nothing by itself: what waits goes after the next one.
-      if (!this.closed && !cancelled) this.coordinators.sendQueued(threadId);
+      // One that ended on an error holds the user's own messages back: they look at it first.
+      const failed = this.store.getThread(threadId)?.status === "error";
+      if (!this.closed && !cancelled && this.sendNextQueued(threadId, failed)) return;
       // A place is free: the next thread in line behind the same coordinator starts.
       const openedBy = this.closed ? undefined : this.store.getThread(threadId)?.openedBy;
       if (openedBy) this.coordinators.drainLine(openedBy);
@@ -1217,7 +1302,7 @@ export class Hub {
   private async reportResult(threadId: string): Promise<void> {
     const thread = this.store.getThread(threadId);
     if (!thread?.openedBy || thread.archived || thread.status !== "idle") return;
-    if (thread.team || this.coordinators.hasQueued(threadId)) return;
+    if (thread.team || thread.queue?.length) return;
     if (!this.store.getThread(thread.openedBy)) return;
     const asked = this.items(threadId).findLast((i) => i.kind === "user");
     if (asked?.kind !== "user" || asked.from !== "coordinator") return;

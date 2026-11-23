@@ -56,6 +56,7 @@ type ThreadExtra = Pick<
   | "openedBy"
   | "taskKey"
   | "held"
+  | "queue"
   | "parentId"
   | "role"
   | "worksIn"
@@ -79,6 +80,7 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.openedBy ? { openedBy: thread.openedBy } : {}),
     ...(thread.taskKey ? { taskKey: thread.taskKey } : {}),
     ...(thread.held ? { held: thread.held } : {}),
+    ...(thread.queue?.length ? { queue: thread.queue } : {}),
     ...(thread.parentId ? { parentId: thread.parentId } : {}),
     ...(thread.role ? { role: thread.role } : {}),
     ...(thread.worksIn ? { worksIn: thread.worksIn } : {}),
@@ -469,6 +471,8 @@ export class Store {
       >
     > & {
       held?: string | null;
+      /** The messages that wait, whole; an empty list clears them. */
+      queue?: Thread["queue"];
       quietSince?: number | null;
       inLine?: true | null;
       error?: string | null;
@@ -479,7 +483,7 @@ export class Store {
     if (!current) throw new Error(`Unknown thread ${id}`);
     // Only activity moves a thread up the sidebar, not a settings change.
     const active = patch.status !== undefined || patch.title !== undefined;
-    const { pr, held, quietSince, inLine, error: _error, ...rest } = patch;
+    const { pr, held, queue, quietSince, inLine, error: _error, ...rest } = patch;
     const next: Thread = {
       ...current,
       ...rest,
@@ -487,6 +491,8 @@ export class Store {
     };
     if (held === null) delete next.held;
     else if (held) next.held = held;
+    if (queue?.length) next.queue = queue;
+    else if (queue) delete next.queue;
     if (inLine === null) delete next.inLine;
     else if (inLine) next.inLine = true;
     if (quietSince === null) delete next.quietSince;

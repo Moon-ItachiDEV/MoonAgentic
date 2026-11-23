@@ -303,6 +303,23 @@ export const AGENT_QUIET_MS = 10 * 60_000;
 /** An agent's turn with no sign of progress for this long is stopped. */
 export const AGENT_SILENCE_STOP_MS = 30 * 60_000;
 
+/** How many messages a thread keeps waiting at most. */
+export const MAX_QUEUED_MESSAGES = 20;
+
+/**
+ * A message written while the thread's agent was at work, by the user or by the project's
+ * coordinator. It waits its turn, can be changed or taken out meanwhile, and goes by itself
+ * once the turn before it is over.
+ */
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  /** Left by the project's coordinator, not written by the user. */
+  from?: "coordinator";
+  /** When it was written. */
+  at: number;
+}
+
 export interface Thread {
   id: string;
   projectId: string;
@@ -362,6 +379,12 @@ export interface Thread {
    * at work as it may run at once, so this one waits in line.
    */
   held?: string;
+  /**
+   * What was written for after the turn under way, in order. Each of the user's goes as a
+   * turn of its own. Kept across restarts; a turn the user stopped sends none, nor does one
+   * ended on an error send the user's.
+   */
+  queue?: QueuedMessage[];
   /** The team lead's thread, for a coder's thread. */
   parentId?: string;
   /** The thread's part in a team. */
@@ -1069,6 +1092,26 @@ export const ClientMessage = z.discriminatedUnion("type", [
     .object({ type: z.literal("thread.send"), threadId: id, text: messageText, attachments })
     .refine(saysSomething),
   z.object({ type: z.literal("thread.cancel"), threadId: id }),
+  /**
+   * Keeps a message for after the turn under way. Sent at once instead when the thread
+   * is free and nothing waits before it.
+   */
+  z.object({
+    type: z.literal("thread.queue"),
+    requestId: id,
+    threadId: id,
+    text: messageText.trim().min(1),
+  }),
+  /** Changes a message that waits; an empty text takes it out. */
+  z.object({
+    type: z.literal("thread.queueEdit"),
+    requestId: id,
+    threadId: id,
+    id,
+    text: messageText,
+  }),
+  /** Sends the first message that waits now: after a stop or an error, nothing goes by itself. */
+  z.object({ type: z.literal("thread.queueSend"), requestId: id, threadId: id }),
   /** Puts the files back as they were before this message and forgets what came after. */
   z.object({ type: z.literal("thread.restore"), requestId: id, threadId: id, itemId: id }),
   /** Asks for an item whole: a tool's large result, when its line is opened. */

@@ -39,6 +39,7 @@ import { steady, useSame } from "./steady.tsx";
 import { coordinatorOf, listedThreads } from "./project-threads.ts";
 import { Sidebar as PlainSidebar } from "./components/Sidebar.tsx";
 import { TabBar } from "./components/TabBar.tsx";
+import { MessageQueue } from "./components/MessageQueue.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { TeamDialog } from "./components/TeamDialog.tsx";
@@ -340,6 +341,7 @@ export function App() {
             }}
           />
         )}
+        {t && <MessageQueue thread={t} />}
         <Composer
           key={t?.id ?? "new"}
           agents={state.agents}

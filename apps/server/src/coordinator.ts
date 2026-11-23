@@ -75,7 +75,14 @@ export class CoordinatorRefused extends Error {
 /** What coordinators need of the hub that runs the threads. */
 export interface CoordinatorHost extends Pick<
   Hub,
-  "createThread" | "startTeam" | "send" | "cancel" | "whenIdle" | "setArchived" | "discover"
+  | "createThread"
+  | "startTeam"
+  | "send"
+  | "cancel"
+  | "whenIdle"
+  | "setArchived"
+  | "discover"
+  | "queueMessage"
 > {
   catalog: AgentCatalog;
   broadcast(message: ServerMessage): void;
@@ -114,8 +121,6 @@ export class Coordinators {
   private readonly tokens = new Map<string, { projectId: string; threadId: string }>();
   /** What each bridge was started with: traded once for a token, then worth nothing. */
   private readonly bootstraps = new Map<string, { projectId: string; threadId: string }>();
-  /** Messages a coordinator left for a thread at work, given when its turn ends. */
-  private readonly queued = new Map<string, string[]>();
   /** Threads each coordinator opened while answering the current message. */
   private readonly openedThisTurn = new Map<string, number>();
   /** Where this server answers a coordinator's bridge, once it listens. */
@@ -126,14 +131,8 @@ export class Coordinators {
     this.host = host;
   }
 
-  /** Whether a coordinator left messages for the thread, still to be given. */
-  hasQueued(threadId: string): boolean {
-    return !!this.queued.get(threadId)?.length;
-  }
-
   /** The thread is deleted: nothing is kept for it. */
   forget(threadId: string): void {
-    this.queued.delete(threadId);
     this.openedThisTurn.delete(threadId);
   }
 
@@ -334,23 +333,6 @@ export class Coordinators {
     }
   }
 
-  /** Gives a thread whose turn just ended what a coordinator left for it meanwhile. */
-  sendQueued(threadId: string): void {
-    const waiting = this.queued.get(threadId);
-    if (!waiting?.length || this.host.running(threadId)) return;
-    const thread = this.store.getThread(threadId);
-    if (!thread || thread.archived) {
-      this.queued.delete(threadId);
-      return;
-    }
-    try {
-      this.sendFromCoordinator(threadId, waiting.join("\n\n"));
-      this.queued.delete(threadId);
-    } catch {
-      // Still busy, with a team or a step back: kept for the end of the next turn.
-    }
-  }
-
   /** What a coordinator is shown of a thread: its real state, nothing made up. */
   private threadForCoordinator(t: Thread, all = this.store.listThreads()) {
     // A team shows what its members wait for, as the project's page does.
@@ -391,7 +373,7 @@ export class Coordinators {
         : {}),
       ...(t.workspace?.base ? { branch: t.workspace.branch } : {}),
       ...(t.summary ? { last_said: t.summary } : {}),
-      ...(this.queued.get(t.id)?.length ? { queued_messages: this.queued.get(t.id)!.length } : {}),
+      ...(t.queue?.length ? { queued_messages: t.queue.length } : {}),
       updated: new Date(t.updatedAt).toISOString(),
     };
   }
@@ -607,7 +589,9 @@ export class Coordinators {
           return { sent_to: thread.title };
         }
         if (mode === "queue") {
-          this.queued.set(thread.id, [...(this.queued.get(thread.id) ?? []), text]);
+          // In the thread's own line, with what the user wrote: kept across a restart, and
+          // the user sees it wait there.
+          this.host.queueMessage(thread.id, text, "coordinator");
           return { queued_for: thread.title, delivered: "à la fin du tour en cours" };
         }
         // A team's pieces are run by the server: cutting its lead would leave them adrift.
