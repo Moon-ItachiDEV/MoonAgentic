@@ -1,9 +1,15 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, readFileSync, statSync } from "node:fs";
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
-import { ClientMessage, type RemoteAccess, type ServerMessage } from "@moonagentic/protocol";
+import {
+  ClientMessage,
+  MAX_IMAGE_BYTES,
+  type RemoteAccess,
+  type ServerMessage,
+} from "@moonagentic/protocol";
 import { type WebSocket, WebSocketServer } from "ws";
+import { AttachmentRefused } from "./attachments.ts";
 import { COORDINATOR_PATH } from "./coordinator-tools.ts";
 import { type Client, CoordinatorRefused, type Hub } from "./hub.ts";
 import { findRemoteAccess } from "./remote.ts";
@@ -36,6 +42,9 @@ const TYPES: Record<string, string> = {
   ".json": "application/json",
   ".webmanifest": "application/manifest+json",
 };
+
+/** Where the images sent with messages are received and read back. */
+export const ATTACHMENTS_PATH = "/api/attachments";
 
 /** Where a request from this very machine comes from. */
 const LOCAL = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
@@ -210,6 +219,29 @@ export function buildId(webDir: string): string | null {
   }
   builtPage = { file, stamp, id };
   return id;
+}
+
+/** How much of a refused upload is still read, and for how long, before it is cut. */
+const REFUSED_DRAIN_BYTES = 2 * MAX_IMAGE_BYTES;
+const REFUSED_DRAIN_MS = 30_000;
+
+/**
+ * Reads and drops what is left of an upload already refused. Closing on a sender that is
+ * still writing resets the connection on Windows before it has read the answer, and it
+ * would see a network failure instead of the reason. Within limits: one that never stops
+ * is cut.
+ */
+function dropRest(req: IncomingMessage): void {
+  let left = REFUSED_DRAIN_BYTES;
+  const cut = () => req.socket.destroy();
+  const timer = setTimeout(cut, REFUSED_DRAIN_MS);
+  timer.unref();
+  req.on("data", (chunk: Buffer) => {
+    left -= chunk.length;
+    if (left < 0) cut();
+  });
+  req.once("close", () => clearTimeout(timer));
+  req.resume();
 }
 
 /**
@@ -484,6 +516,102 @@ export function createHttpServer(options: {
         (error: unknown) =>
           json(res, 500, { message: error instanceof Error ? error.message : String(error) }),
       );
+      return;
+    }
+    const asked = parseUrl(req.url ?? "/")?.pathname ?? "";
+    if (asked === ATTACHMENTS_PATH || asked.startsWith(`${ATTACHMENTS_PATH}/`)) {
+      // The images sent with messages: received before the message, read back by its thread.
+      const limit = apiLimiter.take(remoteIp);
+      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
+      const authLimit = authFailures.check(remoteIp);
+      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
+      if (!sameToken(given, token)) {
+        authFailures.record(remoteIp);
+        res.writeHead(401).end();
+        return;
+      }
+      const refused = (error: unknown) => {
+        if (res.writableEnded) return;
+        if (error instanceof AttachmentRefused) json(res, error.status, { message: error.message });
+        else json(res, 500, { message: error instanceof Error ? error.message : String(error) });
+      };
+      const parts = asked.slice(ATTACHMENTS_PATH.length).split("/").filter(Boolean);
+      if (parts.length === 0 && req.method === "POST") {
+        const tooLarge = () =>
+          refused(
+            new AttachmentRefused(
+              `Image trop lourde : ${MAX_IMAGE_BYTES / 1024 / 1024} Mo au plus.`,
+              413,
+            ),
+          );
+        if (Number(req.headers["content-length"] ?? 0) > MAX_IMAGE_BYTES) {
+          // Said before any of it is kept.
+          tooLarge();
+          dropRest(req);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        let size = 0;
+        const keep = (chunk: Buffer) => {
+          size += chunk.length;
+          if (size <= MAX_IMAGE_BYTES) return void chunks.push(chunk);
+          // A sender that lied about the length, or gave none: refused as soon as it shows.
+          chunks.length = 0;
+          req.off("data", keep);
+          tooLarge();
+          dropRest(req);
+        };
+        req.on("data", keep);
+        req.on("error", () => undefined);
+        req.on("end", () => {
+          if (size > MAX_IMAGE_BYTES) return;
+          let name: string | undefined;
+          try {
+            name = decodeURIComponent(String(req.headers["x-file-name"] ?? "")) || undefined;
+          } catch {
+            // A name that cannot be read: one is made up from the kind of image.
+          }
+          try {
+            json(res, 201, hub.attachments.add(Buffer.concat(chunks), name));
+          } catch (error) {
+            refused(error);
+          }
+        });
+        return;
+      }
+      if (parts.length === 1 && req.method === "DELETE") {
+        // Taken off the message before it was sent; one already sent belongs to its thread.
+        hub.attachments.discard(parts[0]!);
+        res.writeHead(204).end();
+        return;
+      }
+      if (parts.length === 2 && req.method === "GET") {
+        const found = hub.attachments.find(parts[0]!, parts[1]!);
+        if (!found) {
+          res.writeHead(404, { "cache-control": "no-store" }).end();
+          return;
+        }
+        const stream = createReadStream(found.file);
+        stream.on("error", () => {
+          // Gone between the look and the read, such as with its thread: not there, said so.
+          if (res.headersSent) res.destroy();
+          else res.writeHead(404, { "cache-control": "no-store" }).end();
+        });
+        res.on("close", () => stream.destroy());
+        stream.once("open", () => {
+          res.writeHead(200, {
+            "content-type": found.image.mime,
+            "content-length": found.image.size,
+            // An image never changes once sent; kept by the browser, never by a proxy.
+            "cache-control": "private, max-age=31536000, immutable",
+            "content-disposition": "inline",
+            "cross-origin-resource-policy": "same-origin",
+          });
+          stream.pipe(res);
+        });
+        return;
+      }
+      res.writeHead(parts.length <= 2 ? 405 : 404).end();
       return;
     }
     if (!webDir) {

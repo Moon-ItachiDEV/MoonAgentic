@@ -1,15 +1,19 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { RemoteAccess } from "@moonagentic/protocol";
+import { MAX_IMAGE_BYTES } from "@moonagentic/protocol";
+import { Attachments } from "../src/attachments.ts";
 import { COORDINATOR_PATH } from "../src/coordinator-tools.ts";
 import {
   allowedWsOrigin,
   bearerToken,
   createHttpServer,
+  decode,
   type RateLimitOptions,
   TOKEN_RENEWED,
 } from "../src/http.ts";
@@ -33,7 +37,9 @@ async function serve(
   const webDir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-web-"));
   writeFileSync(path.join(webDir, "index.html"), "<title>MoonAgentic</title>");
   let connected = 0;
+  const images = new Attachments(path.join(webDir, "..", `${path.basename(webDir)}-images`));
   const hub = {
+    attachments: images,
     connect: () => {
       connected += 1;
       return () => undefined;
@@ -64,6 +70,7 @@ async function serve(
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));
     rmSync(webDir, { recursive: true, force: true });
+    rmSync(`${webDir}-images`, { recursive: true, force: true });
   });
   const origin = `127.0.0.1:${(server.address() as AddressInfo).port}`;
   const ticket = async (authToken = TOKEN) => {
@@ -74,7 +81,7 @@ async function serve(
     expect(res.status).toBe(200);
     return ((await res.json()) as { ticket: string }).ticket;
   };
-  return { origin, webDir, connections: () => connected, renewed, asked, ticket };
+  return { origin, webDir, connections: () => connected, renewed, asked, ticket, images };
 }
 
 /** Opens a socket and returns the HTTP status on rejection, or `"open"` on success. */
@@ -349,6 +356,100 @@ describe("the HTTP server", () => {
     expect(await socketStatus(`ws://${origin}/ws?ticket=${pendingTicket}`)).toBe(401);
     expect(await socketOpens(`ws://${origin}/ws?ticket=${await ticket(token)}`)).toBe(true);
     expect((await renew(TOKEN)).status).toBe(401);
+  });
+
+  it("takes an image only from who holds the token, and reads it back by its thread", async () => {
+    const { origin, images } = await serve();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+    const post = (body: Buffer, authToken = TOKEN, name = "capture d'écran.png") =>
+      fetch(`http://${origin}/api/attachments`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${authToken}`,
+          "content-type": "application/octet-stream",
+          "x-file-name": encodeURIComponent(name),
+        },
+        body,
+      });
+    const auth = { authorization: `Bearer ${TOKEN}` };
+
+    expect((await post(png, "autre-jeton")).status).toBe(401);
+    expect(
+      (await fetch(`http://${origin}/api/attachments`, { method: "POST", body: png })).status,
+    ).toBe(401);
+    // What the sender calls it does not make it an image.
+    const script = await post(Buffer.from("<script>alert(1)</script>"), TOKEN, "photo.png");
+    expect(script.status).toBe(415);
+    expect(((await script.json()) as { message: string }).message).toContain("PNG, JPEG");
+    const heavy = await post(Buffer.concat([png, Buffer.alloc(MAX_IMAGE_BYTES)]));
+    expect(heavy.status).toBe(413);
+    // The reason is read, not a connection cut while the image was still being sent.
+    expect(((await heavy.json()) as { message: string }).message).toContain("10 Mo");
+
+    const taken = await post(png);
+    expect(taken.status).toBe(201);
+    const image = (await taken.json()) as { id: string; name: string; mime: string; size: number };
+    expect(image).toMatchObject({ name: "capture d'écran.png", mime: "image/png", size: 12 });
+
+    // Until its message is sent, it belongs to no thread: nothing reads it.
+    const address = (thread: string, id = image.id) =>
+      `http://${origin}/api/attachments/${thread}/${id}`;
+    expect((await fetch(address("fil-1"), { headers: auth })).status).toBe(404);
+    images.bind("fil-1", [image.id]);
+    expect((await fetch(address("fil-1"))).status).toBe(401);
+    expect((await fetch(address("fil-2"), { headers: auth })).status).toBe(404);
+    expect(
+      (await fetch(address("fil-1", "..%2F..%2Fstate.sqlite"), { headers: auth })).status,
+    ).toBe(404);
+    const read = await fetch(address("fil-1"), { headers: auth });
+    expect(read.status).toBe(200);
+    expect(read.headers.get("content-type")).toBe("image/png");
+    expect(read.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(read.headers.get("cache-control")).toContain("private");
+    expect(Buffer.from(await read.arrayBuffer())).toEqual(png);
+    // Gone between the look and the read, as when its thread is deleted: not there, said so.
+    const found = images.find("fil-1", image.id)!;
+    vi.spyOn(images, "find").mockReturnValueOnce({ ...found, file: `${found.file}.parti` });
+    expect((await fetch(address("fil-1"), { headers: auth })).status).toBe(404);
+
+    // Taken off before sending: thrown away. One already sent stays its thread's.
+    const dropped = (await (await post(png)).json()) as { id: string };
+    const drop = (id: string, headers: Record<string, string> = auth) =>
+      fetch(`http://${origin}/api/attachments/${id}`, { method: "DELETE", headers });
+    expect((await drop(dropped.id, {})).status).toBe(401);
+    expect((await drop(dropped.id)).status).toBe(204);
+    expect(() => images.bind("fil-1", [dropped.id])).toThrow("n'est plus là");
+    expect((await drop(image.id)).status).toBe(204);
+    expect((await fetch(address("fil-1"), { headers: auth })).status).toBe(200);
+    expect((await fetch(`http://${origin}/api/attachments`, { headers: auth })).status).toBe(405);
+
+    // A sender that gives no length is stopped as soon as it has sent too much.
+    const [host, port] = origin.split(":") as [string, string];
+    const endless = await new Promise<number>((resolve) => {
+      const req = request(
+        { host, port: Number(port), path: "/api/attachments", method: "POST", headers: auth },
+        (res) => {
+          res.resume();
+          resolve(res.statusCode ?? 0);
+        },
+      );
+      req.on("error", () => undefined);
+      const megabyte = Buffer.alloc(1024 * 1024);
+      req.write(png);
+      for (let n = 0; n <= MAX_IMAGE_BYTES / megabyte.length; n++) req.write(megabyte);
+    });
+    expect(endless).toBe(413);
+  });
+
+  it("takes a message without text only when images come with it", () => {
+    const send = (more: object) =>
+      decode(JSON.stringify({ type: "thread.send", threadId: "fil-1", ...more }));
+    expect(send({ text: "Bonjour" })).toHaveProperty("message");
+    expect(send({ text: "" })).toHaveProperty("error");
+    expect(send({ text: "  ", attachments: [] })).toHaveProperty("error");
+    expect(send({ text: "", attachments: ["image-1"] })).toHaveProperty("message");
+    const tooMany = Array.from({ length: 9 }, (_, n) => `image-${n}`);
+    expect(send({ text: "Regarde", attachments: tooMany })).toHaveProperty("error");
   });
 
   it("closes a connection that stops answering pings, and keeps one that answers", async () => {
