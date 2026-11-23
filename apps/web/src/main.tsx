@@ -14,6 +14,7 @@ import "./composer.css";
 import "./decision.css";
 import "./long-threads.css";
 import "./queue.css";
+import "./planner-run.css";
 import "./images.css";
 import "./mcp-scope.css";
 import "./overview.css";

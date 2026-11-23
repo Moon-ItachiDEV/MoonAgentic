@@ -488,11 +488,14 @@ export interface PlanTask {
   number: number;
   title: string;
   description?: string;
-  /** The user sets it, unless a team does the task: then it follows the team's piece. */
+  /**
+   * The user sets it, unless a thread or a team does the task: then it follows what that
+   * thread, or the team's piece, is really doing.
+   */
   status: PlanStatus;
   /** `lead` when a team's lead planned it, `user` when written by hand. */
   source: "user" | "lead";
-  /** The thread that works on it, when the user linked one. */
+  /** The thread that works on it: started from the card, or linked by the user. */
   threadId?: string;
   /** The piece of a team it stands for: its status then follows that piece. */
   team?: { leadId: string; index: number };
@@ -1201,7 +1204,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   /**
    * Changes a card. `null` clears its description, its days or its thread. The status
-   * of a card a team works on follows the team, and cannot be set here.
+   * of a card a thread or a team works on follows that work, and cannot be set here.
    */
   z.object({
     type: z.literal("plan.update"),
@@ -1215,6 +1218,20 @@ export const ClientMessage = z.discriminatedUnion("type", [
     threadId: id.nullable().optional(),
   }),
   z.object({ type: z.literal("plan.remove"), requestId: id, id }),
+  /**
+   * Starts the card's work: a new thread of its project gets the card's title and
+   * description, and the card follows it from then on. Answers `created` with the thread.
+   */
+  z.object({
+    type: z.literal("plan.run"),
+    requestId: id,
+    id,
+    agentId: id,
+    permissionMode: z.enum(["supervised", "full"]),
+    model: id.optional(),
+    /** Gives the thread its own branch and worktree, when the project is a git repository. */
+    isolated: z.boolean().optional(),
+  }),
   /** Plans a task: at `at`, then as `repeat` says, a new thread starts with `text`. */
   z.object({
     type: z.literal("schedule.add"),
