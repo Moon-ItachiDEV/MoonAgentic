@@ -46,6 +46,7 @@ import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { ComposerImages } from "./ComposerImages.tsx";
 import { AccessChip, Tray, type TrayQuota } from "./ComposerTray.tsx";
+import { GoalBar } from "./GoalBar.tsx";
 import { MessageQueue } from "./MessageQueue.tsx";
 import {
   IconArrowUp,
@@ -495,6 +496,26 @@ export function Composer(props: {
         props.onSchedule(rest);
         putText("", 0);
         return;
+      case "goal": {
+        const goal = rest.trim();
+        // Picked from the list: the goal is written after it.
+        if (!goal) {
+          putText("/goal ", 6);
+          return;
+        }
+        if (!thread) {
+          void submit(undefined, goal);
+          return;
+        }
+        putText("", 0);
+        connection
+          .request({ type: "thread.goal", requestId: newId(), threadId: thread.id, text: goal })
+          .catch((e: unknown) => {
+            connection.notify(e instanceof Error ? e.message : String(e));
+            setText((now) => now || `/goal ${goal}`);
+          });
+        return;
+      }
     }
   };
 
@@ -553,12 +574,16 @@ export function Composer(props: {
     el.style.height = `${el.scrollHeight}px`;
   }, [text]);
 
-  const submit = async (to?: string) => {
-    const typed = text.trim();
+  /** Sends what is written; `goal`: a new thread starts with that goal instead. */
+  const submit = async (to?: string, goal?: string) => {
+    const typed = goal ?? text.trim();
     if ((!typed && !images.drafts.length) || busy) return;
     // MoonAgentic's own commands run here, even while the agent works; the rest of the line
     // stays in the composer.
-    const submission = resolveSubmission(typed, commands);
+    const submission =
+      goal === undefined
+        ? resolveSubmission(typed, commands)
+        : { kind: "send" as const, text: goal };
     if (submission.kind === "action") {
       putText(submission.rest, submission.rest.length);
       runAction(submission.action, submission.rest);
@@ -606,6 +631,7 @@ export function Composer(props: {
         ...(project.git ? { isolated } : {}),
         text: value,
         ...attachments,
+        ...(goal === undefined ? {} : { goal: {} }),
       });
       setText("");
       images.sent();
@@ -847,6 +873,7 @@ export function Composer(props: {
         setFocused(false);
       }}
     >
+      {thread?.goal && <GoalBar thread={thread} goal={thread.goal} />}
       {thread && <MessageQueue thread={thread} />}
       <div
         className={`composer${focused ? " focus" : ""}${full ? " full" : ""}${voice ? " vx-on" : ""}${dropping ? " drop" : ""}`}

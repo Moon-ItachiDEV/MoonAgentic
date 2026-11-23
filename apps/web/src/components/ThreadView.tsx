@@ -697,6 +697,7 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
   return (
     <div className="u-wrap">
       {item.from === "coordinator" && <div className="u-from">Coordinateur</div>}
+      {item.from === "goal" && <div className="u-from">Objectif · relance automatique</div>}
       {!!item.images?.length && <MessageImages threadId={thread.id} images={item.images} />}
       {item.text && (
         <div className="u">

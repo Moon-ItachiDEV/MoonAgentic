@@ -303,6 +303,36 @@ export const AGENT_QUIET_MS = 10 * 60_000;
 /** An agent's turn with no sign of progress for this long is stopped. */
 export const AGENT_SILENCE_STOP_MS = 30 * 60_000;
 
+/** How many turns a goal gets when none is said, and at most. */
+export const GOAL_TURNS = 10;
+export const MAX_GOAL_TURNS = 50;
+/** The turns a goal gets once more when it is taken up again after its last one. */
+export const GOAL_MORE_TURNS = 5;
+
+/**
+ * Where a goal stands. `active`: the agent's turns follow one another until it is reached.
+ * `paused`: by the user, a stop, a failed turn or a restart; nothing goes until it is taken
+ * up again. `reached` and `blocked`: the agent said so. `exhausted`: its turns are spent.
+ */
+export type GoalState = "active" | "paused" | "reached" | "blocked" | "exhausted";
+
+/**
+ * What the user asked a thread's agent to reach, over as many turns as it takes, up to a
+ * number the server keeps. The agent says when it is reached, or blocked.
+ */
+export interface ThreadGoal {
+  text: string;
+  state: GoalState;
+  /** The goal's turns sent so far, the first included. */
+  turns: number;
+  maxTurns: number;
+  /** Why it is paused or blocked, in words for the user. */
+  reason?: string;
+  startedAt: number;
+  /** When it was reached, blocked or spent. */
+  endedAt?: number;
+}
+
 /** How many messages a thread keeps waiting at most. */
 export const MAX_QUEUED_MESSAGES = 20;
 
@@ -385,6 +415,8 @@ export interface Thread {
    * ended on an error send the user's.
    */
   queue?: QueuedMessage[];
+  /** What the agent works toward turn after turn, set with « /goal ». */
+  goal?: ThreadGoal;
   /** The team lead's thread, for a coder's thread. */
   parentId?: string;
   /** The thread's part in a team. */
@@ -586,8 +618,11 @@ export type Item =
       images?: ImageRef[];
       /** Written by the team's engine, not by the user: a member's brief, a fix, a check. */
       byTeam?: true;
-      /** Written by the project's coordinator, an agent, not typed by the user. */
-      from?: "coordinator";
+      /**
+       * Not typed by the user: written by the project's coordinator, an agent, or sent by
+       * the server to take the thread's goal one turn further.
+       */
+      from?: "coordinator" | "goal";
       /** The thread's files just before this message, for threads with their own branch. */
       checkpoint?: string;
       at: number;
@@ -1047,6 +1082,10 @@ export const ClientMessage = z.discriminatedUnion("type", [
       isolated: z.boolean().optional(),
       text: messageText,
       attachments,
+      /** The text is a goal: the agent works toward it over this many turns at most. */
+      goal: z
+        .object({ maxTurns: z.number().int().min(1).max(MAX_GOAL_TURNS).optional() })
+        .optional(),
     })
     .refine(saysSomething),
   /**
@@ -1142,6 +1181,24 @@ export const ClientMessage = z.discriminatedUnion("type", [
     requestId: id,
     threadId: id,
     id: id.optional(),
+  }),
+  /**
+   * Gives the thread a goal its agent works toward, turn after turn: at once if the thread
+   * is free, else at the end of its turn. It replaces the one before.
+   */
+  z.object({
+    type: z.literal("thread.goal"),
+    requestId: id,
+    threadId: id,
+    text: messageText.refine((t) => t.trim().length > 0),
+    maxTurns: z.number().int().min(1).max(MAX_GOAL_TURNS).optional(),
+  }),
+  /** Pauses the goal, takes it up again, or drops it. */
+  z.object({
+    type: z.literal("thread.goalControl"),
+    requestId: id,
+    threadId: id,
+    action: z.enum(["pause", "resume", "stop"]),
   }),
   /** Puts the files back as they were before this message and forgets what came after. */
   z.object({ type: z.literal("thread.restore"), requestId: id, threadId: id, itemId: id }),

@@ -95,6 +95,11 @@ export const IconPlay = ({ size = 13 }: P) => (
     <path d="M7 4.5v15l12-7.5Z" />
   </svg>
 );
+export const IconPause = ({ size = 13 }: P) => (
+  <svg {...base(size)}>
+    <path d="M8 5v14M16 5v14" />
+  </svg>
+);
 export const IconShield = ({ size = 13 }: P) => (
   <svg {...base(size)}>
     <path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6Z" />
