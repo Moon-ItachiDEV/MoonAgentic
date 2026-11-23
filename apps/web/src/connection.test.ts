@@ -8,6 +8,7 @@ import {
   PING_MS,
   PONG_TIMEOUT_MS,
   readToken,
+  WAKE_PONG_MS,
 } from "./connection.ts";
 
 class FakeWebSocket {
@@ -200,6 +201,31 @@ describe("Connection heartbeat", () => {
     // Awake with a connection that looks open: it is checked right away.
     conn.wake();
     expect(sentTypes(FakeWebSocket.instances.at(-1)!)).toEqual(["ping"]);
+  });
+
+  it("replaces a connection dropped while the screen was locked, as soon as the app is back", async () => {
+    const { conn, socket } = await setupConnection({ pingMs: PING_MS });
+    socket.open();
+    // A regular ping already waits for its answer when the user comes back.
+    await vi.advanceTimersByTimeAsync(PING_MS);
+    conn.wake();
+    expect(sentTypes(socket).filter((t) => t === "ping")).toHaveLength(2);
+    // No answer: well before the usual wait, a new connection opens, without the pause
+    // between tries.
+    await vi.advanceTimersByTimeAsync(WAKE_PONG_MS);
+    // Far less than the second the next try would otherwise wait.
+    await vi.advanceTimersByTimeAsync(10);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(WAKE_PONG_MS).toBeLessThan(PONG_TIMEOUT_MS);
+
+    // A connection that answers stays.
+    const next = FakeWebSocket.instances[1]!;
+    next.open();
+    conn.wake();
+    next.emitMessage(JSON.stringify({ type: "pong" }));
+    await vi.advanceTimersByTimeAsync(WAKE_PONG_MS * 2);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(conn.getState().status).toBe("open");
   });
 
   it("says when an action could not leave, and takes it back once connected again", async () => {

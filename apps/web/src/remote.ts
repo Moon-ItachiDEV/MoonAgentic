@@ -118,3 +118,27 @@ export function seenAgo(at: number, now: number): string {
   const hours = Math.floor(minutes / 60);
   return hours < 24 ? `il y a ${hours} h` : `il y a ${Math.floor(hours / 24)} j`;
 }
+
+/**
+ * How to put the app on this device's home screen, or nothing when it is already there or
+ * the browser offers it by itself. On an iPhone, only Safari's share menu does it, and web
+ * notifications only reach an app installed that way.
+ */
+export function installHint(userAgent: string, installed: boolean): string | null {
+  if (installed) return null;
+  if (/iPhone|iPad/.test(userAgent)) {
+    return /CriOS|FxiOS|EdgiOS/.test(userAgent)
+      ? "Pour l'installer, ouvre cette page dans Safari, touche Partager puis « Sur l'écran d'accueil »."
+      : "Pour l'installer, touche Partager puis « Sur l'écran d'accueil ». Les notifications ne marchent sur iPhone qu'une fois l'app installée.";
+  }
+  if (/Android/.test(userAgent)) {
+    return "Pour l'installer, ouvre le menu du navigateur puis « Installer l'application » ou « Ajouter à l'écran d'accueil ».";
+  }
+  return null;
+}
+
+/** Whether the page runs as the installed app, on its own, rather than in a browser tab. */
+export const runsInstalled = () =>
+  (typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches) ||
+  (typeof navigator !== "undefined" &&
+    (navigator as Navigator & { standalone?: boolean }).standalone === true);

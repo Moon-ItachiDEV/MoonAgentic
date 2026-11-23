@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deviceName, pairLink, seenAgo, shownCode } from "./remote.ts";
+import { deviceName, installHint, pairLink, seenAgo, shownCode } from "./remote.ts";
 
 describe("pairing a device, as told to the user", () => {
   it("builds the link a phone scans, with the code in the fragment", () => {
@@ -34,5 +34,19 @@ describe("pairing a device, as told to the user", () => {
     expect(seenAgo(now - 5 * 60_000, now)).toBe("il y a 5 min");
     expect(seenAgo(now - 3 * 3_600_000, now)).toBe("il y a 3 h");
     expect(seenAgo(now - 2 * 86_400_000, now)).toBe("il y a 2 j");
+  });
+});
+
+describe("installing the app", () => {
+  const SAFARI =
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+  it("says how, on each kind of phone, and nothing once installed", () => {
+    expect(installHint(SAFARI, false)).toMatch(/Partager/);
+    expect(installHint(SAFARI, true)).toBeNull();
+    expect(installHint(SAFARI.replace("Version/18.0", "CriOS/131.0"), false)).toMatch(/Safari/);
+    expect(installHint("Mozilla/5.0 (Linux; Android 15) Chrome/131.0 Mobile", false)).toMatch(
+      /Installer/,
+    );
+    expect(installHint("Mozilla/5.0 (Windows NT 10.0) Chrome/131.0", false)).toBeNull();
   });
 });
