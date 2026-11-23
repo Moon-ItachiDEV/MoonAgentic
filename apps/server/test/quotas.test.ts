@@ -5,9 +5,9 @@ import type { ServerMessage } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import {
   askCodex,
+  claudeReading,
   parseClaudeUsage,
   parseCodexLimits,
-  parseRetryAfterMs,
   type QuotaReader,
   Quotas,
   readClaudeQuota,
@@ -43,7 +43,7 @@ describe("Claude Code's quotas", () => {
         usedPercent: 31.4,
         resetsAt: Date.parse("2026-11-30T08:00:00Z"),
       },
-      { label: "Semaine, Opus", short: "semaine Opus", usedPercent: 48 },
+      { label: "Semaine, Opus", short: "semaine Opus", model: "Opus", usedPercent: 48 },
     ]);
     expect(reading.extras).toEqual([{ label: "Crédits en plus", value: "Désactivés" }]);
   });
@@ -61,107 +61,100 @@ describe("Claude Code's quotas", () => {
     expect(reading.extras).toEqual([{ label: "Crédits en plus", value: "Activés" }]);
   });
 
-  const credentials = (oauth: object | undefined) => {
-    const file = path.join(tmp(), ".credentials.json");
-    writeFileSync(file, JSON.stringify(oauth ? { claudeAiOauth: oauth } : {}));
-    return file;
-  };
+  it("reads Fable and other per-model weekly windows, and names their model", () => {
+    const reading = parseClaudeUsage({
+      ...usage,
+      model_scoped: [
+        { display_name: "Fable", utilization: 100, resets_at: "2026-11-28T08:00:00Z" },
+        { display_name: "", utilization: 40, resets_at: null },
+        { display_name: "Haiku", utilization: null, resets_at: null },
+      ],
+    });
+    expect(reading.windows.map((w) => [w.label, w.model])).toEqual([
+      ["Session de 5 h", undefined],
+      ["Semaine, tous modèles", undefined],
+      ["Semaine, Opus", "Opus"],
+      ["Semaine, Fable", "Fable"],
+    ]);
+    expect(reading.windows.at(-1)).toMatchObject({
+      short: "semaine Fable",
+      usedPercent: 100,
+      resetsAt: Date.parse("2026-11-28T08:00:00Z"),
+    });
+  });
 
-  it("asks Anthropic with the saved sign-in, and names the plan", async () => {
-    const file = credentials({ accessToken: "tok", expiresAt: 2e12, subscriptionType: "max" });
-    let asked: { url: string; headers: Record<string, string> } | undefined;
-    const fetcher = (async (url: string, init: RequestInit) => {
-      asked = { url, headers: init.headers as Record<string, string> };
-      return new Response(JSON.stringify(usage), { status: 200 });
-    }) as unknown as typeof fetch;
-    const reading = await readClaudeQuota(file, fetcher, 1e12, undefined, {});
-    expect(asked?.url).toBe("https://api.anthropic.com/api/oauth/usage");
-    expect(asked?.headers.Authorization).toBe("Bearer tok");
-    expect(asked?.headers["anthropic-beta"]).toBe("oauth-2025-04-20");
-    expect(reading.plan).toBe("Abonnement Max");
+  // What Claude Code 0.3.330 answers, checked against the real binary.
+  const subscriber = {
+    subscriptionType: "Claude Max",
+    tokenSource: "claude.ai",
+    apiProvider: "firstParty",
+  };
+  const answer = { subscription_type: "max", rate_limits_available: true, rate_limits: usage };
+
+  it("asks Claude Code itself, and names the plan", async () => {
+    let asked = 0;
+    const reading = await readClaudeQuota(async () => {
+      asked++;
+      return { account: subscriber, usage: answer };
+    });
+    expect(asked).toBe(1);
+    expect(reading).toMatchObject({ state: "ok", plan: "Abonnement Max" });
     expect(reading.windows).toHaveLength(3);
   });
 
-  it("does not ask with an expired sign-in, and says why", async () => {
-    let called = false;
-    const fetcher = (async () => {
-      called = true;
-      return new Response("{}");
-    }) as unknown as typeof fetch;
-    const reading = await readClaudeQuota(
-      credentials({ accessToken: "tok", expiresAt: 1_700_000_000_000 }),
-      fetcher,
-      2e12,
-      undefined,
-      {},
-    );
-    expect(called).toBe(false);
-    expect(reading.state).toBe("unreadable");
-    expect(reading.transient).toBeUndefined();
-    expect(reading.note).toMatch(/expiré/);
+  it("tells signed out, API key, cloud provider and a sign-in without limits apart", () => {
+    const unavailable = {
+      subscription_type: null,
+      rate_limits_available: false,
+      rate_limits: null,
+    };
+    expect(
+      claudeReading({ subscriptionType: "Claude API", apiProvider: "firstParty" }, unavailable),
+    ).toMatchObject({
+      state: "unreadable",
+      note: expect.stringMatching(/pas connecté.*login/),
+    });
+    expect(
+      claudeReading({ apiKeySource: "ANTHROPIC_API_KEY", apiProvider: "firstParty" }, unavailable),
+    ).toMatchObject({ state: "none", note: expect.stringMatching(/ANTHROPIC_API_KEY/) });
+    expect(claudeReading({ apiProvider: "bedrock" }, unavailable)).toMatchObject({
+      state: "none",
+      note: expect.stringMatching(/Amazon Bedrock/),
+    });
+    expect(claudeReading({ tokenSource: "CLAUDE_CODE_OAUTH_TOKEN" }, unavailable)).toMatchObject({
+      state: "unreadable",
+      note: expect.stringMatching(/ne donne pas les limites/),
+    });
   });
 
-  it("tells 401, 403, 429, 5xx, missing sign-in, and ANTHROPIC_API_KEY apart", async () => {
-    const file = credentials({ accessToken: "tok" });
-    const withStatus = (status: number, headers?: Record<string, string>) =>
-      (async () => new Response("", { status, headers })) as unknown as typeof fetch;
-
-    const r401 = await readClaudeQuota(file, withStatus(401), 1, undefined, {});
-    expect(r401).toMatchObject({ state: "unreadable", note: expect.stringMatching(/expiré/) });
-    expect(r401.transient).toBeUndefined();
-
-    const r403 = await readClaudeQuota(file, withStatus(403), 1, undefined, {});
-    expect(r403).toMatchObject({ state: "unreadable", note: expect.stringMatching(/403/) });
-    expect(r403.transient).toBeUndefined();
-
-    const r429 = await readClaudeQuota(
-      file,
-      withStatus(429, { "retry-after": "180" }),
-      1,
+  it("marks a slow or failing Claude Code transient, and stops it", async () => {
+    let stopped = false;
+    const slow = await readClaudeQuota(
+      (signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            stopped = true;
+            reject(new Error("aborted"));
+          });
+        }),
       undefined,
-      {},
+      50,
     );
-    expect(r429).toMatchObject({ state: "unreadable", transient: true, retryAfterMs: 180_000 });
+    expect(slow).toMatchObject({
+      state: "unreadable",
+      transient: true,
+      note: expect.stringMatching(/à temps/),
+    });
+    expect(stopped).toBe(true);
 
-    const r429Zero = await readClaudeQuota(
-      file,
-      withStatus(429, { "retry-after": "0" }),
-      1,
-      undefined,
-      {},
-    );
-    expect(r429Zero).toMatchObject({ state: "unreadable", transient: true });
-    expect(r429Zero.retryAfterMs).toBeGreaterThan(0);
-
-    const r503 = await readClaudeQuota(file, withStatus(503), 1, undefined, {});
-    expect(r503).toMatchObject({ state: "unreadable", transient: true });
-
-    const rMissing = await readClaudeQuota(
-      path.join(tmp(), "none.json"),
-      withStatus(401),
-      1,
-      undefined,
-      {},
-    );
-    expect(rMissing.state).toBe("unreadable");
-
-    const rNoOauth = await readClaudeQuota(
-      credentials(undefined),
-      withStatus(401),
-      1,
-      undefined,
-      {},
-    );
-    expect(rNoOauth.state).toBe("unreadable");
-
-    const rApiKey = await readClaudeQuota(
-      path.join(tmp(), "none.json"),
-      withStatus(401),
-      1,
-      undefined,
-      { ANTHROPIC_API_KEY: "sk-ant-test" },
-    );
-    expect(rApiKey.state).toBe("none");
+    const failing = await readClaudeQuota(async () => {
+      throw new Error("Unsupported control request\nstack");
+    });
+    expect(failing).toMatchObject({
+      state: "unreadable",
+      transient: true,
+      note: "Claude Code n'a pas donné ses limites : Unsupported control request",
+    });
   });
 });
 
@@ -542,19 +535,11 @@ describe("Quotas", () => {
   });
 });
 
-describe("toTime and parseRetryAfterMs", () => {
+describe("toTime", () => {
   it("takes seconds, milliseconds and ISO dates", () => {
     expect(toTime(1_700_000_000)).toBe(1_700_000_000_000);
     expect(toTime(1_700_000_000_000)).toBe(1_700_000_000_000);
     expect(toTime("2026-01-01T00:00:00Z")).toBe(Date.parse("2026-01-01T00:00:00Z"));
     expect(toTime(null)).toBeUndefined();
-  });
-
-  it("parses positive Retry-After delays and ignores zero", () => {
-    const now = Date.parse("2026-11-23T10:00:00Z");
-    expect(parseRetryAfterMs("0", now)).toBeUndefined();
-    expect(parseRetryAfterMs("90", now)).toBe(90_000);
-    expect(parseRetryAfterMs("Mon, 23 Nov 2026 10:05:00 GMT", now)).toBe(300_000);
-    expect(parseRetryAfterMs("invalid", now)).toBeUndefined();
   });
 });

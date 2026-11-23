@@ -10,11 +10,30 @@ export function quotaLevel(usedPercent: number): QuotaLevel {
   return usedPercent >= 100 ? "full" : usedPercent >= WARN_PERCENT ? "warn" : "ok";
 }
 
-/** The window closest to its limit, the one that stops the agent first. */
-export function tightest(quota: AgentQuota | undefined): QuotaWindow | undefined {
+/**
+ * Whether a window limits the model in use. A window of one model (« Opus », « Fable 5.2 »)
+ * counts only when the model's id or name holds that model's family name.
+ */
+export function limitsModel(window: QuotaWindow, model?: (string | undefined)[]): boolean {
+  if (!window.model) return true;
+  const family = window.model.trim().split(/\s+/)[0]!.toLowerCase();
+  return !!family && !!model?.some((m) => m?.toLowerCase().includes(family));
+}
+
+/**
+ * The window closest to its limit, the one that stops the agent first. A window of one model
+ * counts only for that model: without one, only the agent's own windows count.
+ */
+export function tightest(
+  quota: AgentQuota | undefined,
+  model?: (string | undefined)[],
+): QuotaWindow | undefined {
   if (!quota || quota.state !== "ok") return undefined;
   let worst: QuotaWindow | undefined;
-  for (const w of quota.windows) if (!worst || w.usedPercent > worst.usedPercent) worst = w;
+  for (const w of quota.windows) {
+    if (!limitsModel(w, model)) continue;
+    if (!worst || w.usedPercent > worst.usedPercent) worst = w;
+  }
   return worst;
 }
 
@@ -106,8 +125,9 @@ export function quotaWarning(
   quota: AgentQuota | undefined,
   agentName: string,
   now = Date.now(),
+  model?: (string | undefined)[],
 ): { key: string; level: "warn" | "full"; text: string; when?: string } | undefined {
-  const worst = tightest(quota);
+  const worst = tightest(quota, model);
   if (!worst) return undefined;
   const level = quotaLevel(worst.usedPercent);
   if (level === "ok") return undefined;

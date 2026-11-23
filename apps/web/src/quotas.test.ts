@@ -32,6 +32,26 @@ describe("quotas", () => {
     expect(tightest(undefined)).toBeUndefined();
   });
 
+  it("counts a window of one model only for that model", () => {
+    const claude: AgentQuota = {
+      ...quota("claude", 30),
+      windows: [
+        { label: "Session de 5 h", short: "5 h", usedPercent: 30 },
+        { label: "Semaine, Fable", short: "semaine Fable", model: "Fable", usedPercent: 100 },
+        { label: "Semaine, Opus", short: "semaine Opus", model: "Opus", usedPercent: 85 },
+      ],
+    };
+    expect(tightest(claude)?.short).toBe("5 h");
+    expect(tightest(claude, ["claude-fable-5-2", undefined])?.short).toBe("semaine Fable");
+    expect(tightest(claude, ["default", "Opus 5.5"])?.short).toBe("semaine Opus");
+    expect(tightest(claude, ["sonnet", "Sonnet 5.5"])?.short).toBe("5 h");
+    expect(quotaWarning(claude, "Claude Code")).toBeUndefined();
+    expect(quotaWarning(claude, "Claude Code", Date.now(), ["fable"])).toMatchObject({
+      level: "full",
+      text: "Claude Code a atteint sa limite (semaine Fable).",
+    });
+  });
+
   it("warns from 80 % and says full from 100 %", () => {
     expect([79.9, 80, 99, 100, 120].map(quotaLevel)).toEqual([
       "ok",
