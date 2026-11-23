@@ -739,11 +739,8 @@ export function createHttpServer(options: {
     }
     const asked = parseUrl(req.url ?? "/")?.pathname ?? "";
     if (asked.startsWith(`${ARTIFACTS_PATH}/`)) {
-      // An artifact shown in the app: its address is the permission, for some minutes.
-      if (crossSite) {
-        res.writeHead(403).end();
-        return;
-      }
+      // An artifact shown in the app (inside a sandboxed iframe with an opaque origin):
+      // its short-lived ticket in the URL is the permission, not same-origin headers.
       const limit = apiLimiter.take(clientKey);
       if (!limit.ok) return tooMany(res, limit.retryAfterSec);
       if (req.method !== "GET" && req.method !== "HEAD") {
