@@ -86,6 +86,11 @@ export interface Client {
   openThreadIds?: Set<string>;
 }
 
+/** The changed files a result names; the others are counted. */
+const RESULT_FILES = 6;
+/** How much of a thread's last answer its result carries. */
+const RESULT_LIMIT = 400;
+
 const watch = (client: Client, threadId: string): void => {
   (client.openThreadIds ??= new Set()).add(threadId);
 };
@@ -182,14 +187,14 @@ const PR_WATCH_MS = 60_000;
 const SUMMARY_LIMIT = 160;
 
 /** The first lines of a reply as one short line, without Markdown marks. */
-export function summaryOf(reply: string): string {
+export function summaryOf(reply: string, limit = SUMMARY_LIMIT): string {
   const flat = reply
     .replace(/```[\s\S]*?(```|$)/g, " ")
     .replace(/[*`#>]+/g, "")
     .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\s+/g, " ")
     .trim();
-  return flat.length > SUMMARY_LIMIT ? `${flat.slice(0, SUMMARY_LIMIT - 1).trimEnd()}…` : flat;
+  return flat.length > limit ? `${flat.slice(0, limit - 1).trimEnd()}…` : flat;
 }
 
 const settingValues = (settings: AgentSetting[]) =>
@@ -326,8 +331,10 @@ export class Hub {
       send: (id, text) => this.send(id, text, undefined, true),
       cancel: (id) => this.cancel(id),
       setTeam: (id, team) => {
+        const before = this.store.getThread(id)?.team?.phase;
         this.updateThread(id, { team });
         const lead = this.store.getThread(id);
+        if (lead && team && team.phase !== before && !this.closed) this.reportTeam(lead, team);
         if (lead) this.planner.syncTeam(lead);
         // A team that stops working frees its place: its last turn was a member's, which
         // no coordinator opened, so the line is looked at from here.
@@ -1334,8 +1341,62 @@ export class Hub {
       // A place is free: the next thread in line behind the same coordinator starts.
       const openedBy = this.closed ? undefined : this.store.getThread(threadId)?.openedBy;
       if (openedBy) this.drainLine(openedBy);
+      if (openedBy && !cancelled) void this.reportResult(threadId);
     });
     this.turns.set(threadId, turn);
+  }
+
+  /**
+   * Tells, in the coordinator's conversation, what a thread it opened has just finished:
+   * the thread's own last words and the files changed on its branch. Nothing is written
+   * for it, and the coordinator's agent does not run. Only for work the coordinator sent,
+   * once nothing more is on its way: an answer to the user's own message is theirs already.
+   */
+  private async reportResult(threadId: string): Promise<void> {
+    const thread = this.store.getThread(threadId);
+    if (!thread?.openedBy || thread.archived || thread.status !== "idle") return;
+    if (thread.team || this.queued.get(threadId)?.length) return;
+    if (!this.store.getThread(thread.openedBy)) return;
+    const asked = this.items(threadId).findLast((i) => i.kind === "user");
+    if (asked?.kind !== "user" || asked.from !== "coordinator") return;
+    // Its conclusion: what it said last, after its tools, not how it set out.
+    const last = this.items(threadId).findLast((i) => i.kind === "agent" || i.kind === "user");
+    const summary = last?.kind === "agent" ? summaryOf(last.text, RESULT_LIMIT) : "";
+    if (!summary) return;
+    const changed = await this.review(threadId).catch(() => undefined);
+    // Meanwhile the thread may have started again, or gone with its coordinator.
+    if (this.closed || this.turns.has(threadId) || !this.store.getThread(thread.openedBy)) return;
+    const files = changed?.files.map((f) => f.path) ?? [];
+    const more = Math.max(0, files.length - RESULT_FILES) + (changed?.omitted ?? 0);
+    this.putItem(thread.openedBy, {
+      id: `result:${threadId}:${asked.id}`,
+      kind: "result",
+      threadId,
+      title: thread.title,
+      summary,
+      files: files.slice(0, RESULT_FILES),
+      ...(more ? { moreFiles: more } : {}),
+      at: Date.now(),
+    });
+  }
+
+  /** The same for a team the coordinator started, once it is done or has failed. */
+  private reportTeam(lead: Thread, team: Team): void {
+    if (!lead.openedBy || !this.store.getThread(lead.openedBy)) return;
+    if (team.phase !== "done" && team.phase !== "failed") return;
+    const n = team.tasks.length;
+    this.putItem(lead.openedBy, {
+      id: `result:${lead.id}:${team.phase}`,
+      kind: "result",
+      threadId: lead.id,
+      title: lead.title,
+      summary:
+        team.phase === "done"
+          ? `Équipe terminée : ${n} morceau${n > 1 ? "x" : ""} fusionné${n > 1 ? "s" : ""}.`
+          : `Équipe en échec${team.error ? ` : ${team.error}` : "."}`,
+      files: [],
+      at: Date.now(),
+    });
   }
 
   /** Resolves once the thread has no turn running. */

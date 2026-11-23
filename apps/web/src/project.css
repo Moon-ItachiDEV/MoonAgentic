@@ -281,52 +281,114 @@
   min-width: 0;
 }
 /* The thread a coordinator opened, in its conversation: a link to it, with its state now. */
-.opened-card {
+/* A thread the coordinator opened: one quiet line, with what it is really doing. */
+.opened-line {
   display: flex;
   align-items: center;
-  gap: 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
-  padding: 10px 12px;
-}
-.oc-ic {
-  width: 30px;
-  height: 30px;
-  flex: none;
-  display: grid;
-  place-items: center;
-  border-radius: 8px;
-  background: var(--card);
+  gap: 7px;
+  max-width: 100%;
+  padding: 2px 6px 2px 2px;
+  border-radius: 6px;
   color: var(--muted);
+  font-size: 12.5px;
+  text-align: left;
 }
-.oc-text {
-  min-width: 0;
-  flex: 1;
+button.opened-line:hover {
+  color: var(--fg);
+  background: var(--card);
+}
+.opened-line svg {
+  flex: none;
 }
 .oc-t {
-  font-weight: 550;
-  font-size: 13.5px;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.oc-s {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 7px;
-  color: var(--muted);
-  font-size: 12.5px;
+.oc-state {
+  flex: none;
 }
 .oc-state::before {
   content: "· ";
 }
-.opened-card[data-group="waiting"] .oc-state {
+.opened-line[data-group="waiting"] .oc-state {
   color: var(--warn);
 }
-.opened-card[data-group="running"] .oc-state {
+.opened-line[data-group="running"] .oc-state {
   color: var(--accent);
+}
+/* What came back since the user last wrote. */
+.new-sep {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 14px;
+  color: var(--accent);
+  font-size: 12px;
+}
+.new-sep::before,
+.new-sep::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.result {
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+}
+.result-t {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+  border-radius: 6px;
+}
+.result-t:not(:disabled):hover {
+  color: var(--fg);
+}
+.result-t svg {
+  color: var(--ok);
+}
+.result-s {
+  margin: 0;
+  line-height: 1.55;
+}
+.result-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+}
+.result-file,
+.result-more {
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font: 12px/1.4 var(--mono);
+  color: var(--muted);
+}
+/* Beside the coordinator, a line says what and where it is at: the rest is in the thread. */
+.pp-panel .pp-agent,
+.pp-panel .pp-branch {
+  display: none;
+}
+.pp-panel .pp-chips:not(:has(> :not(.pp-agent, .pp-branch))) {
+  display: none;
+}
+@media (hover: hover) {
+  .pp-panel .pp-row .thread-menu-wrap {
+    opacity: 0;
+  }
+  .pp-panel .pp-row:hover .thread-menu-wrap,
+  .pp-panel .pp-row:focus-within .thread-menu-wrap,
+  .pp-panel .pp-row .thread-menu-wrap:has([aria-expanded="true"]) {
+    opacity: 1;
+  }
 }
 /* The coordinator's side: its conversation, its composer under it. */
 .pp-main {
