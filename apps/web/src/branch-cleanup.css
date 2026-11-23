@@ -1,0 +1,85 @@
+/* « Nettoyer les branches »: the merged moon/* branches to tick, and those that stay. */
+.dialog.branch-cleanup {
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+.bc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: -6px;
+}
+.bc-head h3 {
+  margin: 0;
+}
+.bc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.bc-row {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px;
+  min-width: 0;
+}
+.bc-row label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+}
+.bc-row input {
+  margin-top: 3px;
+  accent-color: var(--accent);
+}
+.bc-row[data-state="inUse"],
+.bc-row[data-state="unmerged"] {
+  background: var(--card);
+}
+.bc-tx {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.bc-tx code {
+  font: 12.5px var(--mono);
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bc-tx small {
+  color: var(--faint);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.bc-others summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+.bc-result {
+  font-size: 13px;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--accent-soft);
+}
+.bc-result ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+}
+.bc-result code {
+  font: 12px var(--mono);
+}
+.dialog p.bc-warn {
+  margin: 0;
+  color: var(--err);
+}

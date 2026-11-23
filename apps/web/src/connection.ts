@@ -24,6 +24,9 @@ export const LONG_ASKS_MS: Readonly<Record<string, number>> = {
   // The remote is asked for its branch first, then git merges.
   "workspace.forecast": 2 * 60_000,
   "workspace.sync": 3 * 60_000,
+  // The remote is asked for its branch, then each branch is compared with it.
+  "project.branches": 2 * 60_000,
+  "project.deleteBranches": 3 * 60_000,
 };
 /** How long the page waits for the answer to a request of this type. */
 export const askTimeoutFor = (type: string, usual: number = ASK_TIMEOUT_MS): number =>
@@ -118,7 +121,11 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
                             ? Extract<ServerMessage, { type: "worktreeFiles" }>
                             : T extends "workspace.readFile"
                               ? Extract<ServerMessage, { type: "worktreeFile" }>
-                              : ServerMessage;
+                              : T extends "project.branches"
+                                ? Extract<ServerMessage, { type: "projectBranches" }>
+                                : T extends "project.deleteBranches"
+                                  ? Extract<ServerMessage, { type: "branchesDeleted" }>
+                                  : ServerMessage;
 
 export class Connection {
   private state: State = initialState;

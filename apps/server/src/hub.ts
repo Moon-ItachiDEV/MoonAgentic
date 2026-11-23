@@ -77,6 +77,7 @@ import {
   promptLinks,
   searchFiles,
 } from "./files.ts";
+import { type BranchOwner, deleteMergedBranches, projectBranches } from "./branches.ts";
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { Coordinators } from "./coordinator.ts";
 import { historyBefore } from "./history.ts";
@@ -743,6 +744,26 @@ export class Hub {
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
+      case "project.branches":
+        client.send({
+          type: "projectBranches",
+          requestId: message.requestId,
+          projectId: message.projectId,
+          ...(await projectBranches(this.gitProjectPath(message.projectId), this.branchOwners())),
+        });
+        return;
+      case "project.deleteBranches":
+        client.send({
+          type: "branchesDeleted",
+          requestId: message.requestId,
+          projectId: message.projectId,
+          ...(await deleteMergedBranches(
+            this.gitProjectPath(message.projectId),
+            this.branchOwners(),
+            message.branches,
+          )),
+        });
+        return;
       case "project.remove":
         await this.removeProject(message.projectId);
         client.send({ type: "done", requestId: message.requestId });
@@ -2637,6 +2658,30 @@ export class Hub {
       await dropCheckpoints(workspace.path, [archiveRef(threadId)]).catch(() => undefined);
     }
     return workFolder(workspace);
+  }
+
+  /** The folder of a project that is a git repository, for what works on its branches. */
+  private gitProjectPath(projectId: string): string {
+    const project = this.store.getProject(projectId);
+    if (!project) throw new Error("Ce projet n'existe plus.");
+    if (!this.withGit(project).git) throw new Error("Ce projet n'est pas un dépôt git.");
+    return project.path;
+  }
+
+  /** Every thread with a branch of its own, whatever its project: two can share a repository. */
+  private branchOwners(): BranchOwner[] {
+    return this.store.listThreads().flatMap((t) =>
+      t.workspace?.branch
+        ? [
+            {
+              id: t.id,
+              title: t.title,
+              branch: t.workspace.branch,
+              ...(t.archived ? { archived: true } : {}),
+            },
+          ]
+        : [],
+    );
   }
 
   private withGit(project: Project): Project {

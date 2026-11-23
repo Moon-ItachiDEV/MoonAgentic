@@ -22,6 +22,7 @@ import {
   threadLine,
 } from "../project-threads.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
+import { BranchCleanup } from "./BranchCleanup.tsx";
 import { IconChevron, IconPlus } from "./icons.tsx";
 import { PrChip } from "./PullRequestStatus.tsx";
 import { ThreadMenu } from "./ThreadMenu.tsx";
@@ -76,6 +77,7 @@ export function ProjectPage(props: {
     setRenaming(null);
   };
   const [folds, setFolds] = useState(readFolds);
+  const [cleaning, setCleaning] = useState(false);
   /** Beside the coordinator: the threads, or what the coordinator works with. */
   const [tab, setTab] = useState<"threads" | "context">("threads");
   const context = !!props.panel && tab === "context" && !!props.coordinator;
@@ -186,6 +188,10 @@ export function ProjectPage(props: {
                     ]
                   : []),
                 { label: "Planner du projet", run: props.onOpenPlanner },
+                // Only a git repository has branches of its threads.
+                ...(props.project.git
+                  ? [{ label: "Nettoyer les branches…", run: () => setCleaning(true) }]
+                  : []),
                 { label: "Retirer de MoonAgentic…", danger: true, run: props.onRemoveProject },
               ]}
             />
@@ -398,6 +404,7 @@ export function ProjectPage(props: {
           );
         })}
       </div>
+      {cleaning && <BranchCleanup project={props.project} onClose={() => setCleaning(false)} />}
     </div>
   );
 }
