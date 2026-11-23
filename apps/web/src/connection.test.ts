@@ -145,6 +145,18 @@ describe("Connection heartbeat", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
+  it("treats a non-ASCII token as unauthorized immediately without calling fetch", () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/" });
+    vi.stubGlobal("localStorage", { getItem: () => "…", setItem: () => undefined });
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const conn = new Connection({ pingMs: 0 });
+    expect(conn.getState().status).toBe("unauthorized");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("pings while open, and opens a new connection when no answer comes", async () => {
     const { conn, socket } = await setupConnection({ pingMs: PING_MS });
     socket.open();

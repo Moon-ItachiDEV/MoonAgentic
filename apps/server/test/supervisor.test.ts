@@ -59,14 +59,22 @@ describe("supervisor", () => {
   });
 
   it("detects service managers where stdout/stderr must be redacted", () => {
-    expect(shouldRedactOutput({})).toBe(false);
-    expect(shouldRedactOutput({ INVOCATION_ID: "abc" })).toBe(true);
-    expect(shouldRedactOutput({ JOURNAL_STREAM: "8:12345" })).toBe(true);
-    expect(shouldRedactOutput({ NSSM_SERVICE_NAME: "MoonAgentic" })).toBe(true);
-    expect(shouldRedactOutput({ MOONAGENTIC_REDACT_STDOUT: "1" })).toBe(true);
-    expect(shouldRedactOutput({ INVOCATION_ID: "abc", MOONAGENTIC_REDACT_STDOUT: "0" })).toBe(
+    const piped = () => ["9:99999"];
+    expect(shouldRedactOutput({}, piped)).toBe(false);
+    // Inherited systemd vars on a piped CI runner or terminal do not match fd 1/2.
+    expect(shouldRedactOutput({ INVOCATION_ID: "abc", JOURNAL_STREAM: "8:12345" }, piped)).toBe(
       false,
     );
+    // Actual systemd service unit where stdout/stderr is wired to the journal stream.
+    expect(shouldRedactOutput({ JOURNAL_STREAM: "8:12345" }, () => ["8:12345"])).toBe(true);
+    expect(shouldRedactOutput({ NSSM_SERVICE_NAME: "MoonAgentic" }, piped)).toBe(true);
+    expect(shouldRedactOutput({ MOONAGENTIC_REDACT_STDOUT: "1" }, piped)).toBe(true);
+    expect(
+      shouldRedactOutput(
+        { JOURNAL_STREAM: "8:12345", MOONAGENTIC_REDACT_STDOUT: "0" },
+        () => ["8:12345"],
+      ),
+    ).toBe(false);
   });
 
   it("waits longer after each crash in a row, up to a minute", () => {

@@ -33,6 +33,7 @@ export interface State {
   /** Permission requests waiting in every thread. */
   requests: PendingRequest[];
   mcpServers: McpServerInfo[];
+  mcpSecretsError: string | null;
   projects: Project[];
   threads: Thread[];
   /** The planner's cards, of every project. */
@@ -56,7 +57,12 @@ export interface State {
 export function reduce(state: State, message: ServerMessage): State {
   switch (message.type) {
     case "snapshot":
-      return { ...state, ready: true, ...message.snapshot };
+      return {
+        ...state,
+        ready: true,
+        ...message.snapshot,
+        mcpSecretsError: message.snapshot.mcpSecretsError ?? null,
+      };
     case "agents":
       return { ...state, agents: message.agents };
     case "favorites":
@@ -66,7 +72,11 @@ export function reduce(state: State, message: ServerMessage): State {
     case "requests":
       return { ...state, requests: message.requests };
     case "mcpServers":
-      return { ...state, mcpServers: message.servers };
+      return {
+        ...state,
+        mcpServers: message.servers,
+        mcpSecretsError: message.error ?? null,
+      };
     case "review":
       return {
         ...state,
@@ -175,6 +185,7 @@ export const initialState: State = {
   coordinator: { routes: {} },
   requests: [],
   mcpServers: [],
+  mcpSecretsError: null,
   projects: [],
   threads: [],
   plan: [],

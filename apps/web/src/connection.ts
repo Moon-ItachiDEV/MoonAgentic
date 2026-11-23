@@ -107,8 +107,11 @@ export class Connection {
   constructor(options: ConnectionOptions = {}) {
     this.askTimeoutMs = options.askTimeoutMs ?? ASK_TIMEOUT_MS;
     this.pingMs = options.pingMs ?? PING_MS;
-    if (!this.token) this.state = { ...this.state, status: "unauthorized" };
-    else void this.open();
+    if (!this.token || !/^[\x21-\x7e]+$/.test(this.token)) {
+      this.state = { ...this.state, status: "unauthorized" };
+    } else {
+      void this.open();
+    }
     // A phone's screen coming back on, or its network: the connection is checked at once
     // rather than at the next ping, and a wait before a new try is cut short.
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {

@@ -17,9 +17,9 @@ export const WS_TICKET_TTL_MS = 30_000;
 const MAX_WS_TICKETS = 256;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
 const DEFAULT_MAX_AUTH_FAILURES = 20;
-const DEFAULT_MAX_API_REQUESTS = 120;
+const DEFAULT_MAX_API_REQUESTS = 240;
 const DEFAULT_MAX_COORDINATOR_REQUESTS = 120;
-const DEFAULT_MAX_WS_UPGRADES = 60;
+const DEFAULT_MAX_WS_UPGRADES = 120;
 
 /** A fresh access token: long enough that it cannot be guessed. */
 export const newToken = () => randomBytes(24).toString("base64url");
@@ -424,13 +424,21 @@ export function createHttpServer(options: {
           }
           return;
         }
-        hub.coordinatorCall(given ?? "", String(body?.tool ?? ""), body?.args).then(
-          (result) => json(res, 200, { result }),
+        const abort = new AbortController();
+        res.once("close", () => {
+          if (!res.writableEnded) abort.abort();
+        });
+        hub.coordinatorCall(given ?? "", String(body?.tool ?? ""), body?.args, abort.signal).then(
+          (result) => {
+            if (!res.writableEnded) json(res, 200, { result });
+          },
           (error: unknown) => {
             if (error instanceof CoordinatorRefused) coordAuthFailures.record(remoteIp);
-            json(res, error instanceof CoordinatorRefused ? 401 : 400, {
-              error: error instanceof Error ? error.message : String(error),
-            });
+            if (!res.writableEnded) {
+              json(res, error instanceof CoordinatorRefused ? 401 : 400, {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
           },
         );
       });

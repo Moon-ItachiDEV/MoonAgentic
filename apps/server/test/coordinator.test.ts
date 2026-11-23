@@ -430,19 +430,57 @@ describe("a project's coordinator", () => {
       permissionMode: "full",
     });
     expect(hub.snapshot().coordinator.team).toMatchObject({ coders: 2, permissionMode: "full" });
-    // While the coordinator stays supervised, replaying a saved full team is capped to supervised.
-    const team = await call("start_team", { task_key: "gros", task: "Refais tout" });
+    // While the coordinator stays supervised, replaying a saved full team asks the user ONCE:
+    // 1. Refusing cancels start_team without opening any team.
+    const refusedReq = post(tokens[0]!, {
+      tool: "start_team",
+      args: { task_key: "refuse", task: "Tâche refusée" },
+    });
+    const askRefuse = () =>
+      store
+        .listItems(coordinatorId)
+        .find((i) => i.kind === "permission" && i.title.includes("accès complet") && i.outcome === null);
+    await soon(askRefuse).toBeTruthy();
+    hub.respondToPermission(coordinatorId, askRefuse()!.id, "reject");
+    expect((await refusedReq).status).toBe(400);
+    expect(store.listThreads().some((t) => t.taskKey === "refuse")).toBe(false);
+
+    // 2. Picking « Lancer en supervisé » launches the team in supervised mode.
+    const supReq = post(tokens[0]!, {
+      tool: "start_team",
+      args: { task_key: "sup", task: "En supervisé" },
+    });
+    await soon(askRefuse).toBeTruthy();
+    hub.respondToPermission(coordinatorId, askRefuse()!.id, "supervised");
+    const supRes = (await (await supReq).json()) as { result: { opened: { id: string } } };
+    expect(store.getThread(supRes.result.opened.id)!.team).toMatchObject({
+      coders: 2,
+      permissionMode: "supervised",
+    });
+
+    // 3. Picking « Autoriser en accès complet » launches the team in full mode with that single click.
+    await release();
+    await hold();
+    const approvedReq = post(tokens[0]!, {
+      tool: "start_team",
+      args: { task_key: "gros", task: "Refais tout" },
+    });
+    await soon(askRefuse).toBeTruthy();
+    hub.respondToPermission(coordinatorId, askRefuse()!.id, "full");
+    const team = (await (await approvedReq).json()) as {
+      result?: { opened: { id: string }; already_open?: boolean };
+    };
     const lead = store.getThread(team.result!.opened.id)!;
     expect(lead).toMatchObject({ role: "lead", openedBy: coordinatorId, taskKey: "gros" });
-    expect(lead.team).toMatchObject({ coders: 2, permissionMode: "supervised" });
+    expect(lead.team).toMatchObject({ coders: 2, permissionMode: "full" });
     expect(lead.team!.task).toContain("Refais tout");
     expect(
       (await call("start_team", { task_key: "gros", task: "Refais tout" })).result,
     ).toMatchObject({ already_open: true });
-    // Once the user explicitly puts the coordinator in full mode, start_team may launch a full team.
-    await release();
+
+    // Once the user explicitly puts the coordinator in full mode, start_team runs autonomously 24/7
+    // without asking for confirmation.
     hub.setPermissionMode(coordinatorId, "full");
-    await hold();
     const fullTeam = await call("start_team", { task_key: "complet", task: "Mode complet" });
     expect(store.getThread(fullTeam.result!.opened.id)!.team).toMatchObject({
       coders: 2,
@@ -545,7 +583,7 @@ describe("a project's coordinator", () => {
       lead: member,
       coder: member,
       coders: 1,
-      permissionMode: "full",
+      permissionMode: "supervised",
     });
     for (const t of store.listThreads().filter((t) => t.role === "lead")) {
       await hub.handle(client, { type: "team.stop", threadId: t.id });

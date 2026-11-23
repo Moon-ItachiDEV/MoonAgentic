@@ -631,7 +631,7 @@ describe("Hub with the demo agent", () => {
 
   it("hands enabled MCP servers to agents, and never shows their secrets to clients", async () => {
     const { hub, store, client, projectId } = setup();
-    hub.addMcpServer({
+    await hub.addMcpServer({
       name: "fichiers",
       transport: {
         type: "stdio",
@@ -641,7 +641,7 @@ describe("Hub with the demo agent", () => {
       },
     });
     // The demo agent cannot reach HTTP servers, so it must not be given one.
-    hub.addMcpServer({
+    await hub.addMcpServer({
       name: "web",
       transport: {
         type: "http",
@@ -649,17 +649,17 @@ describe("Hub with the demo agent", () => {
         headers: [{ name: "Authorization", value: "Bearer s3cret" }],
       },
     });
-    const off = hub.addMcpServer({
+    const off = await hub.addMcpServer({
       name: "coupé",
       transport: { type: "stdio", command: "off", args: [], env: [] },
     });
     await hub.handle(client, { type: "mcp.setEnabled", id: off, enabled: false });
-    expect(() =>
+    await expect(
       hub.addMcpServer({
         name: "Web",
         transport: { type: "stdio", command: "x", args: [], env: [] },
       }),
-    ).toThrow("déjà");
+    ).rejects.toThrow("déjà");
 
     const threadId = hub.createThread({
       projectId,
@@ -1379,21 +1379,21 @@ describe("teams outside git", () => {
 });
 
 describe("security boundaries", () => {
-  it("refuses reserving the internal moonagentic MCP server name", () => {
+  it("refuses reserving the internal moonagentic MCP server name", async () => {
     const { hub } = setup();
     for (const reserved of ["moonagentic", "MoonAgentic", "  MOONAGENTIC  "]) {
-      expect(() =>
+      await expect(
         hub.addMcpServer({
           name: reserved,
           transport: { type: "stdio", command: "node", args: [], env: [] },
         }),
-      ).toThrow("réservé");
+      ).rejects.toThrow("réservé");
     }
   });
 
   it("keeps MCP secret values out of state.sqlite and its backups, and migrates legacy secrets", async () => {
     const { dir, store, hub } = setup();
-    const id = hub.addMcpServer({
+    const id = await hub.addMcpServer({
       name: "api",
       transport: {
         type: "http",
@@ -1408,7 +1408,7 @@ describe("security boundaries", () => {
     const backup = backupNow(store, path.join(dir, "backups"))!;
     expect(readFileSync(backup).toString("latin1")).not.toContain("ultra-secret-42");
     // Hydrated records in memory still carry the secret for agents.
-    expect(hub.catalog.mcpServers()).toMatchObject([
+    expect(await hub.catalog.mcpServers()).toMatchObject([
       {
         id,
         transport: { headers: [{ name: "Authorization", value: "Bearer ultra-secret-42" }] },
@@ -1441,13 +1441,14 @@ describe("security boundaries", () => {
       legacyStore.close();
       rmSync(legacyDir, { recursive: true, force: true });
     });
+    await migratedHub.catalog.ready;
     // Secret was moved out of SQLite and is still available when hydrated.
     expect(JSON.stringify(legacyStore.getSetting("mcpServers", []))).not.toContain(
       "legacy-plain-secret",
     );
     const migratedBackup = backupNow(legacyStore, path.join(legacyDir, "backups"))!;
     expect(readFileSync(migratedBackup).toString("latin1")).not.toContain("legacy-plain-secret");
-    expect(migratedHub.catalog.mcpServers()).toMatchObject([
+    expect(await migratedHub.catalog.mcpServers()).toMatchObject([
       {
         id: "old-1",
         transport: { env: [{ name: "API_KEY", value: "legacy-plain-secret" }] },
@@ -1455,7 +1456,55 @@ describe("security boundaries", () => {
     ]);
   });
 
-  it("blocks execute, other, fetch and write tools from auto-approving on full-mode reviewers and coordinators", async () => {
+  it("keeps snapshot working and reports mcpSecretsError when the MCP secret vault cannot be read", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-bad-vault-"));
+    const vaultFile = path.join(
+      dir,
+      process.platform === "win32" ? "mcp-secrets.dpapi" : "mcp-secrets.json",
+    );
+    writeFileSync(vaultFile, "{corrupt-vault-data", "utf8");
+    const store = new Store(path.join(dir, "state.sqlite"));
+    store.setSetting("mcpServers", [
+      {
+        id: "srv-1",
+        name: "api",
+        enabled: true,
+        transport: {
+          type: "stdio",
+          command: "npx",
+          args: ["srv"],
+          env: [{ name: "API_KEY", value: "" }],
+        },
+      },
+    ]);
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(dir, ".worktrees"),
+      homeDir: dir,
+      prWatchMs: 0,
+    });
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    // Synchronous snapshot succeeds immediately even before async vault loading finishes.
+    const initial = hub.snapshot();
+    expect(initial.mcpServers).toMatchObject([{ id: "srv-1", name: "api" }]);
+
+    // Once vault loading finishes, the error is surfaced in snapshot without crashing agents.
+    await hub.catalog.ready;
+    expect(hub.snapshot().mcpSecretsError).toMatch(/secrets MCP/i);
+    expect(await hub.catalog.mcpServers()).toMatchObject([
+      { id: "srv-1", transport: { env: [{ name: "API_KEY", value: "" }] } },
+    ]);
+
+    // Removing the last MCP server clears the unreadable vault and error.
+    await hub.catalog.removeMcpServer("srv-1");
+    expect(hub.snapshot().mcpSecretsError).toBeUndefined();
+  });
+
+  it("blocks writes/fetch/other on full-mode reviewers, and also blocks execute on coordinators", async () => {
     const { dir, store, hub, projectId } = setup();
     const agent = path.join(dir, "kind-agent.mjs");
     // Mock ACP agent that requests permission for the ToolKind sent in the prompt.
@@ -1533,7 +1582,8 @@ describe("security boundaries", () => {
       }
     };
 
-    // Reviewer with full permissionMode: only read/search/think auto-approve.
+    // Reviewer with full permissionMode: read/search/think/execute auto-approve (so shell-based
+    // reviewers like Codex can inspect diffs/files), while writes/fetch/other/missing wait.
     const reviewerId = hub.createThread({
       projectId,
       agentId,
@@ -1541,15 +1591,19 @@ describe("security boundaries", () => {
       role: "reviewer",
       text: "",
     });
-    for (const allowed of ["read", "search", "think"]) await check(reviewerId, allowed, true);
-    for (const blocked of ["execute", "other", "fetch", "edit", "delete", "move", "missing"]) {
+    for (const allowed of ["read", "search", "think", "execute"]) {
+      await check(reviewerId, allowed, true);
+    }
+    for (const blocked of ["other", "fetch", "edit", "delete", "move", "missing"]) {
       await check(reviewerId, blocked, false);
     }
 
     // Coordinator switched to full permissionMode: execute/other/fetch/edits still wait on user.
     const coordinatorId = hub.openCoordinator(projectId, agentId);
     hub.setPermissionMode(coordinatorId, "full");
-    await check(coordinatorId, "read", true);
+    for (const allowed of ["read", "search", "think"]) {
+      await check(coordinatorId, allowed, true);
+    }
     for (const blocked of ["execute", "other", "fetch", "edit"]) {
       await check(coordinatorId, blocked, false);
     }

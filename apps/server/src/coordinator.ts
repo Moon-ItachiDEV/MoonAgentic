@@ -92,6 +92,15 @@ export interface CoordinatorHost extends Pick<
   putItem(threadId: string, item: Item): void;
   requireThread(threadId: string): Thread;
   pendingRequests(): PendingRequest[];
+  /**
+   * Asks the user once before a supervised coordinator launches a saved full-access team.
+   * Resolves to `"full"`, `"supervised"`, or `null` if refused/cancelled.
+   */
+  confirmTeamPermission(
+    coordinatorId: string,
+    task: string,
+    signal?: AbortSignal,
+  ): Promise<PermissionMode | null>;
 }
 
 /**
@@ -386,7 +395,12 @@ export class Coordinators {
    * One tool call of a coordinator, from its bridge. The token says which project it may
    * touch: a thread of another project, a team's member or a coordinator is never reached.
    */
-  async coordinatorCall(token: string, tool: string, args: unknown): Promise<unknown> {
+  async coordinatorCall(
+    token: string,
+    tool: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     const scope = this.tokens.get(token);
     const coordinator = scope && this.store.getThread(scope.threadId);
     if (!scope || coordinator?.kind !== "coordinator") throw new CoordinatorRefused();
@@ -535,9 +549,17 @@ export class Coordinators {
           throw new Error(
             `Tu as déjà ouvert ${opened} fils pour ce message : demande à l'utilisateur avant d'en ouvrir d'autres.`,
           );
-        // A supervised coordinator never escalates a team past its own permission mode.
-        const permissionMode: PermissionMode =
-          coordinator.permissionMode === "full" ? setup.permissionMode : "supervised";
+        // A supervised coordinator never escalates silently to full access: when the saved team
+        // runs in full access, ask the user once (full, supervised, or cancel). Once the
+        // coordinator itself is in full access, it launches autonomously 24/7.
+        let permissionMode: PermissionMode = setup.permissionMode;
+        if (coordinator.permissionMode !== "full" && setup.permissionMode === "full") {
+          const chosen = await this.host.confirmTeamPermission(coordinator.id, task, signal);
+          if (!chosen) {
+            throw new Error("L'utilisateur a refusé de lancer l'équipe en accès complet.");
+          }
+          permissionMode = chosen;
+        }
         const id = this.host.startTeam({
           ...setup,
           permissionMode,

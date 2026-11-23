@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { appendFileSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { appendFileSync, fstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
@@ -30,18 +30,38 @@ export const redact = (line: string) =>
     .replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{6,}\b/g, "$1…")
     .replace(/\b(sk-(?:ant-|proj-|live-|test-)?)[A-Za-z0-9_-]{12,}\b/g, "$1…");
 
+const currentStdStreams = (): string[] => {
+  const streams: string[] = [];
+  for (const fd of [1, 2]) {
+    try {
+      const stat = fstatSync(fd);
+      streams.push(`${stat.dev}:${stat.ino}`);
+    } catch {
+      // closed or unavailable descriptor
+    }
+  }
+  return streams;
+};
+
 /**
- * True when stdout/stderr goes into a service manager's persistent journal (systemd, NSSM) or
- * the operator explicitly asked for redacted output via `MOONAGENTIC_REDACT_STDOUT=1`.
+ * True when stdout/stderr goes directly into a service manager's persistent journal (per
+ * `systemd.exec(5)`: fd 1 or 2 matches `JOURNAL_STREAM=<dev>:<ino>`, or NSSM) or the operator
+ * explicitly set `MOONAGENTIC_REDACT_STDOUT=1`. Checking the actual stream avoids false positives
+ * in terminals and CI runners that inherit systemd variables while piping child output.
  */
-export function shouldRedactOutput(env: NodeJS.ProcessEnv = process.env): boolean {
+export function shouldRedactOutput(
+  env: NodeJS.ProcessEnv = process.env,
+  stdStreams: () => string[] = currentStdStreams,
+): boolean {
   if (env.MOONAGENTIC_REDACT_STDOUT === "1" || env.MOONAGENTIC_REDACT_STDOUT === "true") {
     return true;
   }
   if (env.MOONAGENTIC_REDACT_STDOUT === "0" || env.MOONAGENTIC_REDACT_STDOUT === "false") {
     return false;
   }
-  return Boolean(env.INVOCATION_ID || env.JOURNAL_STREAM || env.NSSM_SERVICE_NAME);
+  if (env.NSSM_SERVICE_NAME) return true;
+  const journal = env.JOURNAL_STREAM?.trim();
+  return Boolean(journal && stdStreams().includes(journal));
 }
 
 /**

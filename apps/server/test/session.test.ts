@@ -529,11 +529,13 @@ describe("agentEnv", () => {
 
   it("never passes stripped host secrets to a spawned ACP agent process", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-env-"));
-    cleanups.push(() => {
+    let session: AgentSession | undefined;
+    cleanups.push(async () => {
+      await session?.close().catch(() => undefined);
       delete process.env.MOONAGENTIC_GITHUB_TOKEN;
       delete process.env.GH_TOKEN;
       delete process.env.MOONAGENTIC_TOKEN;
-      rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     });
     process.env.MOONAGENTIC_GITHUB_TOKEN = "gho_must_not_leak";
     process.env.GH_TOKEN = "ghp_must_not_leak";
@@ -570,7 +572,7 @@ describe("agentEnv", () => {
     );
 
     let reply = "";
-    const session = await AgentSession.start({
+    session = await AgentSession.start({
       launch: { command: process.execPath, args: [agent] },
       cwd: dir,
       previousSessionId: null,
@@ -584,7 +586,6 @@ describe("agentEnv", () => {
         onExit: () => undefined,
       },
     });
-    cleanups.push(() => session.close());
     await session.prompt("check env");
     expect(JSON.parse(reply)).toEqual([]);
   });

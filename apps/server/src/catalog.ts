@@ -7,6 +7,7 @@ import type {
   AgentSetting,
   CustomAgentInput,
   Favorites,
+  McpServerInfo,
   McpServerInput,
   ServerMessage,
 } from "@moonagentic/protocol";
@@ -48,6 +49,10 @@ export class AgentCatalog {
   private readonly homeDir: string;
   /** Where MCP secret values live, kept apart from `state.sqlite` and its backups. */
   private readonly mcpSecrets: McpSecretStore;
+  /** Why migrating legacy SQLite MCP secrets failed, if the secret vault rejected writes. */
+  private migrationError: string | undefined;
+  /** Resolves once MCP secrets are loaded from the vault and any legacy SQLite secrets migrated. */
+  readonly ready: Promise<void>;
 
   constructor(
     store: Store,
@@ -61,7 +66,7 @@ export class AgentCatalog {
     this.broadcast = broadcast;
     this.homeDir = homeDir;
     this.mcpSecrets = mcpSecrets;
-    this.migrateMcpSecrets();
+    this.ready = this.initMcpSecrets();
     agents.setCustom(this.customAgents());
   }
 
@@ -272,37 +277,71 @@ export class AgentCatalog {
     return this.store.getSetting<McpServerRecord[]>("mcpServers", []);
   }
 
-  /** Moves any MCP secret values saved inside `state.sqlite` by an earlier version into the secret store. */
-  private migrateMcpSecrets(): void {
+  /**
+   * Loads MCP secrets asynchronously and migrates any plaintext values stored in `state.sqlite`
+   * by an earlier version. Never throws: decryption failures stay recorded in `mcpSecretsError()`
+   * so clients still connect and Connexions can report them.
+   */
+  private async initMcpSecrets(): Promise<void> {
+    await this.mcpSecrets.load();
     const raw = this.rawMcpServers();
-    let changed = false;
-    const stripped = raw.map((server) => {
-      const secrets = extractMcpSecrets(server);
-      if (Object.keys(secrets).length === 0) return server;
-      changed = true;
-      this.mcpSecrets.set(server.id, { ...this.mcpSecrets.get(server.id), ...secrets });
-      return stripMcpSecrets(server);
-    });
-    if (changed) this.store.setSetting("mcpServers", stripped);
+    const hasPlaintext = raw.some((s) => Object.keys(extractMcpSecrets(s)).length > 0);
+    if (hasPlaintext && !this.mcpSecrets.error()) {
+      try {
+        const stripped: McpServerRecord[] = [];
+        for (const server of raw) {
+          const secrets = extractMcpSecrets(server);
+          if (Object.keys(secrets).length === 0) {
+            stripped.push(server);
+            continue;
+          }
+          await this.mcpSecrets.set(server.id, { ...this.mcpSecrets.get(server.id), ...secrets });
+          stripped.push(stripMcpSecrets(server));
+        }
+        this.store.setSetting("mcpServers", stripped);
+        this.migrationError = undefined;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        this.migrationError = `Impossible de migrer les secrets MCP hors de la base : ${detail}`;
+        console.error("Migration des secrets MCP impossible :", error);
+      }
+    }
+    const err = this.mcpSecretsError();
+    if (err) {
+      this.broadcast({ type: "mcpServers", servers: this.mcpServerInfos(), error: err });
+    }
   }
 
-  mcpServers(): McpServerRecord[] {
+  /** Public server metadata (secret names only, never touches the secret vault). */
+  mcpServerInfos(): McpServerInfo[] {
+    return this.rawMcpServers().map(mcpInfo);
+  }
+
+  /** Why MCP secrets could not be decrypted/migrated, if a vault error happened. */
+  mcpSecretsError(): string | undefined {
+    return this.mcpSecrets.error() ?? this.migrationError;
+  }
+
+  /** Enabled/disabled servers with their decrypted secret values, ready to pass to an agent. */
+  async mcpServers(): Promise<McpServerRecord[]> {
+    await this.ready;
     return this.rawMcpServers().map((s) => hydrateMcpSecrets(s, this.mcpSecrets.get(s.id)));
   }
 
   /** Registers an MCP server for every agent session started from now on. */
-  addMcpServer(input: McpServerInput): string {
+  async addMcpServer(input: McpServerInput): Promise<string> {
     const key = input.name.trim().toLowerCase();
     if (key === RESERVED_MCP_NAME) {
       throw new Error(`Le nom « ${RESERVED_MCP_NAME} » est réservé à MoonAgentic.`);
     }
+    await this.ready;
     if (this.rawMcpServers().some((s) => s.name.trim().toLowerCase() === key)) {
       throw new Error(`Un serveur MCP s'appelle déjà « ${input.name} ».`);
     }
     const id = randomUUID();
     const record: McpServerRecord = { ...input, id, enabled: true };
     const secrets = extractMcpSecrets(record);
-    if (Object.keys(secrets).length) this.mcpSecrets.set(id, secrets);
+    if (Object.keys(secrets).length) await this.mcpSecrets.set(id, secrets);
     this.updateMcpServers((servers) => [...servers, stripMcpSecrets(record)]);
     return id;
   }
@@ -312,22 +351,38 @@ export class AgentCatalog {
     this.updateMcpServers((servers) => servers.map((s) => (s.id === id ? { ...s, enabled } : s)));
   }
 
-  removeMcpServer(id: string): void {
+  async removeMcpServer(id: string): Promise<void> {
     if (!this.rawMcpServers().some((s) => s.id === id)) return;
+    await this.ready;
     this.updateMcpServers((servers) => servers.filter((s) => s.id !== id));
-    this.mcpSecrets.delete(id);
+    const empty = this.rawMcpServers().length === 0;
+    const cleanup = empty ? this.mcpSecrets.clear() : this.mcpSecrets.delete(id);
+    await cleanup.catch((error: unknown) => {
+      console.error("Suppression du secret MCP impossible :", error);
+    });
+    if (empty && !this.mcpSecrets.error()) this.migrationError = undefined;
+    const err = this.mcpSecretsError();
+    if (!err) this.broadcast({ type: "mcpServers", servers: this.mcpServerInfos() });
   }
 
   private updateMcpServers(change: (servers: McpServerRecord[]) => McpServerRecord[]): void {
     const servers = change(this.rawMcpServers());
     this.store.setSetting("mcpServers", servers);
-    this.broadcast({ type: "mcpServers", servers: servers.map(mcpInfo) });
+    const err = this.mcpSecretsError();
+    this.broadcast({
+      type: "mcpServers",
+      servers: servers.map(mcpInfo),
+      ...(err ? { error: err } : {}),
+    });
   }
 
   /** Stops the agents started only to be checked, and resolves once they are gone. */
   async close(): Promise<void> {
     const discoveries = [...this.discoveries.values()];
     for (const d of discoveries) d.stop.abort();
-    await Promise.all(discoveries.map((d) => d.done.catch(() => undefined)));
+    await Promise.all([
+      this.ready.catch(() => undefined),
+      ...discoveries.map((d) => d.done.catch(() => undefined)),
+    ]);
   }
 }

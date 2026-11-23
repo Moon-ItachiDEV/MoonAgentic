@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   chmodSync,
@@ -19,19 +19,46 @@ type SecretMap = Record<string, McpServerSecrets>;
 
 /**
  * Keeps MCP server secret values outside `state.sqlite`, so SQLite backups and migration copies
- * never duplicate API keys, bearer tokens, or database passwords.
+ * never duplicate API keys, bearer tokens, or database passwords. Reads are asynchronous and
+ * fault-tolerant: a vault that cannot be decrypted (e.g. a DPAPI file copied from another PC)
+ * surfaces its error in Connexions instead of blocking clients or crashing the server.
  */
 export interface McpSecretStore {
+  /** Loads secrets into memory once; captures read/decrypt errors instead of throwing. */
+  load(): Promise<void>;
+  /** Why reading the secret vault failed, if it did. */
+  error(): string | undefined;
+  /** Returns cached secret values for one server (empty if none or vault unreadable). */
   get(serverId: string): McpServerSecrets;
-  set(serverId: string, secrets: McpServerSecrets): void;
-  delete(serverId: string): void;
+  /** Persists secret values for one server atomically. */
+  set(serverId: string, secrets: McpServerSecrets): Promise<void>;
+  /** Deletes secret values for one server. */
+  delete(serverId: string): Promise<void>;
+  /** Removes the vault file and resets any cached error (used when no MCP servers remain). */
+  clear(): Promise<void>;
 }
 
 const VAULT_TIMEOUT_MS = 20_000;
 const DPAPI =
   "Add-Type -AssemblyName System.Security;$e=[Text.Encoding]::UTF8.GetBytes('MoonAgentic');";
 
-function powershellSync(script: string, input: string): string {
+/** Runs a command asynchronously with `input` on stdin so secrets never appear on argv. */
+function pipe(command: string, args: string[], input: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      command,
+      args,
+      { timeout: VAULT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) reject(new Error(stderr.trim().split("\n")[0] || error.message));
+        else resolve(stdout);
+      },
+    );
+    child.stdin?.end(input);
+  });
+}
+
+function powershell(script: string, input: string): Promise<string> {
   const encoded = Buffer.from(script, "utf16le").toString("base64");
   // By its full path: a `powershell.exe` earlier on PATH would be handed the secrets.
   const exe = path.join(
@@ -41,7 +68,7 @@ function powershellSync(script: string, input: string): string {
     "v1.0",
     "powershell.exe",
   );
-  return execFileSync(
+  return pipe(
     exe,
     [
       "-NoProfile",
@@ -53,13 +80,7 @@ function powershellSync(script: string, input: string): string {
       "-EncodedCommand",
       encoded,
     ],
-    {
-      input,
-      encoding: "utf8",
-      timeout: VAULT_TIMEOUT_MS,
-      windowsHide: true,
-      maxBuffer: 4 * 1024 * 1024,
-    },
+    input,
   );
 }
 
@@ -68,9 +89,11 @@ function parseSecretMap(raw: string): SecretMap {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return {};
+    throw new Error("Le fichier des secrets MCP est corrompu.");
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Le fichier des secrets MCP a un format inattendu.");
+  }
   const map: SecretMap = {};
   for (const [serverId, entry] of Object.entries(parsed as Record<string, unknown>)) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
@@ -101,87 +124,150 @@ function atomicWritePrivate(file: string, content: string): void {
 export function memoryMcpSecretStore(): McpSecretStore {
   const data = new Map<string, McpServerSecrets>();
   return {
+    load: async () => undefined,
+    error: () => undefined,
     get: (serverId) => ({ ...data.get(serverId) }),
-    set: (serverId, secrets) => {
+    set: async (serverId, secrets) => {
       if (Object.keys(secrets).length) data.set(serverId, { ...secrets });
       else data.delete(serverId);
     },
-    delete: (serverId) => {
+    delete: async (serverId) => {
       data.delete(serverId);
+    },
+    clear: async () => {
+      data.clear();
     },
   };
 }
 
 function cachedStore(io: {
-  read(): SecretMap;
-  write(map: SecretMap): void;
-  clear(): void;
+  read(): Promise<SecretMap>;
+  write(map: SecretMap): Promise<void>;
+  clear(): Promise<void>;
+  readErrorMessage: (cause: string) => string;
 }): McpSecretStore {
-  let cache: SecretMap | undefined;
-  const load = (): SecretMap => (cache ??= io.read());
-  const persist = (next: SecretMap): void => {
-    if (Object.keys(next).length === 0) io.clear();
-    else io.write(next);
-    cache = next;
+  let cache: SecretMap = {};
+  let loaded = false;
+  let loading: Promise<void> | undefined;
+  let lastError: string | undefined;
+  let writes: Promise<void> = Promise.resolve();
+
+  const load = async (): Promise<void> => {
+    if (loaded) return;
+    loading ??= io
+      .read()
+      .then(
+        (map) => {
+          cache = map;
+          lastError = undefined;
+          loaded = true;
+        },
+        (error: unknown) => {
+          const detail = error instanceof Error ? error.message : String(error);
+          lastError = io.readErrorMessage(detail);
+          console.error("Secrets MCP illisibles :", error);
+          cache = {};
+          loaded = true;
+        },
+      )
+      .finally(() => {
+        loading = undefined;
+      });
+    return loading;
   };
+
+  const enqueue = (work: () => Promise<void>): Promise<void> => {
+    const run = writes.then(work, work);
+    writes = run.catch(() => undefined);
+    return run;
+  };
+
+  const persist = async (next: SecretMap): Promise<void> => {
+    if (Object.keys(next).length === 0) await io.clear();
+    else await io.write(next);
+    cache = next;
+    lastError = undefined;
+    loaded = true;
+  };
+
   return {
-    get: (serverId) => ({ ...load()[serverId] }),
-    set: (serverId, secrets) => {
-      const next: SecretMap = { ...load() };
-      if (Object.keys(secrets).length) next[serverId] = { ...secrets };
-      else delete next[serverId];
-      persist(next);
-    },
-    delete: (serverId) => {
-      const current = load();
-      if (!Object.hasOwn(current, serverId)) return;
-      const next: SecretMap = { ...current };
-      delete next[serverId];
-      persist(next);
-    },
+    load,
+    error: () => lastError,
+    get: (serverId) => ({ ...cache[serverId] }),
+    set: (serverId, secrets) =>
+      enqueue(async () => {
+        await load();
+        if (Object.keys(secrets).length === 0 && !Object.hasOwn(cache, serverId)) return;
+        const next: SecretMap = { ...cache };
+        if (Object.keys(secrets).length) next[serverId] = { ...secrets };
+        else delete next[serverId];
+        await persist(next);
+      }),
+    delete: (serverId) =>
+      enqueue(async () => {
+        await load();
+        if (!Object.hasOwn(cache, serverId)) return;
+        const next: SecretMap = { ...cache };
+        delete next[serverId];
+        await persist(next);
+      }),
+    clear: () =>
+      enqueue(async () => {
+        await load();
+        await persist({});
+      }),
   };
 }
 
 /** Keeps MCP secrets in a `0o600` JSON file outside `state.sqlite` and its backups. */
 export function fileMcpSecretStore(file: string): McpSecretStore {
   return cachedStore({
-    read: () => (existsSync(file) ? parseSecretMap(readFileSync(file, "utf8")) : {}),
-    write: (map) => atomicWritePrivate(file, JSON.stringify(map)),
-    clear: () => rmSync(file, { force: true }),
+    read: async () => (existsSync(file) ? parseSecretMap(readFileSync(file, "utf8")) : {}),
+    write: async (map) => atomicWritePrivate(file, JSON.stringify(map)),
+    clear: async () => rmSync(file, { force: true }),
+    readErrorMessage: (detail) =>
+      `Impossible de lire les secrets MCP : ${detail}. Supprime et recrée les serveurs MCP concernés.`,
   });
 }
 
 /**
- * Keeps MCP secrets sealed with the user's Windows account (DPAPI). Base64 on stdin/stdout keeps
- * arbitrary UTF-8 values lossless across Windows PowerShell codepages.
+ * Keeps MCP secrets sealed with the user's Windows account (DPAPI), asynchronously like
+ * `github-vault.ts`. Base64 on stdin/stdout keeps arbitrary UTF-8 values lossless across
+ * Windows PowerShell codepages.
  */
 export function windowsMcpSecretStore(file: string): McpSecretStore {
   return cachedStore({
-    read: () => {
+    read: async () => {
       if (!existsSync(file)) return {};
       const sealed = readFileSync(file, "utf8").trim();
       if (!sealed) return {};
-      const rawBase64 = powershellSync(
-        `${DPAPI}$b=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim());` +
-          "[Console]::Out.Write([Convert]::ToBase64String(" +
-          "[Security.Cryptography.ProtectedData]::Unprotect($b,$e,'CurrentUser')))",
-        sealed,
+      const rawBase64 = (
+        await powershell(
+          `${DPAPI}$b=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim());` +
+            "[Console]::Out.Write([Convert]::ToBase64String(" +
+            "[Security.Cryptography.ProtectedData]::Unprotect($b,$e,'CurrentUser')))",
+          sealed,
+        )
       ).trim();
       if (!rawBase64) return {};
       return parseSecretMap(Buffer.from(rawBase64, "base64").toString("utf8"));
     },
-    write: (map) => {
+    write: async (map) => {
       const encoded = Buffer.from(JSON.stringify(map), "utf8").toString("base64");
-      const sealed = powershellSync(
-        `${DPAPI}$b=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim());` +
-          "[Console]::Out.Write([Convert]::ToBase64String(" +
-          "[Security.Cryptography.ProtectedData]::Protect($b,$e,'CurrentUser')))",
-        encoded,
+      const sealed = (
+        await powershell(
+          `${DPAPI}$b=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim());` +
+            "[Console]::Out.Write([Convert]::ToBase64String(" +
+            "[Security.Cryptography.ProtectedData]::Protect($b,$e,'CurrentUser')))",
+          encoded,
+        )
       ).trim();
       if (!sealed) throw new Error("Windows n'a pas pu chiffrer les secrets MCP.");
       atomicWritePrivate(file, sealed);
     },
-    clear: () => rmSync(file, { force: true }),
+    clear: async () => rmSync(file, { force: true }),
+    readErrorMessage: (detail) =>
+      `Impossible de déchiffrer les secrets MCP sur ce compte Windows (${detail}). Si le dossier .moonagentic vient d'une autre machine, recrée les serveurs MCP concernés.`,
   });
 }
 
@@ -198,8 +284,7 @@ export function defaultMcpSecretStore(
 
 /** Extracts non-empty secret values from one MCP server record. */
 export function extractMcpSecrets(server: McpServerRecord): McpServerSecrets {
-  const entries =
-    server.transport.type === "stdio" ? server.transport.env : server.transport.headers;
+  const entries = server.transport.type === "stdio" ? server.transport.env : server.transport.headers;
   const secrets: McpServerSecrets = {};
   for (const entry of entries) {
     if (entry.value) secrets[entry.name] = entry.value;

@@ -40,7 +40,15 @@ function ServerRow({ server }: { server: McpServerInfo }) {
   );
 }
 
-export function McpDialog({ servers, onClose }: { servers: McpServerInfo[]; onClose: () => void }) {
+export function McpDialog({
+  servers,
+  secretsError,
+  onClose,
+}: {
+  servers: McpServerInfo[];
+  secretsError?: string | null;
+  onClose: () => void;
+}) {
   const [adding, setAdding] = useState(servers.length === 0);
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
@@ -85,6 +93,7 @@ export function McpDialog({ servers, onClose }: { servers: McpServerInfo[]; onCl
           Donnés à chaque agent au démarrage d'un fil. Les secrets restent sur la machine où tourne
           MoonAgentic et ne s'affichent jamais ici.
         </p>
+        {secretsError && <p className="error">{secretsError}</p>}
         {servers.length > 0 && (
           <ul className="mcp-list">
             {servers.map((s) => (
