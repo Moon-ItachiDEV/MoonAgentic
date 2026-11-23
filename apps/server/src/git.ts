@@ -695,3 +695,196 @@ async function openPullRequest(
     return { error: why || "gh n'a pas pu ouvrir la pull request." };
   }
 }
+
+/** The branch checked out in the folder; empty on a detached HEAD. */
+export async function currentBranch(dir: string): Promise<string> {
+  return (await git(dir, ["branch", "--show-current"])).trim();
+}
+
+/** Runs git and gives its exit code with what it wrote, for commands whose failure says something. */
+function gitCode(
+  cwd: string,
+  args: string[],
+  env?: NodeJS.ProcessEnv,
+): Promise<{ code: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    execFile(
+      "git",
+      [...GIT_QUIET, ...args],
+      {
+        cwd,
+        env: { ...process.env, ...NO_PROMPT, ...env },
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: LOCAL_TIMEOUT_MS,
+        windowsHide: true,
+      },
+      (error, stdout, stderr) => {
+        const code = error ? (typeof error.code === "number" ? error.code : -1) : 0;
+        resolve({ code, stdout, stderr });
+      },
+    );
+  });
+}
+
+/** A path as git shows it in a review: inside the folder, with no way out of it. */
+const safeRelative = (file: string): boolean =>
+  !!file &&
+  !file.includes("\0") &&
+  !path.isAbsolute(file) &&
+  !/^[a-zA-Z]:/.test(file) &&
+  !file.split(/[\\/]/).some((part) => part === ".." || part === ".git");
+
+/**
+ * Puts one file of a review back as it was at `base`, the start of the branch: a changed or
+ * removed file comes back, a new one goes. For a rename, `from` comes back and the new name
+ * goes. Committed changes too: the review then shows nothing for it.
+ */
+export async function rejectFile(dir: string, base: string, file: string, from?: string) {
+  const paths = from ? [file, from] : [file];
+  if (!paths.every(safeRelative)) throw new Error("Ce chemin n'est pas dans la copie de travail.");
+  for (const p of paths) {
+    const existed = (await gitCode(dir, ["cat-file", "-e", `${base}:${p}`])).code === 0;
+    if (existed) {
+      await git(dir, ["--literal-pathspecs", "checkout", base, "--", p]);
+    } else {
+      await git(dir, [
+        "--literal-pathspecs",
+        "rm",
+        "-q",
+        "-f",
+        "--cached",
+        "--ignore-unmatch",
+        "--",
+        p,
+      ]);
+      rmSync(path.join(dir, p), { force: true });
+    }
+  }
+}
+
+/** Who a commit made only to look ahead is from: no one's name lands in the repository. */
+const PREVIEW_AUTHOR = {
+  GIT_AUTHOR_NAME: "MoonAgentic",
+  GIT_AUTHOR_EMAIL: "moonagentic@localhost",
+  GIT_COMMITTER_NAME: "MoonAgentic",
+  GIT_COMMITTER_EMAIL: "moonagentic@localhost",
+};
+
+export interface MergeForecast {
+  /** The branch it is compared with. */
+  target: string;
+  /** Commits on `target` the folder's branch does not have yet. */
+  behind: number;
+  /** Files that would conflict if `target` were merged in now, work not committed included. */
+  conflicts: string[];
+}
+
+/**
+ * What merging `target` into the folder's branch would do now, without doing it: how far
+ * behind it is, and which files would conflict. The folder's uncommitted work counts, as a
+ * commit no branch shows; nothing in the folder or its index changes.
+ */
+export async function mergeForecast(dir: string, target: string): Promise<MergeForecast> {
+  const known = await gitCode(dir, ["rev-parse", "-q", "--verify", `${target}^{commit}`]);
+  if (known.code !== 0) throw new Error(`La branche ${target} n'existe pas dans ce dépôt.`);
+  const behind = Number((await git(dir, ["rev-list", "--count", `HEAD..${target}`])).trim()) || 0;
+  if (!behind) return { target, behind: 0, conflicts: [] };
+  const work = await withScratchIndex(dir, async (env) => {
+    await git(dir, ["add", "-A"], env);
+    const tree = (await git(dir, ["write-tree"], env)).trim();
+    return (
+      await git(dir, ["commit-tree", tree, "-p", "HEAD", "-m", "Aperçu de fusion"], {
+        ...env,
+        ...PREVIEW_AUTHOR,
+      })
+    ).trim();
+  });
+  const merged = await gitCode(dir, [
+    "merge-tree",
+    "--write-tree",
+    "--name-only",
+    "--no-messages",
+    target,
+    work,
+  ]);
+  if (merged.code !== 0 && merged.code !== 1) {
+    throw new Error(
+      /unknown option|usage:/i.test(merged.stderr)
+        ? "Prévoir une fusion demande git 2.38 ou plus récent."
+        : merged.stderr.trim() || "git n'a pas pu prévoir la fusion.",
+    );
+  }
+  // The merged tree first, then each file in conflict.
+  const conflicts = merged.code === 1 ? merged.stdout.split("\n").slice(1).filter(Boolean) : [];
+  return { target, behind, conflicts: [...new Set(conflicts)] };
+}
+
+/**
+ * Merges `target` into the folder's branch, work not committed kept aside and put back
+ * after. Only when the forecast says it merges cleanly; a merge that stops anyway is
+ * undone, so the folder is never left half merged. Returns the new start of the branch.
+ */
+export async function syncWithBranch(dir: string, target: string, message: string) {
+  const merged = await gitCode(dir, [
+    "merge",
+    "--no-ff",
+    "--no-edit",
+    "--autostash",
+    "-m",
+    message,
+    target,
+  ]);
+  if (merged.code !== 0) {
+    await gitCode(dir, ["merge", "--abort"]);
+    throw new Error(merged.stderr.trim() || "La fusion n'a pas abouti : rien n'a changé.");
+  }
+  return (await git(dir, ["merge-base", "HEAD", target])).trim();
+}
+
+/** How long asking the remote for its branch may take, before the last known copy is used. */
+const FETCH_TIMEOUT_MS = 30_000;
+/** A remote asked less than this long ago is not asked again: the panel asks often. */
+const FETCH_EVERY_MS = 60_000;
+const fetchedAt = new Map<string, number>();
+
+/**
+ * The branch to compare a thread's branch with: `baseBranch` itself, or its copy on the
+ * remote when that one is ahead (a pull request merged on GitHub), asked for again first.
+ * When the remote cannot be reached, its last known copy is used.
+ */
+export async function syncTarget(dir: string, baseBranch: string): Promise<string> {
+  const upstream = await gitCode(dir, [
+    "rev-parse",
+    "--abbrev-ref",
+    "--symbolic-full-name",
+    `${baseBranch}@{upstream}`,
+  ]);
+  const remoteRef = upstream.code === 0 ? upstream.stdout.trim() : "";
+  const slash = remoteRef.indexOf("/");
+  if (slash <= 0) return baseBranch;
+  const remote = remoteRef.slice(0, slash);
+  const key = `${dir}\0${remoteRef}`;
+  const last = fetchedAt.get(key) ?? 0;
+  if (Date.now() - last > FETCH_EVERY_MS) {
+    fetchedAt.set(key, Date.now());
+    const auth = await githubGitAuth().catch(() => ({ args: [] as string[], env: {} }));
+    await git(
+      dir,
+      [...auth.args, "fetch", "-q", "--no-tags", remote, remoteRef.slice(slash + 1)],
+      auth.env,
+      FETCH_TIMEOUT_MS,
+    ).catch(() => undefined);
+  }
+  if ((await gitCode(dir, ["rev-parse", "-q", "--verify", `${remoteRef}^{commit}`])).code !== 0) {
+    return baseBranch;
+  }
+  // The remote's copy when it is ahead, unless the local branch has commits it does not.
+  const [local, remoteHead] = await Promise.all(
+    [baseBranch, remoteRef].map(async (ref) =>
+      (await gitCode(dir, ["rev-parse", ref])).stdout.trim(),
+    ),
+  );
+  if (local === remoteHead) return baseBranch;
+  const ahead = await gitCode(dir, ["merge-base", "--is-ancestor", baseBranch, remoteRef]);
+  return ahead.code === 0 ? remoteRef : baseBranch;
+}
