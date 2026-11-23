@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { findRow, type LineComment, parsePatch, placeComments, reviewMessage } from "./diff.ts";
+import {
+  findRow,
+  type LineComment,
+  parsePatch,
+  placeComments,
+  reviewMessage,
+  withoutFile,
+} from "./diff.ts";
 
 describe("parsePatch", () => {
   it("numbers lines in the old and the new file", () => {
@@ -103,5 +110,18 @@ describe("remarks anchored to their line", () => {
   it("keeps every remark while the review is still loading", () => {
     const placed = placeComments(undefined, [onC]);
     expect(placed.all).toEqual([onC]);
+  });
+});
+
+describe("remarks on a file whose changes were dropped", () => {
+  it("go with it, under its name or the one it had before a rename", () => {
+    const c = (id: string, path: string) => ({ id, path });
+    const all = [c("1", "a.ts"), c("2", "b.ts"), c("3", "old.ts"), c("4", "a.tsx")];
+    expect(withoutFile(all, { path: "a.ts" }).map((x) => x.id)).toEqual(["2", "3", "4"]);
+    expect(withoutFile(all, { path: "new.ts", from: "old.ts" }).map((x) => x.id)).toEqual([
+      "1",
+      "2",
+      "4",
+    ]);
   });
 });

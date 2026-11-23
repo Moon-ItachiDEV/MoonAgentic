@@ -64,6 +64,7 @@ import {
   samePath,
   saveCheckpoint,
   ship,
+  type MergeForecast,
   type ShipResult,
 } from "./git.ts";
 import {
@@ -91,6 +92,7 @@ import { AgentPool } from "./sessions.ts";
 import { light, TimelineLog } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
 import type { Store } from "./store.ts";
+import { forecastFor, rejectReviewFile, syncWorkspace } from "./workspace.ts";
 
 export interface Client {
   send(message: ServerMessage): void;
@@ -930,6 +932,22 @@ export class Hub {
           ),
         );
         return;
+      case "workspace.rejectFile":
+        await this.rejectFile(message.threadId, message.path, message.from);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "workspace.forecast":
+        client.send({
+          type: "forecast",
+          requestId: message.requestId,
+          threadId: message.threadId,
+          ...(await this.forecast(message.threadId)),
+        });
+        return;
+      case "workspace.sync":
+        await this.syncWithBase(message.threadId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "workspace.ship": {
         const result = await this.ship(
           message.threadId,
@@ -1690,6 +1708,45 @@ export class Hub {
     const workspace = this.requireLiveThread(threadId).workspace;
     if (!workspace?.base) return { files: [] };
     return reviewChanges(workspace.path, workspace.base);
+  }
+
+  /** Drops the changes to one file of the review, while the agent is not at work. */
+  async rejectFile(threadId: string, file: string, from?: string): Promise<void> {
+    const thread = this.requireLiveThread(threadId);
+    await this.exclusive(threadId, "Attends la fin de l'annulation du fichier.", () =>
+      rejectReviewFile(thread.workspace, file, from),
+    );
+  }
+
+  /**
+   * What merging the branch the thread started from would do now. A merge of it made some
+   * other way, by the agent, moves the start of the branch on, as « Synchroniser » does.
+   */
+  async forecast(threadId: string): Promise<MergeForecast> {
+    const workspace = this.requireLiveThread(threadId).workspace;
+    const { base, ...forecast } = await forecastFor(workspace);
+    // The server closed meanwhile: its store is no longer there to write to.
+    if (this.closed) return forecast;
+    const now = this.store.getThread(threadId)?.workspace;
+    // Only over the start it was worked out from: a sync meanwhile has the last word.
+    if (now && workspace && now.base === workspace.base && base !== now.base) {
+      this.updateThread(threadId, { workspace: { ...now, base } });
+    }
+    return forecast;
+  }
+
+  /**
+   * Merges the branch the thread started from into its own, when nothing conflicts. The
+   * branch then starts from there, so the review keeps showing the thread's work alone.
+   */
+  async syncWithBase(threadId: string): Promise<void> {
+    this.requireLiveThread(threadId);
+    await this.exclusive(threadId, "Attends la fin de la synchronisation.", async () => {
+      const workspace = this.store.getThread(threadId)?.workspace;
+      const { base } = await syncWorkspace(workspace);
+      const now = this.store.getThread(threadId)?.workspace;
+      if (now && now.base !== base) this.updateThread(threadId, { workspace: { ...now, base } });
+    });
   }
 
   /**

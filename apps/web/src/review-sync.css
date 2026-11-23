@@ -1,0 +1,58 @@
+/* Where the thread's branch stands against the one it started from, under its name. */
+.rv-sync {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: -2px 16px 8px;
+  padding: 5px 6px 5px 10px;
+  min-height: 30px;
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 12px;
+  color: var(--muted);
+}
+.rv-sync svg {
+  flex: none;
+  color: var(--add-fg);
+}
+.rv-sync.behind {
+  color: var(--fg);
+}
+.rv-sync.conflict {
+  color: var(--warn);
+}
+.rv-sync-t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rv-sync .btn {
+  flex: none;
+}
+.rv-panel .rv-sync-e {
+  margin: -4px 16px 8px;
+  padding: 0;
+}
+
+/* Dropping one file's changes: the button in its header, then the question under it. */
+.rvf-rj {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+}
+.rvf-rj:hover:not(:disabled) {
+  color: var(--del-fg);
+}
+.rvf-ask {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 12px;
+}
