@@ -468,7 +468,7 @@ export function SettingsPage(props: {
               title="Projet par défaut"
               text="Les nouvelles discussions démarrent dans ce projet."
             >
-              {props.projects.length ? (
+              {props.projects.some((p) => !p.locked) ? (
                 <label className="set-select">
                   <IconFolder size={14} />
                   <select
@@ -476,11 +476,13 @@ export function SettingsPage(props: {
                     value={props.projectId ?? ""}
                     onChange={(e) => props.onPickProject(e.target.value)}
                   >
-                    {props.projects.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
+                    {props.projects
+                      .filter((p) => !p.locked)
+                      .map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
                   </select>
                 </label>
               ) : (

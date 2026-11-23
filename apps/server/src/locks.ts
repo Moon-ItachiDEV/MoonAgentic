@@ -11,6 +11,8 @@ export interface LockStorage {
 
 const LOCKED_SETTING = "lock.projects";
 const PIN_SETTING = "lock.pin";
+/** The recent wrong codes, kept so that restarting the server does not reset the count. */
+const FAILURES_SETTING = "lock.failures";
 /** Wrong codes allowed in a row before waiting. */
 export const MAX_TRIES = 5;
 /** How long the wrong codes are counted, and how long one waits after too many. */
@@ -31,6 +33,7 @@ export class ProjectLocks {
     this.storage = storage;
     this.now = now;
     this.locked = new Set(storage.getSetting<string[]>(LOCKED_SETTING, []));
+    this.failures = storage.getSetting<number[]>(FAILURES_SETTING, []);
   }
 
   /** True when some project is locked: everything sent is then looked at. */
@@ -99,8 +102,10 @@ export class ProjectLocks {
         hashPin(pin, Buffer.from(kept.salt, "base64")),
         Buffer.from(kept.hash, "base64"),
       );
+    const before = this.failures.length;
     if (right) this.failures = [];
     else this.failures.push(now);
+    if (before || this.failures.length) this.storage.setSetting(FAILURES_SETTING, this.failures);
     return right;
   }
 

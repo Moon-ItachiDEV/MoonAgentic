@@ -13,23 +13,33 @@ export type LockAsk =
   /** The code that opens this project again; `after` runs once it is open. */
   | { kind: "unlock"; projectId: string; name: string; after?: () => void };
 
-let asked: LockAsk | null = null;
+/** The ask shown, numbered so that each one starts afresh and closes only itself. */
+export interface Asked {
+  ask: LockAsk;
+  seq: number;
+}
+
+let asked: Asked | null = null;
+let seq = 0;
 const listeners = new Set<() => void>();
 const changed = () => {
   for (const listener of listeners) listener();
 };
 
 export const lockSheet = {
-  get: (): LockAsk | null => asked,
+  get: (): Asked | null => asked,
   subscribe(listener: () => void): () => void {
     listeners.add(listener);
     return () => listeners.delete(listener);
   },
   open(ask: LockAsk): void {
-    asked = ask;
+    seq += 1;
+    asked = { ask, seq };
     changed();
   },
-  close(): void {
+  /** Closes the sheet, or only the ask numbered `which` when given, not one opened since. */
+  close(which?: number): void {
+    if (which !== undefined && asked?.seq !== which) return;
     asked = null;
     changed();
   },

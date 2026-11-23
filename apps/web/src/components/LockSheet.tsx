@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import "../lock.css";
 import { connection, newId } from "../connection.ts";
-import { type LockAsk, fullPin, lockSheet } from "../lock.ts";
+import { type Asked, type LockAsk, fullPin, lockSheet } from "../lock.ts";
 import { IconLock } from "./icons.tsx";
 
 type Step = "current" | "new" | "confirm" | "code";
@@ -22,18 +22,43 @@ const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /** Shown over everything while a code is asked for. */
 export function LockSheet() {
-  const ask = useSyncExternalStore(lockSheet.subscribe, lockSheet.get);
+  const asked = useSyncExternalStore(lockSheet.subscribe, lockSheet.get);
   // A new ask starts afresh, even over one left open.
-  return ask ? <Sheet key={JSON.stringify(ask)} ask={ask} /> : null;
+  return asked ? <Sheet key={asked.seq} asked={asked} /> : null;
 }
 
-function Sheet({ ask }: { ask: LockAsk }) {
+function Sheet({ asked }: { asked: Asked }) {
+  const ask: LockAsk = asked.ask;
   const [step, setStep] = useState<Step>(firstStep(ask));
   const [typed, setTyped] = useState("");
   const [state, setState] = useState<"" | "busy" | "ok" | "bad">("");
   const [message, setMessage] = useState<string | null>(null);
   const kept = useRef<{ current?: string; first?: string }>({});
   const card = useRef<HTMLDivElement>(null);
+  /** The pauses under way, stopped if the sheet goes first. */
+  const timers = useRef(new Set<ReturnType<typeof setTimeout>>());
+  /** What follows a code the server took, still to run if the sheet goes before its pause ends. */
+  const pending = useRef<(() => void) | undefined>(undefined);
+  const alive = useRef(true);
+  const later = (run: () => void, ms: number) => {
+    if (!alive.current) return;
+    const timer = setTimeout(() => {
+      timers.current.delete(timer);
+      run();
+    }, ms);
+    timers.current.add(timer);
+  };
+  useEffect(
+    () => () => {
+      alive.current = false;
+      for (const timer of timers.current) clearTimeout(timer);
+      timers.current.clear();
+      const after = pending.current;
+      pending.current = undefined;
+      after?.();
+    },
+    [],
+  );
 
   const hint =
     step === "confirm"
@@ -50,13 +75,13 @@ function Sheet({ ask }: { ask: LockAsk }) {
         ? "Pour le remplacer par un nouveau."
         : "Il servira à rouvrir les projets que tu verrouilles, sur tous tes appareils. Tu peux le changer dans Réglages › Général.";
 
-  const close = () => lockSheet.close();
+  const close = () => lockSheet.close(asked.seq);
 
   /** Wrong: says why, then lets it be typed again from `back`. */
   const refuse = (why: string, back: Step) => {
     setState("bad");
     setMessage(why);
-    setTimeout(() => {
+    later(() => {
       setTyped("");
       setStep(back);
       setState("");
@@ -72,7 +97,11 @@ function Sheet({ ask }: { ask: LockAsk }) {
     } catch {
       // Not every browser lets a page vibrate.
     }
-    setTimeout(() => {
+    // The server took it: what follows runs even if another sheet replaces this one first.
+    if (!alive.current) return after?.();
+    pending.current = after;
+    later(() => {
+      pending.current = undefined;
       close();
       after?.();
     }, 900);
@@ -89,7 +118,7 @@ function Sheet({ ask }: { ask: LockAsk }) {
       kept.current.first = pin;
       // The last digit is seen before the slots empty for the second time.
       setState("busy");
-      setTimeout(() => {
+      later(() => {
         setTyped("");
         setStep("confirm");
         setState("");

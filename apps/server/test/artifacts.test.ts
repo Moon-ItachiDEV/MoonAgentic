@@ -129,8 +129,15 @@ describe("artifacts", { timeout: 40_000 }, () => {
     hub.locks.setPin("123456");
     hub.locks.lock(projectId);
     expect(await hub.artifactLinks.resolve(ticket, "docs/maquette.html")).toBeUndefined();
+    // Not even looked for: they never take room from an open project's under the cap.
+    const replies: ServerMessage[] = [];
+    const raw = { send: (m: ServerMessage) => void replies.push(m) };
+    await hub.handle(raw, { type: "artifacts.list", requestId: "a1" });
+    expect(replies.at(-1)).toMatchObject({ type: "artifacts", artifacts: [] });
     hub.locks.unlock(projectId, "123456");
     expect(await hub.artifactLinks.resolve(ticket, "docs/maquette.html")).toBeDefined();
+    await hub.handle(raw, { type: "artifacts.list", requestId: "a2" });
+    expect((replies.at(-1) as { artifacts: unknown[] }).artifacts.length).toBeGreaterThan(0);
   });
 
   it.skipIf(process.platform === "win32")(

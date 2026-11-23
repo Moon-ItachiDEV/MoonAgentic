@@ -918,7 +918,10 @@ export class Hub {
         client.send({
           type: "artifacts",
           requestId: message.requestId,
-          ...(await findArtifacts(this.store.listThreads())),
+          // A locked project's folders are not even looked at, nor counted in the cap.
+          ...(await findArtifacts(
+            this.store.listThreads().filter((t) => !this.locks.isLocked(t.projectId)),
+          )),
         });
         return;
       case "artifacts.open": {
@@ -1103,8 +1106,9 @@ export class Hub {
         client.send({
           type: "activity",
           requestId: message.requestId,
-          days: this.store.activityDays(since, offsetMs),
-          firstAt: this.store.firstThreadAt(),
+          // Not even how much a locked project's threads were written in.
+          days: this.store.activityDays(since, offsetMs, this.locks.lockedProjects()),
+          firstAt: this.store.firstThreadAt(this.locks.lockedProjects()),
         });
         return;
       }

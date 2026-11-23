@@ -83,6 +83,17 @@ describe("project locks", () => {
     expect(locks.isLocked("p1")).toBe(false);
   });
 
+  it("keeps counting the wrong codes when the server starts again", () => {
+    const storage = memory();
+    const now = () => 1_000_000;
+    const first = new ProjectLocks(storage, now);
+    first.setPin("123456");
+    first.lock("p1");
+    for (let i = 0; i < MAX_TRIES; i++) expect(() => first.unlock("p1", "000000")).toThrow();
+    const again = new ProjectLocks(storage, now);
+    expect(() => again.unlock("p1", "123456")).toThrow(/Réessaie/);
+  });
+
   it("counts again from zero after the right code", () => {
     const locks = new ProjectLocks(memory());
     locks.setPin("123456");
@@ -179,6 +190,24 @@ describe("a locked project on the wire", () => {
     await expect(
       hub.handle(client, { type: "plan.add", requestId: "c2", projectId: secret, title: "Non" }),
     ).rejects.toThrow(/verrouillé/);
+  });
+
+  it("leaves its messages out of the activity map", async () => {
+    const { hub, client, secret, open, thread } = setup();
+    const hidden = thread(secret, "secret");
+    const shown = thread(open, "public");
+    await hub.whenIdle(hidden);
+    await hub.whenIdle(shown);
+    const total = async (requestId: string) => {
+      await hub.handle(client, { type: "activity", requestId, tzOffset: 0, days: 2 });
+      return client.last("activity").days.reduce((n, d) => n + d.count, 0);
+    };
+    const all = await total("a1");
+    await hub.handle(client, { type: "lock.setPin", requestId: "r1", pin: "123456" });
+    await hub.handle(client, { type: "lock.project", requestId: "r2", projectId: secret });
+    const left = await total("a2");
+    expect(left).toBeGreaterThan(0);
+    expect(left).toBeLessThan(all);
   });
 
   it("filters search hits", async () => {
