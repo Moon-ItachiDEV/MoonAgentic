@@ -10,7 +10,7 @@ import { LEGACY_MODE, modelOption } from "../src/session.ts";
 import { Store } from "../src/store.ts";
 
 class TestClient implements Client {
-  openThreadId?: string;
+  openThreadIds?: Set<string>;
   readonly messages: ServerMessage[] = [];
   private waiters: { match: (m: ServerMessage) => boolean; resolve: (m: ServerMessage) => void }[] =
     [];
@@ -105,7 +105,7 @@ describe("Hub with the demo agent", () => {
       text: "Relis",
       role: "reviewer",
     });
-    client.openThreadId = threadId;
+    client.openThreadIds = new Set([threadId]);
     await asked;
     expect(store.getThread(threadId)?.status).toBe("waiting");
     await hub.cancel(threadId);
@@ -121,7 +121,7 @@ describe("Hub with the demo agent", () => {
       permissionMode: "supervised",
       text: "Corrige la réponse",
     });
-    client.openThreadId = threadId;
+    client.openThreadIds = new Set([threadId]);
 
     const request = await asked;
     expect(store.getThread(threadId)?.status).toBe("waiting");
@@ -213,7 +213,7 @@ describe("Hub with the demo agent", () => {
     // The thread still works afterwards.
     hub.send(threadId, "Encore");
     const client = new TestClient();
-    client.openThreadId = threadId;
+    client.openThreadIds = new Set([threadId]);
     hub.connect(client);
     await client.next(isPermissionRequest);
     await hub.cancel(threadId);
@@ -230,7 +230,7 @@ describe("Hub with the demo agent", () => {
       permissionMode: "supervised",
       text: "Stop",
     });
-    client.openThreadId = threadId;
+    client.openThreadIds = new Set([threadId]);
     await asked;
     await hub.cancel(threadId);
     await hub.whenIdle(threadId);
@@ -268,7 +268,7 @@ describe("Hub with the demo agent", () => {
       permissionMode: "supervised",
       text: "Un",
     });
-    client.openThreadId = threadId;
+    client.openThreadIds = new Set([threadId]);
     await asked;
     expect(() => hub.send(threadId, "Deux")).toThrow("L'agent travaille encore");
   });
@@ -385,7 +385,7 @@ describe("Hub with the demo agent", () => {
       permissionMode: "supervised",
       text: "Un",
     });
-    client.openThreadId = threadId;
+    client.openThreadIds = new Set([threadId]);
     await asked;
     await expect(hub.setModel(threadId, "rapide")).rejects.toThrow("fin de la réponse");
     await hub.cancel(threadId);
@@ -509,7 +509,7 @@ describe("Hub with the demo agent", () => {
       settings: { mode: "agent" },
       text: "Un",
     });
-    client.openThreadId = threadId;
+    client.openThreadIds = new Set([threadId]);
     await asked;
     await expect(hub.switchAgent(threadId, "demo-2")).rejects.toThrow("fin de la réponse");
     await hub.cancel(threadId);
@@ -1143,7 +1143,7 @@ describe("streamed text", () => {
       permissionMode: "full",
       text: "Corrige la réponse",
     });
-    const threadId = client.openThreadId!;
+    const threadId = [...client.openThreadIds!][0]!;
     await hub.whenIdle(threadId);
     const appends = client.messages.filter((m) => m.type === "append").length;
     expect(appends).toBeGreaterThan(10);
