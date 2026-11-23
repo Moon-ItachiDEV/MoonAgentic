@@ -20,6 +20,9 @@ const git = (cwd: string, ...args: string[]) =>
     .toString()
     .trim();
 
+/** A file's text, whatever line endings git on Windows gave it on checkout. */
+const read = (file: string) => readFileSync(file, "utf8").replaceAll("\r\n", "\n");
+
 const identity = (dir: string) => {
   git(dir, "config", "user.email", "test@example.com");
   git(dir, "config", "user.name", "Test");
@@ -73,7 +76,7 @@ describe("dropping one file's changes", () => {
     expect(await paths()).toEqual(["README.md", "carnet.md", "nouveau.txt"]);
 
     await hub.rejectFile(threadId, "README.md");
-    expect(readFileSync(path.join(dir, "README.md"), "utf8")).toBe("# Demo\nune ligne\n");
+    expect(read(path.join(dir, "README.md"))).toBe("# Demo\nune ligne\n");
     await hub.rejectFile(threadId, "nouveau.txt");
     expect(existsSync(path.join(dir, "nouveau.txt"))).toBe(false);
     await hub.rejectFile(threadId, "carnet.md", "notes.md");
@@ -89,7 +92,7 @@ describe("dropping one file's changes", () => {
     git(dir, "commit", "-q", "-am", "change");
     expect((await hub.review(threadId)).files.map((f) => f.path)).toEqual(["README.md"]);
     await hub.rejectFile(threadId, "README.md");
-    expect(readFileSync(path.join(dir, "README.md"), "utf8")).toBe("# Demo\nune ligne\n");
+    expect(read(path.join(dir, "README.md"))).toBe("# Demo\nune ligne\n");
     expect((await hub.review(threadId)).files).toEqual([]);
 
     // Nothing outside the review, and never outside the folder.
@@ -117,8 +120,8 @@ describe("keeping up with the branch it started from", () => {
     await hub.syncWithBase(threadId);
     expect(workspace().base).toBe(git(repo, "rev-parse", "main"));
     expect(workspace().base).not.toBe(before);
-    expect(readFileSync(path.join(dir, "notes.md"), "utf8")).toBe("notes\nde main\n");
-    expect(readFileSync(path.join(dir, "README.md"), "utf8")).toBe("# Demo\nle travail du fil\n");
+    expect(read(path.join(dir, "notes.md"))).toBe("notes\nde main\n");
+    expect(read(path.join(dir, "README.md"))).toBe("# Demo\nle travail du fil\n");
     // The review shows the thread's own work only, not what came from main.
     expect((await hub.review(threadId)).files.map((f) => f.path)).toEqual(["README.md"]);
     expect(await forecastFor(workspace())).toMatchObject({ behind: 0 });
@@ -137,7 +140,7 @@ describe("keeping up with the branch it started from", () => {
     const head = git(dir, "rev-parse", "HEAD");
     await expect(hub.syncWithBase(threadId)).rejects.toThrow(/bloquerait sur 1 fichier/);
     expect(git(dir, "rev-parse", "HEAD")).toBe(head);
-    expect(readFileSync(path.join(dir, "README.md"), "utf8")).toBe("# Demo\ncôté fil\n");
+    expect(read(path.join(dir, "README.md"))).toBe("# Demo\ncôté fil\n");
   });
 
   it("compares with the remote's main when a merge landed there first", async () => {
@@ -156,7 +159,7 @@ describe("keeping up with the branch it started from", () => {
       conflicts: [],
     });
     await hub.syncWithBase(threadId);
-    expect(readFileSync(path.join(dir, "notes.md"), "utf8")).toBe("notes\nfusionnées ailleurs\n");
+    expect(read(path.join(dir, "notes.md"))).toBe("notes\nfusionnées ailleurs\n");
     expect(workspace().base).toBe(git(dir, "rev-parse", "origin/main"));
   });
 });
