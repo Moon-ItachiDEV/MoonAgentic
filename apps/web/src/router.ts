@@ -1,12 +1,20 @@
 import { useSyncExternalStore } from "react";
 
 export type SettingsSection =
-  "general" | "appearance" | "agents" | "models" | "coordinator" | "mcp" | "remote";
+  | "general"
+  | "appearance"
+  | "agents"
+  | "models"
+  | "subscriptions"
+  | "coordinator"
+  | "mcp"
+  | "remote";
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   "general",
   "appearance",
   "agents",
   "models",
+  "subscriptions",
   "coordinator",
   "mcp",
   "remote",

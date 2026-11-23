@@ -31,6 +31,8 @@ import {
 } from "../dictation.ts";
 import { connection, newId } from "../connection.ts";
 import { readPref, writePref } from "../prefs.ts";
+import { quotaWarning, roomiest } from "../quotas.ts";
+import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { ContextGauge } from "./ContextGauge.tsx";
 import {
@@ -82,6 +84,8 @@ export function Composer(props: {
   onConnections: () => void;
   /** Opens the settings. */
   onSettings: () => void;
+  /** Opens Réglages › Abonnements. */
+  onSubscriptions?: () => void;
   /** Archives the thread. */
   onArchive: () => void;
   /** Asks before deleting the thread. */
@@ -167,6 +171,25 @@ export function Composer(props: {
       ? modeSetting.choices.find((c) => c.id === settings[modeSetting.id])?.name
       : undefined;
   const running = thread?.status === "running" || thread?.status === "waiting";
+  // Nearly out on its subscription: said over the composer, with an agent that has room.
+  const quotas = useQuotas();
+  const quotaSeen = useQuotaSeen();
+  const warning = agent
+    ? quotaWarning(
+        quotas.find((q) => q.agentId === agent.id),
+        agent.name,
+      )
+    : undefined;
+  const roomier = warning && agent ? roomiest(quotas, agents, agent.id) : undefined;
+  const pickAgent = (id: string) => {
+    if (thread) {
+      if (id !== thread.agentId)
+        connection.send({ type: "thread.switchAgent", threadId: thread.id, agentId: id });
+      return;
+    }
+    setPickedAgentId(id);
+    writePref("agent", id);
+  };
   // The model is switched between turns only, so a turn starting (here or on another
   // device) closes the picker for good rather than hiding it until the turn ends.
   if (menu && thread && running) setMenu(false);
@@ -562,321 +585,350 @@ export function Composer(props: {
   const seconds = voice ? Math.floor((Date.now() - voice.started) / 1000) : 0;
   const heardText = voice ? `${voice.heard.final} ` : "";
 
-  return (
-    <div
-      className={`composer${open ? " open" : ""}${voice ? " vx-on" : ""}`}
-      ref={root}
-      onFocus={() => setFocused(true)}
-      onPointerDownCapture={() => {
-        pressedInside.current = true;
-      }}
-      onBlur={(e) => {
-        const box = e.currentTarget;
-        if (box.contains(e.relatedTarget as Node | null)) return;
-        // Safari gives no `relatedTarget` when a button is touched: wait for the click to
-        // land before folding the composer, then fold only if the focus really left it.
-        if (pressedInside.current) {
-          setTimeout(() => {
-            pressedInside.current = false;
-            if (!box.contains(document.activeElement)) setFocused(false);
-          }, 300);
-          return;
-        }
-        setFocused(false);
-      }}
-    >
-      {voice && (
-        <div className="vxp">
-          <div className="vxp-t" aria-live="polite">
-            {voice.heard.final || voice.heard.interim ? (
-              <>
-                {voice.typed && <span className="vxp-typed">{voice.typed} </span>}
-                {voice.heard.final && heardText}
-                <span className="vxp-cur">{voice.heard.interim}</span>
-              </>
-            ) : (
-              <span className="vxp-ph">Je t'écoute…</span>
-            )}
-          </div>
-          <div className="vxp-w">
-            <button className="vxp-x" aria-label="Annuler la dictée" onClick={cancelVoice}>
-              <IconClose />
-            </button>
-            <span className="vxp-level" aria-hidden>
-              <i />
-            </span>
-          </div>
-        </div>
-      )}
-      <textarea
-        ref={input}
-        hidden={!!voice}
-        rows={1}
-        value={text}
-        placeholder={placeholder}
-        disabled={!project}
-        aria-label="Message"
-        role="combobox"
-        aria-autocomplete="list"
-        aria-expanded={suggesting}
-        aria-controls={suggesting ? "composer-suggest" : undefined}
-        aria-activedescendant={suggesting && suggestions.length ? `sg-${highlighted}` : undefined}
-        onChange={(e) => {
-          setText(e.target.value);
-          setCaret(e.target.selectionStart);
-          setActive(0);
-          // Erasing back to the `/`, `@` or `$` opens the list again.
-          if (dismissed !== null && e.target.value.length <= dismissed + 1) setDismissed(null);
-        }}
-        onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-        onFocus={() => {
-          // Skills or commands added to the folder since show up without a reload.
-          loadCatalog();
-        }}
-        onKeyDown={(e) => {
-          if (suggesting && !e.nativeEvent.isComposing) {
-            const count = suggestions.length;
-            if (e.key === "ArrowDown" && count) {
-              e.preventDefault();
-              setActive((highlighted + 1) % count);
-              return;
-            }
-            if (e.key === "ArrowUp" && count) {
-              e.preventDefault();
-              setActive((highlighted - 1 + count) % count);
-              return;
-            }
-            if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && count) {
-              e.preventDefault();
-              const item = suggestions[highlighted];
-              if (item) pick(item);
-              return;
-            }
-            if (e.key === "Escape") {
-              e.preventDefault();
-              e.stopPropagation();
-              setDismissed(trigger.start);
-              return;
-            }
-          }
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-            e.preventDefault();
-            void submit();
-          }
-        }}
-      />
-      <div className="cbar">
-        <PlusMenu
-          open={plusOpen}
-          branch={
-            !thread && project?.git
-              ? {
-                  on: isolated,
-                  onToggle: () => {
-                    setIsolated(!isolated);
-                    writePref("isolated", String(!isolated));
-                  },
-                }
-              : undefined
-          }
-          disabled={!project}
-          inThread={!!thread}
-          onToggle={(open) => {
-            setPlusOpen(open);
-            if (open) setMenu(false);
-          }}
-          onPick={(insert) => {
-            setPlusOpen(false);
-            input.current?.focus();
-            // Starts the word the composer already completes: @ files, $ skills, / commands.
-            if (insert === "/") {
-              // A command is the message's first word.
-              const rest = text.trimStart();
-              putText(rest ? `/ ${rest}` : "/", 1);
-              return;
-            }
-            const before = text.slice(0, caret);
-            const space = before && !/\s$/.test(before) ? " " : "";
-            putText(
-              before + space + insert + text.slice(caret),
-              before.length + space.length + insert.length,
-            );
-          }}
-        />
-        <button
-          className="agentchip"
-          // In a thread whose agent is gone, the picker is how it goes to another one.
-          disabled={thread ? running : !agent?.available}
-          title={
-            thread && running
-              ? "L'agent et ses réglages se changent entre deux réponses"
-              : thread && !agent?.available
-                ? "Cet agent n'est plus disponible : choisis-en un autre pour continuer"
-                : undefined
-          }
-          aria-haspopup="menu"
-          aria-expanded={pickerOpen}
-          onClick={() => setMenu((m) => !m)}
-        >
-          <AgentBadge agent={agent} />
-          <span className="lbl">
-            {agent?.name ?? (thread ? "Agent retiré" : "Aucun agent installé")}
-            {modeName && <span className="sep"> · </span>}
-            {modeName && <span className="mode">{modeName}</span>}
-            {modelName && <span className="sep"> · </span>}
-            {modelName}
-          </span>
-        </button>
-        <span className="grow" />
-        {!thread && project?.git && isolated && (
-          <button
-            className="perm branch on mark"
-            aria-label="Branche à part"
-            title="Branche à part : l'agent travaille sur sa propre branche, dans une copie du projet. Change-le dans le menu +."
-            onClick={() => {
-              setPlusOpen(true);
-              setMenu(false);
-            }}
-          >
-            <IconBranch size={13} />
+  const notice = warning && agent && quotaSeen[agent.id] !== warning.key && !voice && (
+    <div className={`qt-notice ${warning.level}`} role="status">
+      <span className="qt-dot" aria-hidden />
+      <div className="qt-msg">
+        {warning.text} {warning.when && <span>{warning.when}</span>}
+      </div>
+      <div className="qt-acts">
+        {roomier && !running ? (
+          <button className="btn sm" onClick={() => pickAgent(roomier.id)}>
+            Passer à {roomier.name}
           </button>
+        ) : (
+          props.onSubscriptions && (
+            <button className="btn sm" onClick={props.onSubscriptions}>
+              Voir les limites
+            </button>
+          )
         )}
         <button
-          className={`perm${mode === "full" ? " full" : ""}`}
-          onClick={toggleMode}
-          title={
-            mode === "full"
-              ? "L'agent agit sans demander"
-              : "L'agent demande avant de modifier ou lancer quoi que ce soit"
-          }
+          className="ib"
+          aria-label="Masquer cet avertissement"
+          onClick={() => dismissQuotaWarning(agent.id, warning.key)}
         >
-          <IconShield />
-          {mode === "full" ? "Accès complet" : "Supervisé"}
+          <IconClose />
         </button>
-        {thread?.usage && (
-          <ContextGauge
-            usage={thread.usage}
-            action={
-              thread.canCompact
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      {notice}
+      <div
+        className={`composer${open ? " open" : ""}${voice ? " vx-on" : ""}`}
+        ref={root}
+        onFocus={() => setFocused(true)}
+        onPointerDownCapture={() => {
+          pressedInside.current = true;
+        }}
+        onBlur={(e) => {
+          const box = e.currentTarget;
+          if (box.contains(e.relatedTarget as Node | null)) return;
+          // Safari gives no `relatedTarget` when a button is touched: wait for the click to
+          // land before folding the composer, then fold only if the focus really left it.
+          if (pressedInside.current) {
+            setTimeout(() => {
+              pressedInside.current = false;
+              if (!box.contains(document.activeElement)) setFocused(false);
+            }, 300);
+            return;
+          }
+          setFocused(false);
+        }}
+      >
+        {voice && (
+          <div className="vxp">
+            <div className="vxp-t" aria-live="polite">
+              {voice.heard.final || voice.heard.interim ? (
+                <>
+                  {voice.typed && <span className="vxp-typed">{voice.typed} </span>}
+                  {voice.heard.final && heardText}
+                  <span className="vxp-cur">{voice.heard.interim}</span>
+                </>
+              ) : (
+                <span className="vxp-ph">Je t'écoute…</span>
+              )}
+            </div>
+            <div className="vxp-w">
+              <button className="vxp-x" aria-label="Annuler la dictée" onClick={cancelVoice}>
+                <IconClose />
+              </button>
+              <span className="vxp-level" aria-hidden>
+                <i />
+              </span>
+            </div>
+          </div>
+        )}
+        <textarea
+          ref={input}
+          hidden={!!voice}
+          rows={1}
+          value={text}
+          placeholder={placeholder}
+          disabled={!project}
+          aria-label="Message"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={suggesting}
+          aria-controls={suggesting ? "composer-suggest" : undefined}
+          aria-activedescendant={suggesting && suggestions.length ? `sg-${highlighted}` : undefined}
+          onChange={(e) => {
+            setText(e.target.value);
+            setCaret(e.target.selectionStart);
+            setActive(0);
+            // Erasing back to the `/`, `@` or `$` opens the list again.
+            if (dismissed !== null && e.target.value.length <= dismissed + 1) setDismissed(null);
+          }}
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+          onFocus={() => {
+            // Skills or commands added to the folder since show up without a reload.
+            loadCatalog();
+          }}
+          onKeyDown={(e) => {
+            if (suggesting && !e.nativeEvent.isComposing) {
+              const count = suggestions.length;
+              if (e.key === "ArrowDown" && count) {
+                e.preventDefault();
+                setActive((highlighted + 1) % count);
+                return;
+              }
+              if (e.key === "ArrowUp" && count) {
+                e.preventDefault();
+                setActive((highlighted - 1 + count) % count);
+                return;
+              }
+              if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && count) {
+                e.preventDefault();
+                const item = suggestions[highlighted];
+                if (item) pick(item);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                setDismissed(trigger.start);
+                return;
+              }
+            }
+            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              e.preventDefault();
+              void submit();
+            }
+          }}
+        />
+        <div className="cbar">
+          <PlusMenu
+            open={plusOpen}
+            branch={
+              !thread && project?.git
                 ? {
-                    label: "Compacter la conversation",
-                    disabled: running,
-                    run: () =>
-                      connection.send({
-                        type: "thread.send",
-                        threadId: thread.id,
-                        text: "/compact",
-                      }),
+                    on: isolated,
+                    onToggle: () => {
+                      setIsolated(!isolated);
+                      writePref("isolated", String(!isolated));
+                    },
                   }
                 : undefined
             }
+            disabled={!project}
+            inThread={!!thread}
+            onToggle={(open) => {
+              setPlusOpen(open);
+              if (open) setMenu(false);
+            }}
+            onPick={(insert) => {
+              setPlusOpen(false);
+              input.current?.focus();
+              // Starts the word the composer already completes: @ files, $ skills, / commands.
+              if (insert === "/") {
+                // A command is the message's first word.
+                const rest = text.trimStart();
+                putText(rest ? `/ ${rest}` : "/", 1);
+                return;
+              }
+              const before = text.slice(0, caret);
+              const space = before && !/\s$/.test(before) ? " " : "";
+              putText(
+                before + space + insert + text.slice(caret),
+                before.length + space.length + insert.length,
+              );
+            }}
           />
-        )}
-        {canDictate && (
           <button
-            className="mic-btn"
-            aria-label={voice ? "Arrêter la dictée" : "Dicter"}
-            title={voice ? "Arrêter la dictée" : "Dicter"}
-            aria-pressed={!!voice}
-            onClick={() => (voice ? stopVoice() : startVoice())}
+            className="agentchip"
+            // In a thread whose agent is gone, the picker is how it goes to another one.
+            disabled={thread ? running : !agent?.available}
+            title={
+              thread && running
+                ? "L'agent et ses réglages se changent entre deux réponses"
+                : thread && !agent?.available
+                  ? "Cet agent n'est plus disponible : choisis-en un autre pour continuer"
+                  : undefined
+            }
+            aria-haspopup="menu"
+            aria-expanded={pickerOpen}
+            onClick={() => setMenu((m) => !m)}
           >
-            <IconMic />
-          </button>
-        )}
-        {voice ? (
-          <button className="send vox" aria-label="Terminer la dictée" onClick={stopVoice}>
-            <span className="vx-sq" />
-            <IconWave />
-            <span className="vx-t">
-              {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+            <AgentBadge agent={agent} />
+            <span className="lbl">
+              {agent?.name ?? (thread ? "Agent retiré" : "Aucun agent installé")}
+              {modeName && <span className="sep"> · </span>}
+              {modeName && <span className="mode">{modeName}</span>}
+              {modelName && <span className="sep"> · </span>}
+              {modelName}
             </span>
           </button>
-        ) : running ? (
+          <span className="grow" />
+          {!thread && project?.git && isolated && (
+            <button
+              className="perm branch on mark"
+              aria-label="Branche à part"
+              title="Branche à part : l'agent travaille sur sa propre branche, dans une copie du projet. Change-le dans le menu +."
+              onClick={() => {
+                setPlusOpen(true);
+                setMenu(false);
+              }}
+            >
+              <IconBranch size={13} />
+            </button>
+          )}
           <button
-            className="send stop"
-            aria-label="Arrêter"
-            onClick={() =>
-              thread && connection.send({ type: "thread.cancel", threadId: thread.id })
+            className={`perm${mode === "full" ? " full" : ""}`}
+            onClick={toggleMode}
+            title={
+              mode === "full"
+                ? "L'agent agit sans demander"
+                : "L'agent demande avant de modifier ou lancer quoi que ce soit"
             }
           >
-            <IconStop />
+            <IconShield />
+            {mode === "full" ? "Accès complet" : "Supervisé"}
           </button>
-        ) : !text.trim() && canDictate ? (
-          <button className="send" aria-label="Mode vocal" title="Mode vocal" onClick={startVoice}>
-            <IconWave />
-          </button>
-        ) : (
-          <button
-            className="send"
-            aria-label="Envoyer"
-            disabled={!canSend}
-            onClick={() => void submit()}
-          >
-            <IconArrowUp />
-          </button>
-        )}
-      </div>
-      {suggesting && trigger && (
-        <Suggestions
-          kind={trigger.kind}
-          items={suggestions}
-          active={highlighted}
-          empty={empty}
-          onPick={pick}
-          onHover={setActive}
-        />
-      )}
-      <Presence show={pickerOpen}>
-        <Picker
-          agents={agents}
-          agent={agent}
-          model={model}
-          favorites={props.favorites}
-          projectId={project?.id}
-          inThread={!!thread}
-          agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
-          settings={settings}
-          onPickSetting={pickSetting}
-          onPickAgent={(id) => {
-            if (thread) {
-              if (id !== thread.agentId)
-                connection.send({ type: "thread.switchAgent", threadId: thread.id, agentId: id });
-              return;
-            }
-            setPickedAgentId(id);
-            writePref("agent", id);
-          }}
-          onPickAgentModel={(id, model, stay) => {
-            if (thread) {
-              // The model is set once the new agent has the thread: the server takes one change at a time.
-              if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
-              connection.send({ type: "thread.switchAgent", threadId: thread.id, agentId: id });
-            } else {
-              setPickedAgentId(id);
-              writePref("agent", id);
-              if (model) {
-                setModelPicks((p) => ({ ...p, [id]: model }));
-                writePref(`model.${id}`, model);
+          {thread?.usage && (
+            <ContextGauge
+              usage={thread.usage}
+              action={
+                thread.canCompact
+                  ? {
+                      label: "Compacter la conversation",
+                      disabled: running,
+                      run: () =>
+                        connection.send({
+                          type: "thread.send",
+                          threadId: thread.id,
+                          text: "/compact",
+                        }),
+                    }
+                  : undefined
               }
-            }
-            if (stay) return;
-            setMenu(false);
-            input.current?.focus();
-          }}
-          onPickModel={(id, stay) => {
-            if (thread)
-              connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
-            else if (agent) {
-              setModelPicks((p) => ({ ...p, [agent.id]: id }));
-              writePref(`model.${agent.id}`, id);
-            }
-            if (stay) return;
-            setMenu(false);
-            input.current?.focus();
-          }}
-          onClose={() => setMenu(false)}
-        />
-      </Presence>
-    </div>
+            />
+          )}
+          {canDictate && (
+            <button
+              className="mic-btn"
+              aria-label={voice ? "Arrêter la dictée" : "Dicter"}
+              title={voice ? "Arrêter la dictée" : "Dicter"}
+              aria-pressed={!!voice}
+              onClick={() => (voice ? stopVoice() : startVoice())}
+            >
+              <IconMic />
+            </button>
+          )}
+          {voice ? (
+            <button className="send vox" aria-label="Terminer la dictée" onClick={stopVoice}>
+              <span className="vx-sq" />
+              <IconWave />
+              <span className="vx-t">
+                {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+              </span>
+            </button>
+          ) : running ? (
+            <button
+              className="send stop"
+              aria-label="Arrêter"
+              onClick={() =>
+                thread && connection.send({ type: "thread.cancel", threadId: thread.id })
+              }
+            >
+              <IconStop />
+            </button>
+          ) : !text.trim() && canDictate ? (
+            <button
+              className="send"
+              aria-label="Mode vocal"
+              title="Mode vocal"
+              onClick={startVoice}
+            >
+              <IconWave />
+            </button>
+          ) : (
+            <button
+              className="send"
+              aria-label="Envoyer"
+              disabled={!canSend}
+              onClick={() => void submit()}
+            >
+              <IconArrowUp />
+            </button>
+          )}
+        </div>
+        {suggesting && trigger && (
+          <Suggestions
+            kind={trigger.kind}
+            items={suggestions}
+            active={highlighted}
+            empty={empty}
+            onPick={pick}
+            onHover={setActive}
+          />
+        )}
+        <Presence show={pickerOpen}>
+          <Picker
+            agents={agents}
+            agent={agent}
+            model={model}
+            favorites={props.favorites}
+            projectId={project?.id}
+            inThread={!!thread}
+            agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
+            settings={settings}
+            onPickSetting={pickSetting}
+            onPickAgent={pickAgent}
+            onPickAgentModel={(id, model, stay) => {
+              if (thread) {
+                // The model is set once the new agent has the thread: the server takes one change at a time.
+                if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
+                connection.send({ type: "thread.switchAgent", threadId: thread.id, agentId: id });
+              } else {
+                setPickedAgentId(id);
+                writePref("agent", id);
+                if (model) {
+                  setModelPicks((p) => ({ ...p, [id]: model }));
+                  writePref(`model.${id}`, model);
+                }
+              }
+              if (stay) return;
+              setMenu(false);
+              input.current?.focus();
+            }}
+            onPickModel={(id, stay) => {
+              if (thread)
+                connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
+              else if (agent) {
+                setModelPicks((p) => ({ ...p, [agent.id]: id }));
+                writePref(`model.${agent.id}`, id);
+              }
+              if (stay) return;
+              setMenu(false);
+              input.current?.focus();
+            }}
+            onClose={() => setMenu(false)}
+          />
+        </Presence>
+      </div>
+    </>
   );
 }

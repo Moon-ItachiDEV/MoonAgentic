@@ -1,9 +1,17 @@
-import type { AgentInfo, AgentSetting, Favorites, ModelChoice } from "@moonagentic/protocol";
+import type {
+  AgentInfo,
+  AgentQuota,
+  AgentSetting,
+  Favorites,
+  ModelChoice,
+} from "@moonagentic/protocol";
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { connection } from "../connection.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconBack, IconCheck, IconStar, IconX } from "./icons.tsx";
 import { entryKey, keepLines, type WheelEntry, wheelEntries } from "../wheel.ts";
+import { formatPercent, quotaLevel, tightest } from "../quotas.ts";
+import { useQuotas } from "../use-quotas.ts";
 
 type View = "model" | "all" | "effort" | "options";
 
@@ -39,6 +47,7 @@ export function Picker(props: {
   onClose: () => void;
 }) {
   const { agent, favorites } = props;
+  const quotas = useQuotas();
   const [view, setView] = useState<View>(props.start ?? "model");
   const [direction, setDirection] = useState<"fwd" | "back">("fwd");
   const go = (next: View, back = false) => {
@@ -187,6 +196,7 @@ export function Picker(props: {
               {a.name}
               {!a.available && a.hint && <small>{a.hint}</small>}
             </span>
+            {a.available && <AgentQuotaTag quota={quotas.find((q) => q.agentId === a.id)} />}
             {a.id === agent?.id && (
               <span className="on-mark">
                 <IconCheck />
@@ -584,5 +594,23 @@ function SettingRow(props: {
         ))}
       </div>
     </div>
+  );
+}
+
+/** The window closest to its limit, beside an agent; nothing when it cannot be read. */
+function AgentQuotaTag({ quota }: { quota: AgentQuota | undefined }) {
+  const worst = tightest(quota);
+  if (!worst) return null;
+  const level = quotaLevel(worst.usedPercent);
+  return (
+    <span
+      className={`mp-quota ${level}`}
+      title={`${worst.label} : ${formatPercent(worst.usedPercent)} utilisés`}
+    >
+      <i aria-hidden>
+        <b style={{ width: `${Math.min(100, worst.usedPercent)}%` }} />
+      </i>
+      {worst.short} {formatPercent(worst.usedPercent)}
+    </span>
   );
 }

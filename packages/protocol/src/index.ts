@@ -711,6 +711,42 @@ export interface CoordinatorSettings {
   maxTurns?: number;
 }
 
+/** One window of an agent's subscription, as the agent's own service reports it. */
+export interface QuotaWindow {
+  /** What it covers, in words: « Session de 5 h », « Semaine, Opus ». */
+  label: string;
+  /** The same, short, for tight places: « 5 h », « semaine ». */
+  short: string;
+  /** Share used, from 0 to 100; past 100 when the agent lets the user go over. */
+  usedPercent: number;
+  /** When it frees up again, as a timestamp, when the agent says. */
+  resetsAt?: number;
+}
+
+/**
+ * What an agent's subscription has left, read from the agent's own service: never estimated.
+ * `loading`: first read in progress; `unreadable`: the agent gives no figures to another app,
+ * or asking failed (`note` says why); `none`: the agent pays as it goes, so there is no quota
+ * to follow. When `state` is `ok`, `note` may still explain that a newer refresh failed
+ * temporarily and the previous figures were kept.
+ */
+export interface AgentQuota {
+  agentId: AgentId;
+  state: "ok" | "unreadable" | "none" | "loading";
+  /** The plan, as the agent names it: « Abonnement Max », « ChatGPT Plus ». */
+  plan?: string;
+  windows: QuotaWindow[];
+  /** Other lines worth showing, such as credits. */
+  extras: { label: string; value: string }[];
+  note?: string;
+  /** Where the agent shows its figures itself, when they cannot be read here. */
+  link?: string;
+  /** True when the agent has no live reader (so re-reading cannot change this card). */
+  fixed?: boolean;
+  /** When figures were last read, as a timestamp. */
+  readAt?: number;
+}
+
 export interface Snapshot {
   coordinator: CoordinatorSettings;
   favorites: Favorites;
@@ -721,6 +757,7 @@ export interface Snapshot {
   threads: Thread[];
   plan: PlanTask[];
   schedules: Schedule[];
+  quotas: AgentQuota[];
 }
 
 export type ServerMessage =
@@ -767,6 +804,8 @@ export type ServerMessage =
       url?: string;
       prOpened: boolean;
     }
+  /** What each agent's subscription has left, after it was read again. */
+  | { type: "quotas"; quotas: AgentQuota[] }
   | { type: "github"; requestId: string; status: GithubStatus }
   | { type: "githubRepos"; requestId: string; repos: GithubRepo[] }
   /** Reply to `github.login`: the code to type on GitHub. */
@@ -1052,6 +1091,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
     }),
   }),
   z.object({ type: z.literal("agent.removeCustom"), agentId: id }),
+  /** Reads each agent's subscription quotas again now, or only this agent's. */
+  z.object({ type: z.literal("quotas.refresh"), requestId: id, agentId: id.optional() }),
   /** Asks what `git` and `gh` know of GitHub on the machine running MoonAgentic. */
   z.object({ type: z.literal("github.status"), requestId: id }),
   /** Lists the repositories the signed-in account can reach, last pushed first. */
