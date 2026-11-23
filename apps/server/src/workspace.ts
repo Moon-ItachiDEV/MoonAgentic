@@ -127,8 +127,11 @@ export async function listedWorktreeFile(
   file: string,
 ): Promise<string | undefined> {
   if (!workspace?.base || !existsSync(workspace.path)) return undefined;
-  const files = await worktreeListing(workspace.path, LISTING_TTL_MS).catch((): string[] => []);
-  return files.includes(file) ? resolveInside(workspace.path, file) : undefined;
+  const listed = async (maxAge: number) =>
+    (await worktreeListing(workspace.path, maxAge).catch((): string[] => [])).includes(file);
+  // A file the agent just made may be newer than the listing kept: it is listed again once.
+  if (!(await listed(LISTING_TTL_MS)) && !(await listed(0))) return undefined;
+  return resolveInside(workspace.path, file);
 }
 
 /** The files of the thread's folder, listed anew: what the agent just made is in it. */

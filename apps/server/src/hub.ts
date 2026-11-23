@@ -106,6 +106,8 @@ import {
 
 export interface Client {
   send(message: ServerMessage): void;
+  /** The paired device that opened it; none for the computer itself. */
+  deviceId?: string;
   /** The threads whose timelines this client is showing: a coordinator's, and one beside it. */
   openThreadIds?: Set<string>;
 }
@@ -763,7 +765,7 @@ export class Hub {
         if (!(await listedWorktreeFile(workspace, message.path))) {
           throw new Error("Ce fichier n'est plus dans la copie de travail de ce fil.");
         }
-        const { ticket, expiresAt } = this.artifactLinks.issue(message.threadId);
+        const { ticket, expiresAt } = this.artifactLinks.issue(message.threadId, client.deviceId);
         client.send({
           type: "artifactLink",
           requestId: message.requestId,
