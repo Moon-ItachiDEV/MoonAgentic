@@ -429,6 +429,16 @@ describe("composer", () => {
       "Réessayer",
     ]);
     expect(await page.getByText("Découper la tâche").count()).toBe(0);
+    // The same team as a tree of its agents: the lead, each piece with its reviewer and its
+    // tester, the merge. A card opens what there is to know about its agent.
+    await strip.getByRole("radio", { name: "Arbre" }).click();
+    const tree = strip.locator(".tt");
+    await expect.poll(() => tree.locator(".tt-card").count()).toBe(8);
+    await tree.getByRole("button", { name: /^Chef,/ }).click();
+    await tree.getByRole("button", { name: "Ouvrir son fil" }).waitFor();
+    await shot(page, "c10d-equipe-arbre");
+    await page.keyboard.press("Escape");
+    await strip.getByRole("radio", { name: "Étapes" }).click();
     // The lead's internal prompt and plan stay folded: only « Voir le détail » shows.
     expect(await page.getByText("Tu es le chef d'une équipe").count()).toBe(0);
     await page.locator(".team-detail-h").first().click();
