@@ -13,7 +13,7 @@ class FakeWebSocket {
   readonly sent: string[] = [];
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: { code: number }) => void) | null = null;
 
   constructor(url: URL | string) {
     this.url = String(url);
@@ -35,7 +35,7 @@ class FakeWebSocket {
 
   closeNow(): void {
     this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.();
+    this.onclose?.({ code: 1006 });
   }
 }
 
