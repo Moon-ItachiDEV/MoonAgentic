@@ -155,9 +155,15 @@ describe("composer", () => {
 
     await page.getByRole("button", { name: "Supervisé" }).click();
     await composer(page).press("Enter");
+    await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
+    // What it said on the way is folded with its steps, under one line.
+    expect(await page.getByText("Pièces jointes : app.ts (texte), SKILL.md (texte).").count()).toBe(
+      0,
+    );
+    await page.locator(".team-detail-h").last().click();
     // The agent got the file and the skill with the message.
     await page.getByText("Pièces jointes : app.ts (texte), SKILL.md (texte).").waitFor();
-    await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
+    await page.locator(".team-detail-h").last().click();
 
     // In the thread, the agent's own commands join in, with who offers them.
     await composer(page).fill("/");
