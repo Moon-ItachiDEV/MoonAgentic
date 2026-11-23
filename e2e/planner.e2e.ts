@@ -73,7 +73,7 @@ async function onPlanner(name: string, viewport = { width: 1280, height: 820 }):
   await page.getByLabel("Dossier", { exact: true }).fill(project);
   await page.getByRole("button", { name: "Ajouter le projet" }).click();
   await expect.poll(() => page.getByRole("combobox", { name: "Message" }).isEnabled()).toBe(true);
-  await page.getByRole("button", { name: "Planner", exact: true }).click();
+  await page.locator(".nav").getByRole("button", { name: "Planner", exact: true }).click();
   await page.getByRole("heading", { name: /Planner/ }).waitFor();
   return page;
 }
@@ -160,7 +160,10 @@ describe("planner", () => {
     await page.getByText("Aucune tâche planifiée.").waitFor();
     expect(await entry.getAttribute("aria-current")).toBe("page");
     expect(
-      await page.getByRole("button", { name: "Planner", exact: true }).getAttribute("aria-current"),
+      await page
+        .locator(".nav")
+        .getByRole("button", { name: "Planner", exact: true })
+        .getAttribute("aria-current"),
     ).toBeNull();
 
     // The address alone brings the view back: after a reload, and in a new window.

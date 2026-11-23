@@ -830,7 +830,7 @@ export function App() {
                     ? { name: "project", projectId: t.projectId }
                     : { name: "thread", threadId: t.id },
                 ),
-              onOpenPlanner: () => go({ name: "planner" }),
+              onOpenPlanner: openPlanner,
               onOpenSubscriptions: () => go({ name: "settings", section: "subscriptions" }),
             }}
           />
