@@ -52,6 +52,7 @@ describe("client state", () => {
         threads: [thread("a")],
         plan: [],
         schedules: [],
+        quotas: [],
       },
     });
     expect(state.ready).toBe(true);
@@ -82,6 +83,7 @@ describe("client state", () => {
           { ...planned, id: "s1", projectId: "p" },
           { ...planned, id: "s2", projectId: "q" },
         ],
+        quotas: [],
       },
     });
     state = reduce(state, { type: "items", threadId: "a", items: [user("u1", "Un")] });
