@@ -19,7 +19,8 @@
   gap: 12px;
   padding: 10px 12px 10px 14px;
   border-radius: 14px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   background: var(--surface);
   text-align: left;
   min-width: 0;
@@ -27,7 +28,7 @@
   color: var(--fg);
 }
 .qcard:hover {
-  border-color: var(--line2);
+  background: var(--hover);
 }
 .qcard > svg {
   color: var(--faint);
@@ -54,7 +55,7 @@
 }
 .qc-t {
   display: block;
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;

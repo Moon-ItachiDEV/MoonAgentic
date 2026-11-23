@@ -409,11 +409,11 @@ describe("composer", () => {
       .poll(() => dialog.getByLabel("Tâche").inputValue())
       .toBe("Corrige answer et documente-la");
     // The demo agent for every role, not a real one that may be installed on this machine.
-    await dialog.getByLabel("Chef", { exact: true }).selectOption({ label: "Agent de démo" });
-    await dialog.getByLabel("Codeurs", { exact: true }).selectOption({ label: "Agent de démo" });
-    await dialog.getByLabel("Relecteur", { exact: true }).selectOption({ label: "Agent de démo" });
-    await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Agent de démo" });
-    await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Chef", { exact: true }).selectOption("demo\n");
+    await dialog.getByLabel("Codeurs", { exact: true }).selectOption("demo\n");
+    await dialog.getByLabel("Relecteur", { exact: true }).selectOption("demo\n");
+    await dialog.getByLabel("Testeur", { exact: true }).selectOption("demo\n");
+    await dialog.getByLabel("Fusionneur", { exact: true }).selectOption("demo\n");
     await shot(page, "c10-equipe-lancer");
     // The team opens its pull request at the end unless told not to.
     const autoShip = dialog.getByLabel(/Ouvrir la PR à la fin/);
@@ -492,9 +492,9 @@ describe("composer", () => {
     // A piece the reviewer keeps refusing goes back three times, then to the lead, then to the user.
     await composer(page).fill("/equipe Corrige answer, à toujours refuser");
     await composer(page).press("Enter");
-    await dialog.getByLabel("Chef", { exact: true }).selectOption({ label: "Agent de démo" });
-    await dialog.getByLabel("Codeurs", { exact: true }).selectOption({ label: "Agent de démo" });
-    await dialog.getByLabel("Relecteur", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Chef", { exact: true }).selectOption("demo\n");
+    await dialog.getByLabel("Codeurs", { exact: true }).selectOption("demo\n");
+    await dialog.getByLabel("Relecteur", { exact: true }).selectOption("demo\n");
     await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Personne" });
     await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Personne" });
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
@@ -506,8 +506,8 @@ describe("composer", () => {
     // Live: supervised coders wait on the user, and the timeline says so as it happens.
     await composer(page).fill("/equipe Corrige answer");
     await composer(page).press("Enter");
-    await dialog.getByLabel("Chef", { exact: true }).selectOption({ label: "Agent de démo" });
-    await dialog.getByLabel("Codeurs", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Chef", { exact: true }).selectOption("demo\n");
+    await dialog.getByLabel("Codeurs", { exact: true }).selectOption("demo\n");
     await dialog.getByLabel("Relecteur", { exact: true }).selectOption({ label: "Personne" });
     await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Personne" });
     await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Personne" });
@@ -619,7 +619,7 @@ describe("composer", () => {
 
     // The coordinator: one agent to talk to about the whole project. Its agent calls
     // MoonAgentic's own tools, here to open a thread on a branch of its own.
-    await page.getByLabel("Agent du coordinateur").selectOption({ label: "Agent de démo" });
+    await page.getByLabel("Modèle du coordinateur").selectOption("demo\n");
     await page.getByRole("button", { name: "Activer le coordinateur" }).click();
     // Its conversation takes the page, the threads beside it.
     await page.locator(".pp-panel").waitFor();
@@ -877,7 +877,7 @@ describe("composer", () => {
     expect(await dialog.getByLabel("Tâche").inputValue()).toBe(
       "Résume les changements de la semaine",
     );
-    await dialog.getByLabel("Agent", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Modèle", { exact: true }).selectOption("demo\n");
     await dialog.getByLabel("Quand").fill("2020-01-15T09:00");
     await dialog.getByRole("button", { name: "Planifier", exact: true }).click();
     await dialog.getByText("Ce moment est déjà passé").waitFor();
@@ -895,7 +895,7 @@ describe("composer", () => {
     // One for this very minute: the server starts it by itself, in a thread of its own.
     await page.getByRole("button", { name: "Planifier une tâche" }).click();
     await dialog.getByLabel("Tâche").fill("Dis bonjour");
-    await dialog.getByLabel("Agent", { exact: true }).selectOption({ label: "Agent de démo" });
+    await dialog.getByLabel("Modèle", { exact: true }).selectOption("demo\n");
     await dialog.getByLabel("Quand").fill(field(new Date()));
     await dialog.getByRole("button", { name: "Planifier", exact: true }).click();
     await row("Dis bonjour")

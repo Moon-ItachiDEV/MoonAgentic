@@ -8,10 +8,9 @@
 }
 .review-btn.on {
   background: var(--card);
-  border-color: var(--line2);
 }
 .review-btn .cnt {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .rv-scrim {
@@ -24,7 +23,7 @@
   display: flex;
   flex-direction: column;
   background: var(--surface);
-  border-left: 1px solid var(--line);
+  border-left: 1px solid transparent;
   animation: rv-in 0.22s var(--ease);
 }
 @keyframes rv-in {
@@ -62,20 +61,20 @@
 }
 .rv-tab b {
   font-weight: 400;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--faint);
 }
 .rv-panel .rv-branch {
   margin: 0;
   padding: 2px 16px 8px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .rv-chip {
   padding: 1px 7px;
   border-radius: 6px;
   background: var(--card);
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .rv-scroll {
@@ -90,7 +89,7 @@
   padding: 8px 12px;
   border-radius: 10px;
   background: var(--card);
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .rv-msg {
@@ -99,20 +98,20 @@
   color: var(--muted);
 }
 .rv-msg.error {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .rv-sum {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 4px 10px 6px 16px;
-  font: 12.5px var(--mono);
+  font: 12px var(--mono);
   color: var(--muted);
 }
 
 /* One file */
 .rvf {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid transparent;
 }
 .rvf-h {
   position: sticky;
@@ -124,7 +123,7 @@
   min-height: 40px;
   padding: 0 12px 0 6px;
   background: var(--surface);
-  font: 12.5px var(--mono);
+  font: 12px var(--mono);
 }
 .rvf-tg {
   width: 26px;
@@ -198,7 +197,7 @@
 /* The numbered diff */
 .rvd {
   overflow-x: auto;
-  font: 12.5px/1.6 var(--mono);
+  font: 12px/1.6 var(--mono);
   padding-bottom: 6px;
 }
 .rvd-l {
@@ -222,7 +221,7 @@
   text-align: right;
   color: var(--faint);
   user-select: none;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .rvd-s {
   color: var(--faint);
@@ -264,7 +263,7 @@
 .rvc {
   display: block;
   padding: 7px 11px;
-  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border: 1px solid transparent;
   border-radius: 10px;
   background: var(--accent-soft);
   font-size: 13px;
@@ -274,10 +273,10 @@
 }
 .rvc-edit {
   padding: 8px;
-  border: 1px solid var(--line2);
+  border: 1px solid transparent;
   border-radius: 12px;
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--float);
 }
 .rvc-edit textarea {
   display: block;
@@ -298,7 +297,7 @@
 
 /* Bottom: remarks to send, then the commit */
 .rv-foot {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid transparent;
   padding: 8px 12px 12px;
   display: grid;
   gap: 8px;
@@ -331,7 +330,8 @@
   min-width: 0;
   height: 36px;
   padding: 0 14px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 999px;
   background: var(--bg);
   font: inherit;
@@ -340,7 +340,7 @@
   outline: none;
 }
 .rv-commit:focus {
-  border-color: var(--line2);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .rv-ship .btn {
   height: 36px;
@@ -366,7 +366,7 @@
     bottom: 0;
     z-index: 45;
     width: min(620px, 100%);
-    box-shadow: var(--shadow);
+    box-shadow: var(--float);
   }
 }
 @media (max-width: 860px) {
@@ -403,7 +403,8 @@
   max-height: 30vh;
   overflow-y: auto;
   padding: 8px 8px 8px 12px;
-  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface));
   border-radius: 12px;
   font-size: 13px;
 }

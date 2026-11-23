@@ -286,3 +286,41 @@ export function timelineTicks(from: number, days: number) {
   }
   return { months, weeks };
 }
+
+/** What the « Planner » line of the side bar shows: nothing at all while nothing moves. */
+export interface PlannerSignal {
+  /** An agent works on one of the cards right now. */
+  live: boolean;
+  /** Cards that wait for the user: a question, an agreement, a piece held back. */
+  waiting: number;
+  /** Cards « En cours » or « En test ». */
+  active: number;
+}
+
+export function plannerSignal(
+  cards: PlanTask[],
+  threads: Thread[],
+  agents: AgentInfo[],
+): PlannerSignal {
+  let live = false;
+  let waiting = 0;
+  let active = 0;
+  for (const card of cards) {
+    const work = cardWork(card, threads, agents);
+    if (work.tone === "live") live = true;
+    if (work.tone === "wait") waiting++;
+    if (card.status === "doing" || card.status === "test") active++;
+  }
+  return { live, waiting, active };
+}
+
+/** The signal in one line, for its tooltip and screen readers. */
+export function plannerSignalText(s: PlannerSignal): string {
+  return [
+    s.waiting ? `${s.waiting} ${s.waiting > 1 ? "cartes t'attendent" : "carte t'attend"}` : "",
+    s.live ? "un agent travaille" : "",
+    s.active ? `${s.active} en cours` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}

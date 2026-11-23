@@ -50,7 +50,7 @@
   padding-top: clamp(24px, 6vh, 56px);
 }
 .ov-show {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
   padding: 4px 10px;
   border-radius: 8px;
@@ -80,12 +80,12 @@
   font-weight: 600;
 }
 .ov-scope {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--faint);
 }
 .ov-hide {
   margin-left: auto;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
   height: 28px;
   padding: 0 9px;
@@ -111,7 +111,7 @@
   border-radius: 14px;
   background: var(--surface);
   box-shadow: 0 0 0 1px var(--ov-hair);
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -167,7 +167,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
   min-height: 20px;
 }
@@ -200,7 +200,7 @@
 }
 .ov-empty {
   margin: 0;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .ov-link {
@@ -272,7 +272,7 @@
   color: var(--accent);
 }
 .ov-s.review {
-  color: var(--ok);
+  color: var(--ok-tx);
 }
 .ov-pj {
   color: var(--faint);
@@ -335,7 +335,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11.5px;
+  font-size: 12px;
   white-space: nowrap;
   padding: 0 7px;
   height: 19px;
@@ -357,7 +357,7 @@
 }
 .ov-st.ok {
   background: var(--add-bg);
-  color: var(--ok);
+  color: var(--ok-tx);
 }
 .ov-st.run {
   background: var(--ov-warn-bg);
@@ -365,7 +365,7 @@
 }
 .ov-st.bad {
   background: var(--del-bg);
-  color: var(--err);
+  color: var(--err-tx);
 }
 .ov-st.merged {
   background: var(--accent-soft);
@@ -423,7 +423,7 @@
 .ov-months {
   display: grid;
   gap: 3px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--faint);
   margin-top: -4px;
 }
@@ -452,7 +452,7 @@
   align-items: center;
   gap: 3px;
   color: var(--faint);
-  font-size: 11px;
+  font-size: 12px;
 }
 .ov-scale i {
   width: 9px;
@@ -503,7 +503,7 @@
   background: var(--hover);
 }
 .sq-h {
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--faint);
 }
@@ -512,7 +512,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px 8px;
   align-items: baseline;
-  font-size: 12.5px;
+  font-size: 12px;
 }
 .sq-n {
   color: var(--fg);
@@ -522,7 +522,7 @@
 }
 .sq-n small {
   color: var(--faint);
-  font-size: 11.5px;
+  font-size: 12px;
   margin-left: 5px;
 }
 .sq-p {
@@ -551,7 +551,7 @@
   background: var(--ov-warn-bar);
 }
 .sq-r.full .sq-p {
-  color: var(--err);
+  color: var(--err-tx);
   font-weight: 500;
 }
 .sq-r.full .sq-b i {

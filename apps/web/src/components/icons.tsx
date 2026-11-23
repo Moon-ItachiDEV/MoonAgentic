@@ -413,3 +413,76 @@ export const IconLock = ({ size = 13 }: P) => (
     <path d="M5.6 7V5.3a2.4 2.4 0 0 1 4.8 0V7" />
   </svg>
 );
+
+/** Filled marks for a state, as in the mockup: the inner stroke takes the surface color. */
+const mark = (size: number): SVGProps<SVGSVGElement> => ({
+  width: size,
+  height: size,
+  viewBox: "0 0 24 24",
+  "aria-hidden": true,
+});
+/** A filled round with a check: passed. */
+export const IconOkCircle = ({ size = 16 }: P) => (
+  <svg {...mark(size)}>
+    <circle cx="12" cy="12" r="9" fill="currentColor" />
+    <path
+      d="m8 12.3 2.8 2.7L16.2 9.5"
+      fill="none"
+      stroke="var(--surface)"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+/** A filled round with a cross: failed. */
+export const IconErrCircle = ({ size = 16 }: P) => (
+  <svg {...mark(size)}>
+    <circle cx="12" cy="12" r="9" fill="currentColor" />
+    <path d="m9 9 6 6m0-6-6 6" stroke="var(--surface)" strokeWidth="2" strokeLinecap="round" />
+  </svg>
+);
+/** A filled triangle: something waits to be sorted out. */
+export const IconWarnTri = ({ size = 16 }: P) => (
+  <svg {...mark(size)}>
+    <path
+      d="M12 3.5 2.5 20h19Z"
+      fill="currentColor"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinejoin="round"
+    />
+    <path d="M12 10v4.5M12 17.2v.1" stroke="var(--surface)" strokeWidth="2" strokeLinecap="round" />
+  </svg>
+);
+/** GitHub's mark. */
+export const IconGithub = ({ size = 14 }: P) => (
+  <svg {...mark(size)}>
+    <path
+      fill="currentColor"
+      d="M12 2.5a9.5 9.5 0 0 0-3 18.5c.5.1.7-.2.7-.5v-1.7c-2.6.6-3.2-1.2-3.2-1.2-.4-1.1-1-1.4-1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .8 1.5 2.3 1 2.8.8.1-.6.3-1 .6-1.3-2.1-.2-4.3-1-4.3-4.7 0-1 .4-1.9 1-2.6-.1-.3-.4-1.2.1-2.5 0 0 .8-.3 2.6 1a9 9 0 0 1 4.8 0c1.8-1.3 2.6-1 2.6-1 .5 1.3.2 2.2.1 2.5.6.7 1 1.6 1 2.6 0 3.7-2.2 4.5-4.3 4.7.3.3.6.9.6 1.8v2.7c0 .3.2.6.7.5A9.5 9.5 0 0 0 12 2.5Z"
+    />
+  </svg>
+);
+/** Opens elsewhere. */
+export const IconExternal = ({ size = 12 }: P) => (
+  <svg {...base(size)} strokeWidth={1.7}>
+    <path d="M14 4h6v6m0-6-9 9M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+  </svg>
+);
+/** A wrench: an agent fixes it. */
+export const IconWrench = ({ size = 15 }: P) => (
+  <svg {...base(size)} strokeWidth={1.7}>
+    <path d="M14.5 6.5a4 4 0 0 0 5 5l-8.8 8.8a2.1 2.1 0 0 1-3-3L16.5 8.5" />
+    <path d="M14.5 6.5 17 4l3 3-2.5 2.5" />
+  </svg>
+);
+/** Two branches joining: merged. */
+export const IconMerge = ({ size = 15 }: P) => (
+  <svg {...base(size)} strokeWidth={1.7}>
+    <circle cx="6" cy="5.5" r="2" />
+    <circle cx="6" cy="18.5" r="2" />
+    <circle cx="18" cy="14" r="2" />
+    <path d="M6 7.5v9M6 8c1 4 5 6 10 6" />
+  </svg>
+);

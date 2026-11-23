@@ -11,12 +11,12 @@
   width: max-content;
   max-width: calc(100vw - 32px);
   padding: 10px 10px 10px 16px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 12px;
   background: var(--surface);
   color: var(--fg);
-  box-shadow: var(--shadow);
-  font-size: 13.5px;
+  box-shadow: var(--float);
+  font-size: 13px;
   animation: update-in 0.3s var(--ease);
 }
 .update-banner span {

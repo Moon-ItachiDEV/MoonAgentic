@@ -1,5 +1,6 @@
 import type {
   AgentInfo,
+  Favorites,
   PermissionMode,
   Project,
   Schedule,
@@ -7,8 +8,8 @@ import type {
 } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
 import { connection, newId } from "../connection.ts";
-import { readPref } from "../prefs.ts";
 import { firstMoment, fromField, REPEATS, titleFromText, toField } from "../schedule.ts";
+import { firstPick, type ModelPick, ModelSelect } from "./ModelSelect.tsx";
 
 /**
  * Plans a task for later, or changes one already planned. At its time the server starts a
@@ -17,6 +18,7 @@ import { firstMoment, fromField, REPEATS, titleFromText, toField } from "../sche
 export function ScheduleDialog({
   project,
   agents,
+  favorites,
   text: initialText,
   schedule,
   onClose,
@@ -24,6 +26,7 @@ export function ScheduleDialog({
 }: {
   project: Project;
   agents: AgentInfo[];
+  favorites: Favorites;
   /** What was typed after `/planifier`. */
   text: string;
   /** The planned task being changed; a new one otherwise. */
@@ -31,29 +34,24 @@ export function ScheduleDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const ready = agents.filter((a) => a.available);
   const [text, setText] = useState(schedule?.text ?? initialText);
   const [title, setTitle] = useState(schedule?.title ?? "");
   const [firstWhen] = useState(() => toField(firstMoment(schedule, Date.now())));
   const [when, setWhen] = useState(firstWhen);
   const [repeat, setRepeat] = useState<ScheduleRepeat>(schedule?.repeat ?? "once");
-  const [agentId, setAgentId] = useState(() => {
-    const last = readPref("agent");
-    return schedule?.agentId ?? ready.find((a) => a.id === last)?.id ?? ready[0]?.id ?? "";
-  });
+  const [pick, setPick] = useState<ModelPick | undefined>(() =>
+    schedule
+      ? { agentId: schedule.agentId, ...(schedule.model ? { model: schedule.model } : {}) }
+      : firstPick(agents, favorites),
+  );
+  const agentId = pick?.agentId ?? "";
   const agent = agents.find((a) => a.id === agentId);
-  const [model, setModel] = useState(schedule?.model ?? "");
+  const model = pick?.model ?? "";
   // Nobody watches a planned task start: it asks before acting unless told otherwise.
   const [mode, setMode] = useState<PermissionMode>(schedule?.permissionMode ?? "supervised");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const at = fromField(when);
-
-  // The models come from the agent itself: it is asked once, as the model picker does.
-  useEffect(() => {
-    if (schedule || !agent?.available || agent.models || agent.modelsError) return;
-    connection.send({ type: "agent.discover", agentId: agent.id, projectId: project.id });
-  }, [schedule, agent, project.id]);
 
   useEffect(() => {
     const escape = (event: KeyboardEvent) => event.key === "Escape" && !busy && onClose();
@@ -172,40 +170,17 @@ export function ScheduleDialog({
           </p>
         ) : (
           <>
-            <div className="team-row">
-              <label className="field">
-                Agent
-                <select
-                  aria-label="Agent"
-                  value={agentId}
-                  onChange={(e) => {
-                    setAgentId(e.target.value);
-                    setModel("");
-                  }}
-                >
-                  {ready.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {agent?.models && agent.models.length > 0 && (
-                <label className="field">
-                  Modèle
-                  <select
-                    value={model || agent.defaultModel || ""}
-                    onChange={(e) => setModel(e.target.value)}
-                  >
-                    {agent.models.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-            </div>
+            <label className="field">
+              Modèle
+              <ModelSelect
+                label="Modèle"
+                agents={agents}
+                favorites={favorites}
+                value={pick}
+                onChange={setPick}
+                projectId={project.id}
+              />
+            </label>
             <label className="field">
               Accès de l'agent
               <select value={mode} onChange={(e) => setMode(e.target.value as PermissionMode)}>
@@ -213,7 +188,7 @@ export function ScheduleDialog({
                 <option value="full">Accès complet, sans rien demander</option>
               </select>
             </label>
-            {ready.length === 0 && (
+            {!agents.some((a) => a.available) && (
               <p className="error">Aucun agent n'est prêt : ouvre les Connexions.</p>
             )}
           </>

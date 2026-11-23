@@ -3,11 +3,13 @@ import {
   ROUTE_KINDS,
   type AgentInfo,
   type CoordinatorSettings,
+  type Favorites,
   type Project,
   type Thread,
   type ThreadGroup,
 } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
+import { firstPick, type ModelPick, ModelSelect } from "./ModelSelect.tsx";
 import { connection } from "../connection.ts";
 import { notificationsOn, projectMuted, setProjectMuted } from "../notifications.ts";
 import { syncPush } from "../push.ts";
@@ -63,13 +65,19 @@ export function ProjectPage(props: {
   settings?: CoordinatorSettings | undefined;
   onOpenSettings?: (() => void) | undefined;
   /** Given while the project has no coordinator yet: starts one with this agent. */
-  onStartCoordinator?: ((agentId: string) => Promise<void>) | undefined;
+  onStartCoordinator?: ((pick: ModelPick) => Promise<void>) | undefined;
+  /** The user's favorite models: the coordinator is picked among them. */
+  favorites?: Favorites;
 }) {
   const ready = props.agents.filter((a) => a.available);
   const [muted, setMuted] = useState(() => projectMuted(props.project.id));
-  const [coordAgent, setCoordAgent] = useState<string>();
+  const [coordPick, setCoordPick] = useState<ModelPick>();
   const [coordError, setCoordError] = useState<string>();
-  const picked = ready.find((a) => a.id === coordAgent) ?? ready[0];
+  const favorites = props.favorites ?? {};
+  const picked =
+    coordPick && ready.some((a) => a.id === coordPick.agentId)
+      ? coordPick
+      : firstPick(props.agents, favorites);
   // The name being typed, while the project is renamed in place.
   const [renaming, setRenaming] = useState<string | null>(null);
   const rename = () => {
@@ -207,29 +215,25 @@ export function ProjectPage(props: {
           <div className="pp-coord">
             <div className="pp-coord-t">Coordinateur du projet</div>
             <p>
-              Un agent à qui parler de tout le projet : il répond aux questions rapides et ouvre un
-              fil sur sa propre branche pour un bug ou une fonctionnalité. Tu peux toujours ouvrir
-              un fil toi-même avec « Fil ».
+              Un agent à qui parler de tout le projet. Il répond aux questions rapides et ouvre un
+              fil sur sa propre branche pour chaque bug ou fonctionnalité.
             </p>
             {picked ? (
               <div className="pp-coord-go">
-                <select
-                  aria-label="Agent du coordinateur"
-                  value={picked.id}
-                  onChange={(e) => setCoordAgent(e.target.value)}
-                >
-                  {ready.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name}
-                    </option>
-                  ))}
-                </select>
+                <ModelSelect
+                  label="Modèle du coordinateur"
+                  agents={props.agents}
+                  favorites={favorites}
+                  value={picked}
+                  onChange={(pick) => pick && setCoordPick(pick)}
+                  projectId={props.project.id}
+                />
                 <button
-                  className="btn sm pri"
+                  className="btn pri"
                   onClick={() => {
                     setCoordError(undefined);
                     props
-                      .onStartCoordinator?.(picked.id)
+                      .onStartCoordinator?.(picked)
                       .catch((error: unknown) =>
                         setCoordError(error instanceof Error ? error.message : String(error)),
                       );
@@ -310,7 +314,7 @@ export function ProjectPage(props: {
           <p className="pp-empty">
             {props.panel
               ? "Aucun fil de discussion pour le moment. Demande une tâche et elle s'affichera ici."
-              : "Aucune discussion dans ce projet. Écris ci-dessous pour ouvrir la première."}
+              : "Aucune discussion pour l'instant. Écris ci-dessous pour ouvrir la première."}
           </p>
         )}
         {groups.map(({ group, threads }) => {

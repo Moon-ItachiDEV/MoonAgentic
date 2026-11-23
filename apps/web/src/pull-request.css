@@ -29,7 +29,7 @@
   gap: 4px;
   padding: 0 7px 0 5px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--pr) 35%, transparent);
+  border: 1px solid transparent;
   background: color-mix(in srgb, var(--pr) 9%, transparent);
   color: var(--pr) !important;
   font-size: 0.92em;
@@ -73,7 +73,8 @@
   display: grid;
   gap: 6px;
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 12px;
   background: var(--surface);
   font-size: 13px;
@@ -114,7 +115,7 @@
   animation: rv-prs-pulse 1.4s ease-in-out infinite;
 }
 .rv-prs-l.err {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .rv-prs-l.err .rv-prs-dot {
   background: var(--err);
