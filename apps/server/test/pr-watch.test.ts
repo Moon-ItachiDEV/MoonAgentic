@@ -176,8 +176,12 @@ describe("a thread that fixes its pull request", { timeout: 40_000 }, () => {
       prWatch: { ...store.getThread(threadId)!.prWatch!, tries: PR_WATCH_TRIES },
     });
     github.pr = failing("c".repeat(40));
+    // Once the last fix is pushed; each read is awaited, so none is left when the hub closes.
     await expect
-      .poll(() => (hub.pullRequest(threadId), store.getThread(threadId)?.prWatch?.exhausted))
+      .poll(async () => {
+        await hub.pullRequest(threadId);
+        return store.getThread(threadId)?.prWatch?.exhausted;
+      })
       .toBe(true);
     expect(fixes()).toHaveLength(2);
 

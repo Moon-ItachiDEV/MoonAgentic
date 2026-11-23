@@ -2165,7 +2165,8 @@ export class Hub {
   async pullRequest(threadId: string): Promise<PullRequestInfo | undefined> {
     const on = await this.branchOnGithub(threadId);
     const pr = await on?.github.find(on.repo, on.branch);
-    if (on) await this.notePullRequest(threadId, pr);
+    // GitHub may answer after the hub has closed, and its store with it.
+    if (on && !this.closed) await this.notePullRequest(threadId, pr);
     return pr;
   }
 
