@@ -338,6 +338,7 @@ function NotificationsRow() {
  */
 function LockCard(props: { projects: Project[]; lockPin: boolean }) {
   const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  const pairedDevice = useSyncExternalStore(connection.subscribe, connection.getState).pairedDevice;
   const [confirmReset, setConfirmReset] = useState(false);
   return (
     <>
@@ -346,19 +347,25 @@ function LockCard(props: { projects: Project[]; lockPin: boolean }) {
         <Row
           title="Code de verrouillage"
           text={
-            props.lockPin
-              ? "Un code à 6 chiffres est défini. Il est demandé pour rouvrir un projet verrouillé. Réservé à cet ordinateur."
-              : "Aucun code pour l'instant. Il te sera demandé au premier verrouillage (sur cet ordinateur)."
+            pairedDevice
+              ? props.lockPin
+                ? "Un code à 6 chiffres est défini. Pour le changer ou le réinitialiser, va sur l'ordinateur où tourne MoonAgentic."
+                : "Aucun code pour l'instant. Il se définit depuis l'ordinateur où tourne MoonAgentic."
+              : props.lockPin
+                ? "Un code à 6 chiffres est défini. Il est demandé pour rouvrir un projet verrouillé. Réservé à cet ordinateur."
+                : "Aucun code pour l'instant. Il te sera demandé au premier verrouillage (sur cet ordinateur)."
           }
         >
-          <button
-            className="btn sm"
-            onClick={() => lockSheet.open(props.lockPin ? { kind: "change" } : { kind: "set" })}
-          >
-            {props.lockPin ? "Changer le code" : "Définir le code"}
-          </button>
+          {!pairedDevice && (
+            <button
+              className="btn sm"
+              onClick={() => lockSheet.open(props.lockPin ? { kind: "change" } : { kind: "set" })}
+            >
+              {props.lockPin ? "Changer le code" : "Définir le code"}
+            </button>
+          )}
         </Row>
-        {props.lockPin && (
+        {props.lockPin && !pairedDevice && (
           <Row
             title="Code oublié"
             text="Efface le code et rouvre tous les projets verrouillés. Réservé à cet ordinateur."

@@ -963,6 +963,8 @@ export interface Snapshot {
   quotas: AgentQuota[];
   /** True once a code to lock projects with is set. */
   lockPin?: boolean;
+  /** True when this connection belongs to a paired device rather than the computer itself. */
+  pairedDevice?: boolean;
 }
 
 /**

@@ -68,7 +68,7 @@ let clock = 0;
 /** Drops cached attachment blobs and revokes their object URLs (optionally for hidden threads only). */
 export function clearAttachmentCache(keepThreadIds?: ReadonlySet<string>): void {
   for (const [id, entry] of held) {
-    if (keepThreadIds && entry.threadId && keepThreadIds.has(entry.threadId)) continue;
+    if (keepThreadIds && (!entry.threadId || keepThreadIds.has(entry.threadId))) continue;
     held.delete(id);
     void entry.read.then(({ url }) => URL.revokeObjectURL(url)).catch(() => undefined);
   }

@@ -65,6 +65,7 @@ import {
   branchName,
   dropCheckpoints,
   gitCommonDir,
+  gitRootCommonDir,
   isGitRepo,
   isSameOrInside,
   pathsOverlap,
@@ -165,17 +166,8 @@ const FORCE_STOP_MS = 10_000;
 const START_TIMEOUT_MS = 120_000;
 
 const ONLY_ON_COMPUTER = "Seul l'ordinateur où tourne MoonAgentic peut faire ça.";
-/** Operations reserved to the computer running MoonAgentic, refused to paired devices. */
-const COMPUTER_ONLY_MESSAGES = new Set<ClientMessage["type"]>([
-  "lock.setPin",
-  "lock.reset",
-  "agent.addCustom",
-  "agent.removeCustom",
-  "mcp.add",
-  "mcp.setEnabled",
-  "mcp.setScope",
-  "mcp.remove",
-]);
+/** Lock code creation, change, and reset are reserved to the computer running MoonAgentic. */
+const COMPUTER_ONLY_MESSAGES = new Set<ClientMessage["type"]>(["lock.setPin", "lock.reset"]);
 
 export interface HubOptions {
   /** MoonAgentic's own private data folder (`~/.moonagentic`), refused as a project path. */
@@ -547,11 +539,11 @@ export class Hub {
     };
     this.clients.add(client);
     this.quotas.onClientConnect();
-    client.send({ type: "snapshot", snapshot: this.snapshot() });
+    client.send({ type: "snapshot", snapshot: this.snapshot(!!client.deviceId) });
     return () => this.clients.delete(client);
   }
 
-  snapshot(): Snapshot {
+  snapshot(pairedDevice = false): Snapshot {
     const mcpSecretsError = this.catalog.mcpSecretsError();
     return {
       coordinator: this.coordinators.coordinatorSettings(),
@@ -567,6 +559,7 @@ export class Hub {
       plan: this.planner.list(),
       schedules: this.scheduler.list(),
       ...(this.locks.hasPin() ? { lockPin: true } : {}),
+      ...(pairedDevice ? { pairedDevice: true } : {}),
     };
   }
 
@@ -648,31 +641,22 @@ export class Hub {
       throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
     };
     if (message.type === "mcp.add") {
-      const target = message.server.projectIds;
-      if (!target || target.some((p) => this.locks.isLocked(p))) lockedError();
+      if (message.server.projectIds?.some((p) => this.locks.isLocked(p))) lockedError();
       return false;
     }
     if (message.type === "mcp.setScope") {
       const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
       if (
-        current &&
-        (!current.projectIds || current.projectIds.some((p) => this.locks.isLocked(p)))
+        current?.projectIds?.some((p) => this.locks.isLocked(p)) ||
+        message.projectIds?.some((p) => this.locks.isLocked(p))
       ) {
-        lockedError();
-      }
-      if (!message.projectIds || message.projectIds.some((p) => this.locks.isLocked(p))) {
         lockedError();
       }
       return false;
     }
     if (message.type === "mcp.setEnabled" || message.type === "mcp.remove") {
       const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
-      if (
-        current &&
-        (!current.projectIds || current.projectIds.some((p) => this.locks.isLocked(p)))
-      ) {
-        lockedError();
-      }
+      if (current?.projectIds?.some((p) => this.locks.isLocked(p))) lockedError();
       return false;
     }
     const projects: (string | undefined)[] = [];
@@ -695,8 +679,12 @@ export class Hub {
 
   /** Every window gets the whole state again, as /lock now lets it out. */
   private sendSnapshots(): void {
-    const snapshot = this.snapshot();
-    for (const client of this.clients) client.send({ type: "snapshot", snapshot });
+    const owner = this.snapshot(false);
+    let paired: Snapshot | undefined;
+    for (const client of this.clients) {
+      const snapshot = client.deviceId ? (paired ??= { ...owner, pairedDevice: true }) : owner;
+      client.send({ type: "snapshot", snapshot });
+    }
   }
 
   async handle(client: Client, message: ClientMessage): Promise<void> {
@@ -1342,15 +1330,19 @@ export class Hub {
           "Ce dossier chevauche un projet verrouillé : saisis le code pour l'ouvrir.",
         );
       }
-      if (targetCommonDir === null) {
-        targetCommonDir = existsSync(resolved) ? gitCommonDir(resolved) : undefined;
-      }
-      if (targetCommonDir && existsSync(p.path)) {
-        const lockedCommonDir = gitCommonDir(p.path);
-        if (lockedCommonDir && lockedCommonDir === targetCommonDir) {
-          throw new Error(
-            "Ce dossier partage son dépôt git avec un projet verrouillé : saisis le code pour l'ouvrir.",
-          );
+      if (existsSync(p.path)) {
+        // Only compare git repositories when the locked project is the root of its own repo,
+        // not when it merely sits inside a git-tracked parent (such as a versioned home folder).
+        const lockedCommonDir = gitRootCommonDir(p.path);
+        if (lockedCommonDir) {
+          if (targetCommonDir === null) {
+            targetCommonDir = existsSync(resolved) ? gitCommonDir(resolved) : undefined;
+          }
+          if (targetCommonDir === lockedCommonDir) {
+            throw new Error(
+              "Ce dossier partage son dépôt git avec un projet verrouillé : saisis le code pour l'ouvrir.",
+            );
+          }
         }
       }
     }

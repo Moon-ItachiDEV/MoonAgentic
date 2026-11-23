@@ -23,8 +23,56 @@ const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** Shown over everything while a code is asked for. */
 export function LockSheet() {
   const asked = useSyncExternalStore(lockSheet.subscribe, lockSheet.get);
+  const pairedDevice = useSyncExternalStore(connection.subscribe, connection.getState).pairedDevice;
   // A new ask starts afresh, even over one left open.
-  return asked ? <Sheet key={asked.seq} asked={asked} /> : null;
+  if (!asked) return null;
+  if (pairedDevice && (asked.ask.kind === "set" || asked.ask.kind === "change")) {
+    return <ComputerOnlySheet seq={asked.seq} />;
+  }
+  return <Sheet key={asked.seq} asked={asked} />;
+}
+
+/** Shown on a paired phone when no PIN exists yet (or change was triggered): computer only. */
+function ComputerOnlySheet({ seq }: { seq: number }) {
+  const close = () => lockSheet.close(seq);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      lockSheet.close(seq);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [seq]);
+  return (
+    <div
+      className="lk-scrim"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) close();
+      }}
+    >
+      <div
+        className="lk-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="À faire depuis l'ordinateur"
+        tabIndex={-1}
+      >
+        <span className="lk-ic">
+          <IconLock size={20} />
+        </span>
+        <b className="lk-ttl">À faire depuis l'ordinateur</b>
+        <span className="lk-sub">
+          Pour définir ou modifier le code de verrouillage, va sur l'ordinateur où tourne
+          MoonAgentic.
+        </span>
+        <button type="button" className="btn sm" onClick={close}>
+          Fermer
+        </button>
+      </div>
+    </div>
+  );
 }
 
 function Sheet({ asked }: { asked: Asked }) {

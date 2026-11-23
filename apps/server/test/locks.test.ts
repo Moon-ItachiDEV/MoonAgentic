@@ -326,47 +326,46 @@ describe("a locked project on the wire", () => {
     ).rejects.toThrow(/verrouillé/);
   });
 
-  it("reserves lock PIN/reset, custom agents, and MCP configuration to the computer", async () => {
+  it("reserves lock PIN/reset to the computer while letting paired devices manage custom agents and MCP", async () => {
     const { hub, client, secret, open, thread } = setup();
     const phone = new TestClient("phone-1");
     hub.connect(phone);
+    expect(client.last("snapshot").snapshot.pairedDevice).toBeUndefined();
+    expect(phone.last("snapshot").snapshot.pairedDevice).toBe(true);
 
-    // Paired devices cannot set the initial PIN, change it, reset it, or register host commands/MCP.
+    // Paired devices cannot set the initial PIN, change it, or reset it.
     await expect(
       hub.handle(phone, { type: "lock.setPin", requestId: "p1", pin: "123456" }),
     ).rejects.toThrow(/Seul l'ordinateur/);
     await expect(hub.handle(phone, { type: "lock.reset", requestId: "p2" })).rejects.toThrow(
       /Seul l'ordinateur/,
     );
-    await expect(
-      hub.handle(phone, {
-        type: "agent.addCustom",
-        requestId: "p3",
-        agent: { name: "evil", command: "node", args: ["-e", "1"] },
-      }),
-    ).rejects.toThrow(/Seul l'ordinateur/);
-    await expect(
-      hub.handle(phone, { type: "agent.removeCustom", agentId: "custom-1" }),
-    ).rejects.toThrow(/Seul l'ordinateur/);
-    await expect(
-      hub.handle(phone, {
-        type: "mcp.add",
-        requestId: "p4",
-        server: {
-          name: "evil-mcp",
-          transport: { type: "stdio", command: "node", args: ["-e", "1"], env: [] },
-        },
-      }),
-    ).rejects.toThrow(/Seul l'ordinateur/);
-    await expect(
-      hub.handle(phone, { type: "mcp.setEnabled", id: "m1", enabled: false }),
-    ).rejects.toThrow(/Seul l'ordinateur/);
-    await expect(
-      hub.handle(phone, { type: "mcp.setScope", id: "m1", projectIds: null, allRoles: false }),
-    ).rejects.toThrow(/Seul l'ordinateur/);
-    await expect(hub.handle(phone, { type: "mcp.remove", id: "m1" })).rejects.toThrow(
-      /Seul l'ordinateur/,
-    );
+
+    // Paired devices can still manage custom agents and MCP servers as before.
+    await hub.handle(phone, {
+      type: "agent.addCustom",
+      requestId: "p3",
+      agent: { name: "custom-phone", command: "node", args: ["-e", "1"] },
+    });
+    const customId = phone.last("created").id;
+    await hub.handle(phone, { type: "agent.removeCustom", agentId: customId });
+    await hub.handle(phone, {
+      type: "mcp.add",
+      requestId: "p4",
+      server: {
+        name: "phone-mcp",
+        transport: { type: "stdio", command: "node", args: ["-e", "1"], env: [] },
+      },
+    });
+    const mcpId = phone.last("created").id;
+    await hub.handle(phone, { type: "mcp.setEnabled", id: mcpId, enabled: false });
+    await hub.handle(phone, {
+      type: "mcp.setScope",
+      id: mcpId,
+      projectIds: [open],
+      allRoles: false,
+    });
+    await hub.handle(phone, { type: "mcp.remove", id: mcpId });
 
     // The computer sets the PIN, locks a project; failed phone tries do not block the computer.
     const hidden = thread(secret, "secret-fil");
@@ -394,6 +393,8 @@ describe("a locked project on the wire", () => {
     // The computer can reset the PIN and unlock all projects cleanly.
     await hub.handle(client, { type: "lock.reset", requestId: "c3" });
     expect(client.last("snapshot").snapshot.lockPin).toBeUndefined();
+    expect(client.last("snapshot").snapshot.pairedDevice).toBeUndefined();
+    expect(phone.last("snapshot").snapshot.pairedDevice).toBe(true);
     expect(client.last("snapshot").snapshot.threads.map((t) => t.id)).toContain(hidden);
     expect(phone.last("snapshot").snapshot.threads.map((t) => t.id)).toContain(hidden);
 
@@ -473,10 +474,53 @@ describe("a locked project on the wire", () => {
     expect(hub.createProject("sub", subDir)).toBeTruthy();
   });
 
-  it("blocks MCP mutations that touch a locked project while allowing open-only MCP servers", async () => {
+  it("allows unrelated projects and discussionsProject() inside a git-versioned home directory", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-lock-home-git-"));
+    const homeDir = path.join(dir, "home");
+    const dataDir = path.join(dir, "moon-data");
+    const notesDir = path.join(homeDir, "notes");
+    const otherDir = path.join(homeDir, "other");
+    mkdirSync(path.join(dataDir, "worktrees"), { recursive: true });
+    mkdirSync(notesDir, { recursive: true });
+    mkdirSync(otherDir, { recursive: true });
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync("git", args, { cwd, stdio: "ignore", windowsHide: true });
+    // Home directory itself is a git repo (e.g. dotfiles), while projects inside it are plain folders.
+    git(homeDir, "init", "-b", "main");
+    git(homeDir, "config", "user.name", "Test");
+    git(homeDir, "config", "user.email", "test@example.com");
+    writeFileSync(path.join(homeDir, ".profile"), "export FOO=1\n");
+    git(homeDir, "add", ".profile");
+    git(homeDir, "commit", "-m", "dotfiles");
+
+    const store = new Store(path.join(dataDir, "state.sqlite"));
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      dataDir,
+      worktreesDir: path.join(dataDir, "worktrees"),
+      homeDir,
+    });
+    const client = new TestClient();
+    hub.connect(client);
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    });
+
+    const notesId = hub.createProject("notes", notesDir);
+    await hub.handle(client, { type: "lock.setPin", requestId: "h1", pin: "123456" });
+    await hub.handle(client, { type: "lock.project", requestId: "h2", projectId: notesId });
+
+    // Locking `notes` must still block its parent (`homeDir`) and subfolders, but allow siblings and Discussions.
+    expect(() => hub.createProject("home", homeDir)).toThrow(/verrouillé/);
+    expect(hub.createProject("other", otherDir)).toBeTruthy();
+    expect(hub.discussionsProject()).toBeTruthy();
+  });
+
+  it("blocks MCP mutations that explicitly target a locked project while allowing global and open-only MCP servers", async () => {
     const { hub, client, secret, open } = setup();
     const stdio = { type: "stdio" as const, command: "node", args: [], env: [] };
-    // Register one global server and one scoped to `open` before locking.
+    // Register one global server, one scoped to `open`, and one scoped to `secret` before locking.
     await hub.handle(client, {
       type: "mcp.add",
       requestId: "m1",
@@ -489,18 +533,17 @@ describe("a locked project on the wire", () => {
       server: { name: "open-srv", transport: stdio, projectIds: [open] },
     });
     const openId = client.last("created").id;
+    await hub.handle(client, {
+      type: "mcp.add",
+      requestId: "m2s",
+      server: { name: "secret-srv", transport: stdio, projectIds: [secret] },
+    });
+    const secretSrvId = client.last("created").id;
 
     await hub.handle(client, { type: "lock.setPin", requestId: "l1", pin: "123456" });
     await hub.handle(client, { type: "lock.project", requestId: "l2", projectId: secret });
 
-    // Adding a global server or one targeting the locked project is refused.
-    await expect(
-      hub.handle(client, {
-        type: "mcp.add",
-        requestId: "m3",
-        server: { name: "g2", transport: stdio },
-      }),
-    ).rejects.toThrow(/verrouillé/);
+    // Explicitly targeting a locked project in projectIds is refused.
     await expect(
       hub.handle(client, {
         type: "mcp.add",
@@ -508,14 +551,6 @@ describe("a locked project on the wire", () => {
         server: { name: "s2", transport: stdio, projectIds: [secret] },
       }),
     ).rejects.toThrow(/verrouillé/);
-
-    // Modifying or deleting the global server, or widening open-srv to locked/global, is refused.
-    await expect(
-      hub.handle(client, { type: "mcp.setEnabled", id: globalId, enabled: false }),
-    ).rejects.toThrow(/verrouillé/);
-    await expect(hub.handle(client, { type: "mcp.remove", id: globalId })).rejects.toThrow(
-      /verrouillé/,
-    );
     await expect(
       hub.handle(client, {
         type: "mcp.setScope",
@@ -525,11 +560,35 @@ describe("a locked project on the wire", () => {
       }),
     ).rejects.toThrow(/verrouillé/);
     await expect(
-      hub.handle(client, { type: "mcp.setScope", id: openId, projectIds: null, allRoles: false }),
+      hub.handle(client, { type: "mcp.setEnabled", id: secretSrvId, enabled: false }),
     ).rejects.toThrow(/verrouillé/);
+    await expect(
+      hub.handle(client, {
+        type: "mcp.setScope",
+        id: secretSrvId,
+        projectIds: [open],
+        allRoles: false,
+      }),
+    ).rejects.toThrow(/verrouillé/);
+    await expect(hub.handle(client, { type: "mcp.remove", id: secretSrvId })).rejects.toThrow(
+      /verrouillé/,
+    );
 
-    // Scoped operations on open-only servers still work.
+    // Global and open-project MCP operations remain allowed while another project is locked.
+    await hub.handle(client, {
+      type: "mcp.add",
+      requestId: "m3",
+      server: { name: "g2", transport: stdio },
+    });
+    await hub.handle(client, { type: "mcp.setEnabled", id: globalId, enabled: false });
+    await hub.handle(client, {
+      type: "mcp.setScope",
+      id: openId,
+      projectIds: null,
+      allRoles: false,
+    });
     await hub.handle(client, { type: "mcp.setEnabled", id: openId, enabled: false });
+    await hub.handle(client, { type: "mcp.remove", id: globalId });
     await hub.handle(client, { type: "mcp.remove", id: openId });
   });
 
