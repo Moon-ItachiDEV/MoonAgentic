@@ -10,6 +10,7 @@ import {
 import { useEffect, useState } from "react";
 import { connection } from "../connection.ts";
 import { notificationsOn, projectMuted, setProjectMuted } from "../notifications.ts";
+import { syncPush } from "../push.ts";
 import { readPref, writePref } from "../prefs.ts";
 import {
   checksLabel,
@@ -170,6 +171,8 @@ export function ProjectPage(props: {
                         run: () => {
                           setProjectMuted(props.project.id, !muted);
                           setMuted(!muted);
+                          // The server, which sends Web Push, must know it too.
+                          syncPush();
                         },
                       },
                     ]

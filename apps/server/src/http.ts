@@ -603,6 +603,9 @@ export function createHttpServer(options: {
         for (const [key, { who: w }] of wsTickets) if (w.owner) wsTickets.delete(key);
         // So do the addresses given to show artifacts, which the old token was enough to get.
         hub.artifactLinks.forget((deviceId) => deviceId === undefined);
+        // And the browsers it subscribed to Web Push: the computer's own say so again when they
+        // connect with the new token.
+        hub.push.forget((deviceId) => deviceId === undefined);
         const old = [...sockets].filter(([, w]) => w.owner).map(([socket]) => socket);
         res.once("close", () => {
           for (const socket of old) socket.close(TOKEN_RENEWED, "token renewed");

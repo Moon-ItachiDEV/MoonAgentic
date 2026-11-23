@@ -1,8 +1,7 @@
 // Browser notifications, on this device only: asked for in the settings, then shown when a
 // thread starts waiting for the user or a team ends, while MoonAgentic stays open in a tab.
-import type { Thread } from "@moonagentic/protocol";
+import { type Notice, noticesFor, settledTags, type Thread } from "@moonagentic/protocol";
 import { connection } from "./connection.ts";
-import { type Notice, noticesFor, settledTags } from "./notices.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { navigate } from "./router.ts";
 
@@ -35,7 +34,7 @@ export function setProjectMuted(projectId: string, muted: boolean): void {
 }
 
 /** Phones show a notification only through a service worker; a computer does without. */
-function registration(): Promise<ServiceWorkerRegistration | undefined> {
+export function registration(): Promise<ServiceWorkerRegistration | undefined> {
   worker ??=
     "serviceWorker" in navigator
       ? navigator.serviceWorker
@@ -73,7 +72,7 @@ export async function showNotice(notice: Notice): Promise<boolean> {
   const options = {
     body: notice.body,
     tag: notice.tag,
-    icon: "/icon.svg",
+    icon: "/icon-192.png",
     data: { threadId: notice.threadId },
   };
   try {
@@ -144,6 +143,8 @@ function anotherTabInFront(): Promise<boolean> {
  * sidebar and « À traiter » tell them there. Of several tabs in the background, one shows it.
  */
 async function notify(notice: Notice): Promise<void> {
+  // The server sends it through Web Push, which shows it even with the app closed.
+  if (readPref("notifications.push") === "true") return;
   if (inFront() || (await anotherTabInFront())) return;
   if (!("locks" in navigator)) {
     await showNotice(notice);

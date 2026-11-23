@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export type { PairedDevice, RemoteAccess, RemoteAddress } from "./remote.ts";
+export { type Notice, noticesFor, settledTags, waitingTag } from "./notices.ts";
 export { defaultTeam, pickMember, TEAM_PRESETS, type TeamPreset } from "./team-presets.ts";
 
 // Zod builds faster checks with `new Function` when it can, and tries it as soon as a
@@ -1047,6 +1048,11 @@ export type ServerMessage =
       targets: string[];
       branches: MoonBranch[];
     }
+  /**
+   * The server's public key for Web Push, which a browser needs to subscribe, and whether the
+   * browser at the address asked about is reached already.
+   */
+  | { type: "pushState"; requestId: string; publicKey: string; subscribed: boolean }
   /** The artifacts of the threads' own branches, the newest first; see `Artifact`. */
   | { type: "artifacts"; requestId: string; artifacts: Artifact[]; capped: boolean }
   /**
@@ -1468,6 +1474,26 @@ export const ClientMessage = z.discriminatedUnion("type", [
     name: z.string().trim().min(1).max(120),
   }),
   z.object({ type: z.literal("project.setPinned"), projectId: id, pinned: z.boolean() }),
+  /** Asks for Web Push's key, and whether this browser is reached already; see `pushState`. */
+  z.object({
+    type: z.literal("push.state"),
+    requestId: id,
+    endpoint: z.string().max(2048).optional(),
+  }),
+  /** This browser wants notifications while MoonAgentic is closed, except for those projects. */
+  z.object({
+    type: z.literal("push.subscribe"),
+    requestId: id,
+    endpoint: z.string().url().max(2048),
+    p256dh: z.string().min(1).max(200),
+    auth: z.string().min(1).max(100),
+    muted: z.array(id).max(500),
+  }),
+  z.object({
+    type: z.literal("push.unsubscribe"),
+    requestId: id,
+    endpoint: z.string().max(2048),
+  }),
   /** Lists the artifacts of the threads' own branches; see `artifacts`. */
   z.object({ type: z.literal("artifacts.list"), requestId: id }),
   /** Asks for an address to show one artifact; see `artifactLink`. */
