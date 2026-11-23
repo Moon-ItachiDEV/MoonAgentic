@@ -207,7 +207,12 @@ export function ThreadView({
           return renderItem(block.index, block.clamp, showBy);
         })}
         {/* The live line of the stretch at work says what the agent does: no second line. */}
-        {thread.status === "running" && blocks.at(-1)?.kind !== "detail" && (
+        {thread.status === "running" && thread.inLine && (
+          <div className="working">
+            En file : démarre dès qu'une place se libère sur le serveur.
+          </div>
+        )}
+        {thread.status === "running" && !thread.inLine && blocks.at(-1)?.kind !== "detail" && (
           <div className="working">
             <span className="spin" />
             {agent?.name ?? "L'agent"} travaille…
@@ -318,7 +323,9 @@ function FeedItem({
         >
           <IconBranch size={13} />
           <span className="oc-t">{opened.title}</span>
-          <span className="oc-state">{opened.held ? "En file" : why || GROUP_LABEL[group]}</span>
+          <span className="oc-state">
+            {opened.held || opened.inLine ? "En file" : why || GROUP_LABEL[group]}
+          </span>
         </button>
       );
     }

@@ -1,7 +1,9 @@
 import {
   type AgentInfo,
   type CoordinatorSettings,
+  DEFAULT_MAX_TURNS,
   DEFAULT_PARALLEL,
+  MAX_MAX_TURNS,
   MAX_PARALLEL,
   type Favorites,
   type McpServerInfo,
@@ -518,6 +520,29 @@ export function SettingsPage(props: {
                   }
                 >
                   {Array.from({ length: MAX_PARALLEL }, (_, i) => i + 1).map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </Row>
+            <Row
+              title="Tours en même temps sur tout le serveur"
+              text="Au-delà, ce que lancent un coordinateur, une équipe ou une tâche planifiée attend en file. Ce que tu envoies toi-même part toujours."
+            >
+              <label className="set-select">
+                <select
+                  aria-label="Tours en même temps sur tout le serveur"
+                  value={props.coordinator.maxTurns ?? DEFAULT_MAX_TURNS}
+                  onChange={(e) =>
+                    connection.send({
+                      type: "server.setMaxTurns",
+                      maxTurns: Number(e.target.value),
+                    })
+                  }
+                >
+                  {Array.from({ length: MAX_MAX_TURNS }, (_, i) => i + 1).map((n) => (
                     <option key={n} value={n}>
                       {n}
                     </option>

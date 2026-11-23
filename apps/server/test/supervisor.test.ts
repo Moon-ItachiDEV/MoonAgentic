@@ -86,6 +86,8 @@ describe("daily backups", () => {
 
     const first = backupNow(store, backups, day(20), 2);
     expect(first && existsSync(first)).toBe(true);
+    // A copy cut short by a power cut is not taken for the day's copy.
+    writeFileSync(path.join(backups, "state-2026-11-21.sqlite.tmp"), "moitié");
     // Once a day only.
     expect(backupNow(store, backups, day(20), 2)).toBeUndefined();
     backupNow(store, backups, day(21), 2);

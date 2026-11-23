@@ -716,6 +716,86 @@ describe("modelOption", () => {
   });
 });
 
+describe("Hub: one cap on turns for the whole server", () => {
+  const said = (store: Store, id: string) => lastTurnSaid(store.listItems(id));
+
+  it("keeps what the server starts in line past the cap, and lets the user's own messages through", async () => {
+    const { hub, store, client, projectId } = setup({ forceStopMs: 200 });
+    await hub.handle(client, { type: "server.setMaxTurns", maxTurns: 1 });
+    expect(hub.coordinatorSettings().maxTurns).toBe(1);
+    const create = (text: string, auto?: boolean) =>
+      hub.createThread({ projectId, agentId: "demo", permissionMode: "full", text, auto });
+
+    // The only place is taken by a turn that never ends.
+    const frozen = create("/fige");
+    await expect.poll(() => said(store, frozen), { timeout: 10_000 }).toContain("Je réfléchis");
+
+    // A planned task waits, in plain sight, and its agent is not started.
+    const first = create("/compact", true);
+    const second = create("/compact", true);
+    expect(store.getThread(first)).toMatchObject({ status: "running", inLine: true });
+    expect(store.getThread(second)).toMatchObject({ status: "running", inLine: true });
+    expect(hub.liveAgents).toBe(1);
+
+    // What the user sends goes at once.
+    const mine = create("/compact");
+    await hub.whenIdle(mine);
+    expect(said(store, mine)).toContain("Contexte compacté.");
+    expect(store.getThread(first)?.inLine).toBe(true);
+
+    // Stopped while in line: it leaves it without ever starting.
+    await hub.cancel(second);
+    await hub.whenIdle(second);
+    expect(store.getThread(second)).toMatchObject({ status: "idle" });
+    expect(store.getThread(second)?.inLine).toBeUndefined();
+    expect(said(store, second)).toBe("");
+
+    // The place frees: the first in line starts by itself.
+    await hub.cancel(frozen);
+    await hub.whenIdle(frozen);
+    await hub.whenIdle(first);
+    expect(store.getThread(first)?.inLine).toBeUndefined();
+    expect(said(store, first)).toContain("Contexte compacté.");
+  });
+
+  it("starts the turns in line when the cap is raised, and does not count a turn waiting for the user", async () => {
+    const { hub, store, client, projectId } = setup();
+    await hub.handle(client, { type: "server.setMaxTurns", maxTurns: 1 });
+    const frozen = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "/fige",
+    });
+    await expect
+      .poll(() => lastTurnSaid(store.listItems(frozen)), { timeout: 10_000 })
+      .toContain("Je réfléchis");
+    const waits = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Modifie",
+      auto: true,
+    });
+    const then = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "/compact",
+      auto: true,
+    });
+    expect(store.getThread(waits)?.inLine).toBe(true);
+
+    await hub.handle(client, { type: "server.setMaxTurns", maxTurns: 2 });
+    // The first in line starts and asks the user: that takes no place, so the next goes too.
+    await expect.poll(() => store.getThread(waits)?.status, { timeout: 10_000 }).toBe("waiting");
+    await hub.whenIdle(then);
+    expect(lastTurnSaid(store.listItems(then))).toContain("Contexte compacté.");
+    await hub.cancel(waits);
+    await hub.cancel(frozen);
+  });
+});
+
 describe("Hub after a restart", () => {
   it("starts the threads left in a coordinator's line", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-test-"));
@@ -793,6 +873,17 @@ describe("Store.recoverAfterRestart", () => {
       updatedAt: 1,
     });
     store.addThread({
+      id: "in-line",
+      projectId: "p",
+      title: "in line",
+      agentId: "demo",
+      status: "running",
+      permissionMode: "supervised",
+      inLine: true,
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    store.addThread({
       id: "only-quiet",
       projectId: "p",
       title: "only quiet",
@@ -811,6 +902,7 @@ describe("Store.recoverAfterRestart", () => {
     expect(store.getThread("quiet")).toMatchObject({ status: "idle", pinned: true });
     expect(store.getThread("quiet")?.quietSince).toBeUndefined();
     expect(store.getThread("only-quiet")?.quietSince).toBeUndefined();
+    expect(store.getThread("in-line")?.inLine).toBeUndefined();
     store.close();
   });
 });
