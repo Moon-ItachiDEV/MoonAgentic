@@ -29,6 +29,7 @@ import type {
 import type { Agents } from "./agents.ts";
 import { cloneGithubRepo, githubRepos, githubStatus, parseGithubRepo } from "./github.ts";
 import { githubAccount, type LoginResult } from "./github-account.ts";
+import { mergePlan, noteTool } from "./plan-steps.ts";
 import { defaultParent, findClones, usualRoots } from "./local-clones.ts";
 import {
   branchExists,
@@ -2137,14 +2138,22 @@ export class Hub {
         this.catalog.rememberCommands(thread.agentId, commands);
         return;
       }
-      case "plan":
+      case "plan": {
+        const id = `plan:${this.turnIds.get(threadId) ?? "late"}`;
+        const before = this.store.getItem(threadId, id);
+        const now = Date.now();
         this.putItem(threadId, {
-          id: `plan:${this.turnIds.get(threadId) ?? "late"}`,
+          id,
           kind: "plan",
-          entries: update.entries.map((e) => ({ content: e.content, status: e.status })),
-          at: Date.now(),
+          entries: mergePlan(
+            before?.kind === "plan" ? before.entries : undefined,
+            update.entries.map((e) => ({ content: e.content, status: e.status })),
+            now,
+          ),
+          at: before?.at ?? now,
         });
         return;
+      }
       default:
         return;
     }
@@ -2204,6 +2213,13 @@ export class Hub {
     const existing = this.store.getItem(threadId, id) as ToolItem | undefined;
     const content = update.content ? toolContent(update.content) : undefined;
     const questions = toolQuestions(update.rawInput) ?? existing?.questions;
+    // A new call joins the step of the agent's plan it is on.
+    if (!existing && update.title) {
+      const planId = `plan:${this.turnIds.get(threadId) ?? "late"}`;
+      const plan = this.store.getItem(threadId, planId);
+      const entries = plan?.kind === "plan" ? noteTool(plan.entries, update.title) : undefined;
+      if (plan?.kind === "plan" && entries) this.putItem(threadId, { ...plan, entries });
+    }
     this.putItem(threadId, {
       id,
       kind: "tool",
