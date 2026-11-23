@@ -4,6 +4,8 @@
 /* Theme: light or dark on demand, the system's otherwise. */
 :root[data-theme="dark"] {
   --bg: #111113;
+  --side: #131315;
+  --seg-on: #2c2c31;
   --surface: #18181b;
   --card: #1b1b1e;
   --sunken: #212125;
@@ -18,17 +20,32 @@
   --ok: #52c585;
   --warn: #e2a740;
   --err: #f06c6c;
+  --ok-tx: var(--ok);
+  --err-tx: var(--err);
+  --okbg: #15271d;
+  --errbg: #2c1818;
+  --warnbg: #2a2114;
+  --accbg: #1c2140;
+  --merged: #a88bf0;
+  --mergedbg: #221b33;
+  --track: #2b2b30;
+  --float:
+    0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3),
+    0 12px 28px -6px rgba(0, 0, 0, 0.5), 0 28px 56px -16px rgba(0, 0, 0, 0.55);
   --add-bg: rgba(82, 197, 133, 0.1);
   --add-fg: #73d69c;
   --del-bg: rgba(240, 108, 108, 0.1);
   --del-fg: #f28c8c;
   --scrim: rgba(0, 0, 0, 0.5);
   --shadow: 0 20px 50px -18px rgba(0, 0, 0, 0.6), 0 3px 10px rgba(0, 0, 0, 0.3);
+  --raise: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 4px 14px -6px rgba(0, 0, 0, 0.5);
   color-scheme: dark;
 }
 @media (prefers-color-scheme: dark) {
   :root[data-theme="light"] {
     --bg: #fafafa;
+    --side: #f4f4f6;
+    --seg-on: #ffffff;
     --surface: #ffffff;
     --card: #f3f3f4;
     --sunken: #efeff1;
@@ -43,12 +60,27 @@
     --ok: #1f8a50;
     --warn: #9a6008;
     --err: #cc3d3d;
+    --ok-tx: #1a7a46;
+    --err-tx: #c23535;
+    --okbg: #e8f5ee;
+    --errbg: #fbeeee;
+    --warnbg: #fbf3e4;
+    --accbg: #eceffd;
+    --merged: #7a4fd6;
+    --mergedbg: #f1ecfc;
+    --track: #e6e6ea;
+    --float:
+      0 0 0 0.5px rgba(24, 24, 40, 0.07), 0 1px 2px rgba(20, 20, 30, 0.05),
+      0 8px 16px -8px rgba(20, 20, 30, 0.12), 0 28px 56px -24px rgba(20, 20, 30, 0.28);
     --add-bg: rgba(31, 138, 80, 0.09);
     --add-fg: #1d7a47;
     --del-bg: rgba(204, 61, 61, 0.08);
     --del-fg: #b43636;
     --scrim: rgba(20, 20, 24, 0.28);
     --shadow: 0 20px 50px -18px rgba(20, 20, 30, 0.25), 0 3px 10px rgba(20, 20, 30, 0.06);
+    --raise:
+      0 0 0 0.5px rgba(24, 24, 40, 0.06), 0 1px 2px rgba(24, 24, 40, 0.04),
+      0 4px 14px -6px rgba(24, 24, 40, 0.08);
     color-scheme: light;
   }
 }
@@ -127,7 +159,7 @@
   padding: 0 10px;
   border-radius: 10px;
   color: var(--fg);
-  font-size: 14.5px;
+  font-size: 14px;
   align-self: flex-start;
 }
 .set-search {
@@ -150,7 +182,7 @@
   background: none;
   outline: none;
   font: inherit;
-  font-size: 13.5px;
+  font-size: 13px;
   color: var(--fg);
 }
 .set-search input::-webkit-search-cancel-button {
@@ -197,7 +229,7 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  font-size: 13.5px;
+  font-size: 13px;
   line-height: 1.2;
 }
 .set-login {
@@ -207,7 +239,7 @@
 }
 .set-who small {
   color: var(--muted);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .set-theme {
   margin-left: auto;
@@ -229,7 +261,7 @@
   height: 35px;
   padding: 0 10px;
   border-radius: 10px;
-  font-size: 14.5px;
+  font-size: 14px;
   color: var(--fg);
   text-align: left;
 }
@@ -266,7 +298,7 @@
 }
 .set-page h1 {
   margin: 0 0 4px;
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -286,7 +318,7 @@
   align-items: flex-start;
 }
 .set-row + .set-row {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid transparent;
 }
 .set-tx {
   flex: 1;
@@ -322,16 +354,16 @@
   gap: 6px;
   height: 34px;
   padding: 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 10px;
-  background: var(--surface);
+  background: var(--sunken);
   color: var(--muted);
 }
 .set-select select {
   border: 0;
   background: none;
   font: inherit;
-  font-size: 13.5px;
+  font-size: 13px;
   color: var(--fg);
   outline: none;
   max-width: 200px;
@@ -340,8 +372,8 @@
   display: inline-flex;
   padding: 3px;
   border-radius: 11px;
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--card);
+  border: 1px solid transparent;
 }
 .set-seg button {
   height: 28px;
@@ -416,9 +448,9 @@
   gap: 4px;
   height: 28px;
   padding: 0 4px 0 10px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: var(--surface);
+  background: var(--card);
   font-size: 13px;
 }
 .set-chip button {
@@ -438,7 +470,7 @@
   color: var(--faint);
 }
 .set-tag.on {
-  color: var(--ok);
+  color: var(--ok-tx);
 }
 
 @media (max-width: 860px) {

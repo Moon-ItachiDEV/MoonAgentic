@@ -156,10 +156,10 @@ describe("GitHub sign-in", () => {
     await list.getByRole("button", { name: /moon\/app/ }).click();
     await page.getByText("Sera cloné dans").waitFor();
     await shot("g4-ou-va-le-clone");
-    await page.getByRole("button", { name: "Changer", exact: true }).first().click();
+    await page.getByRole("button", { name: "Changer de dépôt" }).click();
 
     await list.getByRole("button", { name: /moon\/site/ }).click();
-    await page.getByText("Déjà cloné dans").waitFor();
+    await page.getByText("Déjà cloné sur cette machine").waitFor();
     await shot("g5-deja-clone");
     await page.getByRole("button", { name: "Utiliser ce clone" }).click();
     await expect.poll(() => page.getByRole("combobox", { name: "Message" }).isEnabled()).toBe(true);

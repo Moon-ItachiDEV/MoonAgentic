@@ -9,7 +9,7 @@ import {
   type Schedule,
   type Thread,
 } from "@moonagentic/protocol";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
 import {
   PLAN_COLUMNS,
@@ -26,6 +26,7 @@ import {
 import { readPref, writePref } from "../prefs.ts";
 import type { PlannerView } from "../router.ts";
 import { IconClose, IconFolder, IconPlay } from "./icons.tsx";
+import { firstPick, type ModelPick, ModelSelect } from "./ModelSelect.tsx";
 import { PlanSchedules } from "./PlanSchedules.tsx";
 import { PlanTimeline } from "./PlanTimeline.tsx";
 
@@ -693,13 +694,10 @@ function Launch({
   before: () => void;
   onCancel: () => void;
 }) {
-  const ready = agents.filter((a) => a.available);
-  const [agentId, setAgentId] = useState(() => {
-    const last = readPref("agent");
-    return ready.find((a) => a.id === last)?.id ?? ready[0]?.id ?? "";
-  });
-  const agent = agents.find((a) => a.id === agentId);
-  const [model, setModel] = useState("");
+  const favorites = useSyncExternalStore(connection.subscribe, connection.getState).favorites;
+  const [pick, setPick] = useState<ModelPick | undefined>(() => firstPick(agents, favorites));
+  const agentId = pick?.agentId ?? "";
+  const model = pick?.model ?? "";
   const [mode, setMode] = useState<PermissionMode>(() =>
     readPref("permissionMode") === "full" ? "full" : "supervised",
   );
@@ -711,12 +709,6 @@ function Launch({
     // In braces: a recent browser answers a scroll with a promise, which is no clean-up.
     form.current?.scrollIntoView({ block: "nearest" });
   }, []);
-
-  // The models come from the agent itself: it is asked once, as the model picker does.
-  useEffect(() => {
-    if (!agent?.available || agent.models || agent.modelsError) return;
-    connection.send({ type: "agent.discover", agentId: agent.id, projectId: project.id });
-  }, [agent, project.id]);
 
   const run = async () => {
     if (!agentId || busy) return;
@@ -754,37 +746,16 @@ function Launch({
         suit ensuite ce fil.
       </p>
       <label className="field">
-        Agent
-        <select
-          aria-label="Agent"
-          value={agentId}
-          onChange={(e) => {
-            setAgentId(e.target.value);
-            setModel("");
-          }}
-        >
-          {ready.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
+        Modèle
+        <ModelSelect
+          label="Modèle"
+          agents={agents}
+          favorites={favorites}
+          value={pick}
+          onChange={setPick}
+          projectId={project.id}
+        />
       </label>
-      {agent?.models && agent.models.length > 0 && (
-        <label className="field">
-          Modèle
-          <select
-            value={model || agent.defaultModel || ""}
-            onChange={(e) => setModel(e.target.value)}
-          >
-            {agent.models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
       <label className="field">
         Accès de l'agent
         <select value={mode} onChange={(e) => setMode(e.target.value as PermissionMode)}>
@@ -802,7 +773,7 @@ function Launch({
           Branche à part
         </label>
       )}
-      {ready.length === 0 && (
+      {!agents.some((a) => a.available) && (
         <p className="error">Aucun agent n'est prêt : ouvre les Connexions.</p>
       )}
       <div className="pl-launch-f">

@@ -5,7 +5,7 @@
   gap: 12px;
   margin-top: 4px;
   padding-top: 8px;
-  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-top: 1px solid transparent;
 }
 .rv-prs-wt {
   display: grid;

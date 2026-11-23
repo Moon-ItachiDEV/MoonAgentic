@@ -4,10 +4,10 @@
   display: inline-block;
   margin-top: 10px;
   padding: 8px 14px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 10px;
-  background: var(--surface);
-  font: 600 22px/1.2 var(--mono);
+  background: var(--sunken);
+  font: 600 24px/1.2 var(--mono);
   letter-spacing: 0.12em;
   color: var(--fg);
   user-select: all;
@@ -25,7 +25,8 @@
   justify-content: space-between;
   gap: 10px;
   padding: 8px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 12px;
 }
 .ra-devices span {
@@ -52,9 +53,9 @@
   flex: 1;
   min-width: 0;
   height: 40px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 10px;
-  background: var(--surface);
+  background: var(--sunken);
   color: var(--fg);
   padding: 0 12px;
   font: 600 16px var(--mono);
@@ -66,9 +67,9 @@
   border-color: var(--accent);
 }
 .gate p.error {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .gate p.pair-alt {
-  font-size: 12.5px;
+  font-size: 12px;
   margin-top: 10px;
 }

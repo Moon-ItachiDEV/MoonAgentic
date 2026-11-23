@@ -1,6 +1,6 @@
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
-import { ProjectLocks } from "./locks.ts";
+import { COMPUTER_ACTOR, ProjectLocks } from "./locks.ts";
 import { Push, type PushSend } from "./push.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
@@ -65,7 +65,10 @@ import {
   worktreeStart,
   branchName,
   dropCheckpoints,
+  gitCommonDir,
   isGitRepo,
+  isSameOrInside,
+  pathsOverlap,
   restoreCheckpoint,
   reviewChanges,
   samePath,
@@ -163,7 +166,22 @@ const FORCE_STOP_MS = 10_000;
 /** How long an agent may take to open its session before the turn gives up. */
 const START_TIMEOUT_MS = 120_000;
 
+const ONLY_ON_COMPUTER = "Seul l'ordinateur où tourne MoonAgentic peut faire ça.";
+/** Operations reserved to the computer running MoonAgentic, refused to paired devices. */
+const COMPUTER_ONLY_MESSAGES = new Set<ClientMessage["type"]>([
+  "lock.setPin",
+  "lock.reset",
+  "agent.addCustom",
+  "agent.removeCustom",
+  "mcp.add",
+  "mcp.setEnabled",
+  "mcp.setScope",
+  "mcp.remove",
+]);
+
 export interface HubOptions {
+  /** MoonAgentic's own private data folder (`~/.moonagentic`), refused as a project path. */
+  dataDir?: string;
   /** Where threads with their own branch get their worktree. */
   worktreesDir: string;
   /** How Web Push messages are sent; to push services over the network when not given. */
@@ -305,6 +323,8 @@ export class Hub {
     { form: FormQuestions; answer: (r: acp.CreateElicitationResponse) => void }
   >();
 
+  /** MoonAgentic's own private data folder, when passed by the server. */
+  private readonly dataDir: string | undefined;
   /** Where threads with their own branch get their worktree. */
   private readonly worktreesDir: string;
   /** The images sent with messages. */
@@ -366,6 +386,7 @@ export class Hub {
     this.store = store;
     this.locks = new ProjectLocks(store);
     this.agents = agents;
+    this.dataDir = options.dataDir;
     this.worktreesDir = options.worktreesDir;
     this.attachments = new Attachments(
       options.attachmentsDir ?? path.join(path.dirname(options.worktreesDir), "attachments"),
@@ -638,6 +659,37 @@ export class Hub {
     if (!this.locks.any() || message.type.startsWith("lock.")) return false;
     if (message.type === "ping" || message.type === "thread.leave") return false;
     if (message.type === "thread.open") return this.lockedThread(message.threadId);
+    const lockedError = () => {
+      throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    };
+    if (message.type === "mcp.add") {
+      const target = message.server.projectIds;
+      if (!target || target.some((p) => this.locks.isLocked(p))) lockedError();
+      return false;
+    }
+    if (message.type === "mcp.setScope") {
+      const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
+      if (
+        current &&
+        (!current.projectIds || current.projectIds.some((p) => this.locks.isLocked(p)))
+      ) {
+        lockedError();
+      }
+      if (!message.projectIds || message.projectIds.some((p) => this.locks.isLocked(p))) {
+        lockedError();
+      }
+      return false;
+    }
+    if (message.type === "mcp.setEnabled" || message.type === "mcp.remove") {
+      const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
+      if (
+        current &&
+        (!current.projectIds || current.projectIds.some((p) => this.locks.isLocked(p)))
+      ) {
+        lockedError();
+      }
+      return false;
+    }
     const projects: (string | undefined)[] = [];
     if ("projectId" in message && typeof message.projectId === "string") {
       projects.push(message.projectId);
@@ -652,9 +704,7 @@ export class Hub {
         projects.push(this.store.getSchedule(message.id)?.projectId);
       }
     }
-    if (projects.some((p) => this.locks.isLocked(p))) {
-      throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
-    }
+    if (projects.some((p) => this.locks.isLocked(p))) lockedError();
     return false;
   }
 
@@ -665,6 +715,9 @@ export class Hub {
   }
 
   async handle(client: Client, message: ClientMessage): Promise<void> {
+    if (client.deviceId && COMPUTER_ONLY_MESSAGES.has(message.type)) {
+      throw new Error(ONLY_ON_COMPUTER);
+    }
     if (this.refuseLocked(message)) return;
     switch (message.type) {
       case "ping":
@@ -689,8 +742,16 @@ export class Hub {
             (c) => c.repo?.toLowerCase() === `${wanted.owner}/${wanted.name}`.toLowerCase(),
           );
         if (twin?.projectId) {
+          if (this.locks.isLocked(twin.projectId)) {
+            throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+          }
           client.send({ type: "created", requestId: message.requestId, id: twin.projectId });
           return;
+        }
+        const folderName = message.name?.trim() || wanted?.name || "";
+        if (folderName && !/[\\/]/.test(folderName) && folderName !== "." && folderName !== "..") {
+          const parent = path.resolve(message.parent.replace(/^~(?=$|[\\/])/, os.homedir()));
+          this.assertProjectPathAllowed(path.join(parent, folderName));
         }
         const { dest, name, existing } = await cloneGithubRepo(message);
         const known = existing
@@ -702,6 +763,9 @@ export class Hub {
               }
             })
           : undefined;
+        if (known && this.locks.isLocked(known.id)) {
+          throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+        }
         const id = known?.id ?? this.createProject(name, dest);
         client.send({ type: "created", requestId: message.requestId, id });
         return;
@@ -911,7 +975,7 @@ export class Hub {
         return;
       }
       case "lock.setPin":
-        this.locks.setPin(message.pin, message.current);
+        this.locks.setPin(message.pin, message.current, COMPUTER_ACTOR);
         this.sendSnapshots();
         client.send({ type: "done", requestId: message.requestId });
         return;
@@ -922,7 +986,12 @@ export class Hub {
         client.send({ type: "done", requestId: message.requestId });
         return;
       case "lock.unlock":
-        this.locks.unlock(message.projectId, message.pin);
+        this.locks.unlock(message.projectId, message.pin, client.deviceId ?? COMPUTER_ACTOR);
+        this.sendSnapshots();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "lock.reset":
+        this.locks.reset();
         this.sendSnapshots();
         client.send({ type: "done", requestId: message.requestId });
         return;
@@ -1171,7 +1240,9 @@ export class Hub {
         client.send({
           type: "searched",
           requestId: message.requestId,
-          hits: (this.flushAll(), this.store.searchItems(message.query)),
+          hits:
+            (this.flushAll(),
+            this.store.searchItems(message.query, 30, this.locks.lockedProjects())),
         });
         return;
       case "agent.setMascot":
@@ -1289,6 +1360,44 @@ export class Hub {
     }
   }
 
+  /**
+   * Refuses folders that would expose MoonAgentic's own internal data (`dataDir` / worktrees)
+   * or bypass `/lock` via a parent folder, subfolder, symlink, or shared git repository.
+   */
+  private assertProjectPathAllowed(resolved: string): void {
+    if (this.dataDir && pathsOverlap(resolved, this.dataDir)) {
+      throw new Error(
+        "Ce dossier contient les données internes de MoonAgentic et ne peut pas être ouvert comme projet.",
+      );
+    }
+    if (isSameOrInside(resolved, this.worktreesDir)) {
+      throw new Error(
+        "Ce dossier appartient à MoonAgentic et ne peut pas être ouvert comme projet.",
+      );
+    }
+    if (!this.locks.any()) return;
+    let targetCommonDir: string | undefined | null = null;
+    for (const p of this.store.listProjects()) {
+      if (!this.locks.isLocked(p.id)) continue;
+      if (pathsOverlap(resolved, p.path)) {
+        throw new Error(
+          "Ce dossier chevauche un projet verrouillé : saisis le code pour l'ouvrir.",
+        );
+      }
+      if (targetCommonDir === null) {
+        targetCommonDir = existsSync(resolved) ? gitCommonDir(resolved) : undefined;
+      }
+      if (targetCommonDir && existsSync(p.path)) {
+        const lockedCommonDir = gitCommonDir(p.path);
+        if (lockedCommonDir && lockedCommonDir === targetCommonDir) {
+          throw new Error(
+            "Ce dossier partage son dépôt git avec un projet verrouillé : saisis le code pour l'ouvrir.",
+          );
+        }
+      }
+    }
+  }
+
   createProject(name: string, rawPath: string): string {
     const resolved = path.resolve(rawPath.replace(/^~(?=$|[\\/])/, os.homedir()));
     // A folder already in MoonAgentic opens as it is, so no project is ever there twice.
@@ -1299,7 +1408,13 @@ export class Hub {
         return false; // a project whose folder is gone
       }
     });
-    if (known) return known.id;
+    if (known) {
+      if (this.locks.isLocked(known.id)) {
+        throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+      }
+      return known.id;
+    }
+    this.assertProjectPathAllowed(resolved);
     let isDirectory = false;
     try {
       isDirectory = statSync(resolved).isDirectory();
@@ -3188,6 +3303,7 @@ export class Hub {
               title: t.title,
               branch: t.workspace.branch,
               ...(t.archived ? { archived: true } : {}),
+              ...(this.locks.isLocked(t.projectId) ? { locked: true } : {}),
             },
           ]
         : [],

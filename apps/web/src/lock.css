@@ -24,7 +24,7 @@
   padding: 26px 22px 16px;
   border-radius: 26px;
   background: var(--bg);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   box-shadow: 0 30px 70px -30px rgba(20, 20, 30, 0.4);
   text-align: center;
   outline: none;
@@ -49,11 +49,11 @@
     color 0.3s;
 }
 .lk-ttl {
-  font-weight: 550;
+  font-weight: 600;
   font-size: 16px;
 }
 .lk-sub {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
   line-height: 1.45;
   max-width: 270px;
@@ -108,13 +108,13 @@
   }
 }
 .lk-msg {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--faint);
   min-height: 18px;
 }
 .lk-card.ok .lk-slots i {
-  border-color: var(--ok);
-  color: var(--ok);
+  border-color: var(--ok-tx);
+  color: var(--ok-tx);
   background: color-mix(in srgb, var(--ok) 10%, transparent);
   animation: lk-wave 0.4s cubic-bezier(0.3, 1.4, 0.5, 1) both;
 }
@@ -124,21 +124,21 @@
   }
 }
 .lk-card.ok .lk-msg {
-  color: var(--ok);
+  color: var(--ok-tx);
 }
 .lk-card.ok .lk-ic {
   background: color-mix(in srgb, var(--ok) 14%, transparent);
-  color: var(--ok);
+  color: var(--ok-tx);
 }
 .lk-card.bad .lk-slots {
   animation: lk-shake 0.32s;
 }
 .lk-card.bad .lk-slots i {
-  border-color: var(--err);
-  color: var(--err);
+  border-color: var(--err-tx);
+  color: var(--err-tx);
 }
 .lk-card.bad .lk-msg {
-  color: var(--err);
+  color: var(--err-tx);
 }
 @keyframes lk-shake {
   20% {
@@ -230,7 +230,7 @@
 .lk-page p {
   max-width: 340px;
   color: var(--muted);
-  font-size: 13.5px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -253,8 +253,9 @@
   height: 30px;
   padding: 0 11px;
   border-radius: 999px;
-  border: 1px solid var(--line);
-  font-size: 12.5px;
+  border: 1px solid transparent;
+  background: var(--card);
+  font-size: 12px;
   color: var(--muted);
 }
 .lk-chip svg {
@@ -263,7 +264,6 @@
 .lk-chip[aria-pressed="true"] {
   background: var(--fg);
   color: var(--bg);
-  border-color: var(--fg);
 }
 .lk-chip[aria-pressed="true"] svg {
   opacity: 1;

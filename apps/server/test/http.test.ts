@@ -16,6 +16,7 @@ import {
   createHttpServer,
   decode,
   DEVICE_REVOKED,
+  rateKey,
   type RateLimitOptions,
   TOKEN_RENEWED,
 } from "../src/http.ts";
@@ -563,7 +564,7 @@ describe("the HTTP server", () => {
     expect(read.status).toBe(200);
     expect(read.headers.get("content-type")).toBe("image/png");
     expect(read.headers.get("x-content-type-options")).toBe("nosniff");
-    expect(read.headers.get("cache-control")).toContain("private");
+    expect(read.headers.get("cache-control")).toBe("private, no-store");
     expect(Buffer.from(await read.arrayBuffer())).toEqual(png);
     // A locked project's thread shows none of its images.
     const hidden = ((await (await post(png)).json()) as { id: string }).id;
@@ -631,5 +632,133 @@ describe("the HTTP server", () => {
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(here.readyState).toBe(WebSocket.OPEN);
     here.close();
+  });
+
+  it("survives overlong paths without crashing and rejects non-GET/HEAD on static files and /api/build", async () => {
+    const { origin, images } = await serve();
+    const longPath = await fetch(`http://${origin}/${"a".repeat(350)}`);
+    if (process.platform === "win32") expect([200, 400]).toContain(longPath.status);
+    else expect(longPath.status).toBe(400);
+
+    // Non-read methods on static files and /api/build are refused with 405; HEAD returns headers only.
+    expect((await fetch(`http://${origin}/index.html`, { method: "DELETE" })).status).toBe(405);
+    expect((await fetch(`http://${origin}/index.html`, { method: "POST" })).status).toBe(405);
+    expect((await fetch(`http://${origin}/api/build`, { method: "POST" })).status).toBe(405);
+    const headPage = await fetch(`http://${origin}/index.html`, { method: "HEAD" });
+    expect(headPage.status).toBe(200);
+    expect(await headPage.text()).toBe("");
+    const headBuild = await fetch(`http://${origin}/api/build`, { method: "HEAD" });
+    expect(headBuild.status).toBe(200);
+    expect(await headBuild.text()).toBe("");
+
+    // An unexpected synchronous error inside a route answers 500 instead of stopping the server.
+    const spy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(images, "find").mockImplementationOnce(() => {
+      throw new Error("panne inattendue");
+    });
+    const boom = await fetch(`http://${origin}/api/attachments/fil-1/img-1`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(boom.status).toBe(500);
+    spy.mockRestore();
+
+    // The server is still alive and serves normal requests.
+    const page = await fetch(`http://${origin}/t/apres-erreur`);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("MoonAgentic");
+  });
+
+  it("derives rate-limit keys per forwarded client on loopback and ignores X-Forwarded-For from non-loopback", () => {
+    const fakeReq = (remoteAddress: string | undefined, xff?: string | string[]) => ({
+      socket: { remoteAddress } as never,
+      headers: xff === undefined ? {} : { "x-forwarded-for": xff },
+    });
+    expect(rateKey(fakeReq("127.0.0.1"))).toBe("local");
+    expect(rateKey(fakeReq("::1"))).toBe("local");
+    expect(rateKey(fakeReq("127.0.0.1", "100.64.0.9"))).toBe("forwarded:100.64.0.9");
+    expect(rateKey(fakeReq("127.0.0.1", "1.2.3.4, 100.64.0.9"))).toBe("forwarded:100.64.0.9");
+    expect(rateKey(fakeReq("127.0.0.1", "100.64.0.9, "))).toBe("forwarded:100.64.0.9");
+    expect(rateKey(fakeReq("127.0.0.1", ["1.2.3.4", "100.64.0.9"]))).toBe("forwarded:100.64.0.9");
+    // Direct LAN clients cannot spoof X-Forwarded-For to evade rate limits.
+    expect(rateKey(fakeReq("192.168.1.42", "100.64.0.9"))).toBe("192.168.1.42");
+  });
+
+  it("isolates a remote device behind a loopback proxy from locking out the computer or other devices", async () => {
+    const { origin } = await serve({
+      rateLimit: { windowMs: 60_000, maxAuthFailures: 3, maxApiRequests: 10 },
+    });
+    const badPair = (xff: string) =>
+      fetch(`http://${origin}/api/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-forwarded-for": xff },
+        body: JSON.stringify({ code: "AAAA2222", name: "intrus" }),
+      });
+    for (let i = 0; i < 3; i++) expect((await badPair("100.64.0.9")).status).toBe(401);
+    expect((await badPair("100.64.0.9")).status).toBe(429);
+    // The abusive remote device is blocked on /api/auth and /ws.
+    expect(
+      (
+        await fetch(`http://${origin}/api/auth`, {
+          headers: { authorization: `Bearer ${TOKEN}`, "x-forwarded-for": "100.64.0.9" },
+        })
+      ).status,
+    ).toBe(429);
+    expect(
+      await socketStatus(`ws://${origin}/ws`, {
+        authorization: `Bearer ${TOKEN}`,
+        "x-forwarded-for": "100.64.0.9",
+      }),
+    ).toBe(429);
+
+    // The local computer (no X-Forwarded-For) and another remote device stay unaffected.
+    expect(
+      (await fetch(`http://${origin}/api/auth`, { headers: { authorization: `Bearer ${TOKEN}` } }))
+        .status,
+    ).toBe(204);
+    expect(await socketOpens(`ws://${origin}/ws`, { authorization: `Bearer ${TOKEN}` })).toBe(true);
+    expect(
+      (
+        await fetch(`http://${origin}/api/auth`, {
+          headers: { authorization: `Bearer ${TOKEN}`, "x-forwarded-for": "100.64.0.10" },
+        })
+      ).status,
+    ).toBe(204);
+  });
+
+  it("does not let cross-site or unauthenticated floods exhaust the local API rate limit", async () => {
+    const { origin } = await serve({
+      rateLimit: { windowMs: 60_000, maxAuthFailures: 3, maxApiRequests: 4 },
+    });
+    // Cross-origin and unauthenticated requests exceed maxApiRequests without consuming the local bucket.
+    for (let i = 0; i < 8; i++) {
+      expect(
+        (
+          await fetch(`http://${origin}/api/auth`, {
+            headers: { origin: "https://evil.example", authorization: `Bearer ${TOKEN}` },
+          })
+        ).status,
+      ).toBe(403);
+      expect(
+        (
+          await fetch(`http://${origin}/api/auth`, {
+            headers: { "sec-fetch-site": "cross-site", authorization: `Bearer ${TOKEN}` },
+          })
+        ).status,
+      ).toBe(403);
+      expect((await fetch(`http://${origin}/api/auth`)).status).toBe(401);
+      expect(
+        (
+          await fetch(`http://${origin}/api/pair`, {
+            method: "POST",
+            headers: { "content-type": "application/json", origin: "https://evil.example" },
+            body: JSON.stringify({ code: "AAAA2222", name: "x" }),
+          })
+        ).status,
+      ).toBe(403);
+    }
+    expect(
+      (await fetch(`http://${origin}/api/auth`, { headers: { authorization: `Bearer ${TOKEN}` } }))
+        .status,
+    ).toBe(204);
   });
 });

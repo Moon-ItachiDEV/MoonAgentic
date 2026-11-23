@@ -11,6 +11,8 @@ import {
   followedThread,
   isLate,
   linkableThreads,
+  plannerSignal,
+  plannerSignalText,
   timeline,
   timelineTicks,
 } from "./planner.ts";
@@ -271,5 +273,26 @@ describe("timeline", () => {
       { day: 2, label: "30" },
       { day: 9, label: "7" },
     ]);
+  });
+});
+
+describe("plannerSignal", () => {
+  it("shows nothing while nothing moves", () => {
+    const s = plannerSignal([card(), card({ id: "d", status: "live" })], [], agents);
+    expect(s).toEqual({ live: false, waiting: 0, active: 0 });
+    expect(plannerSignalText(s)).toBe("");
+  });
+
+  it("counts what waits for the user, what runs and what is in progress", () => {
+    const cards = [
+      card({ id: "a", status: "doing", threadId: "run" }),
+      card({ id: "b", status: "doing", threadId: "ask" }),
+      card({ id: "c", status: "test" }),
+      card({ id: "d", status: "todo" }),
+    ];
+    const threads = [thread("run", { status: "running" }), thread("ask", { status: "waiting" })];
+    const s = plannerSignal(cards, threads, agents);
+    expect(s).toEqual({ live: true, waiting: 1, active: 3 });
+    expect(plannerSignalText(s)).toBe("1 carte t'attend · un agent travaille · 3 en cours");
   });
 });

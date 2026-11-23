@@ -11,6 +11,7 @@ import {
   repoFullName,
 } from "../github.ts";
 import { GithubMark, GithubSignIn } from "./GithubSignIn.tsx";
+import { IconCheck } from "./icons.tsx";
 
 type Source = "github" | "local";
 
@@ -233,6 +234,7 @@ export function NewProjectDialog({
                 <button
                   type="button"
                   className="btn quiet sm"
+                  aria-label="Changer de dépôt"
                   disabled={busy}
                   onClick={() => {
                     setPicked(null);
@@ -316,16 +318,16 @@ export function NewProjectDialog({
             )}
             {github.error && <p className="error">{github.error}</p>}
 
-            {fullName && already?.projectId && (
-              <p className="np-where ok">
-                Déjà dans MoonAgentic, dans <span className="mono">{already.path}</span>.
-              </p>
-            )}
-            {fullName && already && !already.projectId && (
-              <p className="np-where ok">
-                Déjà cloné dans <span className="mono">{already.path}</span>. MoonAgentic l'utilise
-                tel quel, sans en faire une copie de plus.
-              </p>
+            {fullName && already && (
+              <div className="np-done" role="status">
+                <IconCheck size={16} />
+                <b>
+                  {already.projectId
+                    ? "Déjà un projet de MoonAgentic"
+                    : "Déjà cloné sur cette machine"}
+                </b>
+                <span className="mono">{already.path}</span>
+              </div>
             )}
             {fullName && !already && !editing && (
               <p className="np-where">

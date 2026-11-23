@@ -97,7 +97,9 @@ describe("images sent with a message", () => {
     expect(images.find("fil-1", `../fil-1/${image.id}`)).toBeUndefined();
     expect(images.find("../" + path.basename(dir) + "/fil-1", image.id)).toBeUndefined();
     expect(images.find(".", image.id)).toBeUndefined();
-    expect(status(() => images.bind("../ailleurs", [images.add(PNG).id]))).toBe(404);
+    const pending = images.add(PNG);
+    expect(images.find("pending", pending.id)).toBeUndefined();
+    expect(status(() => images.bind("../ailleurs", [pending.id]))).toBe(404);
     images.forget("..");
     images.forget("pending");
     images.discard("../fil-1/" + image.id);

@@ -742,15 +742,17 @@ export function App() {
                   onStartCoordinator={
                     coordinator
                       ? undefined
-                      : async (agentId) => {
+                      : async (pick) => {
                           await connection.request({
                             type: "coordinator.open",
                             requestId: newId(),
                             projectId: routeProject.id,
-                            agentId,
+                            agentId: pick.agentId,
+                            ...(pick.model ? { model: pick.model } : {}),
                           });
                         }
                   }
+                  favorites={state.favorites}
                 />
               );
               if (!coordinator) return page(false);
@@ -1000,6 +1002,7 @@ export function App() {
           <TeamDialog
             project={project}
             agents={state.agents}
+            favorites={state.favorites}
             task={teamTask}
             onClose={() => setTeamTask(null)}
             onStarted={(id) => {
@@ -1031,6 +1034,7 @@ export function App() {
           <ScheduleDialog
             project={project}
             agents={state.agents}
+            favorites={state.favorites}
             text={scheduling.text}
             schedule={scheduling.schedule}
             onClose={() => setScheduling(null)}

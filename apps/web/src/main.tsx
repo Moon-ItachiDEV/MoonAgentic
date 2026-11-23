@@ -35,6 +35,7 @@ import "./phone.css";
 import "./update.css";
 import "./plan.css";
 import "./team-tree.css";
+import "./pr-board.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

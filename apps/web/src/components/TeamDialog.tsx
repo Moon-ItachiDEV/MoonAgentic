@@ -1,66 +1,45 @@
-import type { AgentInfo, PermissionMode, Project, TeamMember } from "@moonagentic/protocol";
+import type {
+  AgentInfo,
+  Favorites,
+  PermissionMode,
+  Project,
+  TeamMember,
+} from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { pickMember, TEAM_PRESETS, type TeamRole } from "../team-presets.ts";
+import { ModelSelect } from "./ModelSelect.tsx";
 
 function MemberPicker({
   label,
   agents,
+  favorites,
   member,
   onChange,
   optional,
 }: {
   label: string;
   agents: AgentInfo[];
+  favorites: Favorites;
   member: TeamMember | undefined;
   onChange: (member: TeamMember | undefined) => void;
   /** Offers « Personne », for a role the team can do without. */
   optional?: boolean;
 }) {
-  const agent = agents.find((a) => a.id === member?.agentId);
+  // One menu: the favorite models straight away, never a list of agents first.
   return (
     <div className="team-member">
       <label className="field">
         {label}
-        <select
-          aria-label={label}
-          value={member?.agentId ?? ""}
-          onChange={(e) => {
-            const next = agents.find((a) => a.id === e.target.value);
-            if (!next) onChange(undefined);
-            else
-              onChange({
-                agentId: next.id,
-                ...(next.defaultModel ? { model: next.defaultModel } : {}),
-              });
-          }}
-        >
-          {optional && <option value="">Personne</option>}
-          {agents
-            .filter((a) => a.available)
-            .map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-        </select>
+        <ModelSelect
+          label={label}
+          agents={agents}
+          favorites={favorites}
+          value={member}
+          onChange={(pick) => onChange(pick)}
+          {...(optional ? { none: "Personne" } : {})}
+        />
       </label>
-      {agent?.models && agent.models.length > 0 && (
-        <label className="field">
-          Modèle
-          <select
-            aria-label={`Modèle : ${label.toLowerCase()}`}
-            value={member?.model ?? ""}
-            onChange={(e) => onChange({ agentId: agent.id, model: e.target.value })}
-          >
-            {agent.models.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
     </div>
   );
 }
@@ -69,12 +48,14 @@ function MemberPicker({
 export function TeamDialog({
   project,
   agents,
+  favorites,
   task: initialTask,
   onClose,
   onStarted,
 }: {
   project: Project;
   agents: AgentInfo[];
+  favorites: Favorites;
   task: string;
   onClose: () => void;
   onStarted: (leadId: string) => void;
@@ -195,11 +176,24 @@ export function TeamDialog({
           </div>
           <small className="hint">{preset.hint}</small>
         </div>
-        <MemberPicker label="Chef" agents={agents} member={lead} onChange={choose("lead")} />
-        <MemberPicker label="Codeurs" agents={agents} member={coder} onChange={choose("coder")} />
+        <MemberPicker
+          label="Chef"
+          agents={agents}
+          favorites={favorites}
+          member={lead}
+          onChange={choose("lead")}
+        />
+        <MemberPicker
+          label="Codeurs"
+          agents={agents}
+          favorites={favorites}
+          member={coder}
+          onChange={choose("coder")}
+        />
         <MemberPicker
           label="Relecteur"
           agents={agents}
+          favorites={favorites}
           member={reviewer}
           onChange={choose("reviewer")}
           optional
@@ -207,6 +201,7 @@ export function TeamDialog({
         <MemberPicker
           label="Testeur"
           agents={agents}
+          favorites={favorites}
           member={tester}
           onChange={choose("tester")}
           optional
@@ -214,6 +209,7 @@ export function TeamDialog({
         <MemberPicker
           label="Fusionneur"
           agents={agents}
+          favorites={favorites}
           member={merger}
           onChange={choose("merger")}
           optional

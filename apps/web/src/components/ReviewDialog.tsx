@@ -9,7 +9,8 @@ import {
 } from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
-import { ModelSelect } from "./ModelSelect.tsx";
+import { parseRouteValue, routeChoices, routeValue } from "../route-choices.ts";
+import { AgentBadge } from "./AgentBadge.tsx";
 
 /** What was typed after « /revue », as the number the server reads: 113, #113 or its address. */
 export const prRef = (typed: string) => typed.trim().split(/\s+/)[0] ?? "";
@@ -135,7 +136,7 @@ export function ReviewDialog({
           {REVIEW_SLOTS.map((slot, i) => (
             <div key={slot.vendor} className="prr-slot">
               <span className="prr-maker">{slot.label}</span>
-              <ModelSelect
+              <SlotSelect
                 className="prr-pick"
                 label={`Relecteur ${slot.label}`}
                 agents={agents}
@@ -156,7 +157,7 @@ export function ReviewDialog({
           {picked.length > 1 && (
             <div className="prr-slot">
               <span className="prr-maker">Arbitre</span>
-              <ModelSelect
+              <SlotSelect
                 className="prr-pick"
                 label="Arbitre"
                 agents={agents}
@@ -190,5 +191,45 @@ export function ReviewDialog({
         </div>
       </form>
     </div>
+  );
+}
+
+/**
+ * One slot's menu: the favorite models, grouped by agent, or every model with `showAll`
+ * (one switch for the whole dialog). The chosen agent's badge sits beside it.
+ */
+function SlotSelect(props: {
+  label: string;
+  agents: AgentInfo[];
+  favorites: Favorites;
+  value: TeamMember | undefined;
+  showAll: boolean;
+  none: string;
+  onChange: (member: TeamMember | undefined) => void;
+  className: string;
+}) {
+  const { value } = props;
+  const { groups } = routeChoices(props.agents, props.favorites, value, props.showAll);
+  const agent = value && props.agents.find((a) => a.id === value.agentId);
+  return (
+    <label className={props.className}>
+      {value && <AgentBadge agent={agent ?? { id: value.agentId, short: "?" }} small />}
+      <select
+        aria-label={props.label}
+        value={value ? routeValue(value.agentId, value.model) : ""}
+        onChange={(e) => props.onChange(parseRouteValue(e.target.value))}
+      >
+        <option value="">{props.none}</option>
+        {groups.map((g) => (
+          <optgroup key={g.agent.id} label={g.agent.name}>
+            {g.options.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </label>
   );
 }

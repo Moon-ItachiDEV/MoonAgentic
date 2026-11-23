@@ -134,6 +134,58 @@ export function samePath(a: string, b: string): boolean {
   return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
+/**
+ * Canonical filesystem path, resolving symlinks through the deepest existing ancestor when
+ * the target path does not exist yet (e.g. a destination about to be cloned).
+ */
+export function canonicalPath(target: string): string {
+  const resolved = path.resolve(target);
+  const tail: string[] = [];
+  let probe = resolved;
+  for (;;) {
+    try {
+      const real = realpathSync.native(probe);
+      const joined = tail.length ? path.join(real, ...tail.reverse()) : real;
+      return process.platform === "win32" ? joined.toLowerCase() : joined;
+    } catch {
+      const parent = path.dirname(probe);
+      if (parent === probe) {
+        return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+      }
+      tail.push(path.basename(probe));
+      probe = parent;
+    }
+  }
+}
+
+/** True when `child` is the same path as `parent` or sits inside it. */
+export function isSameOrInside(child: string, parent: string): boolean {
+  const rel = path.relative(canonicalPath(parent), canonicalPath(child));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+/** True when two paths are equal or one contains the other (after resolving symlinks). */
+export function pathsOverlap(a: string, b: string): boolean {
+  return isSameOrInside(a, b) || isSameOrInside(b, a);
+}
+
+/** Canonical path of the shared git repository (`.git` common dir) for `dir`, if any. */
+export function gitCommonDir(dir: string): string | undefined {
+  try {
+    const out = execFileSync("git", [...GIT_QUIET, "rev-parse", "--git-common-dir"], {
+      cwd: dir,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+      windowsHide: true,
+    })
+      .toString()
+      .trim();
+    return out ? canonicalPath(path.resolve(dir, out)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The worktree change running on each repository, so the next one waits for it. */
 const worktreeQueues = new Map<string, Promise<unknown>>();
 

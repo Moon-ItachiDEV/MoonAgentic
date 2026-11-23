@@ -86,7 +86,7 @@
   background: var(--card);
   color: var(--faint);
   font: inherit;
-  font-size: 13.5px;
+  font-size: 13px;
   cursor: pointer;
 }
 .side-search:hover {
@@ -106,8 +106,8 @@
   font: 500 10.5px/1 var(--mono);
   padding: 4px 5px;
   border-radius: 6px;
-  background: var(--surface);
-  border: 1px solid var(--line);
+  background: var(--card);
+  border: 1px solid transparent;
   color: var(--faint);
 }
 
@@ -119,10 +119,10 @@
   height: 30px;
   padding: 0 10px;
   border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+  border: 1px solid transparent;
   background: var(--surface);
   color: var(--warn);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   flex: none;
 }
@@ -151,7 +151,8 @@
   .review-btn.codebtn {
     width: auto;
     padding: 0 10px;
-    border: 1px solid var(--line);
+    border: 1px solid transparent;
+    background: var(--card);
   }
 }
 
@@ -248,7 +249,7 @@
   }
 }
 .menu.row-menu button.danger {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .menu.row-menu button svg {
   flex: none;
@@ -317,7 +318,7 @@
 .thr {
   gap: 12px;
   border-radius: 10px;
-  font-size: 14.5px;
+  font-size: 14px;
   color: var(--fg);
 }
 .nav button {
@@ -335,7 +336,7 @@
 .nav .aux.badge {
   background: color-mix(in srgb, var(--warn) 16%, transparent);
   color: var(--warn);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .side-foot .set-gear {
   width: 34px;

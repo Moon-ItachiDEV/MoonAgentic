@@ -1,46 +1,81 @@
-import type { AgentInfo, Favorites, TeamMember } from "@moonagentic/protocol";
+import type { AgentInfo, Favorites } from "@moonagentic/protocol";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { connection } from "../connection.ts";
 import { parseRouteValue, routeChoices, routeValue } from "../route-choices.ts";
-import { AgentBadge } from "./AgentBadge.tsx";
+
+export type ModelPick = { agentId: string; model?: string };
 
 /**
- * One menu to choose who does the work: the favorite models, grouped by agent, or every
- * model when there are none (or when `showAll`). The chosen agent's badge sits beside it.
+ * The first line of the menu: the first favorite of an agent ready now, else the first
+ * ready agent with its default model. What a menu starts on when nothing was picked yet.
+ */
+export function firstPick(agents: AgentInfo[], favorites: Favorites): ModelPick | undefined {
+  const first = routeChoices(agents, favorites, undefined, false).groups[0]?.options[0];
+  return first
+    ? { agentId: first.agentId, ...(first.model ? { model: first.model } : {}) }
+    : undefined;
+}
+
+/**
+ * One menu to pick an agent and its model at once, as the coordinator's settings do: the
+ * user's favorite models straight away, grouped by agent, or every model when there is no
+ * favorite or once « Afficher tous les modèles » is pressed. Never a list of agents first.
  */
 export function ModelSelect(props: {
-  label: string;
   agents: AgentInfo[];
-  favorites: Favorites;
-  value: TeamMember | undefined;
-  showAll: boolean;
-  /** The line for no choice; left out, there is none. */
+  /** The user's favorite models; read from the connection when not given. */
+  favorites?: Favorites;
+  value: ModelPick | undefined;
+  onChange: (pick: ModelPick | undefined) => void;
+  label: string;
+  /** A first line that picks nobody, for a role the work can do without. */
   none?: string;
-  onChange: (member: TeamMember | undefined) => void;
-  className?: string;
+  /** The project the agents are asked about, to list their models. */
+  projectId?: string;
 }) {
-  const { value } = props;
-  const { groups } = routeChoices(props.agents, props.favorites, value, props.showAll);
-  const agent = value && props.agents.find((a) => a.id === value.agentId);
+  const [showAll, setShowAll] = useState(false);
+  const known = useSyncExternalStore(connection.subscribe, connection.getState).favorites;
+  const favorites = props.favorites ?? known;
+  const { groups, favoritesOnly } = routeChoices(props.agents, favorites, props.value, showAll);
+  const hasFavorites = routeChoices(props.agents, favorites, undefined, false).favoritesOnly;
+
+  // Every model is listed: the agents that never said which they have are asked, once.
+  const { agents, projectId } = props;
+  useEffect(() => {
+    if (favoritesOnly || !projectId) return;
+    for (const a of agents) {
+      if (a.available && !a.models && !a.modelsError)
+        connection.send({ type: "agent.discover", agentId: a.id, projectId });
+    }
+  }, [favoritesOnly, agents, projectId]);
+
   return (
-    <label className={props.className ?? "set-select set-route"}>
-      {value && <AgentBadge agent={agent ?? { id: value.agentId, short: "?" }} small />}
+    <span className="model-select">
       <select
         aria-label={props.label}
-        value={value ? routeValue(value.agentId, value.model) : ""}
+        value={props.value ? routeValue(props.value.agentId, props.value.model) : ""}
         onChange={(e) => props.onChange(parseRouteValue(e.target.value))}
       >
-        {(props.none !== undefined || !value) && (
-          <option value="">{props.none ?? "Choisir un modèle"}</option>
+        {props.none !== undefined && <option value="">{props.none}</option>}
+        {/* Each line names its agent: the closed menu then says who, not only which model. */}
+        {groups.flatMap((g) =>
+          g.options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {g.agent.name} · {o.label}
+            </option>
+          )),
         )}
-        {groups.map((g) => (
-          <optgroup key={g.agent.id} label={g.agent.name}>
-            {g.options.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </optgroup>
-        ))}
       </select>
-    </label>
+      {hasFavorites && (
+        <button
+          type="button"
+          className="btn quiet sm model-all"
+          aria-pressed={showAll}
+          onClick={() => setShowAll((on) => !on)}
+        >
+          {showAll ? "Seulement mes favoris" : "Afficher tous les modèles"}
+        </button>
+      )}
+    </span>
   );
 }

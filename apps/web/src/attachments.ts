@@ -55,6 +55,7 @@ interface Read {
   blob: Blob;
 }
 interface Held {
+  threadId?: string;
   read: Promise<Read>;
   users: number;
   used: number;
@@ -63,6 +64,36 @@ interface Held {
 /** The images read so far, by id. */
 const held = new Map<string, Held>();
 let clock = 0;
+
+/** Drops cached attachment blobs and revokes their object URLs (optionally for hidden threads only). */
+export function clearAttachmentCache(keepThreadIds?: ReadonlySet<string>): void {
+  for (const [id, entry] of held) {
+    if (keepThreadIds && entry.threadId && keepThreadIds.has(entry.threadId)) continue;
+    held.delete(id);
+    void entry.read.then(({ url }) => URL.revokeObjectURL(url)).catch(() => undefined);
+  }
+}
+
+let lastThreads: Set<string> | null = null;
+connection.subscribe(() => {
+  const state = connection.getState();
+  if (state.status === "unauthorized") {
+    lastThreads = null;
+    clearAttachmentCache();
+    return;
+  }
+  if (!state.ready) return;
+  const current = new Set(state.threads.map((t) => t.id));
+  if (lastThreads) {
+    for (const id of lastThreads) {
+      if (!current.has(id)) {
+        clearAttachmentCache(current);
+        break;
+      }
+    }
+  }
+  lastThreads = current;
+});
 
 function trim(): void {
   const idle = [...held].filter(([, h]) => h.users === 0).sort((a, b) => a[1].used - b[1].used);
@@ -95,11 +126,13 @@ async function fetchImage(threadId: string, id: string): Promise<Read> {
 function acquire(threadId: string, id: string): Promise<Read> {
   let entry = held.get(id);
   if (!entry) {
-    const fresh: Held = { read: fetchImage(threadId, id), users: 0, used: 0 };
+    const fresh: Held = { threadId, read: fetchImage(threadId, id), users: 0, used: 0 };
     held.set(id, fresh);
     // One that could not be read is asked for again the next time it shows.
     fresh.read.catch(() => held.get(id) === fresh && held.delete(id));
     entry = fresh;
+  } else if (!entry.threadId) {
+    entry.threadId = threadId;
   }
   entry.users += 1;
   entry.used = ++clock;

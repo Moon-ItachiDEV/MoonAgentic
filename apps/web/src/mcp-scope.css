@@ -41,7 +41,7 @@
 }
 .mcp-row > .mcp-scope {
   padding-top: 10px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid transparent;
 }
 .mcp-scope fieldset {
   display: grid;

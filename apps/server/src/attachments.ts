@@ -191,6 +191,7 @@ export class Attachments {
 
   /** An image of the thread and the file that holds it, if it is there. */
   find(threadId: string, id: string): { image: ImageRef; file: string } | undefined {
+    if (threadId === PENDING) return undefined;
     try {
       const folder = this.folder(threadId);
       const image = this.about(folder, id);
