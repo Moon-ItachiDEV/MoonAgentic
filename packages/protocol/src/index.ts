@@ -33,6 +33,8 @@ export interface AgentInfo {
   modelsError?: string;
   /** Other settings the agent offers, such as its mode (plan, agent…) or reasoning effort. */
   settings?: AgentSetting[];
+  /** Settings observed for specific models, when choices (such as reasoning effort) vary by model. */
+  modelSettings?: Record<string, AgentSetting[]>;
   /** The `/` commands the agent listed the last time one of its sessions started. */
   commands?: AgentCommand[];
   /** The program that starts it, once found on this machine. */
@@ -133,6 +135,18 @@ export interface AgentSetting {
   choices: ModelChoice[];
   /** What the agent picks on its own for a new session. */
   current: string;
+}
+
+/** Settings the agent offers for `model`, falling back to its general settings when unobserved. */
+export function agentSettingsFor(
+  agent: Pick<AgentInfo, "settings" | "modelSettings"> | undefined,
+  model: string | undefined,
+): AgentSetting[] {
+  if (!agent) return [];
+  if (model && agent.modelSettings && Object.hasOwn(agent.modelSettings, model)) {
+    return agent.modelSettings[model]!;
+  }
+  return agent.settings ?? [];
 }
 
 /** How much of the agent's context window the conversation fills, as the agent reports it. */

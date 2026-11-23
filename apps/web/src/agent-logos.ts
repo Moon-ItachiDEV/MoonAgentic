@@ -1,17 +1,13 @@
 /**
- * Official agent logos, shown in place of the letter badge.
+ * Agent logos, shown in place of the two-letter fallback badge.
  *
- * An agent is listed here only when its maker publishes the mark for anyone to use
- * without asking first. The others keep their letter badge:
- * - Claude Code (Anthropic), Codex (OpenAI) and Antigravity (Google): their brand
- *   guidelines require prior approval to show the logo in another product.
- *
- * Hermes (Nous Research) publishes no rule either way for third-party use; the user
- * chose to show it. Its icon is the official one from hermes-agent.nousresearch.com.
- *
- * Files live in public/agents/, taken unchanged from the maker's own assets.
+ * Files live in public/agents/. Custom agents and the built-in demo agents keep their
+ * letter badges.
  */
 export const AGENT_LOGOS: Readonly<Record<string, string>> = {
+  claude: "/agents/claude.svg",
+  codex: "/agents/codex.svg",
+  antigravity: "/agents/antigravity.svg",
   // Cube mark from Cursor's brand kit (https://cursor.com/brand), 2D on its dark tile.
   cursor: "/agents/cursor.svg",
   // Hermes Agent's own site icon (48 px PNG), shown full tile.

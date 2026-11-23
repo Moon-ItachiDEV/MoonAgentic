@@ -12,7 +12,7 @@ import type {
   McpServerInput,
   ServerMessage,
 } from "@moonagentic/protocol";
-import { DEFAULT_MASCOTS } from "@moonagentic/protocol";
+import { agentSettingsFor, DEFAULT_MASCOTS } from "@moonagentic/protocol";
 import type { Agents, CustomAgent } from "./agents.ts";
 import { mcpInfo, RESERVED_MCP_NAME, type McpServerRecord } from "./mcp.ts";
 import {
@@ -100,6 +100,7 @@ export class AgentCatalog {
         ...(defaultModel ? { defaultModel } : {}),
         // An empty list says the agent has none; a missing one, from an older cache, is unknown.
         ...(known.settings ? { settings: known.settings } : {}),
+        ...(known.modelSettings ? { modelSettings: known.modelSettings } : {}),
       };
     });
   }
@@ -117,6 +118,14 @@ export class AgentCatalog {
     return match?.id ?? known.current;
   }
 
+  /** Settings known for `model`, falling back to the agent's general settings when unobserved. */
+  settingsFor(agentId: string, model?: string): AgentSetting[] {
+    return agentSettingsFor(
+      this.store.getAgentModels(agentId),
+      model ?? this.defaultModel(agentId),
+    );
+  }
+
   /**
    * Remembers the models and settings an agent offers, so new threads can offer them before
    * starting it. Only a fresh session tells the agent's own defaults, or that it offers no
@@ -131,17 +140,67 @@ export class AgentCatalog {
     const before = this.store.getAgentModels(agentId);
     if (!fresh && !model && (!before || !settings.length)) return;
     const keep = !fresh && before;
-    const next = {
-      models: model ? model.choices : keep ? before.models : [],
-      current: model ? (keep ? before.current : model.current) : keep ? before.current : "",
+    const nextModels = model ? model.choices : keep ? before.models : [];
+    const nextCurrent = model
+      ? keep
+        ? before.current
+        : model.current
+      : keep
+        ? before.current
+        : "";
+
+    const mergeDefaults = (
+      incoming: AgentSetting[],
+      ...fallbacks: (AgentSetting[] | undefined)[]
+    ): AgentSetting[] =>
+      incoming.map((s) => {
+        const saved = fallbacks
+          .map((list) => list?.find((b) => b.id === s.id)?.current)
+          .find((v): v is string => !!v && s.choices.some((c) => c.id === v));
+        return { ...s, current: saved ?? s.current };
+      });
+
+    const activeModel = model?.current || undefined;
+    const validModelIds = new Set(nextModels.map((m) => m.id));
+    const nextModelSettings: Record<string, AgentSetting[]> = {};
+    if (before?.modelSettings) {
+      for (const [id, list] of Object.entries(before.modelSettings)) {
+        if (validModelIds.has(id)) nextModelSettings[id] = list;
+      }
+    }
+    if (activeModel && !(keep && !settings.length)) {
+      const prevForModel = Object.hasOwn(nextModelSettings, activeModel)
+        ? nextModelSettings[activeModel]
+        : undefined;
+      nextModelSettings[activeModel] = fresh
+        ? settings
+        : mergeDefaults(settings, prevForModel, before?.settings);
+    }
+
+    let nextSettings: AgentSetting[];
+    if (keep && !settings.length) {
       // A continued session that leaves its settings out does not take them away.
-      settings:
-        keep && !settings.length
-          ? (before.settings ?? [])
-          : settings.map((s) => ({
-              ...s,
-              current: (keep && before.settings?.find((b) => b.id === s.id)?.current) || s.current,
-            })),
+      nextSettings = before.settings ?? [];
+    } else {
+      const normalized = keep ? mergeDefaults(settings, before.settings) : settings;
+      // Switching to a model without reasoning effort does not wipe effort from models that have it.
+      const preserved = (before?.settings ?? []).filter(
+        (b) =>
+          !normalized.some((s) => s.id === b.id) &&
+          Object.entries(nextModelSettings).some(
+            ([id, list]) => id !== activeModel && list.some((s) => s.id === b.id),
+          ),
+      );
+      nextSettings = [...normalized, ...preserved];
+    }
+
+    const next = {
+      models: nextModels,
+      current: nextCurrent,
+      settings: nextSettings,
+      ...(nextModels.length > 0 || Object.keys(nextModelSettings).length > 0
+        ? { modelSettings: nextModelSettings }
+        : {}),
     };
     if (JSON.stringify(before) === JSON.stringify(next)) return;
     this.store.setAgentModels(agentId, next);
@@ -214,10 +273,28 @@ export class AgentCatalog {
       },
     })
       .then(
-        (session) => {
-          this.recordCheck(agentId, { ok: true, version: session.agentVersion }, true);
-          this.learn(agentId, session.model, session.settings, session.fresh);
-          return session.close();
+        async (session) => {
+          try {
+            this.recordCheck(agentId, { ok: true, version: session.agentVersion }, true);
+            this.learn(agentId, session.model, session.settings, session.fresh);
+            const wanted = this.defaultModel(agentId);
+            if (
+              !stop.signal.aborted &&
+              wanted &&
+              session.model &&
+              wanted !== session.model.current &&
+              session.model.choices.some((c) => c.id === wanted)
+            ) {
+              try {
+                await session.setModel(wanted);
+                this.learn(agentId, session.model, session.settings, false);
+              } catch {
+                // Switching during discovery is best effort; keep what the initial model reported.
+              }
+            }
+          } finally {
+            await session.close();
+          }
         },
         (error: unknown) => {
           if (stop.signal.aborted) return;

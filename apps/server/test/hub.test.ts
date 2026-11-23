@@ -595,10 +595,23 @@ describe("Hub with the demo agent", () => {
   it("runs a thread in the mode and effort it was given, and follows its context use", async () => {
     const { hub, store, projectId } = setup();
     await hub.discover("demo", projectId);
-    const settings = () => hub.snapshot().agents.find((a) => a.id === "demo")?.settings;
+    const demoAgent = () => hub.snapshot().agents.find((a) => a.id === "demo");
+    const settings = () => demoAgent()?.settings;
     expect(settings()).toMatchObject([
       { id: "mode", kind: "mode", current: "agent", choices: [{ id: "agent" }, { id: "plan" }] },
       { id: "effort", kind: "effort", current: "moyen" },
+    ]);
+    // Discovery learns both the initial model and the preferred model's effort choices.
+    expect(demoAgent()?.modelSettings?.rapide?.[1]?.choices.map((c) => c.id)).toEqual([
+      "bas",
+      "moyen",
+      "haut",
+    ]);
+    expect(demoAgent()?.modelSettings?.precis?.[1]?.choices.map((c) => c.id)).toEqual([
+      "bas",
+      "moyen",
+      "haut",
+      "max",
     ]);
 
     const threadId = hub.createThread({
@@ -626,6 +639,8 @@ describe("Hub with the demo agent", () => {
 
     await hub.setModel(threadId, "rapide");
     expect(settings()?.[1]?.choices).toHaveLength(3);
+    // Switching to `rapide` does not lose `precis`'s extra level in per-model settings.
+    expect(demoAgent()?.modelSettings?.precis?.[1]?.choices).toHaveLength(4);
     await hub.setModel(threadId, "precis");
     await hub.setSetting(threadId, "mode", "agent");
     await expect(hub.setSetting(threadId, "mode", "yolo")).rejects.toThrow("Réglage inconnu");
@@ -637,6 +652,24 @@ describe("Hub with the demo agent", () => {
     hub.send(threadId, "/compact");
     await hub.whenIdle(threadId);
     expect(store.getThread(threadId)?.usage?.used).toBe(3_000);
+
+    // Even when no session is running, setSetting validates against the thread's modelSettings.
+    const now = Date.now();
+    store.addThread({
+      id: "idle-precis",
+      projectId,
+      title: "Idle précis",
+      agentId: "demo",
+      status: "idle",
+      permissionMode: "full",
+      model: "precis",
+      createdAt: now,
+      updatedAt: now,
+    });
+    await hub.setSetting("idle-precis", "effort", "max");
+    expect(store.getThread("idle-precis")?.settings?.effort).toBe("max");
+    await hub.setModel("idle-precis", "rapide");
+    await expect(hub.setSetting("idle-precis", "effort", "max")).rejects.toThrow("Réglage inconnu");
   });
 
   it("hands a thread to another agent between turns, with the conversation so far", async () => {

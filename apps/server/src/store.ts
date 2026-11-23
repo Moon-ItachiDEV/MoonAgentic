@@ -21,6 +21,8 @@ export interface AgentModels {
   current: string;
   /** Its other settings, with the value it picks on its own as `current`. */
   settings?: AgentSetting[];
+  /** Settings observed per model id, when choices (such as reasoning effort) vary by model. */
+  modelSettings?: Record<string, AgentSetting[]>;
 }
 
 interface ThreadRow {
