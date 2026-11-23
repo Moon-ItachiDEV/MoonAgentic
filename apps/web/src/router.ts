@@ -1,17 +1,21 @@
 import { useSyncExternalStore } from "react";
 
-export type SettingsSection = "general" | "appearance" | "agents" | "models" | "mcp";
+export type SettingsSection =
+  "general" | "appearance" | "agents" | "models" | "coordinator" | "mcp" | "remote";
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   "general",
   "appearance",
   "agents",
   "models",
+  "coordinator",
   "mcp",
+  "remote",
 ];
 
 export type Route =
   | { name: "home" }
   | { name: "planner" }
+  | { name: "project"; projectId: string }
   | { name: "thread"; threadId: string }
   | { name: "settings"; section: SettingsSection };
 
@@ -27,6 +31,12 @@ const parse = (pathname: string): Route => {
   } catch {
     // an address no thread can have
   }
+  const project = /^\/p\/([^/]+)$/.exec(pathname);
+  try {
+    if (project?.[1]) return { name: "project", projectId: decodeURIComponent(project[1]) };
+  } catch {
+    // an address no project can have
+  }
   if (pathname === "/planner") return { name: "planner" };
   return { name: "home" };
 };
@@ -38,16 +48,21 @@ window.addEventListener("popstate", () => {
   for (const l of listeners) l();
 });
 
-export function navigate(route: Route): void {
+export function navigate(route: Route, options: { replace?: boolean } = {}): void {
   const path =
     route.name === "thread"
       ? `/t/${encodeURIComponent(route.threadId)}`
-      : route.name === "planner"
-        ? "/planner"
-        : route.name === "settings"
-          ? `/reglages/${route.section}`
-          : "/";
-  if (path !== location.pathname) history.pushState(null, "", path);
+      : route.name === "project"
+        ? `/p/${encodeURIComponent(route.projectId)}`
+        : route.name === "planner"
+          ? "/planner"
+          : route.name === "settings"
+            ? `/reglages/${route.section}`
+            : "/";
+  if (path !== location.pathname) {
+    if (options.replace) history.replaceState(null, "", path);
+    else history.pushState(null, "", path);
+  }
   current = route;
   for (const l of listeners) l();
 }

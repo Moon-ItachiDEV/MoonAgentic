@@ -154,3 +154,235 @@
     border: 1px solid var(--line);
   }
 }
+
+/* Projects as folders: the chevron folds one, its conversations sit under it, a team on
+   one line whose members unfold under it. */
+.thr-row .fold-proj,
+.thr-row .fold-team {
+  position: absolute;
+  top: 50%;
+  left: 4px;
+  transform: translateY(-50%);
+  height: 28px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-radius: 8px;
+  color: var(--muted);
+  z-index: 1;
+}
+.thr-row .fold-proj:hover,
+.thr-row .fold-team:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.thr-row .fold-proj svg:last-child,
+.thr-row .fold-team svg {
+  color: var(--faint);
+  transition: transform 0.2s var(--ease);
+}
+.thr-row.proj.open .fold-proj svg:last-child,
+.thr-row .fold-team.open svg {
+  transform: rotate(90deg);
+}
+.thr-row.proj .thr {
+  padding-left: 46px;
+  padding-right: 62px;
+}
+.thr-row.proj .pin.new {
+  right: 32px;
+}
+.thr-row.lead .thr {
+  padding-left: 30px;
+}
+.thr-row.lead .fold-team {
+  padding: 0 7px;
+}
+.thr-row.child .thr {
+  padding-left: 42px;
+}
+/* A project's conversations, set in under it. */
+.proj-items {
+  padding-left: 14px;
+}
+@media (hover: hover) {
+  .thr-row.proj .pin.new {
+    opacity: 0;
+  }
+  .thr-row.proj:hover .pin.new,
+  .thr-row.proj .pin.new:focus-visible {
+    opacity: 1;
+  }
+}
+/* No hover on touch: the « + » stays in sight, the count makes room for it. */
+@media (hover: none) {
+  .thr-row.proj .aux {
+    display: none;
+  }
+}
+
+/* « … » on each thread: pin, archive, delete. A pinned thread keeps its pin beside it. */
+.thr-row.has-more.pinned .thr {
+  padding-right: 60px;
+}
+.thr-row.has-more.pinned .pin:not(.acts) {
+  right: 30px;
+}
+.thr-row .pin.acts {
+  color: var(--faint);
+}
+.thr-row.menu-open .pin.acts {
+  opacity: 1;
+  background: var(--hover);
+  color: var(--fg);
+}
+@media (hover: hover) {
+  .thr-row.pinned .pin.acts {
+    opacity: 0;
+  }
+  .thr-row.pinned:hover .pin.acts,
+  .thr-row.pinned .pin.acts:focus-visible,
+  .thr-row.pinned.menu-open .pin.acts {
+    opacity: 1;
+  }
+}
+.menu.row-menu button.danger {
+  color: var(--err);
+}
+.menu.row-menu button svg {
+  flex: none;
+  color: var(--muted);
+}
+.menu.row-menu button.danger svg {
+  color: inherit;
+}
+@media (min-width: 861px) {
+  /* Fixed to the screen, so the sidebar's own scrolling never cuts it. */
+  .menu.row-menu {
+    position: fixed;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    top: var(--y);
+    left: max(8px, calc(var(--x) - 200px));
+    width: 200px;
+    min-width: 0;
+    z-index: 60;
+    transform-origin: 100% 0;
+    animation-name: pop-down;
+  }
+  .menu.row-menu.up {
+    transform: translateY(-100%);
+    animation: fade 0.12s ease-out;
+  }
+  .presence.closing .menu.row-menu {
+    transform: translateY(-6px) scale(0.97);
+  }
+  .presence.closing .menu.row-menu.up {
+    transform: translateY(-100%);
+  }
+}
+
+/* Measured on the mockup (1440 px): 40 px rows, 14.5 px text in full ink, 12 px between
+   icon and text, a 19 px wordmark, two 28 px buttons at the top. */
+.brand {
+  gap: 9px;
+  font-size: 19px;
+  letter-spacing: -0.045em;
+}
+.brand b {
+  font-weight: 650;
+  letter-spacing: -0.05em;
+}
+.brand svg {
+  width: 26px;
+  height: 26px;
+}
+.side-top {
+  gap: 2px;
+}
+.side-top .brand {
+  margin-right: auto;
+}
+.side-top .ib {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+.nav {
+  gap: 0;
+}
+.nav button,
+.thr {
+  gap: 12px;
+  border-radius: 10px;
+  font-size: 14.5px;
+  color: var(--fg);
+}
+.nav button {
+  height: 40px;
+}
+.thr {
+  min-height: 40px;
+}
+.nav button svg {
+  color: var(--muted);
+}
+.nav button.inbrow svg {
+  color: var(--muted);
+}
+.nav .aux.badge {
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  color: var(--warn);
+  font-size: 11.5px;
+}
+.side-foot .set-gear {
+  width: 34px;
+  height: 34px;
+}
+.side-search {
+  height: 36px;
+  font-size: 13px;
+  gap: 6px;
+  padding: 0 6px 0 10px;
+}
+
+/* Folded side bar, on a computer: the conversation takes the whole width. */
+.open-side {
+  flex: none;
+}
+@media (min-width: 861px) {
+  .app.side-off {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .app.side-off > .side {
+    display: none;
+  }
+}
+/* With the Code panel docked on the right, it keeps its column. */
+@media (min-width: 1181px) {
+  .app.side-off.reviewing {
+    grid-template-columns: minmax(0, 1fr) minmax(440px, 46%);
+  }
+}
+@media (max-width: 860px) {
+  .side-fold,
+  .open-side {
+    display: none;
+  }
+}
+
+/* A project's resolved threads: a folder of its own, at the end of the project. */
+.proj-items .more.resolved {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.proj-items .more.resolved svg:last-child {
+  margin-left: auto;
+  transition: transform 0.15s;
+}
+.proj-items .more.resolved.open svg:last-child {
+  transform: rotate(90deg);
+}

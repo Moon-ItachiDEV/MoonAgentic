@@ -422,6 +422,19 @@ export async function commitAll(dir: string, message: string): Promise<boolean> 
   return true;
 }
 
+/**
+ * Whether the folder holds nothing past `commit`: no changed or new file, and its last
+ * commit is that one. Then removing it loses nothing that is not on GitHub already.
+ */
+export async function nothingPast(dir: string, commit: string): Promise<boolean> {
+  try {
+    if ((await git(dir, ["status", "--porcelain"])).trim()) return false;
+    return (await git(dir, ["rev-parse", "HEAD"])).trim() === commit;
+  } catch {
+    return false;
+  }
+}
+
 /** The files a merge left in conflict, while one is under way; undefined when none is. */
 export async function unfinishedMerge(dir: string): Promise<string[] | undefined> {
   const merging = await git(dir, ["rev-parse", "-q", "--verify", "MERGE_HEAD"]).then(
@@ -458,12 +471,31 @@ export function containsBranch(dir: string, branch: string): Promise<boolean> {
   );
 }
 
+/** `owner/name` of the GitHub repository this folder pushes to, when it has one. */
+export async function githubRemote(dir: string): Promise<string | undefined> {
+  try {
+    const remotes = (await git(dir, ["remote"])).split("\n").filter(Boolean);
+    const remote = remotes.includes("origin") ? "origin" : remotes[0];
+    return remote ? githubRepo(await git(dir, ["remote", "get-url", remote])) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export interface ShipResult {
   commit?: string;
   /** The pull request, or the page to open one when it could not be created here. */
   url?: string;
   /** True when `url` is an open pull request rather than the page to open one. */
   prOpened: boolean;
+  /** Why `gh` could not open the pull request, when it was asked to and failed. */
+  prError?: string;
+}
+
+/** A pull request title GitHub takes: one line, not too long. */
+export function prTitle(text: string, max = 100): string {
+  const line = text.replace(/\s+/g, " ").trim();
+  return line.length > max ? `${line.slice(0, max - 1).trimEnd()}…` : line;
 }
 
 /**
@@ -478,6 +510,8 @@ export async function ship(
     message: string;
     pr: boolean;
     title: string;
+    /** The pull request's description. */
+    body?: string;
     files?: string[];
   },
 ): Promise<ShipResult> {
@@ -512,14 +546,21 @@ export async function ship(
   if (!options.pr || !repo) return result;
 
   const base = options.baseBranch ?? "main";
+  const compare = `https://github.com/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(options.branch)}?expand=1`;
   const gh = findOnPath("gh");
   // A `.cmd` could only run through cmd.exe, which would read the thread's title as a script.
-  if (gh && !/\.(cmd|bat)$/i.test(gh)) {
-    const url = await openPullRequest(gh, dir, repo, options.branch, base, options.title);
-    if (url) return { ...result, url, prOpened: true };
-  }
-  const compare = `https://github.com/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(options.branch)}?expand=1`;
-  return { ...result, url: compare };
+  if (!gh || /\.(cmd|bat)$/i.test(gh)) return { ...result, url: compare };
+  const opened = await openPullRequest(
+    gh,
+    dir,
+    repo,
+    options.branch,
+    base,
+    prTitle(options.title),
+    options.body ?? "Ouverte depuis MoonAgentic.",
+  );
+  if (opened.url) return { ...result, url: opened.url, prOpened: true };
+  return { ...result, url: compare, ...(opened.error ? { prError: opened.error } : {}) };
 }
 
 /**
@@ -575,14 +616,16 @@ async function openPullRequest(
   branch: string,
   base: string,
   title: string,
-): Promise<string | undefined> {
+  body: string,
+): Promise<{ url?: string; error?: string }> {
   const run = (args: string[]) =>
     new Promise<string>((resolve, reject) => {
       execFile(
         gh,
         args,
         { cwd: dir, env: { ...process.env, ...NO_PROMPT }, timeout: NETWORK_TIMEOUT_MS },
-        (error, stdout) => (error ? reject(error) : resolve(stdout)),
+        (error, stdout, stderr) =>
+          error ? reject(new Error(stderr.trim() || error.message)) : resolve(stdout),
       );
     });
   const lastUrl = (out: string) => out.match(/https:\/\/\S+/g)?.at(-1);
@@ -599,7 +642,8 @@ async function openPullRequest(
       "-q",
       'select(.state == "OPEN") | .url',
     ]);
-    if (lastUrl(existing)) return lastUrl(existing);
+    const url = lastUrl(existing);
+    if (url) return { url };
   } catch {
     // no pull request yet
   }
@@ -616,11 +660,13 @@ async function openPullRequest(
       "--title",
       title,
       "--body",
-      "Ouverte depuis MoonAgentic.",
+      body,
     ]);
-    return lastUrl(out);
-  } catch {
-    // gh missing a sign-in or access: fall back to the page that opens one
-    return undefined;
+    const url = lastUrl(out);
+    return url ? { url } : { error: "gh n'a pas donné l'adresse de la pull request." };
+  } catch (error) {
+    // gh missing a sign-in or access: the page that opens one is given instead, with why.
+    const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
+    return { error: why || "gh n'a pas pu ouvrir la pull request." };
   }
 }

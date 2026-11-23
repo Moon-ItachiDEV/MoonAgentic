@@ -9,6 +9,7 @@ import {
   recordTimeline,
   type TeamHost,
   Teams,
+  teamStatus,
 } from "../src/team.ts";
 
 describe("readPlan", () => {
@@ -161,6 +162,7 @@ describe("Teams.planned", () => {
       lastReply: (threadId) => replies.get(threadId) ?? "",
       changes: async () => ({ files: [] }),
       mergeInto: async () => [],
+      ship: async () => ({ prOpened: false }),
       unfinishedMerge: async () => undefined,
       contains: async () => false,
     };
@@ -228,5 +230,48 @@ describe("Teams.planned", () => {
     expect(threads.get(leadId)?.team?.error).toBe("Le chef n'a pas donné de plan lisible.");
     expect(sent).toHaveLength(2);
     expect(teams.isActive(leadId)).toBe(false);
+  });
+});
+
+describe("teamStatus", () => {
+  const team: Team = {
+    phase: "coding",
+    task: "Deux corrections",
+    coder: { agentId: "claude" },
+    reviewer: { agentId: "agy" },
+    coders: 2,
+    permissionMode: "supervised",
+    timeline: [{ at: 0, lane: -1, phase: "planning" }],
+    tasks: [
+      { title: "Bouton Cloner", brief: "…", status: "running", threadId: "c1" },
+      {
+        title: "Chargement à la demande",
+        brief: "…",
+        status: "reviewing",
+        threadId: "c2",
+        tries: 1,
+        note: "Il manque un test.",
+      },
+    ],
+  };
+
+  it("tells the lead what each piece is at, for how long, and what its coder last said", () => {
+    const said: Record<string, string> = { c1: "J'écris les tests.", c2: "" };
+    const status = teamStatus(team, 7 * 60_000, (id) => said[id] ?? "");
+    expect(status).toContain("Phase : les codeurs travaillent, depuis 7 min.");
+    expect(status).toContain("Après le code de chaque part : relecture, fusion.");
+    expect(status).toContain("Parts : 0 sur 2 terminées.");
+    expect(status).toContain(
+      "1. « Bouton Cloner » : le codeur travaille. Dernier message du codeur : J'écris les tests.",
+    );
+    expect(status).toContain(
+      "2. « Chargement à la demande » : en relecture, 1 correction demandée. Remarques : Il manque un test.",
+    );
+  });
+
+  it("keeps only the end of a long message", () => {
+    const status = teamStatus(team, 0, () => "a".repeat(1000) + " fin");
+    expect(status).toContain(`Dernier message du codeur : …${"a".repeat(396)} fin`);
+    expect(status).toContain("depuis moins d'une minute");
   });
 });

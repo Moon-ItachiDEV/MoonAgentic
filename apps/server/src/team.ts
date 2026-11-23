@@ -9,6 +9,7 @@ import type {
   TeamTask,
   Thread,
 } from "@moonagentic/protocol";
+import type { ShipResult } from "./git.ts";
 
 /** Pieces of work a lead may hand out, so a plan never floods the machine with agents. */
 const MAX_TASKS = 8;
@@ -39,6 +40,8 @@ export interface TeamHost {
     worksIn?: string;
     /** Given at creation, so the thread is never seen without its team. */
     team?: Team;
+    openedBy?: string;
+    taskKey?: string;
   }): string;
   send(threadId: string, text: string): void;
   cancel(threadId: string): Promise<void>;
@@ -52,6 +55,8 @@ export interface TeamHost {
    * Returns the files left in conflict, the merge then still under way; empty when merged.
    */
   mergeInto(intoId: string, fromId: string, message: string): Promise<string[]>;
+  /** Commits what is left, pushes the thread's branch and opens its pull request. */
+  ship(threadId: string, message: string, title: string, body: string): Promise<ShipResult>;
   /** The files still in conflict while a merge is under way in the thread's folder. */
   unfinishedMerge(threadId: string): Promise<string[] | undefined>;
   /** Whether the `from` thread's branch is part of the `into` thread's. */
@@ -68,6 +73,11 @@ export interface TeamInput {
   merger?: TeamMember | undefined;
   coders: number;
   permissionMode: PermissionMode;
+  /** Opens the pull request by itself once done; true when left out. */
+  autoShip?: boolean | undefined;
+  /** The coordinator that started it, and its name for the subject. */
+  openedBy?: string | undefined;
+  taskKey?: string | undefined;
 }
 
 const planPrompt = (task: string, coders: number) =>
@@ -267,6 +277,21 @@ const working = (t: TeamTask) =>
   t.status === "lead";
 const open = (t: TeamTask) => t.status === "waiting" || working(t);
 const cut = (text: string) => (text.length > NOTE_LIMIT ? `${text.slice(0, NOTE_LIMIT)}…` : text);
+/** The branch that holds a finished team's work: the merge's, or its only piece's. */
+export const shipTarget = (team: Team): string | undefined =>
+  team.mergeThreadId ?? (team.tasks.length === 1 ? team.tasks[0]?.threadId : undefined);
+
+/** The pull request's description: the task as asked, and its pieces. */
+const prBody = (team: Team) =>
+  [
+    team.task,
+    "",
+    "## Sous-tâches",
+    ...team.tasks.map((t) => `- ${t.title}`),
+    "",
+    "Ouverte par l'équipe MoonAgentic, après relecture et tests de chaque sous-tâche.",
+  ].join("\n");
+
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** The thread a piece's agent works in at this point, if any. */
@@ -287,6 +312,71 @@ const cutShort = (team: Team): Team => {
 
 /** Events kept per team, the oldest dropped first. */
 const TIMELINE_LIMIT = 600;
+const PHASE_TEXT: Record<Team["phase"], string> = {
+  planning: "le chef découpe la tâche",
+  coding: "les codeurs travaillent",
+  merging: "les parts sont fusionnées sur une seule branche",
+  blocked: "l'équipe attend l'utilisateur",
+  done: "terminée",
+  failed: "échouée",
+  stopped: "arrêtée",
+};
+const TASK_TEXT: Record<TeamTask["status"], string> = {
+  waiting: "en attente d'un codeur libre",
+  running: "le codeur travaille",
+  reviewing: "en relecture",
+  testing: "en tests",
+  lead: "le chef réécrit sa consigne",
+  blocked: "bloquée, attend l'utilisateur",
+  done: "terminée",
+  failed: "échouée",
+  stopped: "arrêtée",
+};
+/** Characters of a coder's last words, and of a note, given to the lead. */
+const STATUS_CUT = 400;
+const tail = (text: string) => {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > STATUS_CUT ? `…${flat.slice(-STATUS_CUT)}` : flat;
+};
+const minutes = (ms: number) => {
+  const min = Math.max(0, Math.round(ms / 60_000));
+  return min < 1 ? "moins d'une minute" : `${min} min`;
+};
+
+/**
+ * The team's real state, written for its lead: the server runs the pieces, so a lead the
+ * user talks to would otherwise know nothing past its own plan.
+ */
+export function teamStatus(team: Team, now: number, lastReply: (id: string) => string): string {
+  const started = team.timeline?.[0]?.at;
+  const lines = [
+    "[État réel de ton équipe, donné par MoonAgentic : c'est le serveur qui lance les codeurs, la relecture, les tests et la fusion d'après ton plan. L'utilisateur ne voit pas ce bloc ; sers-t'en pour lui répondre.]",
+    `Phase : ${PHASE_TEXT[team.phase]}${started === undefined ? "" : `, depuis ${minutes(now - started)}`}.`,
+  ];
+  const steps = [
+    team.reviewer && "relecture",
+    team.tester && "tests",
+    team.tasks.length > 1 && (team.merger ? "fusion vérifiée" : "fusion"),
+  ].filter(Boolean);
+  if (steps.length) lines.push(`Après le code de chaque part : ${steps.join(", ")}.`);
+  if (team.error) lines.push(`Erreur : ${tail(team.error)}`);
+  const done = team.tasks.filter((t) => t.status === "done").length;
+  lines.push(`Parts : ${done} sur ${team.tasks.length} terminées.`);
+  team.tasks.forEach((task, i) => {
+    let line = `${i + 1}. « ${task.title} » : ${TASK_TEXT[task.status]}`;
+    if (task.merged) line += ", fusionnée";
+    if (task.tries)
+      line += `, ${task.tries} correction${task.tries > 1 ? "s" : ""} demandée${task.tries > 1 ? "s" : ""}`;
+    line += ".";
+    if (task.note) line += ` Remarques : ${tail(task.note)}`;
+    const said = task.threadId ? tail(lastReply(task.threadId)) : "";
+    if (said) line += ` Dernier message du codeur : ${said}`;
+    lines.push(line);
+  });
+  lines.push("[Fin de l'état. Message de l'utilisateur :]");
+  return lines.join("\n");
+}
+
 export const LEAD_LANE = -1;
 export const MERGE_LANE = -2;
 
@@ -346,6 +436,8 @@ export class Teams {
   private closed = false;
   /** Checks being started, which read the changes first. */
   private readonly starting = new Set<Promise<void>>();
+  /** The push under way for each team, by its lead. */
+  private readonly shipping = new Map<string, Promise<void>>();
 
   constructor(host: TeamHost) {
     this.host = host;
@@ -353,7 +445,64 @@ export class Teams {
 
   /** Keeps the team, and in its timeline what changed. */
   private save(leadId: string, team: Team): void {
+    const before = this.host.thread(leadId)?.team?.phase;
     this.host.setTeam(leadId, recordTimeline(team, Date.now()));
+    // Done, the team ends the way a cloud agent does: with its pull request open.
+    if (team.phase === "done" && before !== "done" && team.autoShip !== false && shipTarget(team))
+      this.ship(leadId).catch(() => {});
+  }
+
+  /**
+   * Pushes the branch that holds the team's work, the merge's or its only piece's, and
+   * opens its pull request with the user's `gh`. One push at a time per team: a second ask
+   * meanwhile waits on the first. What went wrong is kept on the team.
+   */
+  ship(leadId: string): Promise<void> {
+    const pending = this.shipping.get(leadId);
+    if (pending) return pending;
+    const team = this.host.thread(leadId)?.team;
+    if (!team || team.phase !== "done") {
+      return Promise.reject(new Error("L'équipe n'a pas fini : rien à envoyer pour l'instant."));
+    }
+    const target = shipTarget(team);
+    if (!target) {
+      return Promise.reject(
+        new Error("Rien à envoyer : cette équipe n'a pas de branche qui réunit son travail."),
+      );
+    }
+    const { shipError: _error, ...fresh } = team;
+    this.host.setTeam(leadId, { ...fresh, shipping: true });
+    const settle = (change: (team: Team) => Team) => {
+      const now = this.host.thread(leadId)?.team;
+      if (!now) return;
+      const { shipping: _shipping, shipError: _old, ...rest } = now;
+      this.host.setTeam(leadId, change(rest));
+    };
+    const work = this.host
+      .ship(target, team.task, team.task, prBody(team))
+      .then(
+        (result) =>
+          settle((rest) => ({
+            ...rest,
+            shipped: {
+              ...(result.url ? { url: result.url } : {}),
+              opened: result.prOpened,
+              ...(result.prError ? { note: cut(result.prError) } : {}),
+            },
+          })),
+        (error: unknown) => settle((rest) => ({ ...rest, shipError: cut(message(error)) })),
+      )
+      .finally(() => this.shipping.delete(leadId));
+    this.shipping.set(leadId, work);
+    this.track(work);
+    return work;
+  }
+
+  /** The access the team's agents get from now on, set from its lead. */
+  setPermissionMode(leadId: string, permissionMode: PermissionMode): void {
+    const team = this.host.thread(leadId)?.team;
+    if (team && team.permissionMode !== permissionMode)
+      this.save(leadId, { ...team, permissionMode });
   }
 
   /** Starts the team; returns the lead's thread. */
@@ -367,6 +516,7 @@ export class Teams {
       ...(input.merger ? { merger: input.merger } : {}),
       coders: input.coders,
       permissionMode: input.permissionMode,
+      ...(input.autoShip === false ? { autoShip: false } : {}),
       tasks: [],
       timeline: [{ at: Date.now(), lane: LEAD_LANE, phase: "planning" }],
     };
@@ -381,6 +531,8 @@ export class Teams {
       title: `Équipe : ${input.task}`,
       role: "lead",
       team,
+      ...(input.openedBy ? { openedBy: input.openedBy } : {}),
+      ...(input.taskKey ? { taskKey: input.taskKey } : {}),
     });
   }
 
@@ -420,6 +572,14 @@ export class Teams {
   /** A team cut short by a stop of the server is marked so, with what was done kept. */
   recover(): void {
     for (const thread of this.host.threads()) {
+      // A push the stop cut off is said so, to be tried again.
+      if (thread.team?.shipping) {
+        const { shipping: _shipping, ...rest } = thread.team;
+        this.host.setTeam(thread.id, {
+          ...rest,
+          shipError: "L'envoi a été coupé par l'arrêt de MoonAgentic : réessaie.",
+        });
+      }
       if (!thread.team || !active(thread.team)) continue;
       this.save(thread.id, {
         ...cutShort(thread.team),
@@ -684,8 +844,8 @@ export class Teams {
         projectId: lead.projectId,
         agentId: member.agentId,
         model: member.model,
-        // The reviewer only reads; the tester writes tests, with the coders' access.
-        permissionMode: role === "reviewer" ? "supervised" : team.permissionMode,
+        // The team's access; a reviewer still asks before changing a file (see the hub).
+        permissionMode: team.permissionMode,
         isolated: false,
         text,
         title: `${role === "reviewer" ? "Relecture" : "Tests"} : ${task.title}`,

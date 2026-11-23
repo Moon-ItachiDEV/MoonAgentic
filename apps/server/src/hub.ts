@@ -1,8 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
+import { DEFAULT_PARALLEL, threadGroup, threadPullRequest } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   AgentSetting,
@@ -12,11 +14,15 @@ import type {
   PendingRequest,
   PermissionMode,
   Project,
+  PullRequestInfo,
   ReviewFile,
   ServerMessage,
   Snapshot,
   Team,
   TeamMember,
+  TeamSetup,
+  CoordinatorSettings,
+  WorkKind,
   TeamRole,
   Thread,
   ToolContent,
@@ -30,9 +36,11 @@ import {
   containsBranch,
   dropRefs,
   mergeBranch,
+  nothingPast,
   unfinishedMerge,
   ensureWorktree,
   forkPoint,
+  githubRemote,
   removeWorktree,
   worktreeStart,
   branchName,
@@ -57,9 +65,17 @@ import {
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { historyBefore } from "./history.ts";
 import { Planner } from "./planner.ts";
+import {
+  BRIDGE_BOOTSTRAP_ENV,
+  BRIDGE_URL_ENV,
+  COORDINATOR_TOOLS,
+  MESSAGE_MODES,
+  THREAD_KINDS,
+} from "./coordinator-tools.ts";
+import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
-import { Teams } from "./team.ts";
-import { mcpInfo } from "./mcp.ts";
+import { shipTarget, Teams, teamStatus } from "./team.ts";
+import { mcpInfo, type McpServerRecord } from "./mcp.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import type { Store } from "./store.ts";
@@ -103,6 +119,70 @@ export interface HubOptions {
   homeDir?: string;
   idleMs?: number;
   maxLiveAgents?: number;
+  /** Where pull requests are read and merged; the user's own `gh` unless given. */
+  pullRequests?: () => PullRequests | undefined;
+  /** How often known pull requests are asked about again; 0 for never. */
+  prWatchMs?: number;
+}
+
+/** Threads a coordinator may open while answering one message, so a mistake cannot flood. */
+const MAX_OPENED_PER_TURN = 4;
+/** Messages of a thread shown to the coordinator that reads it, and characters of each. */
+const READ_MESSAGES = 8;
+const READ_CLIP = 1_500;
+
+/** The user's own words, joined to the brief of a thread opened for them. */
+const withOrigin = (brief: string, asked: string | undefined) =>
+  asked
+    ? `${brief}\n\n---\nMessage d'origine de l'utilisateur, transmis tel quel par MoonAgentic :\n\n${asked
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n")}`
+    : brief;
+
+/** The level a coordinator starts on, as agents name it. */
+const LOW_EFFORT = /^(low|bas)$/i;
+
+/** Told to a thread's agent before a coordinator's message, so it knows who speaks. */
+const FROM_COORDINATOR =
+  "Le message qui suit vient du coordinateur du projet : un agent qui répartit les demandes de l'utilisateur, pas l'utilisateur lui-même. Seule la partie « Message d'origine de l'utilisateur », quand elle est là, est de sa main.";
+
+/** The coordinator's tools that change something: only while it answers the user. */
+const WRITES = new Set(["open_thread", "start_team", "message_thread", "resolve_thread"]);
+/** A permission asked for one of MoonAgentic's own tools, as agents name the tools of an MCP server. */
+const OWN_TOOL = new RegExp(
+  `^mcp__moonagentic__(${COORDINATOR_TOOLS.map((t) => t.name).join("|")})$`,
+);
+
+const BRIDGE = fileURLToPath(new URL("./coordinator-bridge.ts", import.meta.url));
+
+/** What a coordinator is told before each message: its part, and how it acts. */
+export const coordinatorPrompt = (project: string) =>
+  `Tu es le coordinateur du projet « ${project} » dans MoonAgentic. L'utilisateur te parle de tout le projet ; chaque sujet de travail vit dans son propre fil, avec son agent et sa branche.
+
+Ce que tu fais :
+- Une question rapide ou un point d'avancement : tu réponds toi-même, en quelques phrases. Pour l'avancement, lis l'état réel avec list_threads, puis read_thread si on te demande le détail d'un fil. N'invente jamais un état.
+- Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne complète, car l'agent du fil ne voit pas cette conversation. Donne toujours kind : les réglages de l'utilisateur en déduisent l'agent. Si l'outil répond que le fil est en file, dis-le : il démarrera seul.
+- Une tâche trop grosse pour un seul fil, avec plusieurs morceaux indépendants, ou quand l'utilisateur demande une équipe : start_team.
+- Un sujet qui a déjà son fil : tu le relances avec message_thread plutôt que d'en ouvrir un second. Si son agent travaille, ton message attend la fin de son tour ; mode steer seulement pour une correction urgente, car il coupe le travail en cours.
+- resolve_thread seulement quand l'utilisateur dit que le sujet est clos.
+
+Après un outil, dis en une phrase ce que tu as fait. Reste bref : pas de plan, pas de récapitulatif. Réponds dans la langue de l'utilisateur.`;
+
+/** A known, open pull request is asked about again this often. */
+const PR_WATCH_MS = 60_000;
+/** Characters kept of what an agent last said, for lists of threads. */
+const SUMMARY_LIMIT = 160;
+
+/** The first lines of a reply as one short line, without Markdown marks. */
+export function summaryOf(reply: string): string {
+  const flat = reply
+    .replace(/```[\s\S]*?(```|$)/g, " ")
+    .replace(/[*`#>]+/g, "")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length > SUMMARY_LIMIT ? `${flat.slice(0, SUMMARY_LIMIT - 1).trimEnd()}…` : flat;
 }
 
 const settingValues = (settings: AgentSetting[]) =>
@@ -118,10 +198,20 @@ const archiveRef = (threadId: string) => `refs/moonagentic/${threadId}/archive`;
 const workFolder = (workspace: Workspace) =>
   workspace.subdir ? path.join(workspace.path, workspace.subdir) : workspace.path;
 
+/** What a team's reviewer never does on its own, whatever its access: it reads, it does not change. */
+const READ_ONLY_REFUSED = new Set(["edit", "delete", "move"]);
+
 const TEAM_AT_WORK = "Cette équipe travaille encore : arrête-la d'abord.";
 
 /** A step back under way, kept until it is done so a stop in the middle is finished later. */
 type PendingRestore = { itemId: string; tree: string };
+
+/** A coordinator's call that came with no token of this server's: answered 401. */
+export class CoordinatorRefused extends Error {
+  constructor() {
+    super("Accès refusé.");
+  }
+}
 
 /** Owns threads and their agent sessions, and keeps every connected client in sync. */
 export class Hub {
@@ -172,6 +262,27 @@ export class Hub {
 
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
+  private readonly pullRequests: () => PullRequests | undefined;
+  /** What each coordinator's bridge may reach, by its token: one project, kept in memory only. */
+  private readonly coordinatorTokens = new Map<string, { projectId: string; threadId: string }>();
+  /** What each bridge was started with: traded once for a token, then worth nothing. */
+  private readonly coordinatorBootstraps = new Map<
+    string,
+    { projectId: string; threadId: string }
+  >();
+  /** What the user last wrote to each coordinator, joined to the threads it opens for it. */
+  private readonly lastAsked = new Map<string, string>();
+  /** Messages a coordinator left for a thread at work, given when its turn ends. */
+  private readonly queued = new Map<string, string[]>();
+  /** The tool behind each call of a turn, by thread, for agents that name it. */
+  private readonly toolNames = new Map<string, Map<string, string>>();
+  /** Threads each coordinator opened while answering the current message. */
+  private readonly openedThisTurn = new Map<string, number>();
+  /** Where this server answers a coordinator's bridge, once it listens. */
+  coordinatorUrl: string | undefined;
+  /** True while known pull requests are being asked about, so rounds never pile up. */
+  private watching = false;
+  private readonly prTimer: NodeJS.Timeout | undefined;
 
   constructor(store: Store, agents: Agents, options: HubOptions) {
     this.store = store;
@@ -180,6 +291,12 @@ export class Hub {
     this.idleMs = options.idleMs ?? IDLE_MS;
     this.maxLiveAgents = Math.max(1, options.maxLiveAgents ?? MAX_LIVE_AGENTS);
     this.homeDir = options.homeDir ?? os.homedir();
+    this.pullRequests = options.pullRequests ?? localPullRequests;
+    const watchMs = options.prWatchMs ?? PR_WATCH_MS;
+    if (watchMs > 0) {
+      this.prTimer = setInterval(() => void this.watchPullRequests(), watchMs);
+      this.prTimer.unref();
+    }
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
     this.planner = new Planner(store, (m) => this.broadcast(m));
     this.scheduler = new Scheduler(store, (m) => this.broadcast(m), {
@@ -198,15 +315,19 @@ export class Hub {
     this.teams = new Teams({
       thread: (id) => this.store.getThread(id),
       threads: () => this.store.listThreads(),
-      createThread: (input) => this.createThread(input),
-      send: (id, text) => this.send(id, text),
+      createThread: (input) => this.createThread({ ...input, byTeam: true }),
+      send: (id, text) => this.send(id, text, undefined, true),
       cancel: (id) => this.cancel(id),
       setTeam: (id, team) => {
         this.updateThread(id, { team });
         const lead = this.store.getThread(id);
         if (lead) this.planner.syncTeam(lead);
+        // A team that stops working frees its place: its last turn was a member's, which
+        // no coordinator opened, so the line is looked at from here.
+        if (lead?.openedBy && !this.closed) this.drainLine(lead.openedBy);
       },
       mergeInto: (intoId, fromId, title) => this.mergeInto(intoId, fromId, title),
+      ship: (id, message, title, body) => this.ship(id, message, true, undefined, title, body),
       contains: async (intoId, fromId) => {
         const into = this.store.getThread(intoId)?.workspace;
         const from = this.store.getThread(fromId)?.workspace;
@@ -223,13 +344,7 @@ export class Hub {
         if (!workspace?.base || !existsSync(workspace.path)) return { files: [] };
         return reviewChanges(workspace.path, workspace.base);
       },
-      lastReply: (id) => {
-        const items = this.items(id);
-        return items
-          .slice(items.findLastIndex((i) => i.kind === "user") + 1)
-          .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
-          .join("\n");
-      },
+      lastReply: (id) => this.lastReply(id),
     });
     store.recoverAfterRestart();
     this.teams.recover();
@@ -260,6 +375,7 @@ export class Hub {
 
   snapshot(): Snapshot {
     return {
+      coordinator: this.coordinatorSettings(),
       favorites: this.catalog.favorites(),
       requests: this.pendingRequests(),
       mcpServers: this.catalog.mcpServers().map(mcpInfo),
@@ -296,6 +412,28 @@ export class Hub {
       case "github.status":
         client.send({ type: "github", requestId: message.requestId, status: await githubStatus() });
         return;
+      case "workspace.pr":
+      case "workspace.mergePr":
+      case "github.pr": {
+        // Whoever asked waits for this reply, so a failure is sent to it rather than thrown.
+        const asked =
+          message.type === "workspace.pr"
+            ? this.pullRequest(message.threadId)
+            : message.type === "workspace.mergePr"
+              ? this.mergePullRequest(message.threadId, message.number, message.head)
+              : this.pullRequestAt(message.url);
+        client.send(
+          await asked.then(
+            (pr) => ({ type: "pullRequest", requestId: message.requestId, ...(pr ? { pr } : {}) }),
+            (error: unknown) => ({
+              type: "pullRequest",
+              requestId: message.requestId,
+              error: describe(error),
+            }),
+          ),
+        );
+        return;
+      }
       case "github.repos":
         client.send({
           type: "githubRepos",
@@ -318,9 +456,26 @@ export class Hub {
           items: this.items(message.threadId),
         });
         return;
-      case "thread.send":
-        this.send(message.threadId, message.text);
+      case "thread.send": {
+        // Written to by hand, a thread waiting in line starts now, its brief first.
+        const held = this.store.getThread(message.threadId)?.held;
+        this.send(
+          message.threadId,
+          held ? `${held}\n\n${message.text}` : message.text,
+          this.leadContext(message.threadId) ??
+            this.coordinatorContext(message.threadId, message.text),
+        );
+        // Only once it is sent: a refusal keeps the brief where it was.
+        if (held) this.updateThread(message.threadId, { held: null });
         return;
+      }
+      case "coordinator.open": {
+        const id = this.openCoordinator(message.projectId, message.agentId, message.model);
+        client.openThreadId = id;
+        client.send({ type: "created", requestId: message.requestId, id });
+        client.send({ type: "items", threadId: id, items: this.items(id) });
+        return;
+      }
       case "thread.cancel":
         await this.cancel(message.threadId);
         return;
@@ -347,12 +502,58 @@ export class Hub {
         await this.deleteThread(message.threadId);
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "project.rename": {
+        if (!this.store.getProject(message.projectId)) throw new Error("Ce projet n'existe plus.");
+        this.store.renameProject(message.projectId, message.name);
+        const project = this.store.getProject(message.projectId)!;
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
       case "project.remove":
         await this.removeProject(message.projectId);
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "coordinator.setRoute": {
+        const settings = this.coordinatorSettings();
+        const routes = { ...settings.routes };
+        delete routes[message.kind];
+        if (message.agentId) {
+          // Refused now rather than at the first thread a coordinator opens with it.
+          this.agents.launch(message.agentId);
+          routes[message.kind] = {
+            agentId: message.agentId,
+            ...(message.model ? { model: message.model } : {}),
+          };
+        }
+        this.setCoordinatorSettings({ ...settings, routes });
+        return;
+      }
+      case "coordinator.setParallel":
+        this.setCoordinatorSettings({
+          ...this.coordinatorSettings(),
+          parallel: message.parallel,
+        });
+        // More places: the threads already in line take them now.
+        for (const t of this.store.listThreads()) {
+          if (t.kind === "coordinator") this.drainLine(t.id);
+        }
+        return;
       case "team.start": {
         const id = this.startTeam(message);
+        // Kept as the team a coordinator starts when it is asked for one.
+        this.setCoordinatorSettings({
+          ...this.coordinatorSettings(),
+          team: {
+            lead: message.lead,
+            coder: message.coder,
+            ...(message.reviewer ? { reviewer: message.reviewer } : {}),
+            ...(message.tester ? { tester: message.tester } : {}),
+            ...(message.merger ? { merger: message.merger } : {}),
+            coders: message.coders,
+            permissionMode: message.permissionMode,
+            ...(message.autoShip === false ? { autoShip: false } : {}),
+          } as TeamSetup,
+        });
         client.openThreadId = id;
         client.send({ type: "created", requestId: message.requestId, id });
         client.send({ type: "items", threadId: id, items: this.items(id) });
@@ -360,6 +561,10 @@ export class Hub {
       }
       case "team.stop":
         await this.teams.stop(message.threadId);
+        return;
+      case "team.ship":
+        await this.teams.ship(message.threadId);
+        client.send({ type: "done", requestId: message.requestId });
         return;
       case "team.retry":
         await this.teams.retry(message.threadId, message.index);
@@ -522,6 +727,13 @@ export class Hub {
     /** Works in that thread's folder: a team's reviewer or tester. */
     worksIn?: string | undefined;
     team?: Team | undefined;
+    /** The first message is the team engine's, not the user's. */
+    byTeam?: boolean | undefined;
+    /** The coordinator that opened it. */
+    openedBy?: string | undefined;
+    taskKey?: string | undefined;
+    /** Kept in line: the text is given later, once its coordinator has a place free. */
+    held?: boolean | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
@@ -545,6 +757,9 @@ export class Hub {
       ...(input.model ? { model: input.model } : {}),
       ...(input.settings ? { settings: input.settings } : {}),
       ...(workspace ? { workspace } : {}),
+      ...(input.openedBy ? { openedBy: input.openedBy } : {}),
+      ...(input.taskKey ? { taskKey: input.taskKey } : {}),
+      ...(input.held && input.text ? { held: input.text } : {}),
       ...(input.parentId ? { parentId: input.parentId } : {}),
       ...(input.role ? { role: input.role } : {}),
       ...(input.worksIn ? { worksIn: input.worksIn } : {}),
@@ -555,7 +770,10 @@ export class Hub {
     this.store.addThread(thread);
     this.broadcast({ type: "thread", thread });
     // A team's merge thread starts with no message: its branch is filled first.
-    if (input.text) this.send(thread.id, input.text);
+    if (input.text && !input.held) {
+      if (input.openedBy) this.sendFromCoordinator(thread.id, input.text, input.byTeam);
+      else this.send(thread.id, input.text, undefined, input.byTeam);
+    }
     return thread.id;
   }
 
@@ -570,6 +788,9 @@ export class Hub {
     merger?: { agentId: string; model?: string | undefined } | undefined;
     coders: number;
     permissionMode: PermissionMode;
+    autoShip?: boolean | undefined;
+    openedBy?: string | undefined;
+    taskKey?: string | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project) throw new Error("Projet introuvable.");
@@ -594,7 +815,439 @@ export class Hub {
     });
   }
 
-  send(threadId: string, text: string): void {
+  /** How coordinators route work, as set in the settings. */
+  coordinatorSettings(): CoordinatorSettings {
+    return this.store.getSetting<CoordinatorSettings>("coordinator", { routes: {} });
+  }
+
+  private setCoordinatorSettings(settings: CoordinatorSettings): void {
+    this.store.setSetting("coordinator", settings);
+    this.broadcast({ type: "coordinatorSettings", settings });
+  }
+
+  /** The project's coordinator, made with this agent when the project has none yet. */
+  openCoordinator(projectId: string, agentId: string, model?: string): string {
+    const known = this.store
+      .listThreads()
+      .find((t) => t.projectId === projectId && t.kind === "coordinator");
+    if (known) return known.id;
+    const project = this.store.getProject(projectId);
+    if (!project || this.removingProjects.has(projectId)) throw new Error("Projet introuvable.");
+    this.agents.launch(agentId);
+    const now = Date.now();
+    const thread: Thread = {
+      id: randomUUID(),
+      projectId,
+      title: `Coordinateur · ${project.name}`,
+      agentId,
+      status: "idle",
+      // It reads and routes; anything it would change still asks first.
+      permissionMode: "supervised",
+      ...(model ? { model } : {}),
+      kind: "coordinator",
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.store.addThread(thread);
+    this.broadcast({ type: "thread", thread });
+    return thread.id;
+  }
+
+  /** For the user writing to a coordinator: its part, given before the message. */
+  private coordinatorContext(threadId: string, text: string): string | undefined {
+    const thread = this.store.getThread(threadId);
+    if (thread?.kind !== "coordinator") return undefined;
+    this.openedThisTurn.delete(threadId);
+    this.lastAsked.set(threadId, text);
+    return coordinatorPrompt(this.store.getProject(thread.projectId)?.name ?? "");
+  }
+
+  /** Forgets every access given to a coordinator's bridge so far. */
+  private dropCoordinatorAccess(threadId: string): void {
+    for (const held of [this.coordinatorTokens, this.coordinatorBootstraps]) {
+      for (const [token, scope] of held) if (scope.threadId === threadId) held.delete(token);
+    }
+  }
+
+  /**
+   * The MCP server given to a coordinator's agent. Its environment only holds what the
+   * bridge trades, once, for its token: a command the agent runs later finds nothing to use.
+   */
+  private coordinatorServer(thread: Thread): McpServerRecord[] {
+    if (thread.kind !== "coordinator" || !this.coordinatorUrl) return [];
+    this.dropCoordinatorAccess(thread.id);
+    const bootstrap = randomBytes(32).toString("base64url");
+    this.coordinatorBootstraps.set(bootstrap, { projectId: thread.projectId, threadId: thread.id });
+    return [
+      {
+        id: "moonagentic",
+        name: "moonagentic",
+        enabled: true,
+        transport: {
+          type: "stdio",
+          command: process.execPath,
+          args: [BRIDGE],
+          env: [
+            { name: BRIDGE_URL_ENV, value: this.coordinatorUrl },
+            { name: BRIDGE_BOOTSTRAP_ENV, value: bootstrap },
+          ],
+        },
+      },
+    ];
+  }
+
+  /** The bridge's first call: what it was started with, once, for the token of its project. */
+  coordinatorExchange(bootstrap: string): string {
+    const scope = this.coordinatorBootstraps.get(bootstrap);
+    if (!scope) throw new CoordinatorRefused();
+    this.dropCoordinatorAccess(scope.threadId);
+    const token = randomBytes(32).toString("base64url");
+    this.coordinatorTokens.set(token, scope);
+    return token;
+  }
+
+  /** A coordinator's words to a thread: marked as its own, and said to be an agent's. */
+  private sendFromCoordinator(threadId: string, text: string, byTeam?: boolean): void {
+    const lead = this.leadContext(threadId);
+    this.send(
+      threadId,
+      text,
+      lead ? `${FROM_COORDINATOR}\n\n${lead}` : FROM_COORDINATOR,
+      byTeam,
+      "coordinator",
+    );
+  }
+
+  /** Threads a coordinator opened that are at work now: a turn under way, or a team running. */
+  private atWork(coordinatorId: string): number {
+    return this.store
+      .listThreads()
+      .filter(
+        (t) =>
+          t.openedBy === coordinatorId &&
+          !t.archived &&
+          (this.turns.has(t.id) ||
+            (t.team && ["planning", "coding", "merging"].includes(t.team.phase))),
+      ).length;
+  }
+
+  private parallel(): number {
+    return this.coordinatorSettings().parallel ?? DEFAULT_PARALLEL;
+  }
+
+  /** Starts the threads waiting in line behind a coordinator, oldest first, while it has places free. */
+  private drainLine(coordinatorId: string): void {
+    const waiting = this.store
+      .listThreads()
+      .filter((t) => t.openedBy === coordinatorId && t.held && !t.archived)
+      .sort((a, b) => a.createdAt - b.createdAt);
+    for (const next of waiting) {
+      if (this.atWork(coordinatorId) >= this.parallel()) return;
+      const brief = next.held!;
+      try {
+        this.sendFromCoordinator(next.id, brief);
+        this.updateThread(next.id, { held: null });
+      } catch {
+        // Busy for a moment, with a step back or a change of setting: it keeps its place
+        // and its brief, and is tried again when the next place frees.
+        continue;
+      }
+    }
+  }
+
+  /** Gives a thread whose turn just ended what a coordinator left for it meanwhile. */
+  private sendQueued(threadId: string): void {
+    const waiting = this.queued.get(threadId);
+    if (!waiting?.length || this.turns.has(threadId)) return;
+    const thread = this.store.getThread(threadId);
+    if (!thread || thread.archived) {
+      this.queued.delete(threadId);
+      return;
+    }
+    try {
+      this.sendFromCoordinator(threadId, waiting.join("\n\n"));
+      this.queued.delete(threadId);
+    } catch {
+      // Still busy, with a team or a step back: kept for the end of the next turn.
+    }
+  }
+
+  /** What a coordinator is shown of a thread: its real state, nothing made up. */
+  private threadForCoordinator(t: Thread, all = this.store.listThreads()) {
+    // A team shows what its members wait for, as the project's page does.
+    const members = all.filter((m) => m.parentId === t.id);
+    const asking = [t, ...members].some((m) => m.status === "waiting");
+    const blocked = t.team?.tasks.find((task) => task.status === "blocked");
+    return {
+      id: t.id,
+      title: t.title,
+      state: t.held
+        ? "en file"
+        : { waiting: "en attente", running: "en cours", idle: "inactif", resolved: "résolu" }[
+            threadGroup(t, members)
+          ],
+      agent: t.agentId,
+      ...(t.model ? { model: t.model } : {}),
+      ...(asking ? { waits_on: "une réponse de l'utilisateur" } : {}),
+      ...(t.error ? { error: t.error } : {}),
+      ...(t.team
+        ? {
+            team: {
+              phase: t.team.phase,
+              pieces: t.team.tasks.map((task) => `${task.title} : ${task.status}`),
+              ...(blocked?.note ? { blocked_because: blocked.note } : {}),
+            },
+          }
+        : {}),
+      ...(t.pr
+        ? {
+            pull_request: {
+              number: t.pr.number,
+              url: t.pr.url,
+              state: t.pr.state,
+              checks: t.pr.checks,
+              ...(t.pr.conflicts ? { conflicts: true } : {}),
+            },
+          }
+        : {}),
+      ...(t.workspace?.base ? { branch: t.workspace.branch } : {}),
+      ...(t.summary ? { last_said: t.summary } : {}),
+      ...(this.queued.get(t.id)?.length ? { queued_messages: this.queued.get(t.id)!.length } : {}),
+      updated: new Date(t.updatedAt).toISOString(),
+    };
+  }
+
+  /**
+   * One tool call of a coordinator, from its bridge. The token says which project it may
+   * touch: a thread of another project, a team's member or a coordinator is never reached.
+   */
+  async coordinatorCall(token: string, tool: string, args: unknown): Promise<unknown> {
+    const scope = this.coordinatorTokens.get(token);
+    const coordinator = scope && this.store.getThread(scope.threadId);
+    if (!scope || coordinator?.kind !== "coordinator") throw new CoordinatorRefused();
+    if (!COORDINATOR_TOOLS.some((t) => t.name === tool)) throw new Error(`Outil inconnu : ${tool}`);
+    // It acts for the message it is answering: a bridge left behind changes nothing later.
+    if (WRITES.has(tool) && !this.turns.has(coordinator.id))
+      throw new Error("Le coordinateur n'agit que pendant qu'il répond à l'utilisateur.");
+    const input =
+      typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+    const str = (key: string, max: number) => {
+      const value = input[key];
+      if (value === undefined || value === null || value === "") return undefined;
+      if (typeof value !== "string" || value.length > max)
+        throw new Error(`« ${key} » doit être un texte d'au plus ${max} caractères.`);
+      return value.trim() || undefined;
+    };
+    const need = (key: string, max: number) => {
+      const value = str(key, max);
+      if (!value) throw new Error(`« ${key} » est requis.`);
+      return value;
+    };
+    const mine = () =>
+      this.store
+        .listThreads()
+        .filter((t) => t.projectId === scope.projectId && !t.parentId && t.kind !== "coordinator");
+    const one = () => {
+      const id = need("thread_id", 200);
+      const thread = mine().find((t) => t.id === id);
+      if (!thread) throw new Error("Ce fil n'existe pas dans ce projet.");
+      return thread;
+    };
+    switch (tool) {
+      case "list_threads": {
+        const all = this.store.listThreads();
+        return mine().map((t) => this.threadForCoordinator(t, all));
+      }
+      case "read_thread": {
+        const thread = one();
+        const messages = this.items(thread.id)
+          .flatMap((i) =>
+            (i.kind === "user" && !i.byTeam) || i.kind === "agent"
+              ? [
+                  {
+                    from: i.kind === "agent" ? "agent" : i.from ? "coordinateur" : "utilisateur",
+                    text: i.text.length > READ_CLIP ? `${i.text.slice(0, READ_CLIP)}…` : i.text,
+                  },
+                ]
+              : [],
+          )
+          .slice(-READ_MESSAGES);
+        const team = new Set([
+          thread.id,
+          ...this.store
+            .listThreads()
+            .filter((m) => m.parentId === thread.id)
+            .map((m) => m.id),
+        ]);
+        const asks = this.pendingRequests()
+          .filter((r) => team.has(r.threadId))
+          .map((r) => r.title);
+        return {
+          ...this.threadForCoordinator(thread),
+          ...(asks.length ? { asks_permission_for: asks } : {}),
+          last_messages: messages,
+        };
+      }
+      case "open_thread": {
+        const taskKey = need("task_key", 80).toLowerCase();
+        const title = need("title", 120);
+        const brief = need("brief", 20_000);
+        const kind = str("kind", 40);
+        if (kind && !(THREAD_KINDS as readonly string[]).includes(kind))
+          throw new Error(`« kind » doit être l'un de : ${THREAD_KINDS.join(", ")}.`);
+        // A retry, or the same subject asked twice: the thread already open, not a second one.
+        const known = mine().find(
+          (t) => t.openedBy === coordinator.id && t.taskKey === taskKey && !t.archived,
+        );
+        if (known) return { already_open: true, opened: this.threadForCoordinator(known) };
+        const opened = this.openedThisTurn.get(coordinator.id) ?? 0;
+        if (opened >= MAX_OPENED_PER_TURN)
+          throw new Error(
+            `Tu as déjà ouvert ${opened} fils pour ce message : demande à l'utilisateur avant d'en ouvrir d'autres.`,
+          );
+        // Asked by name, else where the settings send this kind of work, else its own agent.
+        const route = kind ? this.coordinatorSettings().routes[kind as WorkKind] : undefined;
+        const asked = str("agent", 200);
+        const agentId = asked ?? route?.agentId ?? coordinator.agentId;
+        const model =
+          str("model", 200) ??
+          (asked
+            ? asked === coordinator.agentId
+              ? coordinator.model
+              : undefined
+            : route
+              ? route.model
+              : coordinator.model);
+        const id = this.createThread({
+          projectId: scope.projectId,
+          agentId,
+          model,
+          permissionMode: coordinator.permissionMode,
+          isolated: true,
+          title,
+          text: withOrigin(brief, this.lastAsked.get(coordinator.id)),
+          openedBy: coordinator.id,
+          taskKey,
+          // Past what it may run at once, the thread waits in line, in plain sight.
+          held: this.atWork(coordinator.id) >= this.parallel(),
+        });
+        this.openedThisTurn.set(coordinator.id, opened + 1);
+        this.putItem(coordinator.id, {
+          id: `opened:${id}`,
+          kind: "opened",
+          threadId: id,
+          title: this.requireThread(id).title,
+          at: Date.now(),
+        });
+        const made = this.requireThread(id);
+        return {
+          opened: this.threadForCoordinator(made),
+          ...(made.held
+            ? { in_line: `Il démarre dès qu'un des ${this.parallel()} fils en cours se termine.` }
+            : {}),
+        };
+      }
+      case "start_team": {
+        const taskKey = need("task_key", 80).toLowerCase();
+        const task = need("task", 20_000);
+        const known = mine().find(
+          (t) => t.openedBy === coordinator.id && t.taskKey === taskKey && !t.archived,
+        );
+        if (known) return { already_open: true, opened: this.threadForCoordinator(known) };
+        const setup = this.coordinatorSettings().team;
+        if (!setup)
+          throw new Error(
+            "Aucune équipe n'est réglée : l'utilisateur doit en lancer une lui-même une première fois (commande /equipe), elle servira ensuite de modèle. Dis-le-lui, ou ouvre un fil simple avec open_thread.",
+          );
+        const opened = this.openedThisTurn.get(coordinator.id) ?? 0;
+        if (opened >= MAX_OPENED_PER_TURN)
+          throw new Error(
+            `Tu as déjà ouvert ${opened} fils pour ce message : demande à l'utilisateur avant d'en ouvrir d'autres.`,
+          );
+        const id = this.startTeam({
+          ...setup,
+          projectId: scope.projectId,
+          task: withOrigin(task, this.lastAsked.get(coordinator.id)),
+          openedBy: coordinator.id,
+          taskKey,
+        });
+        this.openedThisTurn.set(coordinator.id, opened + 1);
+        this.putItem(coordinator.id, {
+          id: `opened:${id}`,
+          kind: "opened",
+          threadId: id,
+          title: this.requireThread(id).title,
+          at: Date.now(),
+        });
+        return { opened: this.threadForCoordinator(this.requireThread(id)) };
+      }
+      case "message_thread": {
+        const thread = one();
+        const text = need("text", 20_000);
+        const mode = str("mode", 20) ?? "queue";
+        if (!(MESSAGE_MODES as readonly string[]).includes(mode))
+          throw new Error(`« mode » doit être l'un de : ${MESSAGE_MODES.join(", ")}.`);
+        if (thread.archived) throw new Error("Ce fil est résolu : l'utilisateur doit le rouvrir.");
+        // In line, it has not started: the message joins its brief, and its place is kept.
+        if (thread.held) {
+          this.updateThread(thread.id, { held: `${thread.held}\n\n${text}` });
+          return { queued_for: thread.title, delivered: "au démarrage du fil en file" };
+        }
+        if (!this.turns.has(thread.id)) {
+          this.sendFromCoordinator(thread.id, text);
+          return { sent_to: thread.title };
+        }
+        if (mode === "queue") {
+          this.queued.set(thread.id, [...(this.queued.get(thread.id) ?? []), text]);
+          return { queued_for: thread.title, delivered: "à la fin du tour en cours" };
+        }
+        // A team's pieces are run by the server: cutting its lead would leave them adrift.
+        if (thread.team) throw new Error("Une équipe ne se coupe pas : utilise le mode queue.");
+        await this.cancel(thread.id);
+        await this.whenIdle(thread.id);
+        this.sendFromCoordinator(thread.id, text);
+        return { sent_to: thread.title, interrupted: true };
+      }
+      case "resolve_thread": {
+        const thread = one();
+        await this.setArchived(thread.id, true);
+        return { resolved: thread.title };
+      }
+      default:
+        throw new Error(`Outil inconnu : ${tool}`);
+    }
+  }
+
+  /**
+   * For the user writing to a team's lead: the team's real state, given before the message.
+   * The server runs the pieces, so the lead would otherwise know nothing past its plan.
+   */
+  private leadContext(threadId: string): string | undefined {
+    const thread = this.store.getThread(threadId);
+    if (thread?.role !== "lead" || !thread.team) return undefined;
+    return teamStatus(thread.team, Date.now(), (id) => this.lastReply(id));
+  }
+
+  /** Everything the agent said in the thread's last turn. */
+  private lastReply(threadId: string): string {
+    const items = this.items(threadId);
+    return items
+      .slice(items.findLastIndex((i) => i.kind === "user") + 1)
+      .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
+      .join("\n");
+  }
+
+  /**
+   * Sends the user's message to the thread's agent; `context` goes before it, unseen.
+   * `byTeam` marks a message the team's engine wrote, which the app keeps out of sight.
+   */
+  send(
+    threadId: string,
+    text: string,
+    context?: string,
+    byTeam?: boolean,
+    from?: "coordinator",
+  ): void {
     const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
     const busy = this.busy.get(threadId);
@@ -602,18 +1255,31 @@ export class Hub {
     // A step back left over from a failure must never replay over the turns that follow.
     if (this.pendingRestores()[threadId]) this.setPendingRestore(threadId, undefined);
     const itemId = `user:${randomUUID()}`;
-    this.putItem(threadId, { id: itemId, kind: "user", text, at: Date.now() });
+    this.putItem(threadId, {
+      id: itemId,
+      kind: "user",
+      text,
+      ...(byTeam ? { byTeam: true as const } : {}),
+      ...(from ? { from } : {}),
+      at: Date.now(),
+    });
     this.updateThread(threadId, { status: "running", error: null });
     this.turnIds.set(threadId, randomUUID());
     this.cancelled.delete(threadId);
     this.clearIdle(threadId);
-    const turn = this.runTurn(thread, text, itemId).finally(() => {
+    const turn = this.runTurn(thread, text, itemId, context).finally(() => {
       const cancelled = this.cancelled.has(threadId);
       this.turns.delete(threadId);
       this.turnIds.delete(threadId);
       this.cancelled.delete(threadId);
+      this.toolNames.delete(threadId);
       this.flushText(threadId);
       this.leftIdle(threadId);
+      if (!this.closed) {
+        const summary = summaryOf(this.lastReply(threadId));
+        const now = this.store.getThread(threadId);
+        if (summary && now && now.summary !== summary) this.updateThread(threadId, { summary });
+      }
       // Last, so the team can give the thread its next message. A server stopping leaves
       // its teams as they are, for the next start to find them cut short.
       try {
@@ -621,6 +1287,11 @@ export class Hub {
       } catch (error) {
         console.error("Équipe :", error);
       }
+      // A turn the user stopped starts nothing by itself: what waits goes after the next one.
+      if (!this.closed && !cancelled) this.sendQueued(threadId);
+      // A place is free: the next thread in line behind the same coordinator starts.
+      const openedBy = this.closed ? undefined : this.store.getThread(threadId)?.openedBy;
+      if (openedBy) this.drainLine(openedBy);
     });
     this.turns.set(threadId, turn);
   }
@@ -703,6 +1374,9 @@ export class Hub {
     message: string,
     pr: boolean,
     files?: string[],
+    /** The pull request's title; otherwise the thread's. */
+    title?: string,
+    body?: string,
   ): Promise<ShipResult> {
     const thread = this.requireLiveThread(threadId);
     const workspace = thread.workspace;
@@ -713,7 +1387,8 @@ export class Hub {
         branch: workspace.branch,
         message,
         pr,
-        title: thread.title,
+        title: title ?? thread.title,
+        ...(body ? { body } : {}),
         ...(files ? { files } : {}),
         ...(workspace.baseBranch ? { baseBranch: workspace.baseBranch } : {}),
       });
@@ -724,7 +1399,133 @@ export class Hub {
         });
       }
       return result;
+    }).then((result) => {
+      // Its pull request shows on the lists at once, without waiting for the next round.
+      if (result.prOpened && !this.closed) {
+        const asked = this.pullRequest(threadId).catch(() => undefined);
+        this.steps.add(asked);
+        void asked.finally(() => this.steps.delete(asked));
+      }
+      return result;
     });
+  }
+
+  /** Where a thread's branch is pushed, and what can ask GitHub about it; nothing without both. */
+  private async branchOnGithub(
+    threadId: string,
+  ): Promise<{ github: PullRequests; repo: string; branch: string } | undefined> {
+    const thread = this.requireThread(threadId);
+    const workspace = thread.workspace;
+    if (!workspace?.base) return undefined;
+    // An archived thread has no folder of its own left: its project has the same remotes.
+    const dir = existsSync(workspace.path)
+      ? workspace.path
+      : this.store.getProject(thread.projectId)?.path;
+    const repo = dir ? await githubRemote(dir) : undefined;
+    const github = repo ? this.pullRequests() : undefined;
+    return repo && github ? { github, repo, branch: workspace.branch } : undefined;
+  }
+
+  /** The pull request of the thread's branch as GitHub describes it now, whoever opened it. */
+  async pullRequest(threadId: string): Promise<PullRequestInfo | undefined> {
+    const on = await this.branchOnGithub(threadId);
+    const pr = await on?.github.find(on.repo, on.branch);
+    if (on) await this.notePullRequest(threadId, pr);
+    return pr;
+  }
+
+  /**
+   * Keeps what lists of threads show of the pull request. One that has just been merged
+   * resolves its thread, when its folder holds nothing more than what was merged.
+   */
+  private async notePullRequest(threadId: string, info: PullRequestInfo | undefined) {
+    const thread = this.store.getThread(threadId);
+    if (!thread) return;
+    const pr = info && threadPullRequest(info);
+    // A team's pull request is its merge thread's, or its only coder's: the lead shows it,
+    // and is the one resolved, which puts the whole team away.
+    const parent = thread.parentId ? this.store.getThread(thread.parentId) : undefined;
+    const lead = parent?.team && shipTarget(parent.team) === threadId ? parent : undefined;
+    if (lead && JSON.stringify(pr) !== JSON.stringify(lead.pr)) {
+      this.updateThread(lead.id, { pr: pr ?? null });
+    }
+    if (JSON.stringify(pr) === JSON.stringify(thread.pr)) return;
+    // Merged since it was last seen open; or merged before it was ever asked about, when
+    // MoonAgentic opened it itself.
+    const merged =
+      pr?.state === "merged" &&
+      (thread.pr ? thread.pr.state !== "merged" : !!thread.workspace?.prOpened);
+    this.updateThread(threadId, { pr: pr ?? null });
+    if (!merged || !info) return;
+    // A member that is not its team's branch is never resolved on its own.
+    if (thread.parentId && !lead) return;
+    const target = lead ?? thread;
+    if (target.archived || thread.archived) return;
+    const atWork = (id: string) => this.turns.has(id) || this.busy.has(id);
+    if (atWork(threadId) || atWork(target.id) || this.teams.isActive(target.id)) return;
+    const path = thread.workspace?.path;
+    if (!path || !existsSync(path) || !(await nothingPast(path, info.head))) return;
+    await this.setArchived(target.id, true).catch((error) =>
+      console.error("Résolution après merge :", error),
+    );
+  }
+
+  /**
+   * Asks GitHub again about the pull requests already known and not yet closed, one thread
+   * at a time: never about every branch, which would be slow and spend the user's quota.
+   */
+  async watchPullRequests(): Promise<void> {
+    if (this.watching || this.closed) return;
+    this.watching = true;
+    try {
+      for (const thread of this.store.listThreads()) {
+        if (this.closed) return;
+        const known = thread.pr
+          ? thread.pr.state === "open" || thread.pr.state === "draft"
+          : !!thread.workspace?.prOpened;
+        if (!known || thread.archived || !thread.workspace?.base) continue;
+        await this.pullRequest(thread.id).catch(() => undefined);
+      }
+    } finally {
+      this.watching = false;
+    }
+  }
+
+  /**
+   * Merges the pull request of the thread's branch, when it is still the one the user saw:
+   * same number, same last commit. Returns it as it is afterwards.
+   */
+  async mergePullRequest(
+    threadId: string,
+    number: number,
+    head: string,
+  ): Promise<PullRequestInfo | undefined> {
+    const on = await this.branchOnGithub(threadId);
+    if (!on) throw new Error("GitHub CLI (gh) est requis pour merger depuis MoonAgentic.");
+    const pr = await on.github.find(on.repo, on.branch);
+    if (!pr || pr.number !== number)
+      throw new Error("Cette pull request n'est plus celle de la branche du fil.");
+    if (pr.state !== "open") {
+      throw new Error(
+        pr.state === "draft"
+          ? "Cette pull request est un brouillon : marque-la prête sur GitHub d'abord."
+          : "Cette pull request n'est plus ouverte.",
+      );
+    }
+    if (pr.head !== head)
+      throw new Error("La branche a reçu de nouveaux commits : relis l'état avant de merger.");
+    if (pr.conflicts) throw new Error("Cette pull request a des conflits avec sa branche de base.");
+    await on.github.merge(on.repo, number, head);
+    const after = await on.github.find(on.repo, String(number));
+    await this.notePullRequest(threadId, after);
+    return after;
+  }
+
+  /** The pull request at this github.com address, for a link that shows its state. */
+  async pullRequestAt(url: string): Promise<PullRequestInfo | undefined> {
+    const at = parsePullRequestUrl(url);
+    if (!at) throw new Error("Ce n'est pas l'adresse d'une pull request GitHub.");
+    return this.pullRequests()?.find(at.repo, String(at.number));
   }
 
   /**
@@ -824,11 +1625,34 @@ export class Hub {
    * ones included, are kept in git. Bringing it back puts the worktree and the files back.
    */
   async setArchived(threadId: string, archived: boolean): Promise<void> {
+    if (archived && this.requireThread(threadId).kind === "coordinator")
+      throw new Error(
+        "Le coordinateur ne se résout pas : supprime sa conversation pour repartir de zéro.",
+      );
+    if (archived && this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
+    // A team goes to the archive whole, and comes back whole: never its lead alone.
+    const members = this.teamMembers(threadId);
+    const order = archived ? [...members, threadId] : [threadId, ...members.reverse()];
+    for (const id of order) await this.setOneArchived(id, archived);
+  }
+
+  /**
+   * The threads of the team this thread leads, those working in a coder's folder first:
+   * they leave it before it goes.
+   */
+  private teamMembers(leadId: string): string[] {
+    return this.store
+      .listThreads()
+      .filter((t) => t.parentId === leadId)
+      .sort((a, b) => Number(!a.worksIn) - Number(!b.worksIn))
+      .map((t) => t.id);
+  }
+
+  private async setOneArchived(threadId: string, archived: boolean): Promise<void> {
     const thread = this.requireThread(threadId);
     if (!!thread.archived === archived) return;
-    if (archived && this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
     const project = this.store.getProject(thread.projectId);
-    await this.exclusive(threadId, "Attends la fin de l'archivage.", async () => {
+    await this.exclusive(threadId, "Attends que le fil soit rangé.", async () => {
       if (!archived) {
         // Its folder comes back first: if that fails, the thread stays in the archive as it was.
         if (thread.workspace?.base && project) await this.prepareWorkspace(threadId, project);
@@ -861,9 +1685,21 @@ export class Hub {
    * with the commits on it, so no committed work is lost.
    */
   async deleteThread(threadId: string): Promise<void> {
-    const thread = this.requireThread(threadId);
-    if (this.turns.has(threadId)) throw new Error("Arrête d'abord l'agent de ce fil.");
+    this.requireThread(threadId);
+    // A team is deleted whole: its members' threads would be left without their lead.
+    const members = this.teamMembers(threadId);
+    if ([threadId, ...members].some((id) => this.turns.has(id)))
+      throw new Error(
+        members.length
+          ? "Arrête d'abord les agents de cette équipe."
+          : "Arrête d'abord l'agent de ce fil.",
+      );
     if (this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
+    for (const id of [...members, threadId]) await this.deleteOneThread(id);
+  }
+
+  private async deleteOneThread(threadId: string): Promise<void> {
+    const thread = this.requireThread(threadId);
     await this.exclusive(threadId, "Attends la fin de la suppression.", async () => {
       await this.releaseFolder(threadId);
       await this.forgetSession(threadId);
@@ -877,6 +1713,9 @@ export class Hub {
       this.setPendingRestore(threadId, undefined);
       clearTimeout(this.drafts.get(threadId)?.timer);
       this.drafts.delete(threadId);
+      this.queued.delete(threadId);
+      this.lastAsked.delete(threadId);
+      this.openedThisTurn.delete(threadId);
       this.store.deleteThread(threadId);
       this.broadcast({ type: "threadRemoved", threadId });
       this.planner.threadDeleted(threadId);
@@ -904,7 +1743,7 @@ export class Hub {
       const order = [...threads].sort((a, b) => Number(!a.worksIn) - Number(!b.worksIn));
       for (const thread of order) {
         this.busy.delete(thread.id);
-        await this.deleteThread(thread.id);
+        await this.deleteOneThread(thread.id);
       }
       this.store.deleteProject(projectId);
       this.gitProjects.delete(projectId);
@@ -1092,6 +1931,8 @@ export class Hub {
     this.sessions.delete(threadId);
     this.clearIdle(threadId);
     this.lastUsed.delete(threadId);
+    // Its bridge stops with it: what it held opens nothing any more.
+    this.dropCoordinatorAccess(threadId);
     await session?.then((s) => s.close()).catch(() => undefined);
     // An agent being paused is gone too before its files change (Windows holds them open).
     await this.pausing.get(threadId);
@@ -1120,8 +1961,15 @@ export class Hub {
   }
 
   setPermissionMode(threadId: string, permissionMode: PermissionMode): void {
-    this.requireThread(threadId);
+    const thread = this.requireThread(threadId);
     this.updateThread(threadId, { permissionMode });
+    // A team's lead speaks for its team: its agents, and those it starts later, follow.
+    if (thread.role !== "lead" || !thread.team) return;
+    this.teams.setPermissionMode(threadId, permissionMode);
+    for (const member of this.store.listThreads()) {
+      if (member.parentId === threadId && member.permissionMode !== permissionMode)
+        this.updateThread(member.id, { permissionMode });
+    }
   }
 
   respondToPermission(threadId: string, itemId: string, optionId: string): void {
@@ -1166,6 +2014,7 @@ export class Hub {
   /** Stops every agent and resolves once their turns have ended. */
   async close(): Promise<void> {
     this.closed = true;
+    clearInterval(this.prTimer);
     this.scheduler.close();
     this.teams.close();
     // A review starting reads the changes first; it must not reach the store once closed.
@@ -1198,7 +2047,12 @@ export class Hub {
     for (const threadId of this.drafts.keys()) this.flushText(threadId);
   }
 
-  private async runTurn(thread: Thread, text: string, itemId: string): Promise<void> {
+  private async runTurn(
+    thread: Thread,
+    text: string,
+    itemId: string,
+    context?: string,
+  ): Promise<void> {
     try {
       const continuing = this.sessions.has(thread.id);
       const session = await this.session(thread);
@@ -1213,7 +2067,8 @@ export class Hub {
         !continuing && session.fresh
           ? historyBefore(this.items(thread.id), itemId, this.catalog.name)
           : undefined;
-      const stopReason = await session.prompt(text, history, this.linksFor(session, text));
+      const prompt = context ? `${context}\n\n${text}` : text;
+      const stopReason = await session.prompt(prompt, history, this.linksFor(session, text));
       const error =
         stopReason === "refusal"
           ? "L'agent a refusé de continuer."
@@ -1396,7 +2251,7 @@ export class Hub {
       launch: this.agents.launch(thread.agentId),
       cwd,
       previousSessionId: this.store.getSessionId(thread.id),
-      mcpServers: this.catalog.mcpServers(),
+      mcpServers: [...this.catalog.mcpServers(), ...this.coordinatorServer(thread)],
       signal: AbortSignal.any([stop, AbortSignal.timeout(START_TIMEOUT_MS)]),
       handlers: {
         onUpdate: (update) => this.applyUpdate(thread.id, update),
@@ -1454,9 +2309,17 @@ export class Hub {
 
   /** Gives a starting agent the mode and effort the thread asked for. */
   private async applySettings(threadId: string, session: AgentSession): Promise<void> {
-    const wanted = this.store.getThread(threadId)?.settings ?? {};
+    const thread = this.store.getThread(threadId);
+    const wanted = thread?.settings ?? {};
     for (const setting of session.settings) {
-      const value = Object.hasOwn(wanted, setting.id) ? wanted[setting.id] : undefined;
+      const chosen = Object.hasOwn(wanted, setting.id) ? wanted[setting.id] : undefined;
+      // A coordinator routes and answers briefly: it starts on the agent's low effort, and
+      // keeps whatever the user sets afterwards.
+      const value =
+        chosen ??
+        (thread?.kind === "coordinator" && setting.kind === "effort"
+          ? setting.choices.find((c) => LOW_EFFORT.test(c.id))?.id
+          : undefined);
       if (value && value !== setting.current && setting.choices.some((c) => c.id === value)) {
         await session.setSetting(setting.id, value);
       }
@@ -1479,6 +2342,7 @@ export class Hub {
         return;
       case "tool_call":
       case "tool_call_update":
+        this.noteToolName(threadId, update);
         this.upsertTool(threadId, update);
         return;
       case "usage_update": {
@@ -1590,6 +2454,20 @@ export class Hub {
     });
   }
 
+  /** Keeps the name an agent gives the tool of a call, when it says it (Claude Code does). */
+  private noteToolName(
+    threadId: string,
+    call: { toolCallId: string; _meta?: Record<string, unknown> | null },
+  ): void {
+    const meta = call._meta?.claudeCode;
+    const name =
+      typeof meta === "object" && meta !== null ? (meta as { toolName?: unknown }).toolName : null;
+    if (typeof name !== "string") return;
+    const names = this.toolNames.get(threadId) ?? new Map<string, string>();
+    names.set(call.toolCallId, name);
+    this.toolNames.set(threadId, names);
+  }
+
   private requestPermission(
     threadId: string,
     request: acp.RequestPermissionRequest,
@@ -1597,7 +2475,18 @@ export class Hub {
   ): Promise<acp.RequestPermissionResponse> {
     const thread = this.requireThread(threadId);
     if (request.toolCall.title) this.upsertTool(threadId, request.toolCall);
-    if (thread.permissionMode === "full") {
+    // A reviewer only reads and runs checks: even with full access, a change waits on the user.
+    // Nor does a coordinator change files: it routes, and the threads it opens do the work.
+    const edits =
+      (thread.role === "reviewer" || thread.kind === "coordinator") &&
+      READ_ONLY_REFUSED.has(request.toolCall.kind ?? "");
+    // MoonAgentic's own tools are the coordinator's work, already limited by the server:
+    // asking the user before each one would make it useless.
+    this.noteToolName(threadId, request.toolCall);
+    const own =
+      thread.kind === "coordinator" &&
+      OWN_TOOL.test(this.toolNames.get(threadId)?.get(request.toolCall.toolCallId) ?? "");
+    if ((thread.permissionMode === "full" && !edits) || own) {
       const allow =
         request.options.find((o) => o.kind === "allow_once") ??
         request.options.find((o) => o.kind === "allow_always");
@@ -1642,7 +2531,7 @@ export class Hub {
   /** A thread that can still change: not put away in the archive. */
   private requireLiveThread(threadId: string): Thread {
     const thread = this.requireThread(threadId);
-    if (thread.archived) throw new Error("Ce fil est archivé : désarchive-le pour continuer.");
+    if (thread.archived) throw new Error("Ce fil est résolu : rouvre-le pour continuer.");
     return thread;
   }
 

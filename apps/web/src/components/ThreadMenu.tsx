@@ -8,8 +8,15 @@ export interface MenuAction {
   danger?: boolean;
 }
 
-/** The thread's own actions, behind one button in the header. */
-export function ThreadMenu({ actions }: { actions: MenuAction[] }) {
+/** A thread's or a project's own actions, behind one « … » button. */
+export function ThreadMenu({
+  actions,
+  label = "Actions du fil",
+}: {
+  actions: MenuAction[];
+  /** What the button is called, when it is not the open thread's. */
+  label?: string;
+}) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -30,8 +37,8 @@ export function ThreadMenu({ actions }: { actions: MenuAction[] }) {
     <div className="thread-menu-wrap" ref={root}>
       <button
         className="ib"
-        aria-label="Actions du fil"
-        title="Actions du fil"
+        aria-label={label}
+        title={label}
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen(!open)}

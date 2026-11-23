@@ -1,9 +1,6 @@
-import type { Team, TeamTask, Thread } from "@moonagentic/protocol";
+import type { Team, Thread } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
 import { connection, newId } from "../connection.ts";
-
-/** Corrections a coder gets before the lead steps in, as the server counts them. */
-const MAX_TRIES = 3;
 
 const active = (team: Team) =>
   team.phase === "planning" || team.phase === "coding" || team.phase === "merging";
@@ -27,55 +24,34 @@ function headline(team: Team): string {
           : "Fusion des sous-tâches sur une seule branche…";
     case "blocked": {
       const left = team.tasks.filter((t) => t.status === "blocked").length;
-      // Nothing blocked but the merge.
-      if (!left) return team.error ?? "La fusion t'attend.";
+      // Nothing blocked but the merge: why is said on its step.
+      if (!left) return "La fusion t'attend.";
       return `${left} ${plural(left, "sous-tâche t'attend", "sous-tâches t'attendent")} : ${plural(left, "ouvre son fil, puis relance-la", "ouvre leurs fils, puis relance-les")}.`;
     }
     case "done":
+      if (team.shipped?.opened) return "Terminé : la PR est ouverte, prête à relire.";
       return team.mergeThreadId
         ? "Terminé : tout est réuni sur une branche, prête à relire et à envoyer."
         : "Terminé : chaque sous-tâche est prête sur sa branche.";
     case "failed":
-      return team.error ?? "L'équipe s'est arrêtée sur une erreur.";
+      return "L'équipe s'est arrêtée sur une erreur.";
     case "stopped":
-      return team.error ?? "Équipe arrêtée.";
+      return "Équipe arrêtée.";
   }
 }
 
-/** What a piece is at, from the thread of whoever works on it when it waits on the user. */
-function taskState(task: TeamTask, byId: (id: string | undefined) => Thread | undefined): string {
-  const at =
-    task.status === "running"
-      ? byId(task.threadId)
-      : task.status === "reviewing"
-        ? byId(task.reviewThreadId)
-        : task.status === "testing"
-          ? byId(task.testThreadId)
-          : undefined;
-  if (at?.status === "waiting") return "attend ton accord";
-  switch (task.status) {
-    case "running":
-      return task.tries ? `correction ${task.tries} sur ${MAX_TRIES}` : "en cours";
-    case "reviewing":
-      return "en relecture";
-    case "testing":
-      return "en tests";
-    case "lead":
-      return "le chef revoit la consigne";
-    case "blocked":
-      return "à toi de voir";
-    case "waiting":
-      return "en attente d'un codeur";
-    case "done":
-      return task.merged ? "fusionnée" : "terminée";
-    case "failed":
-      return "échouée";
-    case "stopped":
-      return "arrêtée";
-  }
-}
+/** A verdict line is for the server: the note says what it means already. */
+const noteText = (note: string) => note.replace(/^\s*VERDICT\s*:.*$/gim, "").trim() || note.trim();
 
-/** The team a lead's thread runs: the plan, each piece's progress, and a way to stop it. */
+/** The branch that holds a finished team's work: the merge's, or its only piece's. */
+const shipTarget = (team: Team) =>
+  team.mergeThreadId ?? (team.tasks.length === 1 ? team.tasks[0]?.threadId : undefined);
+
+/**
+ * What there is to do about the team, right under its timeline: nothing while it works but
+ * a way to stop it, then the pieces to start again, the merge to open, the pull request.
+ * The timeline already says who does what; this says only what is yours to do.
+ */
 export function TeamCard({
   thread,
   team,
@@ -99,6 +75,25 @@ export function TeamCard({
   const [retrying, setRetrying] = useState<number[]>([]);
   const merge = byId(team.mergeThreadId);
   const retryMerge = !isActive && team.phase !== "done" && mergeable(team);
+  // Why the team stopped is the merge's doing: its thread tells the whole story.
+  const mergeBlocked = team.phase === "blocked" && !team.tasks.some((t) => t.status === "blocked");
+  const error =
+    team.error && (team.phase === "blocked" || team.phase === "failed" || team.phase === "stopped")
+      ? team.error
+      : undefined;
+  const canShip =
+    team.phase === "done" && !team.shipping && !team.shipped?.opened && !!shipTarget(team);
+  const shipNote = team.shipError ?? team.shipped?.note;
+  const [shipping, setShipping] = useState(false);
+  const shipAgain = () => {
+    setShipping(true);
+    connection
+      .request({ type: "team.ship", requestId: newId(), threadId: thread.id })
+      .catch((error: unknown) =>
+        connection.notify(error instanceof Error ? error.message : String(error)),
+      )
+      .finally(() => setShipping(false));
+  };
   // -1 stands for the merge. The button waits for the server's answer, not for a guess.
   const retry = (index: number) => {
     setRetrying((r) => [...r, index]);
@@ -114,82 +109,77 @@ export function TeamCard({
       )
       .finally(() => setRetrying((r) => r.filter((i) => i !== index)));
   };
-  return (
-    <div className="card team-card" role="region" aria-label="Équipe">
-      <div className="card-h">
-        Équipe
-        <span className={`team-phase ${team.phase}`}>{headline(team)}</span>
+  const again = team.tasks
+    .map((task, i) => ({ task, i }))
+    .filter(
+      ({ task }) =>
+        team.phase !== "planning" &&
+        (task.status === "blocked" || task.status === "failed" || task.status === "stopped"),
+    );
+  const showMerge = !!merge && (mergeBlocked || team.phase === "done" || retryMerge);
+  const showShip = !!team.shipped?.url || canShip;
+  // While it works, the timeline says it all: only the way to stop it stays.
+  const say = isActive ? undefined : headline(team);
+  const note = shipNote ?? (error && noteText(error));
+  if (!isActive && !again.length && !showMerge && !retryMerge && !showShip && !note) {
+    return say ? (
+      <div className="team-acts" role="region" aria-label="Équipe">
+        <span className={`team-phase ${team.phase}`}>{say}</span>
       </div>
-      {team.tasks.length > 0 && (
-        <ul className="team-tasks">
-          {team.tasks.map((task, i) => {
-            const coder = byId(task.threadId);
-            const reviewer = byId(task.reviewThreadId);
-            const tester = byId(task.testThreadId);
-            const again =
-              team.phase !== "planning" &&
-              (task.status === "blocked" || task.status === "failed" || task.status === "stopped");
-            return (
-              <li key={i} className={`team-task ${task.status}`}>
-                <span className="dot" aria-hidden />
-                {coder ? (
-                  <button className="lnk" onClick={() => onOpenThread(coder.id)}>
-                    {task.title}
-                  </button>
-                ) : (
-                  <span>{task.title}</span>
-                )}
-                <small>{taskState(task, byId)}</small>
-                {(reviewer || tester || (task.status === "blocked" && task.note) || again) && (
-                  <div className="team-more">
-                    {task.status === "blocked" && task.note && (
-                      <p className="team-note">{task.note.replace(/\n{2,}/g, "\n")}</p>
-                    )}
-                    <div className="team-links">
-                      {reviewer && (
-                        <button className="lnk sm" onClick={() => onOpenThread(reviewer.id)}>
-                          Relecture
-                        </button>
-                      )}
-                      {tester && (
-                        <button className="lnk sm" onClick={() => onOpenThread(tester.id)}>
-                          Tests
-                        </button>
-                      )}
-                      {again && (
-                        <button
-                          className="btn sm"
-                          aria-label={`Relancer « ${task.title} »`}
-                          disabled={retrying.includes(i)}
-                          onClick={() => retry(i)}
-                        >
-                          Relancer
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+    ) : null;
+  }
+  return (
+    <div className="team-acts" role="region" aria-label="Équipe">
+      {say && <span className={`team-phase ${team.phase}`}>{say}</span>}
+      {note && (
+        <span className="team-acts-note" title={note}>
+          {note.split("\n").find((l) => l.trim())}
+        </span>
       )}
-      {(merge || retryMerge) && (
-        <div className="row">
-          {retryMerge && (
-            <button className="btn sm" disabled={retrying.includes(-1)} onClick={() => retry(-1)}>
-              Relancer la fusion
-            </button>
-          )}
-          {merge && (
-            <button className="btn sm" onClick={() => onOpenThread(merge.id)}>
-              Ouvrir la fusion
-            </button>
-          )}
-        </div>
-      )}
-      {isActive && (
-        <div className="row">
+      <span className="team-acts-row">
+        {again.map(({ task, i }) => {
+          const coder = byId(task.threadId);
+          return (
+            <span key={i} className="team-acts-piece">
+              {coder ? (
+                <button className="lnk sm" onClick={() => onOpenThread(coder.id)}>
+                  {task.title}
+                </button>
+              ) : (
+                <span>{task.title}</span>
+              )}
+              <button
+                className="btn sm"
+                aria-label={`Relancer « ${task.title} »`}
+                disabled={retrying.includes(i)}
+                onClick={() => retry(i)}
+              >
+                Relancer
+              </button>
+            </span>
+          );
+        })}
+        {showMerge && merge && (
+          <button className="lnk sm" onClick={() => onOpenThread(merge.id)}>
+            Ouvrir la fusion
+          </button>
+        )}
+        {retryMerge && (
+          <button className="btn sm" disabled={retrying.includes(-1)} onClick={() => retry(-1)}>
+            Relancer la fusion
+          </button>
+        )}
+        {team.shipped?.url && (
+          <a className="lnk sm" href={team.shipped.url} target="_blank" rel="noreferrer">
+            {team.shipped.opened ? "Voir la PR" : "Créer la PR sur GitHub"}
+          </a>
+        )}
+        {canShip && (
+          <button className="btn sm" disabled={shipping} onClick={shipAgain}>
+            {team.shipError || team.shipped ? "Réessayer" : "Ouvrir la PR"}
+          </button>
+        )}
+        {isActive && (
           <button
             className="btn sm danger"
             disabled={stopping}
@@ -199,8 +189,8 @@ export function TeamCard({
           >
             {stopping ? "Arrêt…" : "Arrêter l'équipe"}
           </button>
-        </div>
-      )}
+        )}
+      </span>
     </div>
   );
 }

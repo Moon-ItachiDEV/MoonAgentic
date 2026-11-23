@@ -104,7 +104,7 @@ export function composerCommands(options: {
   if (inThread) {
     add("epingler", "Épingler ou désépingler cette discussion", "pin");
     add("exporter", "Exporter cette discussion en Markdown", "export");
-    add("archiver", "Archiver cette discussion et ranger sa copie de travail", "archive");
+    add("resoudre", "Marquer cette discussion résolue et ranger sa copie de travail", "archive");
     add("supprimer", "Supprimer cette discussion (sa branche reste)", "delete");
   }
   add("chercher", "Chercher dans les fils et les messages (Ctrl K)", "search");

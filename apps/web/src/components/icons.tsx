@@ -14,10 +14,24 @@ const base = (size: number): SVGProps<SVGSVGElement> => ({
 
 type P = { size?: number };
 
+/** Drawn on the mockup's 16 px grid, with its 1.4 px lines. */
+const fine = (size: number): SVGProps<SVGSVGElement> => ({
+  ...base(size),
+  viewBox: "0 0 16 16",
+  strokeWidth: 1.4,
+});
+
+/** A square with a pen: a new conversation, as in the mockup. */
 export const IconCompose = ({ size = 16 }: P) => (
-  <svg {...base(size)}>
-    <path d="M12 20h9" />
-    <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+  <svg {...fine(size)}>
+    <path d="M8 3H4.5A1.5 1.5 0 0 0 3 4.5v7A1.5 1.5 0 0 0 4.5 13h7a1.5 1.5 0 0 0 1.5-1.5V8" />
+    <path d="M11.5 2.5l2 2L8 10H6V8z" />
+  </svg>
+);
+/** Three lines with bullets: the planner, as in the mockup. */
+export const IconList = ({ size = 16 }: P) => (
+  <svg {...fine(size)}>
+    <path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8M2.5 4.5h.01M2.5 8h.01M2.5 11.5h.01" />
   </svg>
 );
 export const IconFolder = ({ size = 16 }: P) => (
@@ -35,9 +49,44 @@ export const IconArrowUp = ({ size = 16 }: P) => (
     <path d="M12 19V5M5 12l7-7 7 7" />
   </svg>
 );
+/** The microphone, as in the mockup: its capsule fills with the voice's level (`--lv`). */
+export const IconMic = () => (
+  <svg
+    className="mic"
+    width={16}
+    height={16}
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={1.4}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden
+  >
+    <rect className="mic-fill" x="6" y="2" width="4" height="7.5" rx="2" fill="currentColor" />
+    <rect x="6" y="2" width="4" height="7.5" rx="2" />
+    <path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2" />
+  </svg>
+);
+/** Five bars: talk instead of typing. */
+export const IconWave = () => (
+  <span className="vw" aria-hidden>
+    <i />
+    <i />
+    <i />
+    <i />
+    <i />
+  </span>
+);
 export const IconStop = ({ size = 12 }: P) => (
   <svg width={size} height={size} viewBox="0 0 12 12" aria-hidden>
     <rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor" />
+  </svg>
+);
+export const IconClock = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
   </svg>
 );
 export const IconShield = ({ size = 13 }: P) => (
@@ -71,6 +120,42 @@ export const IconGear = ({ size = 16 }: P) => (
     <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" />
   </svg>
 );
+/** A speech bubble: the phone's « Nouveau » tab. */
+export const IconBubble = ({ size = 20 }: P) => (
+  <svg {...fine(size)}>
+    <path d="M3 4.5A1.5 1.5 0 0 1 4.5 3h7A1.5 1.5 0 0 1 13 4.5v5a1.5 1.5 0 0 1-1.5 1.5H7l-3 2.5V11h.5A1.5 1.5 0 0 1 3 9.5Z" />
+  </svg>
+);
+/** Three stacked layers: the phone's « Projets » tab. */
+export const IconStack = ({ size = 20 }: P) => (
+  <svg {...fine(size)}>
+    <path d="M8 2.5 13.5 5 8 7.5 2.5 5Z" />
+    <path d="M2.5 8 8 10.5 13.5 8M2.5 11 8 13.5l5.5-2.5" />
+  </svg>
+);
+/** Two angle brackets, on the mockup's grid: the phone's « Code » tab. */
+export const IconBrackets = ({ size = 20 }: P) => (
+  <svg {...fine(size)}>
+    <path d="m5.5 4.5-3.5 3.5 3.5 3.5M10.5 4.5 14 8l-3.5 3.5" />
+  </svg>
+);
+/** An arrow to the left: back home, in a conversation on a phone. */
+export const IconArrowLeft = ({ size = 18 }: P) => (
+  <svg {...base(size)}>
+    <path d="M19 12H5M11 18l-6-6 6-6" />
+  </svg>
+);
+export const IconMoon = ({ size = 15 }: P) => (
+  <svg {...base(size)}>
+    <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
+  </svg>
+);
+export const IconSun = ({ size = 15 }: P) => (
+  <svg {...base(size)}>
+    <circle cx="12" cy="12" r="4" />
+    <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+  </svg>
+);
 export const IconBack = ({ size = 14 }: P) => (
   <svg {...base(size)} strokeWidth={2}>
     <path d="m15 6-6 6 6 6" />
@@ -92,6 +177,19 @@ export const IconPlug = ({ size = 16 }: P) => (
     <path d="M9 2v5M15 2v5" />
     <path d="M6 7h12v4a6 6 0 0 1-12 0Z" />
     <path d="M12 17v5" />
+  </svg>
+);
+/** A panel with its side bar: folds or unfolds the side bar. */
+export const IconSidebar = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <rect x="3" y="4" width="18" height="16" rx="3" />
+    <path d="M9 4v16" />
+  </svg>
+);
+export const IconWifi = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <path d="M2.5 9a14 14 0 0 1 19 0M6 12.7a9 9 0 0 1 12 0M9.3 16.3a4 4 0 0 1 5.4 0" />
+    <path d="M12 20h.01" />
   </svg>
 );
 export const IconBranch = ({ size = 15 }: P) => (

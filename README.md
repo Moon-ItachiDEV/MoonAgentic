@@ -55,11 +55,42 @@ Ajoute deux agents simulés hors-ligne pour tester gratuitement le streaming, le
 
 ### Accès depuis un téléphone
 
+**Réglages → Accès distant** affiche l'adresse à ouvrir depuis un autre appareil, le lien avec jeton et son QR code à scanner. La page détecte Tailscale toute seule ; sans lui, elle donne l'adresse du réseau local si tu as lancé le serveur avec `--host 0.0.0.0` :
+
 ```bash
 node apps/server/src/bin.ts --host 0.0.0.0
 ```
 
-Ouvre le lien avec jeton sur ton réseau local ou derrière un tunnel chiffré (Tailscale, WireGuard, SSH), puis ajoute la page à l'écran d'accueil en PWA.
+Sans Tailscale, le trafic n'est pas chiffré : reste sur un réseau de confiance. Si le lien a pu fuiter, **Renouveler le jeton** coupe aussitôt l'ancien.
+
+### Faire tourner 24h/24 sur un mini-PC Windows 11 + Tailscale
+
+Le mini-PC garde tes agents en marche ; ton PC principal et ton téléphone s'y connectent en HTTPS par [Tailscale](https://tailscale.com/download), sans ouvrir de port sur ta box.
+
+1. **Sur le mini-PC**, installe Node.js, pnpm, git, tes agents (connectés une fois à la main) et MoonAgentic comme ci-dessus. Installe Tailscale et connecte-toi ; fais de même sur ton PC principal et ton téléphone, avec le même compte.
+2. **Lance MoonAgentic** (`pnpm start`). Il reste sur `127.0.0.1` : inutile d'ajouter `--host`.
+3. **Publie-le sur ton réseau Tailscale**, une fois pour toutes, dans un terminal du mini-PC :
+
+   ```powershell
+   tailscale serve --bg 4747
+   ```
+
+   Si `tailscale` n'est pas reconnu, utilise `& "C:\Program Files\Tailscale\tailscale.exe" serve --bg 4747`. La première fois, Tailscale peut te demander d'activer HTTPS pour ton réseau : suis le lien qu'il affiche.
+
+4. **Ouvre Réglages → Accès distant** sur le mini-PC : l'adresse `https://<mini-pc>.<ton-réseau>.ts.net` y apparaît avec son QR code. Scanne-le avec ton téléphone, copie le lien sur ton PC principal, puis ajoute la page à l'écran d'accueil.
+5. **Pour qu'il tourne sans toi** : dans Windows, _Paramètres → Système → Alimentation_, mets la mise en veille sur « Jamais ». Pour relancer MoonAgentic à chaque ouverture de session, fais `Win + R`, tape `shell:startup`, et crée dans ce dossier un fichier `MoonAgentic.cmd` (remplace le chemin par celui de ton clone) :
+
+   ```bat
+   @echo off
+   cd /d "C:\chemin\vers\MoonAgentic"
+   pnpm start
+   ```
+
+   Pas besoin de droits administrateur. Évite une tâche planifiée `schtasks` : Windows arrête par défaut une tâche qui tourne depuis plus de 3 jours. Tailscale, lui, redémarre tout seul avec Windows et se souvient de `serve --bg`.
+
+Pour être prévenu quand un fil attend ta réponse ou qu'une équipe a fini, active **Réglages → Général → Notifications** sur chaque appareil. Le navigateur ne les autorise qu'en HTTPS, ce que donne `tailscale serve`, et tant que MoonAgentic reste ouvert dans un onglet.
+
+N'utilise pas `tailscale funnel` : il ouvrirait MoonAgentic à tout Internet. Réglages → Accès distant te prévient si c'est le cas.
 
 ## Agents
 

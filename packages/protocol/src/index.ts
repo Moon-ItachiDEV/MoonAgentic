@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+export type { RemoteAccess, RemoteAddress } from "./remote.ts";
+
 // Zod builds faster checks with `new Function` when it can, and tries it as soon as a
 // schema is made. The web app's content security policy forbids that, so it is turned off
 // before any schema exists; messages here are small enough not to need it.
@@ -258,6 +260,17 @@ export interface Team {
   merger?: TeamMember;
   /** The thread whose branch gets every piece, once they are all done. */
   mergeThreadId?: string;
+  /**
+   * Once done, the team pushes its branch and opens its pull request by itself: `url` is
+   * the pull request, or the page to open one when the user's `gh` could not.
+   */
+  shipped?: { url?: string; opened: boolean; note?: string };
+  /** Why the branch could not be pushed or its pull request opened. */
+  shipError?: string;
+  /** The branch is being pushed and the pull request opened, right now. */
+  shipping?: true;
+  /** Set to false at the start when the user opens the pull request themselves. */
+  autoShip?: boolean;
   /** What the merger is at: the piece whose conflicts it settles, or -1 for the last check. */
   mergeStep?: number;
   /** True once the merger was asked again for the verdict its last check left out. */
@@ -294,10 +307,31 @@ export interface Thread {
   commands?: AgentCommand[];
   /** Kept at the top of the sidebar. */
   pinned?: boolean;
-  /** Put away: out of the sidebar's lists, its worktree removed until it comes back. */
+  /**
+   * Resolved (« Résolu »): out of the lists of work under way, its worktree removed until
+   * it is reopened. Its files, uncommitted ones included, are kept in git meanwhile.
+   */
   archived?: boolean;
+  /** Its pull request as GitHub last described it, once one is known. */
+  pr?: ThreadPullRequest;
+  /** The start of what its agent last said, for lists of threads. */
+  summary?: string;
   /** Set when the thread works on its own branch rather than in the project folder. */
   workspace?: Workspace;
+  /**
+   * A project's coordinator: the one conversation the user talks to about the whole
+   * project. It answers, or opens a thread for the work. Kept out of lists of threads.
+   */
+  kind?: "coordinator";
+  /** The coordinator's thread, for a thread it opened. */
+  openedBy?: string;
+  /** The coordinator's own name for the subject: asked again, it gets this thread back. */
+  taskKey?: string;
+  /**
+   * The brief it gets once a place is free: its coordinator already has as many threads
+   * at work as it may run at once, so this one waits in line.
+   */
+  held?: string;
   /** The team lead's thread, for a coder's thread. */
   parentId?: string;
   /** The thread's part in a team. */
@@ -311,6 +345,83 @@ export interface Thread {
   createdAt: number;
   updatedAt: number;
 }
+
+/** What lists of threads need of a thread's pull request. */
+export interface ThreadPullRequest {
+  url: string;
+  number: number;
+  state: PullRequestInfo["state"];
+  /** Its checks as one: `failed` if one failed, else `pending` if one still runs. */
+  checks: "none" | "pending" | "passed" | "failed";
+  conflicts?: true;
+  /** The repository's rules hold the merge back. */
+  blocked?: true;
+}
+
+/** What a list of threads keeps of a pull request. */
+export function threadPullRequest(pr: PullRequestInfo): ThreadPullRequest {
+  const counted = pr.checks.filter((c) => c.state !== "skipped");
+  return {
+    url: pr.url,
+    number: pr.number,
+    state: pr.state,
+    checks: counted.some((c) => c.state === "failed")
+      ? "failed"
+      : counted.some((c) => c.state === "pending")
+        ? "pending"
+        : counted.length
+          ? "passed"
+          : "none",
+    ...(pr.conflicts ? { conflicts: true as const } : {}),
+    ...(pr.blocked ? { blocked: true as const } : {}),
+  };
+}
+
+/** Where a thread stands for its user, in the order a project lists them. */
+export const THREAD_GROUPS = ["waiting", "running", "idle", "resolved"] as const;
+export type ThreadGroup = (typeof THREAD_GROUPS)[number];
+
+/** Phases of a team in which one of its agents works, or is about to. */
+const TEAM_AT_WORK: readonly TeamPhase[] = ["planning", "coding", "merging"];
+
+/**
+ * The group of a thread, worked out from what is really going on: its agent, the team it
+ * leads, its pull request. `waiting` means the next step is the user's: an answer, an
+ * error to look at, a pull request to merge or whose checks failed. `members` are the
+ * threads of the team it leads: the lead's own pull request is its team's, kept on it by
+ * the server.
+ */
+export function threadGroup(thread: Thread, members: readonly Thread[] = []): ThreadGroup {
+  if (thread.archived) return "resolved";
+  // A team's member that asks the user something makes the whole team wait on them.
+  if (
+    thread.status === "waiting" ||
+    thread.team?.phase === "blocked" ||
+    members.some((m) => m.status === "waiting" && !m.archived)
+  )
+    return "waiting";
+  // One waiting in line behind its coordinator starts by itself: it stays in sight with the
+  // threads at work, not folded away with the idle ones.
+  if (
+    thread.status === "running" ||
+    !!thread.held ||
+    (thread.team && TEAM_AT_WORK.includes(thread.team.phase))
+  )
+    return "running";
+  if (thread.status === "error" || thread.team?.phase === "failed") return "waiting";
+  const pr = thread.pr;
+  if (pr?.state === "open" && (pr.checks === "failed" || pr.conflicts || prReady(pr)))
+    return "waiting";
+  return "idle";
+}
+
+/** An open pull request nothing holds back: only the user's merge is missing. */
+export const prReady = (pr: ThreadPullRequest): boolean =>
+  pr.state === "open" &&
+  !pr.conflicts &&
+  !pr.blocked &&
+  pr.checks !== "pending" &&
+  pr.checks !== "failed";
 
 /** The planner's columns, in order. */
 export const PLAN_STATUSES = ["todo", "doing", "report", "test", "live"] as const;
@@ -374,6 +485,10 @@ export type Item =
       id: string;
       kind: "user";
       text: string;
+      /** Written by the team's engine, not by the user: a member's brief, a fix, a check. */
+      byTeam?: true;
+      /** Written by the project's coordinator, an agent, not typed by the user. */
+      from?: "coordinator";
       /** The thread's files just before this message, for threads with their own branch. */
       checkpoint?: string;
       at: number;
@@ -401,6 +516,8 @@ export type Item =
       at: number;
     }
   | { id: string; kind: "plan"; entries: PlanEntry[]; at: number }
+  /** The coordinator opened a thread for a piece of work: a link to it, where it did. */
+  | { id: string; kind: "opened"; threadId: string; title: string; at: number }
   /** The thread went from one agent to another; agent items before it are `from`'s. */
   | { id: string; kind: "handoff"; from: AgentId; to: AgentId; at: number };
 
@@ -442,6 +559,9 @@ export interface Schedule {
   createdAt: number;
 }
 
+export type { PullRequestCheck, PullRequestInfo } from "./pull-request.ts";
+import type { PullRequestInfo } from "./pull-request.ts";
+
 /** What MoonAgentic sees of GitHub through the user's own `git` and `gh`; it keeps no token. */
 export interface GithubStatus {
   /** `git` is installed. */
@@ -469,7 +589,38 @@ export interface GithubRepo {
   pushedAt?: number;
 }
 
+/** The kinds of work a coordinator opens a thread for. */
+export const WORK_KINDS = ["question", "bug", "fonctionnalite", "relecture", "tests"] as const;
+export type WorkKind = (typeof WORK_KINDS)[number];
+
+/** Threads a coordinator runs at once unless the settings say otherwise, and at most. */
+export const DEFAULT_PARALLEL = 3;
+export const MAX_PARALLEL = 6;
+
+/** A team as the user last set one up: what a coordinator starts when asked for a team. */
+export interface TeamSetup {
+  lead: TeamMember;
+  coder: TeamMember;
+  reviewer?: TeamMember;
+  tester?: TeamMember;
+  merger?: TeamMember;
+  coders: number;
+  permissionMode: PermissionMode;
+  autoShip?: boolean;
+}
+
+/** How coordinators route work: an agent and model for each kind, and the team to start. */
+export interface CoordinatorSettings {
+  /** A kind left out goes to the coordinator's own agent. */
+  routes: Partial<Record<WorkKind, TeamMember>>;
+  /** Kept from the last team the user started by hand. */
+  team?: TeamSetup;
+  /** Threads a coordinator runs at once, the others waiting in line; 3 when left out. */
+  parallel?: number;
+}
+
 export interface Snapshot {
+  coordinator: CoordinatorSettings;
   favorites: Favorites;
   requests: PendingRequest[];
   mcpServers: McpServerInfo[];
@@ -484,6 +635,7 @@ export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "agents"; agents: AgentInfo[] }
   | { type: "favorites"; favorites: Favorites }
+  | { type: "coordinatorSettings"; settings: CoordinatorSettings }
   /** Every permission request still waiting, after one is added or answered. */
   | { type: "requests"; requests: PendingRequest[] }
   | { type: "mcpServers"; servers: McpServerInfo[] }
@@ -525,6 +677,11 @@ export type ServerMessage =
     }
   | { type: "github"; requestId: string; status: GithubStatus }
   | { type: "githubRepos"; requestId: string; repos: GithubRepo[] }
+  /**
+   * A pull request as it is now. Without `pr`: there is none, or nothing here can ask
+   * GitHub (no `gh`, no GitHub remote); `error` says why when asking failed.
+   */
+  | { type: "pullRequest"; requestId: string; pr?: PullRequestInfo; error?: string }
   /** Reply to a create request, so the client can navigate to what it made. */
   | { type: "created"; requestId: string; id: string }
   /** Reply to a request that makes nothing new, once it succeeded. */
@@ -585,6 +742,29 @@ export const ClientMessage = z.discriminatedUnion("type", [
     isolated: z.boolean().optional(),
     text,
   }),
+  /**
+   * Opens the project's coordinator, made with this agent the first time. Answers
+   * `created` with its thread.
+   */
+  z.object({
+    type: z.literal("coordinator.open"),
+    requestId: id,
+    projectId: id,
+    agentId: id,
+    model: id.optional(),
+  }),
+  /** Sends a kind of work to an agent and model; without an agent, back to the coordinator's own. */
+  z.object({
+    type: z.literal("coordinator.setRoute"),
+    kind: z.enum(WORK_KINDS),
+    agentId: id.optional(),
+    model: id.optional(),
+  }),
+  /** How many threads a coordinator runs at once. */
+  z.object({
+    type: z.literal("coordinator.setParallel"),
+    parallel: z.number().int().min(1).max(MAX_PARALLEL),
+  }),
   z.object({ type: z.literal("workspace.review"), threadId: id }),
   z.object({
     type: z.literal("workspace.ship"),
@@ -623,6 +803,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
     merger: z.object({ agentId: id, model: id.optional() }).optional(),
     coders: z.number().int().min(1).max(4),
     permissionMode: z.enum(["supervised", "full"]),
+    /** Opens the pull request by itself once done; true when left out. */
+    autoShip: z.boolean().optional(),
   }),
   /** Stops the team, its lead and every coder at work. */
   z.object({ type: z.literal("team.stop"), threadId: id }),
@@ -630,6 +812,12 @@ export const ClientMessage = z.discriminatedUnion("type", [
    * Starts a piece that is blocked, failed or stopped again, its tries counted from zero;
    * without a piece, the merge that stopped.
    */
+  /** Pushes the finished team's branch and opens its pull request, once more. */
+  z.object({
+    type: z.literal("team.ship"),
+    requestId: id,
+    threadId: id,
+  }),
   z.object({
     type: z.literal("team.retry"),
     requestId: id,
@@ -694,6 +882,12 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread.setArchived"), threadId: id, archived: z.boolean() }),
   z.object({ type: z.literal("thread.delete"), requestId: id, threadId: id }),
   z.object({ type: z.literal("project.remove"), requestId: id, projectId: id }),
+  /** Gives the project another name in MoonAgentic; its folder keeps its own. */
+  z.object({
+    type: z.literal("project.rename"),
+    projectId: id,
+    name: z.string().trim().min(1).max(120),
+  }),
   /** Looks for project files to mention with `@`, in the thread's folder when given. */
   z.object({
     type: z.literal("files.search"),
@@ -744,6 +938,25 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("github.status"), requestId: id }),
   /** Lists the repositories the signed-in `gh` account can reach, last pushed first. */
   z.object({ type: z.literal("github.repos"), requestId: id }),
+  /** Asks GitHub for the pull request of a thread's branch, with its checks. */
+  z.object({ type: z.literal("workspace.pr"), requestId: id, threadId: id }),
+  /**
+   * Merges the pull request of a thread's branch, if its last commit is still `head`: what
+   * the user saw is what gets merged.
+   */
+  z.object({
+    type: z.literal("workspace.mergePr"),
+    requestId: id,
+    threadId: id,
+    number: z.number().int().positive(),
+    head: z.string().regex(/^[0-9a-f]{40,64}$/),
+  }),
+  /** Asks GitHub for the state of the pull request at this address, to draw its link. */
+  z.object({
+    type: z.literal("github.pr"),
+    requestId: id,
+    url: z.string().max(500),
+  }),
   /**
    * Clones a GitHub repository into a new folder, `parent/name`, and makes it a project.
    * `repo` is `owner/name` or its address on github.com.

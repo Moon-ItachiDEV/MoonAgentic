@@ -3,6 +3,9 @@ import { useEffect, useState } from "react";
 
 const LEAD_LANE = -1;
 const MERGE_LANE = -2;
+/** Lanes for roles that have no piece to work on yet, while the lead plans. */
+const QUEUED_REVIEW = -3;
+const QUEUED_TEST = -4;
 
 const active = (team: Team) =>
   team.phase === "planning" || team.phase === "coding" || team.phase === "merging";
@@ -54,7 +57,7 @@ const LABEL: Record<TeamLanePhase, string> = {
   checking: "vérifie l'ensemble",
 };
 
-interface Lane {
+export interface Lane {
   lane: number;
   who: string;
   /** The agent and model, when known. */
@@ -63,6 +66,111 @@ interface Lane {
   open: string | undefined;
   /** The thread working for the lane at its current phase. */
   live: string | undefined;
+  /** A role still to come: what it waits on, as the team was set up. */
+  after?: string;
+}
+
+/**
+ * The strip's lanes: the lead, each piece (or, while the lead plans, the roles to come) and
+ * the merge. Each says its role, then the agent and model at work in it.
+ */
+export function teamLanes(
+  lead: Thread,
+  team: Team,
+  threads: Thread[],
+  agents: AgentInfo[],
+): Lane[] {
+  const running = active(team);
+  const byId = (id: string | undefined) => (id ? threads.find((t) => t.id === id) : undefined);
+  /** The role, then the agent and model at work in it. */
+  const label = (
+    role: string,
+    member: { agentId: string; model?: string | undefined } | undefined,
+  ) => {
+    if (!member) return role;
+    const agent = agents.find((a) => a.id === member.agentId);
+    const model = agent?.models?.find((m) => m.id === member.model)?.name ?? member.model;
+    return [role, agent?.name ?? member.agentId, model].filter(Boolean).join(" · ");
+  };
+  const of = (thread: Thread | undefined) =>
+    thread ? { agentId: thread.agentId, model: thread.model } : undefined;
+
+  const lastPhase = (lane: number) => team.timeline?.findLast((e) => e.lane === lane)?.phase;
+
+  // Every role is there from the start: those still to come say what they wait on.
+  const planning = team.phase === "planning" && !team.tasks.length;
+  const merger = team.mergeThreadId || (team.merger && (running || team.phase === "blocked"));
+  return [
+    { lane: LEAD_LANE, who: "Chef", sub: label("Chef", of(lead)), open: lead.id, live: lead.id },
+    ...(!planning
+      ? team.tasks.map((task, i): Lane => {
+          const phase = lastPhase(i);
+          const live =
+            phase === "reviewing"
+              ? task.reviewThreadId
+              : phase === "testing"
+                ? task.testThreadId
+                : task.threadId;
+          const role =
+            phase === "reviewing" ? "Relecteur" : phase === "testing" ? "Testeur" : "Codeur";
+          // The agent shown is the one at work: the reviewer or tester during their phases.
+          return {
+            lane: i,
+            who: task.title,
+            sub: label(role, of(byId(live ?? task.threadId)) ?? team.coder),
+            open: live,
+            live,
+          };
+        })
+      : [
+          {
+            lane: 0,
+            who: team.coders > 1 ? `${team.coders} codeurs` : "Codeur",
+            sub: label("Codeur", team.coder),
+            open: undefined,
+            live: undefined,
+            after: "après le chef",
+          },
+        ]),
+    ...(team.reviewer && planning
+      ? [
+          {
+            lane: QUEUED_REVIEW,
+            who: "Relecture",
+            sub: label("Relecteur", team.reviewer),
+            open: undefined,
+            live: undefined,
+            after: "après les codeurs",
+          },
+        ]
+      : []),
+    ...(team.tester && planning
+      ? [
+          {
+            lane: QUEUED_TEST,
+            who: "Tests",
+            sub: label("Testeur", team.tester),
+            open: undefined,
+            live: undefined,
+            after: "après la relecture",
+          },
+        ]
+      : []),
+    ...(merger
+      ? [
+          {
+            lane: MERGE_LANE,
+            who: "Fusion",
+            sub: label("Fusionneur", of(byId(team.mergeThreadId)) ?? team.merger),
+            open: team.mergeThreadId,
+            live: team.mergeThreadId,
+            ...(team.mergeThreadId || team.phase === "merging"
+              ? {}
+              : { after: team.tasks.length > 1 ? "après les sous-tâches" : "après les codeurs" }),
+          },
+        ]
+      : []),
+  ];
 }
 
 const clock = (at: number) =>
@@ -107,50 +215,13 @@ export function TeamStrip({
   }, [running]);
 
   const byId = (id: string | undefined) => (id ? threads.find((t) => t.id === id) : undefined);
-  const label = (thread: Thread | undefined) => {
-    if (!thread) return "";
-    const agent = agents.find((a) => a.id === thread.agentId);
-    const model = agent?.models?.find((m) => m.id === thread.model)?.name ?? thread.model;
-    return [agent?.name ?? thread.agentId, model].filter(Boolean).join(" · ");
-  };
-
   const events = team.timeline ?? [];
   const start = events[0]?.at ?? lead.createdAt;
   const end = Math.max(start + 1000, running ? now : (events.at(-1)?.at ?? start));
   const x = (at: number) => Math.min(1, Math.max(0, (at - start) / (end - start)));
   const lastPhase = (lane: number) => events.findLast((e) => e.lane === lane)?.phase;
 
-  const lanes: Lane[] = [
-    { lane: LEAD_LANE, who: "Chef", sub: label(lead), open: lead.id, live: lead.id },
-    ...team.tasks.map((task, i): Lane => {
-      const phase = lastPhase(i);
-      const live =
-        phase === "reviewing"
-          ? task.reviewThreadId
-          : phase === "testing"
-            ? task.testThreadId
-            : task.threadId;
-      // The agent shown is the one at work: the reviewer or tester during their phases.
-      return {
-        lane: i,
-        who: task.title,
-        sub: label(byId(live ?? task.threadId)),
-        open: live,
-        live,
-      };
-    }),
-    ...(team.mergeThreadId || team.phase === "merging"
-      ? [
-          {
-            lane: MERGE_LANE,
-            who: "Fusion",
-            sub: label(byId(team.mergeThreadId)),
-            open: team.mergeThreadId,
-            live: team.mergeThreadId,
-          },
-        ]
-      : []),
-  ];
+  const lanes = teamLanes(lead, team, threads, agents);
 
   /** What the lane is at now: its phase, and whether its agent is really at work. */
   const state = (l: Lane) => {
@@ -197,7 +268,15 @@ export function TeamStrip({
                     : "idle";
             return (
               <span key={l.lane} className={`tl-b d-${dot}`}>
-                {l.lane === LEAD_LANE ? "C" : l.lane === MERGE_LANE ? "F" : l.lane + 1}
+                {l.lane === LEAD_LANE
+                  ? "C"
+                  : l.lane === MERGE_LANE
+                    ? "F"
+                    : l.lane === QUEUED_REVIEW
+                      ? "R"
+                      : l.lane === QUEUED_TEST
+                        ? "T"
+                        : l.lane + 1}
               </span>
             );
           })}
@@ -221,11 +300,11 @@ export function TeamStrip({
               return (
                 <div
                   key={l.lane}
-                  className={`tl-l${s.phase === "idle" ? " ph-idle" : ""}`}
+                  className={`tl-l${s.phase === "idle" ? " ph-idle" : ""}${l.after ? " tl-after" : ""}`}
                   // A lane whose thread is not made yet opens nothing: it is no button.
                   role={l.open ? "button" : "group"}
                   tabIndex={l.open ? 0 : undefined}
-                  aria-label={`${l.who} : ${s.asks ? "attend ton accord" : LABEL[s.phase ?? "idle"] || "au repos"}`}
+                  aria-label={`${l.who} : ${s.asks ? "attend ton accord" : LABEL[s.phase ?? "idle"] || l.after || "au repos"}`}
                   onClick={() => l.open && onOpenThread(l.open)}
                   onKeyDown={(e) => {
                     if ((e.key === "Enter" || e.key === " ") && l.open) {
@@ -267,7 +346,7 @@ export function TeamStrip({
                     })}
                   </span>
                   <span className={`tl-st ph-${s.asks ? "wait" : (s.phase ?? "idle")}`}>
-                    {s.asks ? "attend ton accord" : LABEL[s.phase ?? "idle"]}
+                    {s.asks ? "attend ton accord" : LABEL[s.phase ?? "idle"] || l.after}
                   </span>
                 </div>
               );

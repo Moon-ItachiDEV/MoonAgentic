@@ -15,7 +15,7 @@ export function threadMarkdown(thread: Thread, items: Item[], agents: AgentInfo[
   items.forEach((item, i) => {
     switch (item.kind) {
       case "user":
-        lines.push("## Toi", "", item.text, "");
+        lines.push(item.from === "coordinator" ? "## Coordinateur" : "## Toi", "", item.text, "");
         return;
       case "agent":
         lines.push(`## ${name(authors[i] ?? thread.agentId)}`, "", item.text, "");
@@ -33,6 +33,9 @@ export function threadMarkdown(thread: Thread, items: Item[], agents: AgentInfo[
         return;
       case "handoff":
         lines.push(`*${name(item.from)} passe le relais à ${name(item.to)}.*`, "");
+        return;
+      case "opened":
+        lines.push(`> Fil ouvert : ${item.title}`, "");
         return;
       case "thought":
       case "permission":

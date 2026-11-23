@@ -47,6 +47,12 @@ type ThreadExtra = Pick<
   | "commands"
   | "pinned"
   | "archived"
+  | "pr"
+  | "summary"
+  | "kind"
+  | "openedBy"
+  | "taskKey"
+  | "held"
   | "parentId"
   | "role"
   | "worksIn"
@@ -61,6 +67,12 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.commands?.length ? { commands: thread.commands } : {}),
     ...(thread.pinned ? { pinned: true } : {}),
     ...(thread.archived ? { archived: true } : {}),
+    ...(thread.pr ? { pr: thread.pr } : {}),
+    ...(thread.summary ? { summary: thread.summary } : {}),
+    ...(thread.kind ? { kind: thread.kind } : {}),
+    ...(thread.openedBy ? { openedBy: thread.openedBy } : {}),
+    ...(thread.taskKey ? { taskKey: thread.taskKey } : {}),
+    ...(thread.held ? { held: thread.held } : {}),
     ...(thread.parentId ? { parentId: thread.parentId } : {}),
     ...(thread.role ? { role: thread.role } : {}),
     ...(thread.worksIn ? { worksIn: thread.worksIn } : {}),
@@ -317,6 +329,10 @@ export class Store {
     return r && { id: r.id, name: r.name, path: r.path, createdAt: r.created_at };
   }
 
+  renameProject(id: string, name: string): void {
+    this.sql(`UPDATE projects SET name = ? WHERE id = ?`).run(name, id);
+  }
+
   addProject(project: Project): void {
     this.sql(`INSERT INTO projects (id, name, path, created_at) VALUES (?, ?, ?, ?)`).run(
       project.id,
@@ -375,16 +391,28 @@ export class Store {
         | "pinned"
         | "archived"
         | "team"
+        | "summary"
       >
     > & {
+      held?: string | null;
       error?: string | null;
+      pr?: Thread["pr"] | null;
     },
   ): Thread {
     const current = this.getThread(id);
     if (!current) throw new Error(`Unknown thread ${id}`);
     // Only activity moves a thread up the sidebar, not a settings change.
     const active = patch.status !== undefined || patch.title !== undefined;
-    const next = { ...current, ...patch, updatedAt: active ? Date.now() : current.updatedAt };
+    const { pr, held, error: _error, ...rest } = patch;
+    const next: Thread = {
+      ...current,
+      ...rest,
+      updatedAt: active ? Date.now() : current.updatedAt,
+    };
+    if (held === null) delete next.held;
+    else if (held) next.held = held;
+    if (pr === null) delete next.pr;
+    else if (pr) next.pr = pr;
     const error = patch.error === undefined ? (current.error ?? null) : patch.error;
     this.sql(
       `UPDATE threads SET status = ?, agent_id = ?, permission_mode = ?, title = ?, model = ?, workspace = ?, extra = ?, error = ?, updated_at = ? WHERE id = ?`,
@@ -445,13 +473,17 @@ export class Store {
     ).run(threadId, item.id, threadId, JSON.stringify(item));
   }
 
-  /** Messages from the user or an agent that contain `query`, newest first. */
+  /**
+   * Messages from the user or an agent that contain `query`, newest first. A team's own
+   * messages to its agents are left out: they are long, and not the user's words.
+   */
   searchItems(query: string, limit = 30): SearchHit[] {
     const pattern = `%${fold(query).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const rows = this.sql(
       `SELECT items.thread_id, items.id, items.data FROM items
          JOIN threads ON threads.id = items.thread_id
          WHERE json_extract(items.data, '$.kind') IN ('user', 'agent')
+           AND json_extract(items.data, '$.byTeam') IS NOT 1
            AND moon_fold(json_extract(items.data, '$.text')) LIKE ? ESCAPE '\\'
          ORDER BY threads.updated_at DESC, items.seq DESC
          LIMIT ?`,

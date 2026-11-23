@@ -20,6 +20,7 @@ import {
   ensureWorktree,
   githubRepo,
   parseDiff,
+  prTitle,
   removeWorktree,
   restoreCheckpoint,
   saveCheckpoint,
@@ -397,6 +398,15 @@ describe("git helpers", () => {
     expect(githubRepo("/tmp/remote.git")).toBeUndefined();
   });
 
+  it("makes a one-line pull request title GitHub takes, from a long task over several lines", () => {
+    expect(prTitle("Corrige  le bug\n\net ajoute un test")).toBe(
+      "Corrige le bug et ajoute un test",
+    );
+    const long = prTitle("mot ".repeat(100));
+    expect(long).toHaveLength(100);
+    expect(long.endsWith("…")).toBe(true);
+  });
+
   it("names branches after the thread, readable and safe for git", () => {
     expect(branchName("Corrige l'écran « Réglages » !", "abcdef123")).toBe(
       "moon/corrige-l-ecran-reglages-abcdef",
@@ -457,7 +467,7 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     expect(existsSync(dir)).toBe(false);
     // The branch stays, with nothing of the thread lost.
     expect(git(repo, "branch", "--list", branch)).toContain(branch);
-    expect(() => hub.send(threadId, "Deux")).toThrow("archivé");
+    expect(() => hub.send(threadId, "Deux")).toThrow("résolu");
 
     await hub.setArchived(threadId, false);
     expect(store.getThread(threadId)?.archived).toBeUndefined();
@@ -614,12 +624,12 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     const first = store.listItems(threadId).find((i) => i.kind === "user")!;
     await hub.setArchived(threadId, true);
 
-    await expect(hub.review(threadId)).rejects.toThrow("archivé");
-    await expect(hub.ship(threadId, "msg", false)).rejects.toThrow("archivé");
-    await expect(hub.restore(threadId, first.id)).rejects.toThrow("archivé");
-    await expect(hub.setModel(threadId, "x")).rejects.toThrow("archivé");
-    await expect(hub.setSetting(threadId, "mode", "x")).rejects.toThrow("archivé");
-    await expect(hub.switchAgent(threadId, "other")).rejects.toThrow("archivé");
+    await expect(hub.review(threadId)).rejects.toThrow("résolu");
+    await expect(hub.ship(threadId, "msg", false)).rejects.toThrow("résolu");
+    await expect(hub.restore(threadId, first.id)).rejects.toThrow("résolu");
+    await expect(hub.setModel(threadId, "x")).rejects.toThrow("résolu");
+    await expect(hub.setSetting(threadId, "mode", "x")).rejects.toThrow("résolu");
+    await expect(hub.switchAgent(threadId, "other")).rejects.toThrow("résolu");
 
     // The project's folder has moved: the worktree cannot be made again.
     renameSync(repo, `${repo}-ailleurs`);
@@ -720,6 +730,27 @@ describe("teams", () => {
     expect(asked?.kind === "user" && asked.text).toContain("Ajoute une ligne sur answer");
   });
 
+  it("tells the lead the team's real state when the user writes to it, unseen in the thread", async () => {
+    const { hub, store, projectId } = repository();
+    const client = { send: () => {} };
+    hub.connect(client);
+    const leadId = team(hub, projectId, "Corrige answer et documente-la");
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    await hub.handle(client, { type: "thread.send", threadId: leadId, text: "ETA" });
+    // The demo agent repeats what it was asked: the lead got the state before the message.
+    const reply = () =>
+      store
+        .listItems(leadId)
+        .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
+        .at(-1) ?? "";
+    await expect.poll(reply, { timeout: 10_000 }).toContain("ETA");
+    expect(reply()).toContain("Phase : terminée");
+    expect(reply()).toContain("« Corriger answer » : terminée, fusionnée.");
+    // The user's bubble holds only what they wrote.
+    expect(asked(store, leadId).at(-1)).toBe("ETA");
+    await hub.cancel(leadId);
+  }, 40_000);
+
   it("merges every piece's branch onto one, in a thread the user can review and ship", async () => {
     const { hub, store, repo, projectId } = repository();
     const leadId = team(hub, projectId, "Corrige answer et documente-la");
@@ -751,6 +782,73 @@ describe("teams", () => {
       "equipe/documenter-answer.md",
     ]);
   });
+
+  it("pushes its branch by itself once done, as a cloud agent would, or says why it could not", async () => {
+    const { hub, store, repo, remote, projectId } = repository();
+    const leadId = team(hub, projectId, "Corrige answer et documente-la");
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    // The remote is no GitHub repository: the branch is pushed, with no pull request to open.
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.shipped, { timeout: 10_000 })
+      .toEqual({ opened: false });
+    const branch = store.getThread(store.getThread(leadId)!.team!.mergeThreadId!)!.workspace!
+      .branch;
+    expect(git(remote, "show", `${branch}:equipe/corriger-answer.md`)).toBe("# Corriger answer");
+
+    // Without a remote, the team stays done and says why; asked again, it tries again.
+    git(repo, "remote", "remove", "origin");
+    const client = { send: () => {} };
+    hub.connect(client);
+    await expect(
+      hub.handle(client, { type: "team.ship", requestId: "s", threadId: leadId }),
+    ).resolves.toBeUndefined();
+    expect(store.getThread(leadId)?.team).toMatchObject({
+      phase: "done",
+      shipError: expect.stringContaining("remote"),
+    });
+  }, 40_000);
+
+  it("waits for the user when asked to, pushes once for two asks at once, and says a cut push", async () => {
+    const { hub, store, remote, projectId } = repository();
+    const leadId = hub.startTeam({
+      projectId,
+      task: "Corrige answer et documente-la",
+      lead: { agentId: "demo" },
+      coder: { agentId: "demo" },
+      coders: 2,
+      permissionMode: "full",
+      autoShip: false,
+    });
+    await expect.poll(() => store.getThread(leadId)?.team?.phase, { timeout: 30_000 }).toBe("done");
+    // Asked not to, the team pushes nothing by itself.
+    await new Promise((r) => setTimeout(r, 300));
+    const branch = store.getThread(store.getThread(leadId)!.team!.mergeThreadId!)!.workspace!
+      .branch;
+    expect(store.getThread(leadId)?.team).not.toHaveProperty("shipping");
+    expect(() => git(remote, "rev-parse", "--verify", branch)).toThrow();
+
+    // Two asks at once make one push, and neither leaves an error behind.
+    const client = { send: () => {} };
+    hub.connect(client);
+    const ask = (requestId: string) =>
+      hub.handle(client, { type: "team.ship", requestId, threadId: leadId });
+    const both = Promise.all([ask("a"), ask("b")]);
+    expect(store.getThread(leadId)?.team?.shipping).toBe(true);
+    await both;
+    const team = store.getThread(leadId)!.team!;
+    expect(team.shipped).toEqual({ opened: false });
+    expect(team).not.toHaveProperty("shipError");
+    expect(team).not.toHaveProperty("shipping");
+    expect(git(remote, "rev-parse", "--verify", branch)).toBeTruthy();
+
+    // A push cut off by a stop is said so after the restart, to be tried again.
+    store.updateThread(leadId, { team: { ...team, shipping: true } });
+    hub.teams.recover();
+    expect(store.getThread(leadId)?.team).toMatchObject({
+      shipError: expect.stringContaining("réessaie"),
+    });
+    expect(store.getThread(leadId)?.team).not.toHaveProperty("shipping");
+  }, 40_000);
 
   it("leaves a conflict to the user without a merger, and merges on once it is settled", async () => {
     const { hub, store, repo, projectId } = repository();
@@ -864,7 +962,38 @@ describe("teams", () => {
       "stopped",
       "stopped",
     ]);
+
+    // Once stopped, the team is put away, brought back and deleted whole: no thread is left
+    // without its lead.
+    const memberIds = store
+      .listThreads()
+      .filter((t) => t.parentId === leadId)
+      .map((t) => t.id);
+    expect(memberIds.length).toBeGreaterThanOrEqual(2);
+    await hub.setArchived(leadId, true);
+    for (const id of [leadId, ...memberIds]) expect(store.getThread(id)?.archived).toBe(true);
+    await hub.setArchived(leadId, false);
+    for (const id of [leadId, ...memberIds]) expect(store.getThread(id)?.archived).toBeUndefined();
     await hub.deleteThread(leadId);
+    for (const id of [leadId, ...memberIds]) expect(store.getThread(id)).toBeUndefined();
+  });
+
+  it("gives the lead's access to the whole team, and to the agents it starts later", async () => {
+    const { hub, store, projectId } = repository();
+    const leadId = team(hub, projectId, "Corrige answer", "supervised");
+    await expect
+      .poll(() => store.getThread(leadId)?.team?.tasks.filter((t) => t.threadId).length, {
+        timeout: 30_000,
+      })
+      .toBe(2);
+    hub.setPermissionMode(leadId, "full");
+    const lead = store.getThread(leadId)!;
+    expect(lead.permissionMode).toBe("full");
+    expect(lead.team!.permissionMode).toBe("full");
+    for (const t of lead.team!.tasks)
+      expect(store.getThread(t.threadId!)?.permissionMode).toBe("full");
+    await hub.teams.stop(leadId);
+    for (const t of store.getThread(leadId)!.team!.tasks) await hub.whenIdle(t.threadId!);
   });
 
   it("has each piece reviewed then tested in its coder's folder before it counts as done", async () => {
@@ -895,7 +1024,8 @@ describe("teams", () => {
         role: "reviewer",
         parentId: leadId,
         worksIn: coder.id,
-        permissionMode: "supervised",
+        // The team's access; the hub still asks before a reviewer changes a file.
+        permissionMode: "full",
       });
       expect(reviewer.workspace).toBeUndefined();
       expect(tester).toMatchObject({ role: "tester", worksIn: coder.id, permissionMode: "full" });
@@ -987,7 +1117,8 @@ describe("teams", () => {
     // The project goes whole, reviewers first, though they work in their coders' folders.
     await hub.removeProject(projectId);
     expect(store.listThreads()).toEqual([]);
-  });
+    // Its waits allow a minute: Windows runners take about 15 s for the whole round.
+  }, 90_000);
 
   it("marks a team cut short by a stop of the server, keeping what was done", async () => {
     const { hub, store, root, projectId } = repository();

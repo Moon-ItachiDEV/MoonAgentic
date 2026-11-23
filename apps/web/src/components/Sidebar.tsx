@@ -1,29 +1,47 @@
 import type { Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { waitingCount } from "../project-threads.ts";
 import { readPref, writePref } from "../prefs.ts";
-import { recentAlwaysShown } from "../recent.ts";
+import { RECENT, recentAlwaysShown } from "../recent.ts";
+import {
+  childrenOf as membersOf,
+  conversationsByProject,
+  lineStatus,
+  projectOpen,
+  teamOpen,
+  type LineStatus,
+} from "../sidebar-tree.ts";
 import {
   IconArchive,
-  IconBoard,
   IconChevron,
+  IconClock,
   IconClose,
   IconCompose,
   IconFolder,
+  IconList,
   IconGear,
+  IconMore,
   IconPin,
   IconPlug,
+  IconPlus,
   IconSearch,
+  IconSidebar,
   IconShield,
 } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
+import { Presence } from "./Presence.tsx";
 
-function ThreadStatus({ thread }: { thread: Thread }) {
-  if (thread.status === "running") return <span className="spin" aria-label="En cours" />;
-  if (thread.status === "waiting")
+/** A menu this tall always fits: it opens upwards when the row is that close to the bottom. */
+const MENU_ROOM = 150;
+
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
+
+function ThreadStatus({ status }: { status: LineStatus }) {
+  if (status === "running") return <span className="spin" aria-label="En cours" />;
+  if (status === "waiting")
     return <span className="dot" title="Attend ta réponse" aria-label="Attend ta réponse" />;
-  if (thread.status === "error")
-    return <span className="dot err" title="Erreur" aria-label="Erreur" />;
+  if (status === "error") return <span className="dot err" title="Erreur" aria-label="Erreur" />;
   return null;
 }
 
@@ -33,82 +51,366 @@ export function Sidebar(props: {
   activeProjectId: string | undefined;
   /** True on the planner's page. */
   onPlanner: boolean;
+  /** True on a project's page. */
+  onProject: boolean;
   onOpenPlanner: () => void;
+  /** The planner's « Planifiées » view: the tasks MoonAgentic starts by itself. */
+  onOpenSchedules: () => void;
   onNewThread: () => void;
   onNewProject: () => void;
   onOpenConnections: () => void;
   onOpenRequests: () => void;
+  /** Shows the project: its planner on the planner's page, else its new conversation. */
   onPickProject: (id: string) => void;
+  /** Starts a new conversation in the project. */
+  onNewInProject: (id: string) => void;
   onOpenThread: (id: string) => void;
   onTogglePin: (id: string, pinned: boolean) => void;
+  onSetArchived: (id: string, archived: boolean) => void;
+  /** Asks before deleting the thread. */
+  onDeleteThread: (thread: Thread) => void;
   onRemoveProject: (id: string) => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
+  /** Folds the side bar away, on a computer. */
+  onCollapse: () => void;
 }) {
   const { state } = props;
   const available = state.agents.filter((a) => a.available).length;
-  const countByProject = new Map<string, number>();
-  for (const t of state.threads)
-    countByProject.set(t.projectId, (countByProject.get(t.projectId) ?? 0) + 1);
-
-  const [showArchived, setShowArchived] = useState(false);
-  const [showAll, setShowAll] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(() => readPref("projectsOpen") !== "false");
-  const live = state.threads.filter((t) => !t.archived);
-  const archived = state.threads.filter((t) => t.archived);
-  // A coder's thread sits under its lead's, wherever the lead is listed.
-  const listed = new Set(live.map((t) => t.id));
-  const childrenOf = new Map<string, Thread[]>();
-  for (const t of live) {
-    if (t.parentId && listed.has(t.parentId)) {
-      childrenOf.set(t.parentId, [...(childrenOf.get(t.parentId) ?? []), t]);
+  // Each project folded or not, as the user left it.
+  const [folds, setFolds] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(readPref("projectFolds") ?? "{}") as Record<string, boolean>;
+    } catch {
+      return {};
     }
-  }
-  const top = live.filter((t) => !(t.parentId && listed.has(t.parentId)));
-  // A team's reviewers and testers are reached from its card; they show here only while
-  // open, pinned, or waiting on the user.
-  const shown = (t: Thread) =>
-    (t.role !== "reviewer" && t.role !== "tester") ||
-    t.id === props.activeThreadId ||
-    t.pinned ||
-    t.status === "waiting";
-  const pinned = top.filter((t) => t.pinned);
-  const recent = top.filter((t) => !t.pinned);
-  const { always, foldable } = recentAlwaysShown(recent, childrenOf, props.activeThreadId);
-  const recentShown = showAll ? recent : always;
-  // Coders in the order the lead handed out their pieces.
-  const tree = (t: Thread) => [
-    row(t),
-    ...(childrenOf.get(t.id) ?? [])
-      .filter(shown)
-      .sort((a, b) => a.createdAt - b.createdAt)
-      .map((c) => row(c, true)),
-  ];
-  const row = (t: Thread, child = false) => (
-    <div key={t.id} className={`thr-row${t.pinned ? " pinned" : ""}${child ? " child" : ""}`}>
+  });
+  const setFold = (id: string, open: boolean) => {
+    const next = { ...folds, [id]: open };
+    setFolds(next);
+    writePref("projectFolds", JSON.stringify(next));
+  };
+  // Projects and teams whose every line is shown, past « Voir plus », or whose members are.
+  const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
+  const toggle = (key: string) => {
+    const next = new Set(unfolded);
+    if (!next.delete(key)) next.add(key);
+    setUnfolded(next);
+  };
+
+  // The row whose « … » menu is open (a thread can be listed twice: by its line's key), and where its button is on screen.
+  const [menu, setMenu] = useState<{
+    id: string;
+    key: string;
+    x: number;
+    y: number;
+    up: boolean;
+  } | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuThread = state.threads.find((t) => t.id === menu?.id);
+  const menuOpen = !!menu && !!menuThread;
+  useEffect(() => {
+    if (!menuOpen) return;
+    const away = (event: PointerEvent) => {
+      const target = event.target as Element;
+      // Its own button closes it by itself.
+      if (!menuRef.current?.contains(target) && !target.closest(".thr-row .acts")) setMenu(null);
+    };
+    const escape = (event: KeyboardEvent) => event.key === "Escape" && setMenu(null);
+    const moved = () => setMenu(null);
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", escape);
+    window.addEventListener("resize", moved);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", moved);
+    };
+  }, [menuOpen]);
+  const act = (run: () => void) => () => {
+    setMenu(null);
+    run();
+  };
+
+  const scheduled = state.schedules.filter((s) => s.enabled).length;
+  const live = state.threads.filter((t) => !t.archived);
+  // A resolved team counts once, as its lead: its members are put away with it.
+  const resolvedLeads = new Set(state.threads.filter((t) => t.archived).map((t) => t.id));
+  const archived = state.threads.filter(
+    (t) => t.archived && !(t.parentId && resolvedLeads.has(t.parentId)),
+  );
+  const members = membersOf(live);
+  const byProject = conversationsByProject(live);
+  const active = live.find((t) => t.id === props.activeThreadId);
+  const activeLead =
+    active?.parentId && members.has(active.parentId) ? active.parentId : active?.id;
+  // Keys of the currently open team that the user folded during this visit; reset when
+  // moving to another team, so visited teams fold back automatically on leave.
+  const [foldedActive, setFoldedActive] = useState<{
+    lead: string | undefined;
+    keys: ReadonlySet<string>;
+  }>({ lead: undefined, keys: new Set() });
+  const foldedForLead = foldedActive.lead === activeLead ? foldedActive.keys : EMPTY_KEYS;
+  const toggleTeam = (key: string, isActive: boolean) => {
+    if (!isActive) return toggle(key);
+    const next = new Set(foldedForLead);
+    if (next.delete(key)) {
+      setFoldedActive({ lead: activeLead, keys: next });
+      return;
+    }
+    next.add(key);
+    setFoldedActive({ lead: activeLead, keys: next });
+    if (unfolded.has(key)) toggle(key);
+  };
+  // Opening a thread unfolds its project once, even when multi-project defaults it folded.
+  const activeProject = active?.projectId;
+  useEffect(() => {
+    setFoldedActive((prev) =>
+      prev.keys.size === 0 ? prev : { lead: activeLead, keys: new Set() },
+    );
+    if (activeProject && !projectOpen(folds[activeProject], state.projects.length === 1)) {
+      setFold(activeProject, true);
+    }
+    // Only when the open thread changes, not on every fold.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeProject, activeLead]);
+  const known = new Set(state.projects.map((p) => p.id));
+  const pinned = [...byProject.values()].flat().filter((t) => t.pinned);
+  // Across projects, only when there are several; a thread whose project is gone too.
+  const recent = [...byProject.values()]
+    .flat()
+    .filter((t) => !t.pinned && (state.projects.length > 1 || !known.has(t.projectId)))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, RECENT);
+
+  // A team on one line, its members folded under it unless asked or one of them is open.
+  const tree = (t: Thread, prefix: string) => {
+    const team = members.get(t.id) ?? [];
+    const key = `${prefix}${t.id}`;
+    const isActive = activeLead === t.id;
+    const open = team.length > 0 && teamOpen(key, isActive, unfolded, foldedForLead);
+    return [
+      row(t, {
+        status: lineStatus(t, open ? [] : team),
+        team: team.length ? { open, toggle: () => toggleTeam(key, isActive) } : undefined,
+        key,
+      }),
+      ...(open ? team.map((c) => row(c, { child: true, key: `${prefix}${c.id}` })) : []),
+    ];
+  };
+  const row = (
+    t: Thread,
+    opts: {
+      key: string;
+      child?: boolean;
+      status?: LineStatus;
+      team?: { open: boolean; toggle: () => void } | undefined;
+    },
+  ) => (
+    <div
+      key={opts.key}
+      className={`thr-row has-more${t.pinned ? " pinned" : ""}${opts.child ? " child" : ""}${opts.team ? " lead" : ""}${menu?.key === opts.key ? " menu-open" : ""}`}
+    >
+      {opts.team && (
+        <button
+          className={`fold-team${opts.team.open ? " open" : ""}`}
+          aria-expanded={opts.team.open}
+          aria-label={`${opts.team.open ? "Replier" : "Déplier"} l'équipe ${t.title}`}
+          onClick={opts.team.toggle}
+        >
+          <IconChevron size={11} />
+        </button>
+      )}
       <button
         className={`thr${t.id === props.activeThreadId ? " on" : ""}`}
         onClick={() => props.onOpenThread(t.id)}
       >
         <span className="t">{t.title}</span>
-        <ThreadStatus thread={t} />
+        <ThreadStatus status={opts.status ?? lineStatus(t)} />
       </button>
-      {!t.archived && (
+      {/* A pinned thread keeps its pin in sight; the rest is behind « … ». */}
+      {!t.archived && t.pinned && (
         <button
           className="pin"
-          aria-pressed={!!t.pinned}
-          aria-label={t.pinned ? `Désépingler ${t.title}` : `Épingler ${t.title}`}
-          title={t.pinned ? "Désépingler" : "Épingler"}
-          onClick={() => props.onTogglePin(t.id, !t.pinned)}
+          aria-pressed
+          aria-label={`Désépingler ${t.title}`}
+          title="Désépingler"
+          onClick={() => props.onTogglePin(t.id, false)}
         >
-          <IconPin filled={!!t.pinned} />
+          <IconPin filled />
         </button>
       )}
+      <button
+        className="pin acts"
+        aria-label={`Actions de ${t.title}`}
+        title="Actions"
+        aria-haspopup="menu"
+        aria-expanded={menu?.key === opts.key}
+        onClick={(e) => {
+          if (menu?.key === opts.key) return setMenu(null);
+          const box = e.currentTarget.getBoundingClientRect();
+          const up = box.bottom + MENU_ROOM > window.innerHeight;
+          setMenu({
+            id: t.id,
+            key: opts.key,
+            x: box.right,
+            y: up ? box.top - 4 : box.bottom + 4,
+            up,
+          });
+        }}
+      >
+        <IconMore size={15} />
+      </button>
     </div>
   );
 
+  const project = (p: State["projects"][number]) => {
+    // Pinned ones too: « Épinglés » is a shortcut, the project still holds them.
+    const all = byProject.get(p.id) ?? [];
+    const open = projectOpen(folds[p.id], state.projects.length === 1);
+    const { always, foldable } = recentAlwaysShown(all, members, props.activeThreadId);
+    const more = unfolded.has(`more:${p.id}`);
+    const count = byProject.get(p.id)?.length ?? 0;
+    const waiting = waitingCount(live, p.id);
+    // Put away inside their project, as a folder of its own: never beside the projects.
+    const resolved = archived.filter((t) => t.projectId === p.id);
+    const resolvedOpen = unfolded.has(`resolved:${p.id}`);
+    return [
+      <div key={p.id} className={`thr-row proj${open ? " open" : ""}`}>
+        <button
+          className="fold-proj"
+          aria-expanded={open}
+          aria-label={`${open ? "Replier" : "Déplier"} le projet ${p.name}`}
+          onClick={() => setFold(p.id, !open)}
+        >
+          <IconFolder />
+          <IconChevron size={11} />
+        </button>
+        <button
+          className={`thr${props.onProject && p.id === props.activeProjectId ? " on" : ""}`}
+          title={p.path}
+          onClick={() => {
+            if (!open) setFold(p.id, true);
+            props.onPickProject(p.id);
+          }}
+        >
+          <span className="t">{p.name}</span>
+          {waiting > 0 && (
+            <span
+              className="dot"
+              title={`${waiting} en attente`}
+              aria-label={`${waiting} en attente`}
+            />
+          )}
+          <span className="aux" title={`${count} discussion${count > 1 ? "s" : ""}`}>
+            {count || ""}
+          </span>
+        </button>
+        <button
+          className="pin new"
+          aria-label={`Nouvelle discussion dans ${p.name}`}
+          title="Nouvelle discussion"
+          onClick={() => props.onNewInProject(p.id)}
+        >
+          <IconPlus size={14} />
+        </button>
+        <button
+          className="pin"
+          aria-label={`Retirer le projet ${p.name}`}
+          title="Retirer de MoonAgentic"
+          onClick={() => props.onRemoveProject(p.id)}
+        >
+          <IconClose />
+        </button>
+      </div>,
+      open && (
+        <div key={`${p.id}:items`} className="proj-items">
+          {[
+            ...(all.length === 0 && resolved.length === 0
+              ? [
+                  <div key={`${p.id}:empty`} className="empty-note">
+                    Aucune discussion.
+                  </div>,
+                ]
+              : []),
+            ...(more ? all : always).flatMap((t) => tree(t, "")),
+            ...(foldable > 0
+              ? [
+                  <button
+                    key={`${p.id}:more`}
+                    className="more"
+                    aria-expanded={more}
+                    onClick={() => toggle(`more:${p.id}`)}
+                  >
+                    {more ? "Voir moins" : `Voir plus (${foldable})`}
+                  </button>,
+                ]
+              : []),
+            ...(resolved.length > 0
+              ? [
+                  <button
+                    key={`${p.id}:resolved`}
+                    className={`more resolved${resolvedOpen ? " open" : ""}`}
+                    aria-expanded={resolvedOpen}
+                    onClick={() => toggle(`resolved:${p.id}`)}
+                  >
+                    <IconArchive size={13} />
+                    Résolus ({resolved.length})
+                    <IconChevron size={11} />
+                  </button>,
+                  ...(resolvedOpen
+                    ? resolved.map((t) => row(t, { key: `resolved:${t.id}`, child: true }))
+                    : []),
+                ]
+              : []),
+          ]}
+        </div>
+      ),
+    ];
+  };
+
   return (
-    <aside className="side">
+    <aside className="side" onScrollCapture={() => menu && setMenu(null)}>
+      <Presence show={menuOpen}>
+        {menu && menuThread && (
+          <>
+            <div className="menu-scrim" onClick={() => setMenu(null)} />
+            <div
+              ref={menuRef}
+              className={`menu row-menu${menu.up ? " up" : ""}`}
+              role="menu"
+              aria-label={`Actions de ${menuThread.title}`}
+              style={{ "--x": `${menu.x}px`, "--y": `${menu.y}px` } as React.CSSProperties}
+            >
+              {!menuThread.archived && (
+                <button
+                  role="menuitem"
+                  onClick={act(() => props.onTogglePin(menuThread.id, !menuThread.pinned))}
+                >
+                  <IconPin filled={!!menuThread.pinned} />
+                  {menuThread.pinned ? "Désépingler" : "Épingler"}
+                </button>
+              )}
+              <button
+                role="menuitem"
+                onClick={act(() => props.onSetArchived(menuThread.id, !menuThread.archived))}
+              >
+                <IconArchive />
+                {menuThread.archived ? "Rouvrir" : "Marquer résolu"}
+              </button>
+              <button
+                role="menuitem"
+                className="danger"
+                onClick={act(() => props.onDeleteThread(menuThread))}
+              >
+                <IconClose />
+                Supprimer…
+              </button>
+            </div>
+          </>
+        )}
+      </Presence>
       <div className="side-top">
         <Wordmark />
         <button
@@ -119,7 +421,15 @@ export function Sidebar(props: {
           } MCP`}
           onClick={props.onOpenConnections}
         >
-          <IconPlug size={17} />
+          <IconPlug size={16} />
+        </button>
+        <button
+          className="ib side-fold"
+          aria-label="Masquer la barre latérale"
+          title="Masquer la barre latérale"
+          onClick={props.onCollapse}
+        >
+          <IconSidebar />
         </button>
       </div>
       <nav className="nav">
@@ -129,10 +439,7 @@ export function Sidebar(props: {
             <span className="aux badge">{state.requests.length}</span>
           </button>
         )}
-        <button
-          className={!props.activeThreadId && !props.onPlanner ? "on" : ""}
-          onClick={props.onNewThread}
-        >
+        <button onClick={props.onNewThread}>
           <IconCompose />
           Nouvelle discussion
         </button>
@@ -140,12 +447,17 @@ export function Sidebar(props: {
           <IconFolder />
           Nouveau projet
         </button>
+        <button onClick={props.onOpenSchedules}>
+          <IconClock />
+          Tâches planifiées
+          {scheduled > 0 && <span className="aux">{scheduled}</span>}
+        </button>
         <button
           className={props.onPlanner ? "on" : ""}
           aria-current={props.onPlanner ? "page" : undefined}
           onClick={props.onOpenPlanner}
         >
-          <IconBoard />
+          <IconList />
           Planner
         </button>
       </nav>
@@ -164,47 +476,11 @@ export function Sidebar(props: {
         {projectsOpen && state.ready && state.projects.length === 0 && (
           <div className="empty-note">Aucun projet pour l'instant.</div>
         )}
-        {(projectsOpen ? state.projects : []).map((p) => (
-          <div key={p.id} className="thr-row proj">
-            <button
-              className={`thr${!props.activeThreadId && p.id === props.activeProjectId ? " on" : ""}`}
-              title={p.path}
-              onClick={() => props.onPickProject(p.id)}
-            >
-              <IconFolder />
-              <span className="t">{p.name}</span>
-              <span className="aux">{countByProject.get(p.id) ?? ""}</span>
-            </button>
-            <button
-              className="pin"
-              aria-label={`Retirer le projet ${p.name}`}
-              title="Retirer de MoonAgentic"
-              onClick={() => props.onRemoveProject(p.id)}
-            >
-              <IconClose />
-            </button>
-          </div>
-        ))}
+        {(projectsOpen ? state.projects : []).flatMap(project)}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
-        {pinned.flatMap(tree)}
+        {pinned.flatMap((t) => tree(t, "pin:"))}
         {recent.length > 0 && <div className="sec-h">Récents</div>}
-        {recentShown.flatMap(tree)}
-        {foldable > 0 && (
-          <button className="more" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>
-            {showAll ? "Voir moins" : `Voir plus (${foldable})`}
-          </button>
-        )}
-        {archived.length > 0 && (
-          <button
-            className="sec-h arch-toggle"
-            aria-expanded={showArchived}
-            onClick={() => setShowArchived(!showArchived)}
-          >
-            <IconArchive size={13} />
-            Archivés ({archived.length})
-          </button>
-        )}
-        {showArchived && archived.map((t) => row(t))}
+        {recent.flatMap((t) => tree(t, "recent:"))}
       </div>
       {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}
       <div className="side-foot">

@@ -1,6 +1,6 @@
 import type { Schedule, Thread } from "@moonagentic/protocol";
-import { useEffect, useState, useSyncExternalStore } from "react";
-import { Composer } from "./components/Composer.tsx";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Composer, useNarrow } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
@@ -9,7 +9,9 @@ import {
   IconBack,
   IconCode,
   IconShield,
+  IconArrowLeft,
   IconMenu,
+  IconSidebar,
   IconCompose,
   IconFile,
   IconArchive,
@@ -23,13 +25,16 @@ import {
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
-import { Planner } from "./components/Planner.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
+import { ProjectRequests, projectRequests } from "./components/ProjectRequests.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
-import { SettingsNav, SettingsPage } from "./components/Settings.tsx";
+import { ProjectPage } from "./components/ProjectPage.tsx";
+import { HomeCards } from "./components/HomeCards.tsx";
+import { coordinatorOf, listedThreads } from "./project-threads.ts";
 import { Sidebar } from "./components/Sidebar.tsx";
+import { TabBar } from "./components/TabBar.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { TeamDialog } from "./components/TeamDialog.tsx";
@@ -42,10 +47,43 @@ import { navigate, useRoute } from "./router.ts";
 
 export { ErrorBoundary };
 
+// The planner and the settings are loaded on demand, so they stay out of the main chunk.
+const Planner = lazy(() =>
+  import("./components/Planner.tsx").then((m) => ({ default: m.Planner })),
+);
+const SettingsNav = lazy(() =>
+  import("./components/Settings.tsx").then((m) => ({ default: m.SettingsNav })),
+);
+const SettingsPage = lazy(() =>
+  import("./components/Settings.tsx").then((m) => ({ default: m.SettingsPage })),
+);
+
+/** Wide enough for a project's threads beside its coordinator's conversation. */
+const WIDE = "(min-width: 1180px)";
+const wideQuery = typeof matchMedia === "function" ? matchMedia(WIDE) : undefined;
+const useWide = () =>
+  useSyncExternalStore(
+    (changed) => {
+      wideQuery?.addEventListener("change", changed);
+      return () => wideQuery?.removeEventListener("change", changed);
+    },
+    () => wideQuery?.matches ?? true,
+  );
+
 export function App() {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
   const route = useRoute();
   const [drawer, setDrawer] = useState(false);
+  // The phone's home page: live conversations above the composer, tabs below it.
+  const narrow = useNarrow();
+  // On a computer, the side bar can be folded away, as in the mockup.
+  const [sideOff, setSideOff] = useState(() => readPref("sideOff") === "true");
+  const foldSide = (off: boolean) => {
+    setSideOff(off);
+    writePref("sideOff", String(off));
+  };
+  /** Bumped to open the planner again on the view just chosen. */
+  const [plannerShown, setPlannerShown] = useState(0);
   const [creatingProject, setCreatingProject] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
@@ -70,14 +108,48 @@ export function App() {
     return () => document.removeEventListener("keydown", open);
   }, []);
 
+  const wide = useWide();
+  /** On a narrow screen, what the project's page shows: the coordinator or the threads. */
+  const [projectTab, setProjectTab] = useState<"chat" | "threads">("chat");
+  // Lists show every thread but the coordinators.
+  const listed = useMemo(() => ({ ...state, threads: listedThreads(state.threads) }), [state]);
+  // A coordinator lives on its project's page: its own address, reached from a notification
+  // or an old link, leads there, and « back » does not come here again.
+  const strayProjectId =
+    route.name === "thread"
+      ? state.threads.find((t) => t.id === route.threadId && t.kind === "coordinator")?.projectId
+      : undefined;
+  useEffect(() => {
+    if (!strayProjectId) return;
+    setProjectTab("chat");
+    navigate({ name: "project", projectId: strayProjectId }, { replace: true });
+  }, [strayProjectId]);
+  // Another project's page starts on its coordinator, not on the tab left open before.
+  const pageProjectId = route.name === "project" ? route.projectId : undefined;
+  // Coming back to the same project from one of its threads keeps the tab.
+  const lastPage = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!pageProjectId) return;
+    if (lastPage.current && lastPage.current !== pageProjectId) setProjectTab("chat");
+    lastPage.current = pageProjectId;
+  }, [pageProjectId]);
+
   if (state.status === "unauthorized") return <Unauthorized />;
 
   const thread: Thread | undefined =
     route.name === "thread" ? state.threads.find((t) => t.id === route.threadId) : undefined;
+  // A project's page shows that project; elsewhere, the open thread's or the one last picked.
+  const routeProject =
+    route.name === "project" ? state.projects.find((p) => p.id === route.projectId) : undefined;
   const project =
+    routeProject ??
     state.projects.find((p) => p.id === (thread?.projectId ?? pickedProjectId)) ??
     state.projects[0];
 
+  // On a project's page, the conversation is its coordinator's, once it has one.
+  const coordinator = routeProject ? coordinatorOf(state.threads, routeProject.id) : undefined;
+  /** The thread the composer writes to. */
+  const spoken = thread ?? coordinator;
   const pickProject = (id: string) => {
     setPickedProjectId(id);
     writePref("project", id);
@@ -87,28 +159,41 @@ export function App() {
     setReviewOpen(false);
     navigate(next);
   };
+  /** Opens a thread where it lives: a coordinator on its project's page. */
+  const openThread = (id: string) => {
+    const target = state.threads.find((t) => t.id === id);
+    if (target?.kind === "coordinator") {
+      setProjectTab("chat");
+      go({ name: "project", projectId: target.projectId });
+    } else go({ name: "thread", threadId: id });
+  };
   const togglePin = (id: string, pinned: boolean) =>
     connection.send({ type: "thread.setPinned", threadId: id, pinned });
   const exportThread = () => {
-    const items = thread && state.items[thread.id];
-    if (!thread || !items) return;
-    downloadMarkdown(exportFileName(thread.title), threadMarkdown(thread, items, state.agents));
+    const items = spoken && state.items[spoken.id];
+    if (!spoken || !items) return;
+    downloadMarkdown(exportFileName(spoken.title), threadMarkdown(spoken, items, state.agents));
   };
   const setArchived = (id: string, archived: boolean) =>
     connection.send({ type: "thread.setArchived", threadId: id, archived });
-  const askDeleteThread = (t: Thread) =>
+  const askDeleteThread = (t: Thread) => {
+    // A team goes whole: its lead's thread takes the members' with it.
+    const members = state.threads.filter((m) => m.parentId === t.id).length;
     setConfirm({
-      title: "Supprimer cette discussion ?",
-      text: t.workspace
-        ? `« ${t.title} » et sa copie de travail seront supprimées. Sa branche ${t.workspace.branch} reste dans le dépôt, avec ses commits.`
-        : `« ${t.title} » sera supprimée, avec tous ses messages.`,
+      title: members ? "Supprimer cette équipe ?" : "Supprimer cette discussion ?",
+      text: members
+        ? `« ${t.title} » et les ${members} fils de son équipe seront supprimés, avec leurs copies de travail. Leurs branches restent dans le dépôt, avec leurs commits.`
+        : t.workspace
+          ? `« ${t.title} » et sa copie de travail seront supprimées. Sa branche ${t.workspace.branch} reste dans le dépôt, avec ses commits.`
+          : `« ${t.title} » sera supprimée, avec tous ses messages.`,
       action: "Supprimer",
       // The box stays open, and says why, until the server has really deleted it.
       run: async () => {
         await connection.request({ type: "thread.delete", requestId: newId(), threadId: t.id });
-        if (thread?.id === t.id) go({ name: "home" });
+        if (thread?.id === t.id || thread?.parentId === t.id) go({ name: "home" });
       },
     });
+  };
   const askRemoveProject = (id: string) => {
     const p = state.projects.find((x) => x.id === id);
     if (!p) return;
@@ -119,7 +204,7 @@ export function App() {
       action: "Retirer",
       run: async () => {
         await connection.request({ type: "project.remove", requestId: newId(), projectId: id });
-        if (thread?.projectId === id) go({ name: "home" });
+        if (thread?.projectId === id || routeProject?.id === id) go({ name: "home" });
       },
     });
   };
@@ -131,7 +216,7 @@ export function App() {
         },
         { label: "Exporter en Markdown", run: exportThread },
         {
-          label: thread.archived ? "Désarchiver" : "Archiver",
+          label: thread.archived ? "Rouvrir" : "Marquer résolu",
           run: () => setArchived(thread.id, !thread.archived),
         },
         { label: "Supprimer…", danger: true, run: () => askDeleteThread(thread) },
@@ -165,7 +250,9 @@ export function App() {
           },
           { label: "Exporter cette discussion en Markdown", icon: <IconFile />, run: exportThread },
           {
-            label: thread.archived ? "Désarchiver cette discussion" : "Archiver cette discussion",
+            label: thread.archived
+              ? "Rouvrir cette discussion"
+              : "Marquer cette discussion résolue",
             icon: <IconArchive />,
             run: () => setArchived(thread.id, !thread.archived),
           },
@@ -183,7 +270,7 @@ export function App() {
 
   return (
     <div
-      className={`app${drawer ? " drawer" : ""}${route.name === "home" ? " home-route" : ""}${reviewing ? " reviewing" : ""}`}
+      className={`app${drawer ? " drawer" : ""}${sideOff && route.name !== "settings" ? " side-off" : ""}${route.name === "home" ? " home-route" : ""}${route.name === "thread" ? " in-thread" : ""}${reviewing ? " reviewing" : ""}`}
     >
       {route.name === "settings" ? (
         <ErrorBoundary
@@ -203,19 +290,29 @@ export function App() {
             </aside>
           )}
         >
-          <SettingsNav
-            section={route.section}
-            onPick={(section) => go({ name: "settings", section })}
-            onBack={() => go({ name: "home" })}
-          />
+          // Until the settings arrive, an empty side bar keeps the layout in place.
+          <Suspense fallback={<aside className="side set-side" aria-label="Réglages" />}>
+            <SettingsNav
+              section={route.section}
+              onPick={(section) => go({ name: "settings", section })}
+              onBack={() => go({ name: "home" })}
+            />
+          </Suspense>
         </ErrorBoundary>
       ) : (
         <Sidebar
-          state={state}
+          state={listed}
           activeThreadId={thread?.id}
           activeProjectId={project?.id}
           onPlanner={route.name === "planner"}
+          onProject={route.name === "project"}
           onOpenPlanner={() => go({ name: "planner" })}
+          onOpenSchedules={() => {
+            writePref("plannerView", "planifiees");
+            // A planner already open shows that view too.
+            setPlannerShown((n) => n + 1);
+            go({ name: "planner" });
+          }}
           onNewThread={() => go({ name: "home" })}
           onNewProject={() => {
             setDrawer(false);
@@ -231,11 +328,22 @@ export function App() {
           }}
           onPickProject={(id) => {
             pickProject(id);
-            // On the planner, picking a project shows that project's planner.
-            go(route.name === "planner" ? { name: "planner" } : { name: "home" });
+            // On the planner, picking a project shows that project's planner; anywhere else,
+            // its page, with its conversations grouped by state.
+            if (route.name === "planner") go({ name: "planner" });
+            else go({ name: "project", projectId: id });
+          }}
+          onNewInProject={(id) => {
+            pickProject(id);
+            go({ name: "home" });
           }}
           onOpenThread={(id) => go({ name: "thread", threadId: id })}
           onTogglePin={togglePin}
+          onSetArchived={setArchived}
+          onDeleteThread={(t) => {
+            setDrawer(false);
+            askDeleteThread(t);
+          }}
           onRemoveProject={(id) => {
             setDrawer(false);
             askRemoveProject(id);
@@ -245,16 +353,45 @@ export function App() {
             setDrawer(false);
             setSearchOpen(true);
           }}
+          onCollapse={() => foldSide(true)}
         />
       )}
       <div className="side-scrim" onClick={() => setDrawer(false)} />
       <main className="center">
         <header className="top">
-          <button className="ib mobile-only" aria-label="Menu" onClick={() => setDrawer(true)}>
+          <button
+            className="ib mobile-only menu-btn"
+            aria-label="Menu"
+            onClick={() => setDrawer(true)}
+          >
             <IconMenu />
           </button>
+          {route.name === "thread" && (
+            <button
+              className="ib back-home"
+              aria-label="Retour"
+              title="Retour"
+              onClick={() => go({ name: "home" })}
+            >
+              <IconArrowLeft />
+            </button>
+          )}
+          {sideOff && route.name !== "settings" && (
+            <button
+              className="ib open-side"
+              aria-label="Afficher la barre latérale"
+              title="Afficher la barre latérale"
+              onClick={() => foldSide(false)}
+            >
+              <IconSidebar />
+            </button>
+          )}
           <div className="ttl">
-            {route.name === "settings" ? "Réglages" : (thread?.title ?? "")}
+            {route.name === "settings"
+              ? "Réglages"
+              : route.name === "project"
+                ? (routeProject?.name ?? "")
+                : (thread?.title ?? "")}
           </div>
           {state.requests.length > 0 && (
             <button
@@ -298,17 +435,20 @@ export function App() {
         </header>
         {route.name === "settings" ? (
           <ErrorBoundary key="settings">
-            <SettingsPage
-              section={route.section}
-              agents={state.agents}
-              favorites={state.favorites}
-              projects={state.projects}
-              projectId={project?.id}
-              mcpServers={state.mcpServers}
-              onPickProject={pickProject}
-              onOpenConnections={() => setConnectionsOpen(true)}
-              onOpenMcp={() => setMcpOpen(true)}
-            />
+            <Suspense fallback={<div className="view" />}>
+              <SettingsPage
+                section={route.section}
+                agents={state.agents}
+                favorites={state.favorites}
+                coordinator={state.coordinator}
+                projects={state.projects}
+                projectId={project?.id}
+                mcpServers={state.mcpServers}
+                onPickProject={pickProject}
+                onOpenConnections={() => setConnectionsOpen(true)}
+                onOpenMcp={() => setMcpOpen(true)}
+              />
+            </Suspense>
           </ErrorBoundary>
         ) : route.name === "thread" ? (
           thread ? (
@@ -326,57 +466,189 @@ export function App() {
               </div>
             </div>
           )
+        ) : route.name === "project" ? (
+          routeProject ? (
+            (() => {
+              const page = (panel: boolean) => (
+                <ProjectPage
+                  // Another project starts afresh: a name being typed never follows to the next.
+                  key={routeProject.id}
+                  panel={panel}
+                  project={routeProject}
+                  threads={state.threads}
+                  agents={state.agents}
+                  ready={state.ready}
+                  onOpenThread={(id) => go({ name: "thread", threadId: id })}
+                  onNewThread={() => {
+                    pickProject(routeProject.id);
+                    go({ name: "home" });
+                  }}
+                  onTogglePin={togglePin}
+                  onSetResolved={setArchived}
+                  onDeleteThread={askDeleteThread}
+                  onOpenPlanner={() => {
+                    pickProject(routeProject.id);
+                    go({ name: "planner" });
+                  }}
+                  onRemoveProject={() => askRemoveProject(routeProject.id)}
+                  onStartCoordinator={
+                    coordinator
+                      ? undefined
+                      : async (agentId) => {
+                          await connection.request({
+                            type: "coordinator.open",
+                            requestId: newId(),
+                            projectId: routeProject.id,
+                            agentId,
+                          });
+                        }
+                  }
+                />
+              );
+              if (!coordinator) return page(false);
+              const chat = (
+                <ThreadView
+                  key={coordinator.id}
+                  thread={coordinator}
+                  items={state.items[coordinator.id]}
+                  agents={state.agents}
+                  threads={state.threads}
+                  onOpenThread={(id) => go({ name: "thread", threadId: id })}
+                />
+              );
+              // Wide enough: the conversation, the threads beside it. Else one at a time.
+              if (wide) {
+                return (
+                  <div className="pp-split">
+                    {chat}
+                    {page(true)}
+                  </div>
+                );
+              }
+              return (
+                <div className="pp-stack">
+                  <div className="pp-tabs" role="tablist" aria-label="Page du projet">
+                    <button
+                      role="tab"
+                      aria-selected={projectTab === "chat"}
+                      onClick={() => setProjectTab("chat")}
+                    >
+                      Coordinateur
+                    </button>
+                    <button
+                      role="tab"
+                      aria-selected={projectTab === "threads"}
+                      onClick={() => setProjectTab("threads")}
+                    >
+                      Fils
+                    </button>
+                  </div>
+                  {projectTab === "chat" ? chat : page(false)}
+                </div>
+              );
+            })()
+          ) : (
+            <div className="view">
+              <div className="home">
+                <p className="greet-sub">
+                  {state.ready ? "Ce projet n'existe plus." : "Chargement…"}
+                </p>
+              </div>
+            </div>
+          )
         ) : route.name === "planner" ? (
           <ErrorBoundary key={`planner:${project?.id ?? ""}`}>
-            <Planner
-              key={project?.id}
-              project={project}
-              plan={state.plan}
-              schedules={state.schedules}
-              onSchedule={(schedule) =>
-                setScheduling(schedule ? { text: "", schedule } : { text: "" })
-              }
-              threads={state.threads}
-              agents={state.agents}
-              onOpenThread={(id) => go({ name: "thread", threadId: id })}
-              onNewProject={() => setCreatingProject(true)}
-            />
+            <Suspense fallback={<div className="view" />}>
+              <Planner
+                key={`${project?.id}:${plannerShown}`}
+                project={project}
+                plan={state.plan}
+                schedules={state.schedules}
+                onSchedule={(schedule) =>
+                  setScheduling(schedule ? { text: "", schedule } : { text: "" })
+                }
+                threads={state.threads}
+                agents={state.agents}
+                onOpenThread={(id) => go({ name: "thread", threadId: id })}
+                onNewProject={() => setCreatingProject(true)}
+              />
+            </Suspense>
           </ErrorBoundary>
         ) : (
           <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
         )}
-        {route.name !== "settings" && route.name !== "planner" && (
-          <div className="dock">
-            {thread?.archived ? (
-              <div className="archived-bar" role="status">
-                <IconArchive />
-                <span>Cette discussion est archivée.</span>
-                <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
-                  Désarchiver
-                </button>
-              </div>
-            ) : (
-              <Composer
-                key={thread?.id ?? "new"}
-                agents={state.agents}
-                favorites={state.favorites}
-                thread={thread}
-                project={project}
-                onNewProject={() => setCreatingProject(true)}
-                onCreated={(id) => navigate({ name: "thread", threadId: id })}
-                onExport={exportThread}
-                onSearch={() => setSearchOpen(true)}
-                onRequests={() => setRequestsOpen(true)}
-                onConnections={() => setConnectionsOpen(true)}
-                onArchive={() => thread && setArchived(thread.id, true)}
-                onDelete={() => thread && askDeleteThread(thread)}
-                onTeam={(task) => setTeamTask(task)}
-                onSchedule={(text) => setScheduling({ text })}
-                onSettings={() => go({ name: "settings", section: "general" })}
-              />
-            )}
-          </div>
-        )}
+        {route.name !== "settings" &&
+          route.name !== "planner" &&
+          // Under the « Fils » tab the coordinator's conversation is out of sight: so is its composer.
+          !(coordinator && !wide && projectTab === "threads") && (
+            <div className={`dock${coordinator && wide ? " beside-threads" : ""}`}>
+              {route.name === "home" && (narrow || sideOff) && (
+                <HomeCards
+                  state={state}
+                  agents={state.agents}
+                  onOpen={(t) =>
+                    // A coordinator lives on its project's page, not as a thread of its own.
+                    go(
+                      t.kind === "coordinator"
+                        ? { name: "project", projectId: t.projectId }
+                        : { name: "thread", threadId: t.id },
+                    )
+                  }
+                />
+              )}
+              {thread?.archived ? (
+                <div className="archived-bar" role="status">
+                  <IconArchive />
+                  <span>Cette discussion est résolue.</span>
+                  <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
+                    Rouvrir
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {coordinator && routeProject && (
+                    <ProjectRequests
+                      requests={projectRequests(state.requests, state.threads, routeProject.id)}
+                      threads={state.threads}
+                      onOpenThread={(id, itemId) => {
+                        focusItem(id, itemId);
+                        openThread(id);
+                      }}
+                    />
+                  )}
+                  <Composer
+                    key={spoken?.id ?? "new"}
+                    agents={state.agents}
+                    favorites={state.favorites}
+                    thread={spoken}
+                    project={project}
+                    onNewProject={() => setCreatingProject(true)}
+                    onCreated={(id) => navigate({ name: "thread", threadId: id })}
+                    onExport={exportThread}
+                    onSearch={() => setSearchOpen(true)}
+                    onRequests={() => setRequestsOpen(true)}
+                    onConnections={() => setConnectionsOpen(true)}
+                    onArchive={() => spoken && setArchived(spoken.id, true)}
+                    onDelete={() => spoken && askDeleteThread(spoken)}
+                    onTeam={(task) => setTeamTask(task)}
+                    onSchedule={(text) => setScheduling({ text })}
+                    onSettings={() => go({ name: "settings", section: "general" })}
+                  />
+                </>
+              )}
+              {route.name === "home" && narrow && (
+                <TabBar
+                  state={state}
+                  onNew={() => go({ name: "home" })}
+                  onProjects={() => setDrawer(true)}
+                  onCode={(id) => {
+                    go({ name: "thread", threadId: id });
+                    setReviewOpen(true);
+                  }}
+                />
+              )}
+            </div>
+          )}
       </main>
       {reviewOpen && thread?.workspace && !thread.archived && (
         <ReviewPanel
@@ -445,7 +717,7 @@ export function App() {
           onOpenThread={(id, itemId) => {
             setRequestsOpen(false);
             focusItem(id, itemId);
-            go({ name: "thread", threadId: id });
+            openThread(id);
           }}
           onClose={() => setRequestsOpen(false)}
         />
@@ -458,12 +730,12 @@ export function App() {
       </Presence>
       {searchOpen && (
         <QuickSearch
-          state={state}
+          state={listed}
           actions={quickActions}
           onClose={() => setSearchOpen(false)}
           onOpenThread={(id, itemId) => {
             if (itemId) focusItem(id, itemId);
-            go({ name: "thread", threadId: id });
+            openThread(id);
           }}
           onPickProject={(id) => {
             pickProject(id);

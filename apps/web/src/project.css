@@ -1,0 +1,415 @@
+/* A project's page: its conversations grouped by state. */
+.proj-page {
+  width: min(720px, 100%);
+  margin: 0 auto;
+  padding: 26px 0 30px;
+}
+.pp-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.pp-head > div {
+  min-width: 0;
+}
+.pp-title {
+  font: 400 28px/1.15 var(--serif);
+  letter-spacing: -0.01em;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.pp-path {
+  color: var(--faint);
+  font-size: 12.5px;
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pp-head .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+}
+.pp-empty {
+  color: var(--muted);
+  font-size: 13.5px;
+  margin: 28px 0;
+}
+.pp-group + .pp-group {
+  border-top: 1px solid var(--line);
+}
+.pp-gh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 13px 0 9px;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: left;
+}
+.pp-gh:hover {
+  color: var(--fg);
+}
+.pp-gh .n {
+  color: var(--faint);
+}
+.pp-gh .n::before {
+  content: "· ";
+}
+.pp-gh svg {
+  transition: transform 0.15s ease-out;
+}
+.pp-gh.open svg {
+  transform: rotate(90deg);
+}
+.pp-gh:not(.open) {
+  padding-bottom: 13px;
+}
+.pp-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto auto;
+  column-gap: 10px;
+  align-items: start;
+  padding: 7px 0 11px;
+}
+.pp-state {
+  width: 9px;
+  height: 9px;
+  margin: 6px 0 0 3px;
+  border-radius: 50%;
+  background: var(--line2);
+}
+.pp-row[data-group="waiting"] .pp-state {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 16%, transparent);
+}
+.pp-row[data-group="waiting"] .pp-state[data-status="error"] {
+  background: var(--err);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--err) 16%, transparent);
+}
+/* Turns only while the thread's agent, or its team, is really at work. */
+.pp-row[data-group="running"] .pp-state {
+  width: 13px;
+  height: 13px;
+  margin: 4px 0 0 1px;
+  background: none;
+  border: 1.8px solid var(--line2);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+.pp-row[data-group="resolved"] .pp-state {
+  background: var(--ok);
+}
+.pp-open {
+  display: grid;
+  gap: 1px;
+  text-align: left;
+  min-width: 0;
+  border-radius: 6px;
+}
+.pp-t {
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pp-open:hover .pp-t {
+  text-decoration: underline;
+  text-decoration-color: var(--line2);
+  text-underline-offset: 3px;
+}
+.pp-row[data-group="resolved"] .pp-t {
+  color: var(--muted);
+  font-weight: 400;
+}
+.pp-line {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.pp-when {
+  color: var(--faint);
+  font-size: 11.5px;
+  padding-top: 3px;
+  white-space: nowrap;
+}
+.pp-row .thread-menu-wrap {
+  margin-top: -4px;
+}
+.pp-chips {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  min-width: 0;
+}
+.pp-checks[data-checks="passed"] {
+  color: var(--ok);
+}
+.pp-checks[data-checks="failed"] {
+  color: var(--err);
+}
+.pp-checks[data-checks="pending"] {
+  color: var(--warn);
+}
+.pp-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.pp-branch {
+  font: 11.5px var(--mono);
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pp-row[data-group="running"] .pp-state {
+    animation: none;
+  }
+}
+.pp-acts {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.pp-rename {
+  width: 100%;
+  padding: 0 6px;
+  margin-left: -7px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+}
+
+/* With a coordinator: its conversation, and the project's threads beside it. */
+.pp-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  min-height: 0;
+  overflow: hidden;
+}
+.pp-split > .view {
+  min-width: 0;
+}
+.pp-panel {
+  border-left: 1px solid var(--line);
+  overflow: auto;
+  min-height: 0;
+  padding: 0 16px;
+}
+.pp-panel .proj-page {
+  padding-top: 14px;
+}
+.pp-panel .pp-title {
+  font: 600 14px/1.3 var(--sans);
+  letter-spacing: 0;
+}
+.pp-panel .pp-path {
+  display: none;
+}
+.pp-tabs {
+  display: flex;
+  gap: 3px;
+  margin: 8px 16px 0;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--card);
+}
+.pp-tabs button {
+  flex: 1;
+  padding: 6px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.pp-tabs button[aria-selected="true"] {
+  background: var(--surface);
+  color: var(--fg);
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.pp-coord {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  padding: 14px 16px;
+  margin-bottom: 8px;
+}
+.pp-coord-t {
+  font-weight: 600;
+  font-size: 13.5px;
+}
+.pp-coord p {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 4px 0 0;
+}
+.pp-coord-go {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.pp-coord-go select {
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+  min-width: 0;
+}
+/* The thread a coordinator opened, in its conversation: a link to it, with its state now. */
+.opened-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 10px 12px;
+}
+.oc-ic {
+  width: 30px;
+  height: 30px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--muted);
+}
+.oc-text {
+  min-width: 0;
+  flex: 1;
+}
+.oc-t {
+  font-weight: 550;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oc-s {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 7px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.oc-state::before {
+  content: "· ";
+}
+.opened-card[data-group="waiting"] .oc-state {
+  color: var(--warn);
+}
+.opened-card[data-group="running"] .oc-state {
+  color: var(--accent);
+}
+/* The composer stays under the conversation, not under the threads beside it. */
+.dock.beside-threads {
+  padding-right: 396px;
+}
+/* On a narrow screen: the two tabs, then the one that is shown. */
+.pp-stack {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+}
+
+/* What the project's threads wait for, above the coordinator's composer. */
+.pp-asks {
+  list-style: none;
+  width: min(600px, 100%);
+  margin: 0 auto 8px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+  max-height: 30dvh;
+  overflow-y: auto;
+}
+.pp-ask {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+  border-radius: 12px;
+  background: var(--bg);
+  font-size: 13px;
+}
+.pp-ask > svg {
+  flex: none;
+  color: var(--warn);
+}
+.pp-ask-t {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+  border: none;
+  background: none;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.pp-ask-t b,
+.pp-ask-t span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pp-ask-t b {
+  font-weight: 600;
+}
+.pp-ask-t span {
+  color: var(--muted);
+}
+.pp-ask-a {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+@media (max-width: 560px) {
+  .pp-ask {
+    flex-wrap: wrap;
+  }
+  .pp-ask-t {
+    flex-basis: calc(100% - 30px);
+  }
+  .pp-ask-a {
+    margin-left: 24px;
+  }
+}
+
+/* A message a coordinator wrote in a thread: said so, above it. */
+.u-from {
+  align-self: flex-end;
+  margin: 0 4px 2px;
+  font-size: 11.5px;
+  color: var(--muted);
+}

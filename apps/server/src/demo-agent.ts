@@ -1,9 +1,10 @@
 // A small, free ACP agent for development and tests. It streams text, runs a fake tool,
 // asks permission before a fake edit, and shares a plan, like a real coding agent would.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { Readable, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import * as acp from "@agentclientprotocol/sdk";
@@ -17,6 +18,59 @@ const modes = new Map<string, string>();
 const efforts = new Map<string, string>();
 const used = new Map<string, number>();
 const mcpNames = new Map<string, string[]>();
+/** The MCP servers each session was given, to call the tools of one as a real agent does. */
+const mcpServers = new Map<string, acp.McpServer[]>();
+
+type Ask = (method: string, params: unknown) => Promise<unknown>;
+/** The « moonagentic » server of each session, started once and kept, as a real agent does. */
+const bridges = new Map<string, Promise<Ask>>();
+
+function bridgeOf(sessionId: string, server: acp.McpServerStdio): Promise<Ask> {
+  const known = bridges.get(sessionId);
+  if (known) return known;
+  const child = spawn(server.command, server.args, {
+    env: { ...process.env, ...Object.fromEntries(server.env.map((e) => [e.name, e.value])) },
+    stdio: ["pipe", "pipe", "ignore"],
+  });
+  const answers = createInterface({ input: child.stdout });
+  const waiting = new Map<number, (result: unknown) => void>();
+  answers.on("line", (line) => {
+    const message = JSON.parse(line) as { id: number; result?: unknown; error?: unknown };
+    waiting.get(message.id)?.(message.result ?? message.error);
+  });
+  let next = 0;
+  const ask: Ask = (method, params) =>
+    new Promise<unknown>((resolve) => {
+      next += 1;
+      waiting.set(next, resolve);
+      child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: next, method, params })}\n`);
+    });
+  const started = ask("initialize", { protocolVersion: "2025-06-18", capabilities: {} }).then(
+    () => {
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`,
+      );
+      return ask;
+    },
+  );
+  bridges.set(sessionId, started);
+  return started;
+}
+
+/**
+ * Calls a tool of the « moonagentic » MCP server the session was given, as a real agent
+ * would: through the server it started for the session. Returns what the tool said.
+ */
+async function callMoonAgentic(sessionId: string, name: string, args: unknown): Promise<string> {
+  const server = mcpServers.get(sessionId)?.find((m) => m.name === "moonagentic");
+  if (!server || !("command" in server)) return "Aucun outil MoonAgentic dans cette session.";
+  const ask = await bridgeOf(sessionId, server);
+  const result = (await ask("tools/call", { name, arguments: args })) as {
+    content?: { text: string }[];
+  };
+  return result.content?.[0]?.text ?? JSON.stringify(result);
+}
+
 /** The folder each session works in. */
 const cwds = new Map<string, string>();
 
@@ -103,6 +157,7 @@ const app = acp
       sessionId,
       params.mcpServers.map((m) => m.name),
     );
+    mcpServers.set(sessionId, params.mcpServers);
     // Lists its commands right behind the reply naming the session, often in the same read.
     queueMicrotask(() => {
       void client.notify("session/update", {
@@ -207,6 +262,36 @@ const app = acp
         ...(priced ? { cost: { amount: tokens / 100_000, currency: "USD" } } : {}),
       });
     };
+    // As a coordinator's agent does: a real call to MoonAgentic's own tools.
+    // Its part, given before the message, comes in the same text: the message is the end.
+    const opening = ask.match(/(?:^|\n)\/ouvre (.+)$/);
+    if (opening) {
+      const said = await callMoonAgentic(sessionId, "open_thread", {
+        task_key: opening[1]!.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+        title: opening[1],
+        brief: `Corrige : ${opening[1]}`,
+        kind: "bug",
+      });
+      await say(
+        said.includes('"opened"') ? `J'ai ouvert le fil « ${opening[1]} ».` : said,
+        "agent_message_chunk",
+      );
+      return { stopReason: "end_turn" };
+    }
+    if (/(?:^|\n)\/fils$/.test(ask.trim())) {
+      const said = await callMoonAgentic(sessionId, "list_threads", {});
+      let count: number | undefined;
+      try {
+        count = (JSON.parse(said) as unknown[]).length;
+      } catch {
+        // not a list: what the tool said is shown as it is
+      }
+      await say(
+        count === undefined ? said : `Ce projet a ${count} fil${count > 1 ? "s" : ""}.`,
+        "agent_message_chunk",
+      );
+      return { stopReason: "end_turn" };
+    }
     if (ask.trim() === "/compact") {
       await say("Contexte compacté.", "agent_message_chunk");
       // Only the tokens this time, as some agents do.

@@ -1,0 +1,143 @@
+/* Links to pull requests, drawn as GitHub draws them, and the pull request's state in the
+   review panel. The colors are GitHub's own: green open, violet merged, red closed. */
+:root {
+  --pr-open: #1a7f37;
+  --pr-merged: #8250df;
+  --pr-closed: #cf222e;
+  --pr-draft: #6e7781;
+}
+:root[data-theme="dark"] {
+  --pr-open: #3fb950;
+  --pr-merged: #a371f7;
+  --pr-closed: #f85149;
+  --pr-draft: #8b949e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pr-open: #3fb950;
+    --pr-merged: #a371f7;
+    --pr-closed: #f85149;
+    --pr-draft: #8b949e;
+  }
+}
+
+.prchip {
+  /* Until GitHub has answered, the link keeps a neutral color: no state is made up. */
+  --pr: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px 0 5px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--pr) 35%, transparent);
+  background: color-mix(in srgb, var(--pr) 9%, transparent);
+  color: var(--pr) !important;
+  font-size: 0.92em;
+  font-weight: 500;
+  line-height: 1.5;
+  text-decoration: none;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+.prchip:hover {
+  background: color-mix(in srgb, var(--pr) 16%, transparent);
+}
+.prchip::before {
+  content: "";
+  width: 1em;
+  height: 1em;
+  flex: none;
+  background: currentColor;
+  /* GitHub's pull request mark: two branches, one joining the other. */
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.prchip[data-state="open"] {
+  --pr: var(--pr-open);
+}
+.prchip[data-state="draft"] {
+  --pr: var(--pr-draft);
+}
+.prchip[data-state="closed"] {
+  --pr: var(--pr-closed);
+}
+.prchip[data-state="merged"] {
+  --pr: var(--pr-merged);
+}
+.prchip[data-state="merged"]::before {
+  /* GitHub's merge mark. */
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'/%3E%3C/svg%3E");
+}
+
+.rv-prs {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 13px;
+}
+.rv-prs-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.rv-prs-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.rv-prs-l {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+}
+.rv-prs-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--line2);
+}
+.rv-prs-l.ok .rv-prs-dot {
+  background: var(--ok);
+}
+.rv-prs-l.warn .rv-prs-dot {
+  background: var(--warn);
+  animation: rv-prs-pulse 1.4s ease-in-out infinite;
+}
+.rv-prs-l.err {
+  color: var(--err);
+}
+.rv-prs-l.err .rv-prs-dot {
+  background: var(--err);
+}
+@keyframes rv-prs-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rv-prs-l.warn .rv-prs-dot {
+    animation: none;
+  }
+}
+.rv-prs-f {
+  margin: 0;
+  padding-left: 30px;
+  color: var(--muted);
+}
+.rv-prs-f a {
+  color: inherit;
+}
+.rv-prs-m {
+  justify-self: start;
+  margin-top: 2px;
+}
