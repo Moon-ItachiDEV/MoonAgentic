@@ -876,6 +876,13 @@ export function App() {
           }}
         />
       )}
+      {/* Shown on every page, the phone's included, where the sidebar's own line is out of sight. */}
+      {state.status === "closed" && (
+        <div className="offline" role="status">
+          <span className="spin" aria-hidden />
+          Reconnexion au serveur…
+        </div>
+      )}
       {state.notice && (
         <div className="toast" role="status">
           {state.notice}

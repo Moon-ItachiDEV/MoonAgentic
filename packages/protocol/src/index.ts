@@ -741,6 +741,8 @@ export type ServerMessage =
   | { type: "created"; requestId: string; id: string }
   /** Reply to a request that makes nothing new, once it succeeded. */
   | { type: "done"; requestId: string }
+  /** Answer to a `ping`: the connection is alive. */
+  | { type: "pong" }
   | { type: "error"; requestId?: string; message: string };
 
 const id = z.string().min(1).max(200);
@@ -776,6 +778,8 @@ export const McpServerInput = z.object({
 export type McpServerInput = z.infer<typeof McpServerInput>;
 
 export const ClientMessage = z.discriminatedUnion("type", [
+  /** Asks for a `pong`: a connection that gets none back is dead, whatever the browser says. */
+  z.object({ type: z.literal("ping") }),
   z.object({
     type: z.literal("project.create"),
     requestId: id,

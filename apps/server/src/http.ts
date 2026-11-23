@@ -3,10 +3,13 @@ import { createReadStream, readFileSync, statSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import { ClientMessage, type RemoteAccess, type ServerMessage } from "@moonagentic/protocol";
-import { WebSocketServer } from "ws";
+import { type WebSocket, WebSocketServer } from "ws";
 import { COORDINATOR_PATH } from "./coordinator-tools.ts";
 import { type Client, CoordinatorRefused, type Hub } from "./hub.ts";
 import { findRemoteAccess } from "./remote.ts";
+
+/** How often each connection is pinged. */
+const HEARTBEAT_MS = 30_000;
 
 /** A fresh access token: long enough that it cannot be guessed. */
 export const newToken = () => randomBytes(24).toString("base64url");
@@ -155,6 +158,8 @@ export function createHttpServer(options: {
   webDir?: string;
   /** Keeps a renewed token, so it is still the one after a restart. */
   onTokenRenewed?: (token: string) => void;
+  /** How often each connection is pinged; one that has not answered by the next is closed. */
+  heartbeatMs?: number;
   /** How the server can be reached from elsewhere; asked again each time, as it changes. */
   remoteAccess?: (host: string, port: number) => Promise<RemoteAccess>;
 }): Server {
@@ -293,6 +298,20 @@ export function createHttpServer(options: {
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  // A phone that left the network never says goodbye: a connection that does not answer a
+  // ping by the next one is closed, so nothing is kept for a window that is gone.
+  const alive = new WeakSet<WebSocket>();
+  const heartbeat = setInterval(() => {
+    for (const ws of wss.clients) {
+      if (!alive.has(ws)) {
+        ws.terminate();
+        continue;
+      }
+      alive.delete(ws);
+      ws.ping();
+    }
+  }, options.heartbeatMs ?? HEARTBEAT_MS);
+  heartbeat.unref();
   server.on("upgrade", (req, socket, head) => {
     const url = parseUrl(req.url ?? "/");
     if (url?.pathname !== "/ws" || !sameToken(url.searchParams.get("token"), token)) {
@@ -306,6 +325,8 @@ export function createHttpServer(options: {
         },
       };
       const disconnect = hub.connect(client);
+      alive.add(ws);
+      ws.on("pong", () => alive.add(ws));
       ws.on("close", disconnect);
       // A broken connection closes on its own; without a listener its error would stop the server.
       ws.on("error", () => ws.terminate());
@@ -341,6 +362,9 @@ export function createHttpServer(options: {
       hub.coordinatorUrl = host ? `http://${host}:${address.port}` : undefined;
     }
   });
-  server.on("close", () => wss.close());
+  server.on("close", () => {
+    clearInterval(heartbeat);
+    wss.close();
+  });
   return server;
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ASK_TIMEOUT_MS, Connection } from "./connection.ts";
+import { ASK_TIMEOUT_MS, Connection, NOT_SENT, PING_MS, PONG_TIMEOUT_MS } from "./connection.ts";
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;
@@ -33,13 +33,17 @@ class FakeWebSocket {
     this.onmessage?.({ data });
   }
 
+  close(): void {
+    // A dead connection: the browser takes its time to say so.
+  }
+
   closeNow(): void {
     this.readyState = FakeWebSocket.CLOSED;
     this.onclose?.({ code: 1006 });
   }
 }
 
-function setupConnection(options?: { askTimeoutMs?: number }) {
+function setupConnection(options: { askTimeoutMs?: number; pingMs?: number } = {}) {
   vi.useFakeTimers();
   FakeWebSocket.instances = [];
   vi.stubGlobal("location", { href: "http://127.0.0.1:4747/" });
@@ -53,7 +57,8 @@ function setupConnection(options?: { askTimeoutMs?: number }) {
     vi.fn(async () => new Response(null, { status: 200 })),
   );
   vi.stubGlobal("WebSocket", FakeWebSocket);
-  const conn = new Connection(options);
+  // No heartbeat unless a test is about it: the others count the timers of a request.
+  const conn = new Connection({ pingMs: 0, ...options });
   const socket = FakeWebSocket.instances.at(-1)!;
   return { conn, socket };
 }
@@ -62,6 +67,72 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+describe("Connection heartbeat", () => {
+  const sentTypes = (socket: FakeWebSocket) =>
+    socket.sent.map((raw) => (JSON.parse(raw) as { type: string }).type);
+
+  it("pings while open, and opens a new connection when no answer comes", async () => {
+    const { conn, socket } = setupConnection({ pingMs: PING_MS });
+    socket.open();
+    await vi.advanceTimersByTimeAsync(PING_MS);
+    expect(sentTypes(socket)).toEqual(["ping"]);
+
+    // An answer in time: nothing changes.
+    socket.emitMessage(JSON.stringify({ type: "pong" }));
+    await vi.advanceTimersByTimeAsync(PONG_TIMEOUT_MS);
+    expect(conn.getState().status).toBe("open");
+
+    // The next ping gets none: the connection is given up on without waiting for the browser.
+    await vi.advanceTimersByTimeAsync(PING_MS - PONG_TIMEOUT_MS + PONG_TIMEOUT_MS);
+    expect(conn.getState().status).toBe("closed");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    // The browser noticing later changes nothing.
+    socket.closeNow();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+
+  it("tries again at once when the device wakes, instead of waiting", async () => {
+    const { conn, socket } = setupConnection();
+    socket.open();
+    // Several failures in a row: the wait has grown.
+    socket.closeNow();
+    await vi.advanceTimersByTimeAsync(1_000);
+    FakeWebSocket.instances.at(-1)!.closeNow();
+    await vi.advanceTimersByTimeAsync(0);
+    const before = FakeWebSocket.instances.length;
+
+    conn.wake();
+    expect(FakeWebSocket.instances).toHaveLength(before + 1);
+    FakeWebSocket.instances.at(-1)!.open();
+    expect(conn.getState().status).toBe("open");
+
+    // Awake with a connection that looks open: it is checked right away.
+    conn.wake();
+    expect(sentTypes(FakeWebSocket.instances.at(-1)!)).toEqual(["ping"]);
+  });
+
+  it("says when an action could not leave, and takes it back once connected again", async () => {
+    const { conn, socket } = setupConnection();
+    socket.open();
+    socket.closeNow();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(conn.send({ type: "thread.cancel", threadId: "t" })).toBe(false);
+    expect(conn.getState().notice).toBe(NOT_SENT);
+    // Which thread is shown is told again by itself: no notice for it.
+    conn.dismissNotice();
+    expect(conn.send({ type: "thread.open", threadId: "t" })).toBe(false);
+    expect(conn.getState().notice).toBeNull();
+
+    conn.send({ type: "thread.cancel", threadId: "t" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    FakeWebSocket.instances.at(-1)!.open();
+    expect(conn.getState().notice).toBeNull();
+  });
 });
 
 describe("Connection", () => {
@@ -151,7 +222,7 @@ describe("Connection", () => {
 
     await expect(
       conn.ask({ type: "search", requestId: "req-offline", query: "w" }),
-    ).rejects.toThrow("Pas de connexion au serveur MoonAgentic.");
+    ).rejects.toThrow(NOT_SENT);
     expect(vi.getTimerCount()).toBe(0);
   });
 

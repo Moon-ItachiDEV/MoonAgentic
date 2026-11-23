@@ -15,7 +15,7 @@ afterEach(async () => {
 
 const TOKEN = "jeton-de-test";
 
-async function serve() {
+async function serve(options: { heartbeatMs?: number } = {}) {
   const webDir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-web-"));
   writeFileSync(path.join(webDir, "index.html"), "<title>MoonAgentic</title>");
   let connected = 0;
@@ -33,6 +33,7 @@ async function serve() {
     token: TOKEN,
     webDir,
     onTokenRenewed: (token) => renewed.push(token),
+    ...options,
     remoteAccess: async (host, port): Promise<RemoteAccess> => {
       asked.push({ host, port });
       return { port, exposed: false, tailscale: "absent", addresses: [] };
@@ -180,5 +181,19 @@ describe("the HTTP server", () => {
     expect(await socketOpens(`ws://${origin}/ws?token=${TOKEN}`)).toBe(false);
     expect(await socketOpens(`ws://${origin}/ws?token=${token}`)).toBe(true);
     expect((await renew(TOKEN)).status).toBe(401);
+  });
+
+  it("closes a connection that stops answering pings, and keeps one that answers", async () => {
+    const { origin } = await serve({ heartbeatMs: 60 });
+    const url = `ws://${origin}/ws?token=${TOKEN}`;
+    // As a phone gone out of reach: the connection is there, nothing answers.
+    const gone = new WebSocket(url, { autoPong: false });
+    const here = new WebSocket(url);
+    await Promise.all([gone, here].map((s) => new Promise((resolve) => s.once("open", resolve))));
+    const started = Date.now();
+    await new Promise((resolve) => gone.once("close", resolve));
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(here.readyState).toBe(WebSocket.OPEN);
+    here.close();
   });
 });

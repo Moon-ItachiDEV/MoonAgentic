@@ -7,9 +7,18 @@ const TOKEN_KEY = "moonagentic.token";
 /** The code the server closes a connection with when its token was replaced. */
 const TOKEN_RENEWED = 4001;
 export const ASK_TIMEOUT_MS = 60_000;
+/** How often the server is pinged while the connection is open. */
+export const PING_MS = 20_000;
+/** A ping with no answer after this long means a dead connection: it is opened again. */
+export const PONG_TIMEOUT_MS = 8_000;
+/** Said when something the user did could not leave. */
+export const NOT_SENT =
+  "Pas de connexion : ton action n'est pas partie. Réessaie une fois reconnecté.";
 
 export interface ConnectionOptions {
   askTimeoutMs?: number;
+  /** How often the server is pinged; 0 for never. */
+  pingMs?: number;
 }
 
 function readToken(): string | null {
@@ -75,11 +84,65 @@ export class Connection {
   /** A token being renewed: reconnecting waits for it, so it does not try the old one. */
   private renewal: Promise<unknown> | null = null;
   private readonly askTimeoutMs: number;
+  private readonly pingMs: number;
+  /** The wait before the next try, while the connection is closed. */
+  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private pingTimer: ReturnType<typeof setInterval> | undefined;
+  private pongTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: ConnectionOptions = {}) {
     this.askTimeoutMs = options.askTimeoutMs ?? ASK_TIMEOUT_MS;
+    this.pingMs = options.pingMs ?? PING_MS;
     if (!this.token) this.state = { ...this.state, status: "unauthorized" };
     else this.open();
+    // A phone's screen coming back on, or its network: the connection is checked at once
+    // rather than at the next ping, and a wait before a new try is cut short.
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      const wake = () => this.wake();
+      window.addEventListener("online", wake);
+      window.addEventListener("pageshow", wake);
+      window.addEventListener("focus", wake);
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") wake();
+      });
+    }
+  }
+
+  /** Checks the connection now: pinged if it looks open, opened again at once if it waits. */
+  wake(): void {
+    if (this.state.status === "unauthorized") return;
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      this.ping();
+    } else if (this.retryTimer !== undefined) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = undefined;
+      this.retry = 0;
+      this.open();
+    }
+  }
+
+  /** Asks the server for a sign of life; without one in time, the connection is replaced. */
+  private ping(): void {
+    const socket = this.socket;
+    if (socket?.readyState !== WebSocket.OPEN || this.pongTimer !== undefined) return;
+    socket.send(JSON.stringify({ type: "ping" }));
+    this.pongTimer = setTimeout(() => {
+      this.pongTimer = undefined;
+      // The browser may take minutes to notice: its close is not waited for.
+      if (this.socket === socket) this.lost(socket, true);
+      try {
+        socket.close();
+      } catch {
+        // already gone
+      }
+    }, PONG_TIMEOUT_MS);
+  }
+
+  private stopHeartbeat(): void {
+    clearInterval(this.pingTimer);
+    clearTimeout(this.pongTimer);
+    this.pingTimer = undefined;
+    this.pongTimer = undefined;
   }
 
   subscribe = (listener: () => void) => {
@@ -133,7 +196,7 @@ export class Connection {
       if (!sent) {
         clearTimeout(timer);
         this.pending.delete(message.requestId);
-        reject(new Error("Pas de connexion au serveur MoonAgentic."));
+        reject(new Error(NOT_SENT));
       }
     });
   }
@@ -186,7 +249,14 @@ export class Connection {
   send(message: ClientMessage): boolean {
     if (message.type === "thread.open") this.openThreadIds.add(message.threadId);
     if (message.type === "thread.leave") this.openThreadIds.delete(message.threadId);
-    if (this.socket?.readyState !== WebSocket.OPEN) return false;
+    if (this.socket?.readyState !== WebSocket.OPEN) {
+      // Which threads are shown is told again once connected; anything else is an action
+      // of the user's that did not leave, and they are told so.
+      if (message.type !== "thread.open" && message.type !== "thread.leave") {
+        this.notify(NOT_SENT);
+      }
+      return false;
+    }
     this.socket.send(JSON.stringify(message));
     return true;
   }
@@ -201,11 +271,20 @@ export class Connection {
     socket.onopen = () => {
       opened = true;
       this.retry = 0;
-      this.set({ ...this.state, status: "open" });
+      this.set({
+        ...this.state,
+        status: "open",
+        // What could not leave can now: the notice that said so is out of date.
+        notice: this.state.notice === NOT_SENT ? null : this.state.notice,
+      });
+      this.stopHeartbeat();
+      if (this.pingMs > 0) this.pingTimer = setInterval(() => this.ping(), this.pingMs);
       for (const threadId of this.openThreadIds)
         socket.send(JSON.stringify({ type: "thread.open", threadId }));
     };
     socket.onmessage = (event) => {
+      // A connection already given up on has nothing more to say.
+      if (this.socket !== socket) return;
       let message: ServerMessage;
       try {
         const parsed: unknown = JSON.parse(String(event.data));
@@ -215,6 +294,9 @@ export class Connection {
         console.warn("Trame WebSocket invalide ignorée :", error);
         return;
       }
+      // Any message is a sign of life.
+      clearTimeout(this.pongTimer);
+      this.pongTimer = undefined;
       const requestId = "requestId" in message ? message.requestId : undefined;
       if (requestId) {
         const pending = this.pending.get(requestId);
@@ -227,27 +309,36 @@ export class Connection {
       }
       this.set(reduce(this.state, message));
     };
-    socket.onclose = (event) => {
-      this.socket = null;
-      for (const p of this.pending.values()) {
-        clearTimeout(p.timer);
-        p.reject(new Error("Connexion perdue."));
-      }
-      this.pending.clear();
-      this.set({ ...this.state, status: "closed" });
-      const wait = Math.min(1000 * 2 ** this.retry, 10_000);
-      this.retry += 1;
-      // A refused upgrade looks like any other failure; ask the server whether the token is the cause.
-      // After a renewal the old token is refused too, so it is asked again, with the new one
-      // on the device that renewed it.
-      const check = Promise.resolve(this.renewal).then(() =>
-        opened && event.code !== TOKEN_RENEWED ? true : this.tokenAccepted(),
-      );
-      void check.then((accepted) => {
-        if (accepted) setTimeout(() => this.open(), wait);
-        else this.set({ ...this.state, status: "unauthorized" });
-      });
-    };
+    socket.onclose = (event) => this.lost(socket, opened, event.code);
+  }
+
+  /** The connection is gone: what waited on it fails, and a new one is tried after a wait. */
+  private lost(which: WebSocket, wasOpen: boolean, code?: number): void {
+    // Once only, whether the heartbeat or the browser noticed first.
+    if (this.socket !== which) return;
+    this.socket = null;
+    this.stopHeartbeat();
+    for (const p of this.pending.values()) {
+      clearTimeout(p.timer);
+      p.reject(new Error("Connexion perdue."));
+    }
+    this.pending.clear();
+    this.set({ ...this.state, status: "closed" });
+    const wait = Math.min(1000 * 2 ** this.retry, 10_000);
+    this.retry += 1;
+    // A refused upgrade looks like any other failure; ask the server whether the token is the cause.
+    // After a renewal the old token is refused too, so it is asked again, with the new one
+    // on the device that renewed it.
+    const check = Promise.resolve(this.renewal).then(() =>
+      wasOpen && code !== TOKEN_RENEWED ? true : this.tokenAccepted(),
+    );
+    void check.then((accepted) => {
+      if (!accepted) return this.set({ ...this.state, status: "unauthorized" });
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = undefined;
+        this.open();
+      }, wait);
+    });
   }
 
   private async tokenAccepted(): Promise<boolean> {

@@ -385,6 +385,9 @@ export class Hub {
 
   async handle(client: Client, message: ClientMessage): Promise<void> {
     switch (message.type) {
+      case "ping":
+        client.send({ type: "pong" });
+        return;
       case "project.create": {
         const id = this.createProject(message.name, message.path);
         client.send({ type: "created", requestId: message.requestId, id });
