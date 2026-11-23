@@ -1,11 +1,12 @@
 import { useEffect, useRef } from "react";
-import { IconBranch, IconCamera, IconCheck, IconImage, IconPlus } from "./icons.tsx";
+import { arrowKeys } from "./ComposerTray.tsx";
+import { IconCamera, IconFile, IconImage, IconPlus, IconTerminal } from "./icons.tsx";
 import { Presence } from "./Presence.tsx";
 
 const ITEMS = [
-  { insert: "@", label: "Joindre un fichier du projet", key: "@" },
-  { insert: "$", label: "Utiliser un skill", key: "$" },
-  { insert: "/", label: "Lancer une commande", key: "/" },
+  { insert: "@", label: "Joindre un fichier du projet", key: "@", icon: <IconFile size={13} /> },
+  { insert: "$", label: "Utiliser un skill", key: "$", icon: <span className="sk">$</span> },
+  { insert: "/", label: "Lancer une commande", key: "/", icon: <IconTerminal size={14} /> },
 ] as const;
 
 /** A screen that is touched, so most likely a phone or a tablet with a camera. */
@@ -23,8 +24,6 @@ export function PlusMenu(props: {
   onPick: (insert: string) => void;
   /** Opens the choice of images, or the camera for a photo taken now. */
   onImage: (from: "files" | "camera") => void;
-  /** For a new thread in a git project: whether the agent works on its own branch. */
-  branch?: { on: boolean; onToggle: () => void };
 }) {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -44,7 +43,7 @@ export function PlusMenu(props: {
   return (
     <div className="plus" ref={root}>
       <button
-        className="plus-btn"
+        className="plus-btn ib"
         aria-label="Ajouter"
         aria-haspopup="menu"
         aria-expanded={props.open}
@@ -55,7 +54,7 @@ export function PlusMenu(props: {
         <IconPlus />
       </button>
       <Presence show={props.open}>
-        <div className="menu plus-menu" role="menu">
+        <div className="menu anchored left plus-menu" role="menu" onKeyDown={arrowKeys}>
           <button role="menuitem" onClick={() => props.onImage("files")}>
             <span className="plus-k">
               <IconImage />
@@ -73,31 +72,11 @@ export function PlusMenu(props: {
           <div className="menu-sep" role="separator" />
           {ITEMS.map((item) => (
             <button key={item.key} role="menuitem" onClick={() => props.onPick(item.insert)}>
-              <span className="plus-k">{item.key}</span>
+              <span className="plus-k">{item.icon}</span>
               <span className="tx">{item.label}</span>
+              <kbd>{item.key}</kbd>
             </button>
           ))}
-          {props.branch && (
-            <>
-              <div className="menu-sep" role="separator" />
-              <button
-                role="menuitemcheckbox"
-                aria-checked={props.branch.on}
-                title="L'agent travaille sur sa propre branche, dans une copie à part du projet"
-                onClick={props.branch.onToggle}
-              >
-                <span className="plus-k">
-                  <IconBranch size={13} />
-                </span>
-                <span className="tx">Branche à part</span>
-                {props.branch.on && (
-                  <span className="plus-on">
-                    <IconCheck />
-                  </span>
-                )}
-              </button>
-            </>
-          )}
         </div>
       </Presence>
     </div>

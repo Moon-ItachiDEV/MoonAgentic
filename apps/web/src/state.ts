@@ -211,6 +211,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "files":
     case "catalog":
     case "searched":
+    case "activity":
     case "fullItem":
     case "timeline":
     case "github":

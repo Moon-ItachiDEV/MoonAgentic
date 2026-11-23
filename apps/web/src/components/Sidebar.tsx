@@ -1,4 +1,6 @@
-import type { Thread } from "@moonagentic/protocol";
+import type { AgentInfo, Thread } from "@moonagentic/protocol";
+import { formatPercent, formatReset, quotaLevel, tightest } from "../quotas.ts";
+import { useQuotas } from "../use-quotas.ts";
 import { connection, type State } from "../connection.ts";
 import { useEffect, useRef, useState } from "react";
 import { pinnedFirst, waitingCount } from "../project-threads.ts";
@@ -74,6 +76,8 @@ export function Sidebar(props: {
   onDeleteThread: (thread: Thread) => void;
   onRemoveProject: (id: string) => void;
   onOpenSettings: () => void;
+  /** Réglages > Abonnements, where every quota is shown in full. */
+  onOpenSubscriptions: () => void;
   onOpenSearch: () => void;
   /** Folds the side bar away, on a computer. */
   onCollapse: () => void;
@@ -507,6 +511,7 @@ export function Sidebar(props: {
         {recent.flatMap((t) => tree(t, "recent:"))}
       </div>
       {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}
+      <SideQuotas agents={state.agents} onOpen={props.onOpenSubscriptions} />
       <div className="side-foot">
         <button
           className="ib set-gear"
@@ -523,5 +528,55 @@ export function Sidebar(props: {
         </button>
       </div>
     </aside>
+  );
+}
+
+/**
+ * Each installed agent's tightest subscription window, as three quiet lines at the foot of
+ * the side bar: always in sight, even inside a conversation. Agents that pay as they go are
+ * left out; one whose figures cannot be read says so.
+ */
+function SideQuotas({ agents, onOpen }: { agents: AgentInfo[]; onOpen: () => void }) {
+  const quotas = useQuotas();
+  const rows = quotas
+    .filter((q) => q.state !== "none" && agents.some((a) => a.id === q.agentId && a.available))
+    .slice(0, 4);
+  if (!rows.length) return null;
+  return (
+    <button className="side-quotas" onClick={onOpen} aria-label="Abonnements : voir le détail">
+      <span className="sq-h">Abonnements</span>
+      {rows.map((q) => {
+        const name = agents.find((a) => a.id === q.agentId)?.name ?? q.agentId;
+        const worst = tightest(q);
+        if (!worst)
+          return (
+            <span key={q.agentId} className="sq-r na">
+              <span className="sq-n">{name}</span>
+              <span className="sq-p">{q.state === "loading" ? "…" : "non lisible"}</span>
+            </span>
+          );
+        const level = quotaLevel(worst.usedPercent);
+        return (
+          <span
+            key={q.agentId}
+            className={`sq-r ${level}`}
+            title={
+              worst.resetsAt
+                ? `${worst.label} · se libère ${formatReset(worst.resetsAt)}`
+                : worst.label
+            }
+          >
+            <span className="sq-n">
+              {name}
+              <small>{worst.short}</small>
+            </span>
+            <span className="sq-p">{formatPercent(worst.usedPercent)}</span>
+            <span className="sq-b">
+              <i style={{ width: `${Math.min(100, worst.usedPercent)}%` }} />
+            </span>
+          </span>
+        );
+      })}
+    </button>
   );
 }

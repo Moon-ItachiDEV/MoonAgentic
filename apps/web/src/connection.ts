@@ -74,23 +74,25 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
     ? Extract<ServerMessage, { type: "catalog" }>
     : T extends "search"
       ? Extract<ServerMessage, { type: "searched" }>
-      : T extends "item.get"
-        ? Extract<ServerMessage, { type: "fullItem" }>
-        : T extends "thread.page"
-          ? Extract<ServerMessage, { type: "page" }>
-          : T extends "thread.read"
-            ? Extract<ServerMessage, { type: "timeline" }>
-            : T extends "github.status"
-              ? Extract<ServerMessage, { type: "github" }>
-              : T extends "github.repos"
-                ? Extract<ServerMessage, { type: "githubRepos" }>
-                : T extends "github.login"
-                  ? Extract<ServerMessage, { type: "githubDevice" }>
-                  : T extends "local.clones"
-                    ? Extract<ServerMessage, { type: "localClones" }>
-                    : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
-                      ? Extract<ServerMessage, { type: "pullRequest" }>
-                      : ServerMessage;
+      : T extends "activity"
+        ? Extract<ServerMessage, { type: "activity" }>
+        : T extends "item.get"
+          ? Extract<ServerMessage, { type: "fullItem" }>
+          : T extends "thread.page"
+            ? Extract<ServerMessage, { type: "page" }>
+            : T extends "thread.read"
+              ? Extract<ServerMessage, { type: "timeline" }>
+              : T extends "github.status"
+                ? Extract<ServerMessage, { type: "github" }>
+                : T extends "github.repos"
+                  ? Extract<ServerMessage, { type: "githubRepos" }>
+                  : T extends "github.login"
+                    ? Extract<ServerMessage, { type: "githubDevice" }>
+                    : T extends "local.clones"
+                      ? Extract<ServerMessage, { type: "localClones" }>
+                      : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
+                        ? Extract<ServerMessage, { type: "pullRequest" }>
+                        : ServerMessage;
 
 export class Connection {
   private state: State = initialState;

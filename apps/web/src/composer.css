@@ -1,137 +1,450 @@
-/* The composer as in the mockup: 600 px wide, two rows on a computer, one line on a phone
-   until it is used, a microphone and a voice button. Values measured on the mockup. */
+/* Composer « Plateau » (mockup composer-a.html): a box with a 2026 edge (a gradient hairline,
+   lighter on top, a lit inner rim, a soft halo and layered shadows) over a sunken tray that
+   holds the project, the branch and the MCP servers. Menus open 6 px above their button. */
 
+:root {
+  --tray: #f4f4f6;
+  --fg2: #3f3f46;
+  --press: #e4e4e8;
+  --surface-hi: #ffffff;
+  --surface-lo: #fbfbfc;
+  --halo: rgba(20, 20, 30, 0.035);
+  --edge-hi: rgba(20, 20, 30, 0.07);
+  --edge-lo: rgba(20, 20, 30, 0.15);
+  --edge-focus: rgba(58, 85, 214, 0.32);
+  --edge-warn-hi: rgba(212, 144, 28, 0.35);
+  --edge-warn-lo: rgba(212, 144, 28, 0.6);
+  --rim: rgba(255, 255, 255, 0.9);
+  --rim-tray: rgba(20, 20, 30, 0.04);
+  --lift:
+    0 0 0 0.5px rgba(20, 20, 30, 0.02), 0 1px 2px rgba(20, 20, 30, 0.04),
+    0 4px 10px -4px rgba(20, 20, 30, 0.06), 0 18px 36px -18px rgba(20, 20, 30, 0.14);
+  --lift-focus:
+    0 0 0 4px rgba(58, 85, 214, 0.07), 0 1px 2px rgba(20, 20, 30, 0.05),
+    0 6px 14px -6px rgba(20, 20, 30, 0.08), 0 24px 44px -20px rgba(20, 20, 30, 0.2);
+  --float:
+    0 1px 2px rgba(20, 20, 30, 0.05), 0 8px 16px -8px rgba(20, 20, 30, 0.12),
+    0 28px 56px -24px rgba(20, 20, 30, 0.28);
+  --send-top: #3a3a42;
+  --warn-bar: #d4901c;
+  --warn-bg: #fdf6e7;
+  --warn-line: #efd9ad;
+  --err-bg: #fdf0ef;
+  --err-line: #f1cdca;
+  --trk: #ececf0;
+  --eff-a: #fbd9e8;
+  --eff-b: #f07aae;
+  --eff-c: #b452dc;
+  --eff-d: #5b47f0;
+  --eff-lo: #e0508f;
+  --eff-hi: #5b47f0;
+  --gx-space: linear-gradient(90deg, #f4f3ff, #ebe9ff);
+  --gx-line: rgba(90, 90, 230, 0.28);
+  --gx-thumb: #4b5bff;
+  --gx-glow: rgba(75, 91, 255, 0.45);
+  --gx-ink: #3d4fe0;
+  --gx-ray: #5a6cff;
+  --gx-pal: "#4b5bff,#7c5cff,#b04df0,#e2559f,#2aa3e8";
+  --gx-light: 1;
+  --out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+/* The same values for the dark theme, chosen in the settings or by the system. */
+:root[data-theme="dark"] {
+  --tray: #141416;
+  --fg2: #c9c9cf;
+  --press: #2c2c31;
+  --surface-hi: #222226;
+  --surface-lo: #18181b;
+  --halo: rgba(255, 255, 255, 0.035);
+  --edge-hi: rgba(255, 255, 255, 0.13);
+  --edge-lo: rgba(255, 255, 255, 0.04);
+  --edge-focus: rgba(131, 153, 255, 0.45);
+  --edge-warn-hi: rgba(226, 167, 64, 0.45);
+  --edge-warn-lo: rgba(226, 167, 64, 0.15);
+  --rim: rgba(255, 255, 255, 0.05);
+  --rim-tray: rgba(0, 0, 0, 0.35);
+  --lift:
+    0 0 0 0.5px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3),
+    0 6px 14px -6px rgba(0, 0, 0, 0.45), 0 22px 40px -18px rgba(0, 0, 0, 0.7);
+  --lift-focus:
+    0 0 0 4px rgba(131, 153, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3),
+    0 8px 18px -6px rgba(0, 0, 0, 0.5), 0 28px 48px -18px rgba(0, 0, 0, 0.8);
+  --float:
+    0 0 0 0.5px rgba(0, 0, 0, 0.5), 0 10px 20px -8px rgba(0, 0, 0, 0.55),
+    0 30px 60px -20px rgba(0, 0, 0, 0.8);
+  --send-top: #ffffff;
+  --warn-bar: #e2a740;
+  --warn-bg: #211b10;
+  --warn-line: #4a3a1c;
+  --err-bg: #241414;
+  --err-line: #4d2626;
+  --trk: #232327;
+  --eff-a: #4a2338;
+  --eff-b: #c2487f;
+  --eff-c: #9a4fe0;
+  --eff-d: #6f6bff;
+  --eff-lo: #ff6fa8;
+  --eff-hi: #8c86ff;
+  --gx-space: linear-gradient(90deg, #0b0b1c, #101030);
+  --gx-line: rgba(120, 130, 255, 0.35);
+  --gx-thumb: #6f82ff;
+  --gx-glow: rgba(100, 120, 255, 0.6);
+  --gx-ink: #9fb0ff;
+  --gx-ray: #c9d2ff;
+  --gx-pal: "#3b4cff,#6d5dfc,#a855f7,#e879f9,#38bdf8,#c7d2fe";
+  --gx-light: 0;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --tray: #141416;
+    --fg2: #c9c9cf;
+    --press: #2c2c31;
+    --surface-hi: #222226;
+    --surface-lo: #18181b;
+    --halo: rgba(255, 255, 255, 0.035);
+    --edge-hi: rgba(255, 255, 255, 0.13);
+    --edge-lo: rgba(255, 255, 255, 0.04);
+    --edge-focus: rgba(131, 153, 255, 0.45);
+    --edge-warn-hi: rgba(226, 167, 64, 0.45);
+    --edge-warn-lo: rgba(226, 167, 64, 0.15);
+    --rim: rgba(255, 255, 255, 0.05);
+    --rim-tray: rgba(0, 0, 0, 0.35);
+    --lift:
+      0 0 0 0.5px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3),
+      0 6px 14px -6px rgba(0, 0, 0, 0.45), 0 22px 40px -18px rgba(0, 0, 0, 0.7);
+    --lift-focus:
+      0 0 0 4px rgba(131, 153, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3),
+      0 8px 18px -6px rgba(0, 0, 0, 0.5), 0 28px 48px -18px rgba(0, 0, 0, 0.8);
+    --float:
+      0 0 0 0.5px rgba(0, 0, 0, 0.5), 0 10px 20px -8px rgba(0, 0, 0, 0.55),
+      0 30px 60px -20px rgba(0, 0, 0, 0.8);
+    --send-top: #ffffff;
+    --warn-bar: #e2a740;
+    --warn-bg: #211b10;
+    --warn-line: #4a3a1c;
+    --err-bg: #241414;
+    --err-line: #4d2626;
+    --trk: #232327;
+    --eff-a: #4a2338;
+    --eff-b: #c2487f;
+    --eff-c: #9a4fe0;
+    --eff-d: #6f6bff;
+    --eff-lo: #ff6fa8;
+    --eff-hi: #8c86ff;
+    --gx-space: linear-gradient(90deg, #0b0b1c, #101030);
+    --gx-line: rgba(120, 130, 255, 0.35);
+    --gx-thumb: #6f82ff;
+    --gx-glow: rgba(100, 120, 255, 0.6);
+    --gx-ink: #9fb0ff;
+    --gx-ray: #c9d2ff;
+    --gx-pal: "#3b4cff,#6d5dfc,#a855f7,#e879f9,#38bdf8,#c7d2fe";
+    --gx-light: 0;
+  }
+}
+
+/* ---------- the box ---------- */
+.cmp {
+  position: relative;
+  width: min(680px, 100%);
+}
 .composer {
-  width: min(600px, 100%);
+  --e1: var(--edge-hi);
+  --e2: var(--edge-lo);
+  width: 100%;
+  position: relative;
+  z-index: 2;
+  border: 1px solid transparent;
+  border-radius: 20px;
+  background:
+    linear-gradient(180deg, var(--surface-hi), var(--surface-lo)) padding-box,
+    linear-gradient(180deg, var(--e1), var(--e2)) border-box;
+  box-shadow:
+    inset 0 1px 0 var(--rim),
+    0 0 0 4px var(--halo),
+    var(--lift);
+  transition: box-shadow 0.25s var(--out);
+}
+.composer:focus-within,
+.composer.focus {
+  --e1: var(--edge-focus);
+  border-color: transparent;
+  box-shadow:
+    inset 0 1px 0 var(--rim),
+    0 0 0 4px var(--halo),
+    var(--lift-focus);
+}
+.composer.full,
+.composer.full:focus-within {
+  --e1: var(--edge-warn-hi);
+  --e2: var(--edge-warn-lo);
 }
 .composer textarea {
-  font-size: 14.5px;
+  padding: 14px 16px 2px;
+  min-height: 47px;
+  max-height: 200px;
+  font-size: 15px;
+  caret-color: var(--accent);
 }
 .composer textarea[hidden] {
   display: none;
 }
 .cbar {
-  padding: 2px 6px 6px;
-}
-.plus-btn,
-.mic-btn,
-.send {
-  width: 30px;
-  height: 30px;
-}
-.send {
-  margin-left: 2px;
-  transition:
-    transform 0.12s,
-    width 0.24s cubic-bezier(0.23, 1, 0.32, 1),
-    background-color 0.15s,
-    opacity 0.12s;
+  gap: 2px;
+  padding: 6px 8px 8px;
 }
 
-/* The microphone: its capsule fills with the real level of the voice. */
-.mic-btn {
+/* ---------- buttons and chips ---------- */
+.cmp :is(.plus-btn, .mic-btn) {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
   display: grid;
   place-items: center;
-  border-radius: 8px;
   color: var(--muted);
   flex: none;
   transition:
-    background-color 0.18s,
-    color 0.18s,
-    transform 0.14s cubic-bezier(0.23, 1, 0.32, 1);
+    background-color 0.15s,
+    color 0.15s,
+    transform 0.14s var(--out);
 }
-.mic-btn:hover {
+.cmp :is(.plus-btn, .mic-btn):hover:not(:disabled),
+.cmp .plus-btn[aria-expanded="true"] {
   background: var(--hover);
   color: var(--fg);
 }
-.mic-btn:active {
-  transform: scale(0.9);
+.cmp :is(.plus-btn, .mic-btn):active:not(:disabled) {
+  transform: scale(0.94);
+  background: var(--press);
 }
+.cmp .plus-btn svg {
+  transition: transform 0.2s var(--out);
+}
+.cmp .plus-btn[aria-expanded="true"] svg {
+  transform: rotate(45deg);
+}
+.cmp .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  min-width: 0;
+  transition:
+    background-color 0.15s,
+    color 0.15s,
+    transform 0.14s var(--out);
+}
+.cmp .chip:hover:not(:disabled),
+.cmp .chip[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--edge-hi);
+}
+.cmp .chip:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.cmp .chip .caret {
+  opacity: 0.55;
+  flex: none;
+  transition: transform 0.2s var(--out);
+}
+.cmp .chip[aria-expanded="true"] .caret {
+  transform: rotate(180deg);
+}
+.cmp .chip.full,
+.cmp .chip.full:hover {
+  color: var(--warn);
+}
+.cmp .agentchip {
+  padding: 0 8px 0 6px;
+  max-width: 62%;
+}
+.cmp .agentchip .lbl {
+  display: inline-flex;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+}
+.cmp .agentchip .nm {
+  color: var(--fg);
+  font-weight: 500;
+}
+.cmp .agentchip :is(.mdl, .mode) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmp .gxs {
+  color: var(--gx-ink);
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.ca-wrap,
+.ag-wrap,
+.tray-at {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+.ag-wrap {
+  max-width: 62%;
+}
+.ag-wrap .agentchip {
+  max-width: 100%;
+}
+
+/* ---------- send, stop, queue ---------- */
+.cmp .send {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+  margin-left: 2px;
+  background: linear-gradient(180deg, var(--send-top), var(--fg) 70%);
+  color: var(--bg);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    0 1px 2px rgba(0, 0, 0, 0.18),
+    0 4px 10px -4px rgba(0, 0, 0, 0.3);
+  transition:
+    opacity 0.15s,
+    transform 0.14s var(--out);
+}
+.cmp .send:hover:not(:disabled) {
+  opacity: 0.88;
+}
+.cmp .send:active:not(:disabled) {
+  transform: scale(0.92);
+}
+.cmp .send:disabled {
+  opacity: 0.28;
+  cursor: default;
+  box-shadow: none;
+}
+.cmp .send.soft {
+  background: var(--card);
+  color: var(--fg);
+  box-shadow: inset 0 0 0 1px var(--edge-hi);
+}
+.cmp .send.alt {
+  width: auto;
+  padding: 0 12px 0 10px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.cmp .send.vox {
+  width: auto;
+  padding: 0 12px 0 10px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.vx-sq {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: currentColor;
+  flex: none;
+}
+.cqueue {
+  display: grid;
+  gap: 6px;
+  margin: 0 6px 8px;
+}
+.qm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-radius: 12px;
+  background: var(--card);
+  border: 1px dashed var(--line2);
+  font-size: 13px;
+  color: var(--fg2);
+}
+.qm .t {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.qm .l {
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.qm button {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.qm button:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+/* ---------- dictation: the mic capsule fills with the real level, a thin line follows it ---------- */
 .mic .mic-fill {
   transform-box: fill-box;
   transform-origin: 50% 100%;
   transform: scaleY(0);
 }
-.vx-on .mic-btn {
+.cmp .mic-btn.rec {
   color: var(--accent);
   background: var(--accent-soft);
 }
-.vx-on .mic .mic-fill {
+.voice .mic .mic-fill {
   transform: scaleY(var(--lv, 0));
   transition: transform 0.1s linear;
 }
-
-/* Five bars: still at rest, they follow the voice while it is heard. */
-.vw {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 14px;
-  flex: none;
+.vlevel {
+  height: 0;
+  overflow: hidden;
+  padding: 0 16px;
+  transition: height 0.2s var(--out);
 }
-.vw i {
+.voice .vlevel {
+  height: 10px;
+}
+.vlevel i {
   display: block;
-  width: 1.6px;
-  border-radius: 2px;
-  background: currentColor;
-}
-.vw i:nth-child(1),
-.vw i:nth-child(5) {
-  height: 3px;
-}
-.vw i:nth-child(2) {
-  height: 8px;
-}
-.vw i:nth-child(3) {
-  height: 13px;
-}
-.vw i:nth-child(4) {
-  height: 7px;
-}
-.send.vox {
-  width: 92px;
-  border-radius: 999px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
+  height: 2px;
+  border-radius: 1px;
   background: var(--accent);
-  color: #fff;
-}
-.send.vox .vw {
-  transform: scaleY(calc(0.3 + var(--lv, 0) * 0.9));
-  transition: transform 0.08s linear;
-}
-.vx-sq {
-  width: 9px;
-  height: 9px;
-  border-radius: 2.5px;
-  background: #fff;
-  flex: none;
-}
-.vx-t {
-  font-size: 11.5px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-/* While dictating: the words heard, a cancel button and the voice's level. */
-.composer.vx-on {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--line2));
-  box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--accent) calc(8% + var(--lv, 0) * 20%), transparent),
-    0 10px 28px -18px rgba(0, 0, 0, 0.22);
+  width: calc(var(--lv, 0) * 100%);
+  min-width: 6px;
+  opacity: 0.85;
+  transition: width 80ms linear;
 }
 .vxp {
-  padding: 11px 14px 2px;
-  display: grid;
-  gap: 8px;
-  animation: vxp-in 0.22s cubic-bezier(0.23, 1, 0.32, 1);
+  padding: 14px 16px 2px;
+  animation: vxp-in 0.22s var(--out);
 }
 .vxp-t {
   font-size: 15px;
-  line-height: 1.45;
-  min-height: 22px;
+  line-height: 1.5;
+  min-height: 45px;
   text-align: left;
   overflow-wrap: anywhere;
 }
@@ -144,40 +457,6 @@
 .vxp-cur {
   color: var(--accent);
 }
-.vxp-w {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 24px;
-}
-.vxp-x {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-  background: var(--card);
-  flex: none;
-}
-.vxp-x:hover {
-  color: var(--fg);
-}
-.vxp-level {
-  flex: 1;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--line);
-  overflow: hidden;
-}
-.vxp-level i {
-  display: block;
-  height: 100%;
-  background: var(--accent);
-  transform-origin: 0 50%;
-  transform: scaleX(var(--lv, 0));
-  transition: transform 0.08s linear;
-}
 @keyframes vxp-in {
   from {
     opacity: 0;
@@ -185,132 +464,779 @@
   }
 }
 
-/* « Branche à part » lives in the « + » menu; this mark only says it is on. */
-.perm.branch.mark {
+/* ---------- the tray under the box ---------- */
+.tray {
+  position: relative;
+  z-index: 1;
+  margin: -18px 8px 0;
+  padding: 24px 8px 6px;
+  background: var(--tray);
+  border: 1px solid var(--edge-hi);
+  border-top: 0;
+  border-radius: 0 0 16px 16px;
+  box-shadow: inset 0 10px 12px -10px var(--rim-tray);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12.5px;
+  color: var(--muted);
+  min-height: 46px;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s;
+}
+.tray .tb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 7px;
+  white-space: nowrap;
+  min-width: 0;
+  color: inherit;
+  transition:
+    background-color 0.15s,
+    color 0.15s;
+}
+.tray .tb > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tray .tb:hover:not(:disabled, .static),
+.tray .tb[aria-expanded="true"] {
+  background: var(--hover);
+  color: var(--fg);
+}
+.tray .tb:disabled {
+  cursor: default;
+  opacity: 1;
+}
+.tray .tb.on {
+  color: var(--accent);
+}
+.tray .tb .br {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  max-width: 220px;
+}
+.tray .tb.hint {
+  color: var(--faint);
+}
+.tray .dv {
+  width: 1px;
+  height: 14px;
+  background: var(--line2);
+  margin: 0 4px;
   flex: none;
+}
+.tray .grow {
+  flex: 1;
+}
+.tray .mcp {
+  display: flex;
+  align-items: center;
+  padding-left: 4px;
+}
+.tray .mcp span {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 9px;
+  font-weight: 650;
+  color: #fff;
+  box-shadow: 0 0 0 2px var(--tray);
+  margin-left: -5px;
+}
+/* Quota: a row on top of the context row, which stays. */
+.tray.q2 {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 20px 0 4px;
+}
+.tray.q2.w {
+  background: var(--warn-bg);
+  border-color: var(--warn-line);
+  color: var(--fg2);
+}
+.tray.q2.e {
+  background: var(--err-bg);
+  border-color: var(--err-line);
+  color: var(--fg2);
+}
+.tray .qrow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 6px 6px 14px;
+  margin: 0 0 4px;
+  border-bottom: 1px solid var(--warn-line);
+}
+.tray.e .qrow {
+  border-bottom-color: var(--err-line);
+}
+.tray .crow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px;
+  color: var(--muted);
+  min-width: 0;
+}
+.tray .meter {
+  width: 44px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--warn-line);
+  overflow: hidden;
+  flex: none;
+}
+.tray.e .meter {
+  background: var(--err-line);
+}
+.tray .meter i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--warn-bar);
+}
+.tray.e .meter i {
+  background: var(--err);
+}
+.tray .qt {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tray .qw {
+  color: var(--muted);
+}
+.tray .qa {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--fg);
+  font-weight: 500;
+  box-shadow:
+    0 0 0 1px var(--warn-line),
+    0 1px 2px rgba(0, 0, 0, 0.05);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.tray.e .qa {
+  box-shadow:
+    0 0 0 1px var(--err-line),
+    0 1px 2px rgba(0, 0, 0, 0.05);
+}
+.tray .qa:hover {
+  background: var(--hover);
+}
+.tray .qx {
   width: 26px;
-  padding: 0;
-  justify-content: center;
+  height: 26px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  flex: none;
+}
+.tray .qx:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+
+/* ---------- menus: anchored to their button, sized to their content ---------- */
+.cmp .menu {
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(180deg, var(--edge-hi), var(--edge-lo)) border-box;
+  box-shadow:
+    inset 0 1px 0 var(--rim),
+    var(--float);
+  padding: 6px;
+  animation: popin 0.16s var(--out);
+}
+@keyframes popin {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+}
+.cmp .menu.anchored {
+  bottom: calc(100% + 6px);
+  width: min(var(--w, 280px), calc(100vw - 24px));
+  max-width: none;
+  max-height: min(440px, calc(100dvh - 160px));
+}
+.cmp .menu.anchored.left {
+  left: -4px;
+  right: auto;
+  transform-origin: left bottom;
+}
+.cmp .menu.anchored.right {
+  right: -4px;
+  left: auto;
+  transform-origin: right bottom;
+}
+.cmp .plus-menu {
+  --w: 272px;
+}
+/* The model sheet opens above the agent's chip, edge-aligned with it. */
+.cmp .ag-wrap .menu.mpick {
+  left: auto;
+  right: -4px;
+  bottom: calc(100% + 6px);
+  width: 320px;
+  transform-origin: right bottom;
+}
+/* The / @ $ lists sit on the text box. */
+.cmp .menu.suggest {
+  left: 12px;
+  right: auto;
+  width: min(340px, calc(100% - 24px));
+  bottom: calc(100% - 2px);
+  animation: none;
+}
+.cmp .menu button {
+  border-radius: 10px;
+  min-height: 32px;
+  padding: 6px 8px;
+}
+.cmp .menu button:hover:not(:disabled),
+.cmp .menu.suggest button.on {
+  background: var(--hover);
+  box-shadow: inset 0 0 0 1px var(--edge-hi);
+}
+.cmp .menu.suggest button:hover:not(.on) {
+  box-shadow: none;
+}
+.cmp .menu-h {
+  margin: 0;
+  padding: 6px 10px 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--faint);
+}
+.cmp .menu .tx {
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.cmp .menu .tx small {
+  font-weight: 400;
+  color: var(--muted);
+  margin-top: 1px;
+}
+.cmp .menu .tx small.one {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmp .menu button > kbd {
+  margin-left: auto;
+}
+.cmp :is(.ca-ic, .plus-k) {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  flex: none;
+  background: var(--card);
+  box-shadow:
+    inset 0 0 0 1px var(--edge-hi),
+    inset 0 1px 0 var(--rim);
+  font-size: 12px;
+}
+.cmp .ca-ic.warn {
+  color: var(--warn);
+}
+.cmp .ca-ic.plain {
+  background: none;
+  box-shadow: none;
+}
+.cmp .plus-k .sk {
+  color: var(--accent);
+  font-weight: 600;
+}
+.cmp .menu .on-mark {
+  width: 16px;
+  display: grid;
+  place-items: center;
+  flex: none;
 }
 .menu-sep {
   height: 1px;
-  margin: 4px 6px;
-  background: var(--line);
+  margin: 5px 6px;
+  background: linear-gradient(90deg, transparent, var(--line) 12%, var(--line) 88%, transparent);
 }
-.plus-on {
-  margin-left: auto;
+.menu-foot {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 9px 4px;
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--faint);
+}
+.menu-foot .grow {
+  flex: 1;
+  min-width: 0;
+}
+.menu .lnk,
+.cmp .menu button.lnk {
+  min-height: 0;
+  padding: 2px 4px;
+  font-size: 12px;
   color: var(--accent);
+  font-weight: 500;
+}
+.mcp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 6px 8px;
+}
+.mcp-b {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
   display: grid;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 650;
+  color: #fff;
+  flex: none;
 }
 
-/* Clicking in the composer lights its edge, as in the mockup; only while it has the focus. */
-@property --ga {
-  syntax: "<angle>";
-  inherits: false;
-  initial-value: 0deg;
+/* ---------- effort: one slider, the model's own levels; its top level is « Galaxie » ---------- */
+.eff {
+  padding: 6px 10px;
+  display: grid;
+  gap: 6px;
 }
-.composer::before,
-.composer::after {
+.eff .eh {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.eff .el {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.eff .ev {
+  display: inline-block;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg);
+  transition: color 0.2s;
+}
+.eff .ev.in {
+  animation: evin 0.22s var(--out);
+}
+.eff:has(.trk.drag) .ev.in {
+  animation: none;
+}
+.eff .ev.gx {
+  color: var(--gx-ink);
+}
+.eff .ev small {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 11.5px;
+  margin-left: 4px;
+}
+@keyframes evin {
+  from {
+    opacity: 0;
+    filter: blur(4px);
+    transform: translateX(-4px);
+  }
+}
+.eff .ends {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+/* One animated value: the fill, the thumb, its colour and its glow move together. */
+@property --p {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+.trk {
+  --p: 0;
+  /* The thumb's ring and the glow take the colour of the level, pink at the bottom. */
+  --eff-th: color-mix(in oklab, var(--eff-lo), var(--eff-hi) calc(var(--p) * 100%));
+  position: relative;
+  height: 30px;
+  border-radius: 15px;
+  background: var(--trk);
+  box-shadow: inset 0 0 0 1px var(--edge-hi);
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+  transition:
+    --p 0.3s var(--out),
+    box-shadow 0.35s var(--out);
+}
+.trk.drag {
+  transition: box-shadow 0.35s var(--out);
+  cursor: grabbing;
+}
+.trk:focus-visible {
+  box-shadow:
+    inset 0 0 0 1px var(--edge-hi),
+    0 0 0 3px var(--accent-soft);
+}
+.trk .fill {
+  position: absolute;
+  inset: 0;
+  border-radius: 15px;
+  /* One gradient across the whole track, uncovered by a clip: it never stretches. */
+  background: linear-gradient(
+    90deg,
+    var(--eff-a),
+    var(--eff-b) 35%,
+    var(--eff-c) 70%,
+    var(--eff-d)
+  );
+  clip-path: inset(0 calc((100% - 30px) * (1 - var(--p))) 0 0 round 15px);
+  opacity: calc(0.7 + 0.3 * var(--p));
+  transition: opacity 0.35s var(--out);
+}
+.trk .nt {
+  position: absolute;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: var(--line2);
+  left: calc(15px + (100% - 30px) * var(--x));
+}
+.trk .nt.rec {
+  width: 2px;
+  height: 10px;
+  margin: -5px 0 0 -1px;
+  border-radius: 1px;
+  background: var(--muted);
+}
+.trk .th {
+  position: absolute;
+  top: 50%;
+  left: calc(15px + (100% - 30px) * var(--p));
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  filter: drop-shadow(0 0 0.6px var(--eff-th)) drop-shadow(0 0 0.6px var(--eff-th))
+    drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18))
+    drop-shadow(0 0 calc(3px + 9px * var(--p)) color-mix(in oklab, var(--eff-th) 75%, transparent));
+  transition:
+    color 0.35s var(--out),
+    filter 0.35s var(--out),
+    transform 0.2s var(--out);
+  z-index: 2;
+  will-change: left;
+}
+.trk.drag .th {
+  transform: scale(1.12);
+}
+.trk .th svg {
+  width: 24px;
+  height: 24px;
+}
+.trk canvas {
+  position: absolute;
+  left: -40px;
+  top: -40px;
+  width: calc(100% + 80px);
+  height: calc(100% + 80px);
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0;
+  transition: opacity 0.35s var(--out);
+}
+/* The Galaxie background fades in on its own layer rather than switching at once. */
+.trk::before {
   content: "";
   position: absolute;
-  inset: -1.5px;
-  border-radius: inherit;
-  padding: 1.5px;
-  background: conic-gradient(
-    from var(--ga),
-    transparent 0deg 205deg,
-    color-mix(in srgb, var(--accent) 35%, transparent) 240deg,
-    var(--accent) 275deg,
-    #c792ea 305deg,
-    #e5779a 330deg,
-    var(--warn) 350deg,
-    transparent 360deg
-  );
-  mask:
-    linear-gradient(#000 0 0) content-box,
-    linear-gradient(#000 0 0);
-  mask-composite: exclude;
+  inset: 0;
+  border-radius: 15px;
+  background: var(--gx-space);
   opacity: 0;
-  transition: opacity 0.25s;
+  transition: opacity 0.4s var(--out);
   pointer-events: none;
-  animation: glow-spin 4.2s linear infinite paused;
-  z-index: 0;
 }
-.composer::after {
-  inset: -3px;
-  padding: 3px;
-  filter: blur(7px);
+.trk.gx {
+  box-shadow: inset 0 0 0 1px var(--gx-line);
 }
-.composer:focus-within::before {
+.trk.gx::before,
+.trk.gx canvas {
   opacity: 1;
-  animation-play-state: running;
 }
-.composer:focus-within::after {
-  opacity: 0.45;
-  animation-play-state: running;
-}
-.composer.vx-on::before,
-.composer.vx-on::after {
+.trk.gx .fill {
   opacity: 0;
 }
-@keyframes glow-spin {
-  to {
-    --ga: 360deg;
+.trk.gx .nt {
+  background: var(--gx-line);
+}
+.trk.gx .th {
+  color: var(--gx-thumb);
+  filter: drop-shadow(0 0 8px var(--gx-glow)) drop-shadow(0 0 2px var(--gx-glow));
+}
+/* « Galaxie » reached: one show, then calm. */
+.trk.gx-in {
+  animation: gxpulse 1.1s var(--out);
+}
+@keyframes gxpulse {
+  0% {
+    box-shadow:
+      inset 0 0 0 1px var(--gx-line),
+      0 0 0 0 var(--gx-glow);
+  }
+  35% {
+    box-shadow:
+      inset 0 0 0 1px var(--gx-thumb),
+      0 0 22px 4px var(--gx-glow);
+  }
+  100% {
+    box-shadow:
+      inset 0 0 0 1px var(--gx-line),
+      0 0 0 12px transparent;
   }
 }
-@media (prefers-reduced-motion: reduce) {
-  .composer::before,
-  .composer::after {
-    animation: none;
+.trk.gx-in::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 15px;
+  pointer-events: none;
+  z-index: 1;
+  background: linear-gradient(
+      100deg,
+      transparent 30%,
+      rgba(255, 255, 255, 0.85) 48%,
+      transparent 62%
+    )
+    no-repeat;
+  background-size: 60% 100%;
+  animation: gxsheen 0.9s 0.1s var(--out) both;
+  mix-blend-mode: soft-light;
+}
+@keyframes gxsheen {
+  from {
+    background-position: -120% 0;
   }
+  to {
+    background-position: 260% 0;
+  }
+}
+.trk.gx-in .th {
+  animation: gxthumb 0.8s cubic-bezier(0.22, 1.2, 0.36, 1);
+}
+@keyframes gxthumb {
+  0% {
+    transform: scale(1) rotate(0);
+  }
+  35% {
+    transform: scale(1.4) rotate(220deg);
+  }
+  100% {
+    transform: scale(1) rotate(360deg);
+  }
+}
+.eff .ev.gx.shine {
+  background: linear-gradient(90deg, var(--gx-ink), #e2559f, #a855f7, var(--gx-ink)) 0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation:
+    evin 0.22s var(--out),
+    gxtext 1.6s 0.1s ease-out both;
+}
+.eff .ev.gx.shine small {
+  -webkit-text-fill-color: var(--muted);
+}
+@keyframes gxtext {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+.cmp .gxs {
+  animation: gxchip 0.6s var(--out);
+}
+@keyframes gxchip {
+  0% {
+    opacity: 0;
+    transform: scale(0.4) rotate(-90deg);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.3) rotate(12deg);
+  }
+  100% {
+    transform: none;
+  }
+}
+.cmp .menu.mpick {
+  overflow-x: hidden;
+}
+.eff .recl {
+  position: relative;
+  height: 14px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.eff .recl span {
+  position: absolute;
+  left: calc(15px + (100% - 30px) * var(--x));
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
-/* A phone: one line (+, text, microphone, voice) until the composer is used. */
+/* The collapsed phone composer keeps the agent and full access in sight. */
+.cmp-lead {
+  display: none;
+}
+.cmp-lead button {
+  height: 32px;
+  padding: 0 6px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--warn);
+}
+
+/* ---------- phone ---------- */
 @media (max-width: 860px) {
-  .composer:not(.open) {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 6px;
+  .composer {
+    --e1: color-mix(in srgb, var(--edge-hi) 60%, var(--accent) 18%);
+    --e2: var(--edge-lo);
+    border-radius: 24px;
   }
-  .composer:not(.open) .cbar {
-    display: contents;
+  .cmp:not(.open) .composer {
+    border-radius: 26px;
   }
-  .composer:not(.open) .plus {
-    order: 1;
+  .composer textarea {
+    padding: 12px 14px 0;
+    min-height: 34px;
+    font-size: 16px;
   }
-  .composer:not(.open) textarea {
-    order: 2;
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    height: 34px !important;
-    padding: 6px;
+  .cmp:not(.open) .composer textarea {
+    padding: 12px 92px 12px 44px;
+    height: 46px !important;
     white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
   }
-  .composer:not(.open) .mic-btn {
-    order: 3;
+  .cmp:not(.open).fullacc .composer textarea {
+    padding-left: 62px;
   }
-  .composer:not(.open) .send {
-    order: 4;
-    width: 34px;
-    height: 34px;
+  .cmp:not(.open) .cbar {
+    position: absolute;
+    right: 0;
+    top: 0;
+    padding: 7px 6px;
   }
-  .composer:not(.open) :is(.agentchip, .grow, .perm, .gauge-wrap) {
+  .cmp:not(.open) .cbar > :not(.mic-btn, .send) {
     display: none;
   }
-  .composer.open .cbar {
-    animation: cbar-in 0.2s cubic-bezier(0.23, 1, 0.32, 1);
+  .cmp:not(.open) .cmp-lead {
+    display: flex;
+    position: absolute;
+    left: 6px;
+    top: 7px;
+    align-items: center;
+    gap: 2px;
+    z-index: 1;
   }
-  .composer:not(.open) .mic-btn {
-    width: 28px;
-    height: 28px;
+  .cmp.open .cbar {
+    animation: cbar-in 0.2s var(--out);
+  }
+  .tray {
+    margin: -20px 10px 0;
+    padding-top: 26px;
+    border-radius: 0 0 20px 20px;
+    border: 1px solid transparent;
+    border-top: 0;
+    background:
+      linear-gradient(var(--tray), var(--tray)) padding-box,
+      linear-gradient(180deg, transparent 30%, var(--edge-lo)) border-box;
+    box-shadow:
+      inset 0 12px 14px -12px var(--rim-tray),
+      0 1px 0 var(--rim);
+  }
+  .tray.q2.w {
+    background:
+      linear-gradient(var(--warn-bg), var(--warn-bg)) padding-box,
+      linear-gradient(180deg, transparent 30%, var(--warn-line)) border-box;
+  }
+  .tray.q2.e {
+    background:
+      linear-gradient(var(--err-bg), var(--err-bg)) padding-box,
+      linear-gradient(180deg, transparent 30%, var(--err-line)) border-box;
+  }
+  .tray .tb {
+    height: 36px;
+  }
+  /* 44 px to touch, without changing the drawing. */
+  .cmp :is(.plus-btn, .mic-btn, .send, .chip, .cmp-lead button) {
+    position: relative;
+  }
+  .cmp :is(.plus-btn, .mic-btn, .send, .chip, .cmp-lead button)::before {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
+  /* Small menus stay anchored to their button rather than becoming a sheet. */
+  .cmp .menu.anchored {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    width: min(var(--w, 280px), calc(100vw - 24px));
+    max-height: 60dvh;
+    animation: popin 0.16s var(--out);
+  }
+  .cmp .menu.anchored.left {
+    left: -4px;
+    right: auto;
+  }
+  .cmp .menu.anchored.right {
+    right: -4px;
+    left: auto;
   }
 }
 @keyframes cbar-in {
   from {
     opacity: 0;
     transform: translateY(-4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cmp *,
+  .cmp *::before {
+    animation: none !important;
   }
 }
