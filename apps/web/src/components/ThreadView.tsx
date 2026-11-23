@@ -16,6 +16,7 @@ import {
   useState,
 } from "react";
 import { messageTokens } from "../commands.ts";
+import { imageBlob } from "../attachments.ts";
 import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
@@ -26,6 +27,7 @@ import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "
 import { GROUP_LABEL, threadLine } from "../project-threads.ts";
 import { Clamp } from "./Clamp.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { MessageImages } from "./MessageImages.tsx";
 import { TeamCard } from "./TeamCard.tsx";
 import { TeamStrip } from "./TeamStrip.tsx";
 import { withoutTeamJson } from "../team-json.ts";
@@ -543,13 +545,20 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
     setBusy(true);
     setError(null);
     try {
+      // Its images are read before the message goes, to come back in the composer with it.
+      const files = await Promise.all(
+        (item.images ?? []).map(async (image) => {
+          const blob = await imageBlob(thread.id, image.id).catch(() => undefined);
+          return blob && new File([blob], image.name, { type: image.mime });
+        }),
+      ).then((read) => read.filter((file): file is File => !!file));
       await connection.request({
         type: "thread.restore",
         requestId: newId(),
         threadId: thread.id,
         itemId: item.id,
       });
-      fillComposer(thread.id, item.text);
+      fillComposer(thread.id, item.text, files);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
@@ -559,17 +568,20 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
   return (
     <div className="u-wrap">
       {item.from === "coordinator" && <div className="u-from">Coordinateur</div>}
-      <div className="u">
-        {messageTokens(item.text).map((part, i) =>
-          part.kind ? (
-            <span key={i} className={`tok ${part.kind}`}>
-              {part.text}
-            </span>
-          ) : (
-            part.text
-          ),
-        )}
-      </div>
+      {!!item.images?.length && <MessageImages threadId={thread.id} images={item.images} />}
+      {item.text && (
+        <div className="u">
+          {messageTokens(item.text).map((part, i) =>
+            part.kind ? (
+              <span key={i} className={`tok ${part.kind}`}>
+                {part.text}
+              </span>
+            ) : (
+              part.text
+            ),
+          )}
+        </div>
+      )}
       {canRestore &&
         (confirming ? (
           <div className="u-confirm" role="group" aria-label="Revenir à ce message">

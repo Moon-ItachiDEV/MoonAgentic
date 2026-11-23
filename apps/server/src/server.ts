@@ -40,6 +40,8 @@ const hub = new Hub(store, new Agents({ demo }), {
   worktreesDir: path.join(dataDir, "worktrees"),
   quotaReaders: defaultReaders({ demo }),
 });
+// Images joined to a message that was never sent, left from an earlier run.
+hub.attachments.sweep();
 const server = createHttpServer({
   hub,
   token,

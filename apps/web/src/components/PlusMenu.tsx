@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { IconBranch, IconCheck, IconPlus } from "./icons.tsx";
+import { IconBranch, IconCamera, IconCheck, IconImage, IconPlus } from "./icons.tsx";
 import { Presence } from "./Presence.tsx";
 
 const ITEMS = [
@@ -8,13 +8,21 @@ const ITEMS = [
   { insert: "/", label: "Lancer une commande", key: "/" },
 ] as const;
 
-/** The composer's « + »: starts the word it already completes, for whoever does not type it. */
+/** A screen that is touched, so most likely a phone or a tablet with a camera. */
+const touch = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+
+/**
+ * The composer's « + »: joins an image, or starts the word the composer already completes,
+ * for whoever does not type it.
+ */
 export function PlusMenu(props: {
   open: boolean;
   disabled: boolean;
   inThread: boolean;
   onToggle: (open: boolean) => void;
   onPick: (insert: string) => void;
+  /** Opens the choice of images, or the camera for a photo taken now. */
+  onImage: (from: "files" | "camera") => void;
   /** For a new thread in a git project: whether the agent works on its own branch. */
   branch?: { on: boolean; onToggle: () => void };
 }) {
@@ -41,13 +49,28 @@ export function PlusMenu(props: {
         aria-haspopup="menu"
         aria-expanded={props.open}
         disabled={props.disabled}
-        title={props.disabled ? "Crée d'abord un projet" : "Fichier, skill ou commande"}
+        title={props.disabled ? "Crée d'abord un projet" : "Image, fichier, skill ou commande"}
         onClick={() => props.onToggle(!props.open)}
       >
         <IconPlus />
       </button>
       <Presence show={props.open}>
         <div className="menu plus-menu" role="menu">
+          <button role="menuitem" onClick={() => props.onImage("files")}>
+            <span className="plus-k">
+              <IconImage />
+            </span>
+            <span className="tx">Joindre une image</span>
+          </button>
+          {touch && (
+            <button role="menuitem" onClick={() => props.onImage("camera")}>
+              <span className="plus-k">
+                <IconCamera />
+              </span>
+              <span className="tx">Prendre une photo</span>
+            </button>
+          )}
+          <div className="menu-sep" role="separator" />
           {ITEMS.map((item) => (
             <button key={item.key} role="menuitem" onClick={() => props.onPick(item.insert)}>
               <span className="plus-k">{item.key}</span>

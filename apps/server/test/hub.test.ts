@@ -955,6 +955,83 @@ describe("Composer: files, skills, commands, pins and search", () => {
     );
   });
 
+  it("sends an image with a message, as the image itself to an agent that takes images", async () => {
+    const { dir, hub, store, projectId } = setup();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+    const first = hub.attachments.add(png, "capture.png");
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "",
+      attachments: [first.id],
+    });
+    await hub.whenIdle(threadId);
+    // Images alone name the conversation and still give the agent something to answer.
+    expect(store.getThread(threadId)?.title).toBe("Image");
+    const [sent] = store.listItems(threadId);
+    expect(sent).toMatchObject({ kind: "user", text: "", images: [first] });
+    expect(lastTurnSaid(store.listItems(threadId))).toContain("regarde l'image jointe");
+    expect(lastTurnSaid(store.listItems(threadId))).toContain(
+      "Pièces jointes : image/png, 12 octets (image).",
+    );
+    expect(hub.attachments.find(threadId, first.id)?.image).toEqual(first);
+
+    // An image that is not there stops the message: nothing is written, nothing is sent.
+    const before = store.listItems(threadId).length;
+    expect(() =>
+      hub.send(threadId, "Et celle-ci ?", undefined, undefined, undefined, undefined, ["absente"]),
+    ).toThrow("n'est plus là");
+    expect(store.listItems(threadId)).toHaveLength(before);
+    expect(store.getThread(threadId)?.status).toBe("idle");
+    const threads = store.listThreads().length;
+    expect(() =>
+      hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        text: "Regarde",
+        attachments: ["absente"],
+      }),
+    ).toThrow("n'est plus là");
+    expect(store.listThreads()).toHaveLength(threads);
+
+    // The thread's images go with it.
+    await hub.deleteThread(threadId);
+    expect(existsSync(path.join(dir, "attachments", threadId))).toBe(false);
+  });
+
+  it("links the image's file for an agent that takes no image, and names it in a hand-off", async () => {
+    process.env.MOONAGENTIC_DEMO_IMAGES = "0";
+    cleanups.push(() => {
+      delete process.env.MOONAGENTIC_DEMO_IMAGES;
+    });
+    const { hub, store, projectId } = setup();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+    const image = hub.attachments.add(png, "maquette.png");
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Regarde la maquette",
+      attachments: [image.id],
+    });
+    await hub.whenIdle(threadId);
+    expect(lastTurnSaid(store.listItems(threadId))).toContain(
+      "Pièces jointes : maquette.png (lien).",
+    );
+    // The agent that takes over is told where the earlier image is.
+    const file = hub.attachments.find(threadId, image.id)!.file;
+    expect(
+      historyBefore(
+        store.listItems(threadId),
+        "none",
+        (id) => id,
+        (id) => hub.attachments.find(threadId, id)?.file,
+      ),
+    ).toContain(`Utilisateur : Regarde la maquette [image jointe : ${file}]`);
+  });
+
   it("only links them for an agent that takes no embedded content", async () => {
     process.env.MOONAGENTIC_DEMO_EMBED = "0";
     cleanups.push(() => {

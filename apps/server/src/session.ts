@@ -3,6 +3,7 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { AGENT_QUIET_MS, AGENT_SILENCE_STOP_MS, type AgentSetting } from "@moonagentic/protocol";
 import type { AgentLaunch } from "./agents.ts";
+import type { ImageBlock } from "./attachments.ts";
 import type { PromptLink } from "./files.ts";
 import { acpMcpServers, type McpServerRecord } from "./mcp.ts";
 import { killTree, spawnPlan } from "./spawn.ts";
@@ -720,7 +721,7 @@ export class AgentSession {
   async prompt(
     text: string,
     history?: string,
-    links: PromptLink[] = [],
+    links: (PromptLink | ImageBlock)[] = [],
     inactivityMs: number = this.inactivityMs,
   ): Promise<acp.StopReason> {
     const prompt: acp.ContentBlock[] = [

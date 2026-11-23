@@ -162,7 +162,10 @@ const app = acp
         // Stands for an agent that says it resumes sessions but fails to, and can reload them.
         ...(modelStyle === "resume-fail" ? { sessionCapabilities: { resume: {} } } : {}),
         mcpCapabilities: { http: false, sse: false },
-        promptCapabilities: { embeddedContext: process.env.MOONAGENTIC_DEMO_EMBED !== "0" },
+        promptCapabilities: {
+          embeddedContext: process.env.MOONAGENTIC_DEMO_EMBED !== "0",
+          image: process.env.MOONAGENTIC_DEMO_IMAGES !== "0",
+        },
       },
       agentInfo: { name: "moonagentic-demo", version: "0.1.0" },
     };
@@ -251,11 +254,13 @@ const app = acp
     const texts = params.prompt.flatMap((b) => (b.type === "text" ? [b.text] : []));
     // Files and skills the message points at come after its text, as links or as content.
     const attached = params.prompt.flatMap((b) =>
-      b.type === "resource_link"
-        ? [`${b.name} (lien)`]
-        : b.type === "resource" && "text" in b.resource
-          ? [`${decodeURIComponent(b.resource.uri.split("/").pop() ?? "")} (texte)`]
-          : [],
+      b.type === "image"
+        ? [`${b.mimeType}, ${Buffer.from(b.data, "base64").length} octets (image)`]
+        : b.type === "resource_link"
+          ? [`${b.name} (lien)`]
+          : b.type === "resource" && "text" in b.resource
+            ? [`${decodeURIComponent(b.resource.uri.split("/").pop() ?? "")} (texte)`]
+            : [],
     );
     // The last block is the user's message; one before it carries the earlier conversation.
     const ask = texts.at(-1) ?? "";
