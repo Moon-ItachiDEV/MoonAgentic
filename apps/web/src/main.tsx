@@ -11,6 +11,7 @@ import "./github.css";
 import "./remote.css";
 import "./pull-request.css";
 import "./composer.css";
+import "./overview.css";
 import "./quotas.css";
 import "./quiet.css";
 import "./offline.css";

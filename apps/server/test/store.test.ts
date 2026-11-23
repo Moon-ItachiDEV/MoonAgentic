@@ -86,3 +86,39 @@ describe("database schema versions", () => {
     expect(() => migrate(db, ":memory:")).toThrow("version plus récente");
   });
 });
+
+describe("activity per day", () => {
+  it("counts the user's and the agents' messages by the client's day, team briefs left out", () => {
+    const store = new Store(path.join(folder(), "state.sqlite"));
+    store.addProject({ id: "p", name: "p", path: "/tmp/p", createdAt: 1 });
+    store.addThread({
+      id: "t",
+      projectId: "p",
+      title: "t",
+      agentId: "demo",
+      status: "idle",
+      permissionMode: "supervised",
+      createdAt: Date.UTC(2026, 10, 21, 8),
+      updatedAt: 0,
+    });
+    const at = (d: number, h: number) => Date.UTC(2026, 10, d, h);
+    store.putItem("t", { id: "1", kind: "user", text: "a", at: at(21, 9) });
+    store.putItem("t", { id: "2", kind: "agent", text: "b", at: at(21, 10) });
+    store.putItem("t", { id: "3", kind: "user", text: "brief", byTeam: true, at: at(21, 11) });
+    store.putItem("t", { id: "4", kind: "thought", text: "c", at: at(21, 12) });
+    // 23:30 UTC on the 22nd is already the 23rd in Paris (UTC+1, offset -60 min).
+    store.putItem("t", { id: "5", kind: "agent", text: "d", at: Date.UTC(2026, 10, 22, 23, 30) });
+    const day = (d: number) => Math.floor(Date.UTC(2026, 10, d) / 86_400_000);
+    expect(store.activityDays(0, 0)).toEqual([
+      { day: day(21), count: 2 },
+      { day: day(22), count: 1 },
+    ]);
+    expect(store.activityDays(0, -60 * 60_000)).toEqual([
+      { day: day(21), count: 2 },
+      { day: day(23), count: 1 },
+    ]);
+    expect(store.activityDays(at(22, 0), 0)).toEqual([{ day: day(22), count: 1 }]);
+    expect(store.firstThreadAt()).toBe(Date.UTC(2026, 10, 21, 8));
+    store.close();
+  });
+});

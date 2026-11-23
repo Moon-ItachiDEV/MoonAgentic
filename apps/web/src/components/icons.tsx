@@ -296,3 +296,21 @@ export const IconRefresh = ({ size = 16 }: P) => (
     <path d="M20 20v-4h-4" />
   </svg>
 );
+/** Four squares: the activity map. */
+export const IconGrid = ({ size = 14 }: P) => (
+  <svg {...fine(size)}>
+    <rect x="2" y="2" width="5" height="5" rx="1.2" />
+    <rect x="9" y="2" width="5" height="5" rx="1.2" />
+    <rect x="2" y="9" width="5" height="5" rx="1.2" />
+    <rect x="9" y="9" width="5" height="5" rx="1.2" />
+  </svg>
+);
+/** A branch going back into another: a pull request. */
+export const IconPullRequest = ({ size = 14 }: P) => (
+  <svg {...fine(size)}>
+    <circle cx="4" cy="3.5" r="1.6" />
+    <circle cx="4" cy="12.5" r="1.6" />
+    <circle cx="12" cy="12.5" r="1.6" />
+    <path d="M4 5.1v5.8M12 10.9V6.5c0-1.1-.9-2-2-2H7.5M9 3l-1.5 1.5L9 6" />
+  </svg>
+);

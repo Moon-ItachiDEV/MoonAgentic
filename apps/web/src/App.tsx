@@ -87,6 +87,8 @@ export function App() {
   const narrow = useNarrow();
   // On a computer, the side bar can be folded away, as in the mockup.
   const [sideOff, setSideOff] = useState(() => readPref("sideOff") === "true");
+  // The home page's overview, unless the user folded it away on this device.
+  const [overviewShown, setOverviewShown] = useState(() => readPref("homeOverview") !== "off");
   const foldSide = (off: boolean) => {
     setSideOff(off);
     writePref("sideOff", String(off));
@@ -432,6 +434,10 @@ export function App() {
             askRemoveProject(id);
           }}
           onOpenSettings={() => go({ name: "settings", section: "general" })}
+          onOpenSubscriptions={() => {
+            setDrawer(false);
+            go({ name: "settings", section: "subscriptions" });
+          }}
           onOpenSearch={() => {
             setDrawer(false);
             setSearchOpen(true);
@@ -760,7 +766,27 @@ export function App() {
             </Suspense>
           </ErrorBoundary>
         ) : (
-          <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
+          <Home
+            state={state}
+            project={project}
+            onNewProject={() => setCreatingProject(true)}
+            overview={{
+              shown: overviewShown,
+              narrow,
+              onToggle: (shown) => {
+                setOverviewShown(shown);
+                writePref("homeOverview", shown ? "on" : "off");
+              },
+              onOpenThread: (t) =>
+                go(
+                  t.kind === "coordinator"
+                    ? { name: "project", projectId: t.projectId }
+                    : { name: "thread", threadId: t.id },
+                ),
+              onOpenPlanner: () => go({ name: "planner" }),
+              onOpenSubscriptions: () => go({ name: "settings", section: "subscriptions" }),
+            }}
+          />
         )}
         {route.name !== "settings" &&
           route.name !== "planner" &&
@@ -769,7 +795,7 @@ export function App() {
           // Beside its threads, the coordinator's is under its own conversation.
           !(coordinator && (wide || projectTab === "threads" || beside)) && (
             <div className="dock">
-              {route.name === "home" && (narrow || sideOff) && (
+              {route.name === "home" && (narrow || sideOff) && !overviewShown && (
                 <HomeCards
                   state={state}
                   agents={state.agents}
