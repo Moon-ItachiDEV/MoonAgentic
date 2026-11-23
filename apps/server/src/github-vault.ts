@@ -29,6 +29,7 @@ function pipe(command: string, args: string[], input: string): Promise<string> {
         else resolve(stdout);
       },
     );
+    child.stdin?.on("error", () => undefined);
     child.stdin?.end(input);
   });
 }

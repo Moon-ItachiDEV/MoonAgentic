@@ -806,22 +806,38 @@ export class Store {
   /**
    * Messages from the user or an agent that contain `query`, the latest written first. A
    * team's own messages to its agents are left out: they are long, and not the user's words.
+   * Projects in `hidden` (locked ones) are excluded before `LIMIT` so they neither leak nor
+   * push visible hits out of the result set.
    */
-  searchItems(query: string, limit = 30): SearchHit[] {
+  searchItems(query: string, limit = 30, hidden: string[] = []): SearchHit[] {
     // What was written since the index was last filled is found too.
     this.indexSearch();
     // The folded text is looked for as it is, `*`, `?` and `[` included. From three letters
     // the index names the few messages to look in; shorter, the folded texts are read, the
     // latest first, until enough are found. No message is opened either way but those shown.
     const pattern = `*${fold(query).replace(/[*?[]/g, (c) => `[${c}]`)}*`;
-    const rows = this.sql(
-      `SELECT i.thread_id, i.id, i.data FROM (
-           SELECT rowid AS n FROM search_fts WHERE text GLOB ? ORDER BY rowid DESC LIMIT ?
-         ) hit
-         JOIN search_docs d ON d.n = hit.n
-         JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
-         ORDER BY hit.n DESC`,
-    ).all(pattern, limit) as { thread_id: string; id: string; data: string }[];
+    const rows = (
+      hidden.length
+        ? this.sql(
+            `SELECT i.thread_id, i.id, i.data
+               FROM search_fts f
+               JOIN search_docs d ON d.n = f.rowid
+               JOIN threads t ON t.id = d.thread_id
+               JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
+              WHERE f.text GLOB ?
+                AND t.project_id NOT IN (${hidden.map(() => "?").join(", ")})
+              ORDER BY f.rowid DESC
+              LIMIT ?`,
+          ).all(pattern, ...hidden, limit)
+        : this.sql(
+            `SELECT i.thread_id, i.id, i.data FROM (
+               SELECT rowid AS n FROM search_fts WHERE text GLOB ? ORDER BY rowid DESC LIMIT ?
+             ) hit
+             JOIN search_docs d ON d.n = hit.n
+             JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
+             ORDER BY hit.n DESC`,
+          ).all(pattern, limit)
+    ) as { thread_id: string; id: string; data: string }[];
     return rows.flatMap((row): SearchHit[] => {
       const item = JSON.parse(row.data) as Item;
       if (item.kind !== "user" && item.kind !== "agent") return [];

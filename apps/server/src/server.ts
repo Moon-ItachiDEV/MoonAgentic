@@ -66,6 +66,7 @@ setGithubAccount(github);
 void github.currentToken();
 const demo = !!(values.dev || values.demo);
 const hub = new Hub(store, new Agents({ demo }), {
+  dataDir,
   worktreesDir: path.join(dataDir, "worktrees"),
   quotaReaders: defaultReaders({ demo }),
 });
