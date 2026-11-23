@@ -57,6 +57,9 @@ interface Progress {
   editing: boolean;
   other: string;
 }
+/** How long a request is too new for a key pressed outside the card to answer it. */
+const FRESH = 800;
+
 const fresh = (id: string): Progress => ({
   id,
   hi: 0,
@@ -85,11 +88,16 @@ export function DecisionCard(props: {
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
   const waits = props.waits.filter((w) => !sent.has(w.id));
   const [current, setCurrent] = useState<string>();
-  const [folded, setFolded] = useState(false);
+  // « Plus tard » folds the requests that wait now: one that comes after opens the card again.
+  const [later, setLater] = useState<ReadonlySet<string>>(new Set());
+  const folded = waits.length > 0 && waits.every((w) => later.has(w.id));
+  const setFolded = (on: boolean) => setLater(new Set(on ? waits.map((w) => w.id) : []));
   const [progress, setProgress] = useState<Progress>(fresh(""));
   const narrow = useNarrow();
   const card = useRef<HTMLElement>(null);
   const own = useRef<HTMLInputElement>(null);
+  /** When the request on the card came up: a key already on its way is not an answer to it. */
+  const since = useRef({ id: "", at: 0 });
 
   const page = Math.max(
     0,
@@ -169,15 +177,16 @@ export function DecisionCard(props: {
     if (wait.kind === "question") return commit({ picks: multi ? p.picked : [], text });
     const no = refusal(wait.options);
     if (!no) return;
+    // The agent is still in its turn when it is refused: the server sends the words once
+    // that turn is over.
     const ok = connection.send({
       type: "permission.respond",
       threadId: wait.threadId,
       itemId: wait.id,
       optionId: no.optionId,
+      followUp: text,
     });
-    if (!ok) return;
-    done(wait.id);
-    connection.send({ type: "thread.send", threadId: wait.threadId, text });
+    if (ok) done(wait.id);
   };
 
   const confirm = () => {
@@ -194,9 +203,15 @@ export function DecisionCard(props: {
   useEffect(() => {
     if (p.editing) own.current?.focus();
   }, [p.editing, p.id, p.step]);
+  const waitId = wait?.id ?? "";
+  useEffect(() => {
+    since.current = { id: waitId, at: Date.now() };
+  }, [waitId]);
 
   // Keys act from the card, from the empty composer, or with nothing focused: never while
-  // the user types, nor from a menu or a dialog that has its own keys.
+  // the user types, nor from a menu or a dialog that has its own keys. From outside the
+  // card a key may be the first of a message, so it never answers a permission from the
+  // composer, a request of another thread, or one that has only just come up.
   const keys = useRef<(event: KeyboardEvent) => void>(() => undefined);
   keys.current = (event) => {
     if (!wait || folded || event.defaultPrevented) return;
@@ -209,6 +224,9 @@ export function DecisionCard(props: {
       if (document.querySelector(".dcard") !== card.current) return;
       const typing = target instanceof HTMLTextAreaElement && target.value === "";
       if (!typing && target !== document.body && target !== null) return;
+      if (wait.threadId !== props.threadId) return;
+      if (typing && wait.kind === "permission") return;
+      if (since.current.id !== wait.id || Date.now() - since.current.at < FRESH) return;
     } else if (target === own.current) return;
     const action = cardKey(event.key, Math.min(rows, 9), waits.length);
     if (!action) return;

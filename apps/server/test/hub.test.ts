@@ -233,6 +233,34 @@ describe("Hub with the demo agent", () => {
     expect(client.messages.some((m) => m.type === "append")).toBe(true);
   });
 
+  it("sends what the user says with a refusal once the turn that asked is over", async () => {
+    const { hub, store, client, projectId } = setup();
+    const asked = client.next(isPermissionRequest);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+    });
+    client.openThreadIds = new Set([threadId]);
+    const request = await asked;
+    if (request.type !== "item") throw new Error("unreachable");
+    // The agent is still in its turn: a message sent now would be turned away.
+    expect(() => hub.send(threadId, "Pas ce fichier")).toThrow("L'agent travaille encore");
+    hub.respondToPermission(threadId, request.item.id, "reject", "Pas ce fichier");
+    // The words open the next turn, after the agent has taken the refusal.
+    const said = () =>
+      store.listItems(threadId).flatMap((i) => (i.kind === "user" ? [i.text] : []));
+    await expect.poll(said).toEqual(["Corrige la réponse", "Pas ce fichier"]);
+    expect(
+      store
+        .listItems(threadId)
+        .some((i) => i.kind === "agent" && i.text.includes("je ne touche à rien")),
+    ).toBe(true);
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+  });
+
   it("answers permission requests itself in full access", async () => {
     const { hub, store, projectId } = setup();
     const threadId = hub.createThread({

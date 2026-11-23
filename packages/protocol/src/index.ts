@@ -1214,11 +1214,17 @@ export const ClientMessage = z.discriminatedUnion("type", [
     parent: z.string().trim().min(1).max(4096),
     name: z.string().trim().min(1).max(120).optional(),
   }),
+  /**
+   * Answers a permission request. `followUp` is what the user says with a refusal: the
+   * server sends it as their next message once the turn that asked is over, since no
+   * message can go to an agent still at work.
+   */
   z.object({
     type: z.literal("permission.respond"),
     threadId: id,
     itemId: id,
     optionId: id,
+    followUp: z.string().trim().min(1).max(4000).optional(),
   }),
   /** Answers a question the agent holds its turn on: one answer per question, in order. */
   z.object({

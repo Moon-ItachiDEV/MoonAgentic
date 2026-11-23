@@ -119,7 +119,9 @@ describe("decision card", () => {
     expect(box!.width).toBe(below!.width);
     expect(box!.y + box!.height).toBeLessThanOrEqual(below!.y - 8);
 
-    // From the empty composer: the arrows move, a digit answers.
+    // From the empty composer: the arrows move, a digit answers, once the question has
+    // been there long enough to be read.
+    await page.waitForTimeout(900);
     await composer(page).focus();
     await page.keyboard.press("ArrowDown");
     await expect.poll(() => card(page).locator(".dcard-o.hi").textContent()).toContain("SQS");
@@ -165,8 +167,32 @@ describe("decision card", () => {
       .poll(() => card(page).locator(".dcard-o .dcard-on").allTextContents())
       .toEqual(["Autoriser", "Refuser", "Autre chose…"]);
     await shot(page, "a5-approbation");
-    await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: /Rouvrir la demande/ }).click();
+    // A key from the composer may be the first of a message: it never allows.
+    await page.waitForTimeout(900);
+    await composer(page).focus();
+    await page.keyboard.press("1");
+    await expect.poll(() => composer(page).inputValue()).toBe("1");
+    expect(await card(page).count()).toBe(1);
+    await composer(page).fill("");
+
+    // The user's own words refuse, and go to the agent once its turn is over.
+    await card(page)
+      .getByRole("button", { name: /Autre chose/ })
+      .click();
+    await card(page).getByLabel("Ta réponse").fill("Pas ce fichier, regarde les tests");
+    await page.keyboard.press("Enter");
+    await page.getByText("D'accord, je ne touche à rien.").waitFor();
+    await page.getByText("Tu m'as demandé : « Pas ce fichier, regarde les tests »").waitFor();
+
+    // Put off, a request stays folded; the one that comes after opens the card again.
+    await card(page).getByRole("heading", { name: "Modifier src/app.ts" }).waitFor();
+    await card(page).getByRole("button", { name: "Plus tard" }).click();
+    await page.getByRole("button", { name: /Rouvrir la demande/ }).waitFor();
+    await page.getByRole("button", { name: "Arrêter", exact: true }).click();
+    await expect
+      .poll(() => page.getByRole("button", { name: /Rouvrir la demande/ }).count())
+      .toBe(0);
+    await say(page, "Corrige la réponse");
     await card(page)
       .getByRole("button", { name: /Autoriser/ })
       .click();

@@ -244,6 +244,8 @@ export class Hub {
    * Questions an agent holds its turn on, by item: each also waits in `pendingPermissions`,
    * so whatever cancels a permission request (a stop, the agent ending) cancels it too.
    */
+  /** What the user said with a refusal, by thread: their next message, once the turn is over. */
+  private readonly followUps = new Map<string, string>();
   private readonly pendingForms = new Map<
     string,
     { form: FormQuestions; answer: (r: acp.CreateElicitationResponse) => void }
@@ -855,7 +857,12 @@ export class Hub {
         this.catalog.removeCustomAgent(message.agentId);
         return;
       case "permission.respond":
-        this.respondToPermission(message.threadId, message.itemId, message.optionId);
+        this.respondToPermission(
+          message.threadId,
+          message.itemId,
+          message.optionId,
+          message.followUp,
+        );
         return;
       case "question.respond":
         this.respondToQuestion(message.threadId, message.itemId, message.answers);
@@ -1151,6 +1158,17 @@ export class Hub {
         if (!this.closed) this.teams.turnEnded(threadId, cancelled);
       } catch (error) {
         console.error("Équipe :", error);
+      }
+      // What the user said with a refusal is their next message, now that the agent can
+      // take one. A turn they stopped starts nothing, so the words go with it.
+      const followUp = this.followUps.get(threadId);
+      this.followUps.delete(threadId);
+      if (followUp && !this.closed && !cancelled && !this.turns.has(threadId)) {
+        try {
+          this.send(threadId, followUp);
+        } catch (error) {
+          console.error("Message après un refus :", error);
+        }
       }
       // A turn the user stopped starts nothing by itself: what waits goes after the next one.
       if (!this.closed && !cancelled) this.coordinators.sendQueued(threadId);
@@ -1845,7 +1863,11 @@ export class Hub {
     }
   }
 
-  respondToPermission(threadId: string, itemId: string, optionId: string): void {
+  /**
+   * Answers a permission request. `followUp`, the user's own words with a refusal, goes
+   * to the agent as their next message as soon as the turn that asked is over.
+   */
+  respondToPermission(threadId: string, itemId: string, optionId: string, followUp?: string): void {
     const pending = this.pendingPermissions.get(itemId);
     const item = this.store.getItem(threadId, itemId);
     if (!pending || pending.threadId !== threadId || item?.kind !== "permission") {
@@ -1853,6 +1875,7 @@ export class Hub {
     }
     if (!item.options.some((o) => o.optionId === optionId)) throw new Error("Choix inconnu.");
     this.pendingPermissions.delete(itemId);
+    if (followUp?.trim() && this.turns.has(threadId)) this.followUps.set(threadId, followUp.trim());
     this.putItem(threadId, { ...item, outcome: optionId });
     this.broadcastRequests();
     if (![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)) {
