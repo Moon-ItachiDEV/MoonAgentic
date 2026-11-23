@@ -106,6 +106,20 @@ describe("ServerProcess", () => {
     expect(kinds.slice(0, 5)).toEqual(["starting", "ready", "restarting", "starting", "ready"]);
     expect(server.state.kind).toBe("stopped");
   });
+
+  it("keeps saying why the server ended once it has ended", async () => {
+    const { server, states } = run("already");
+    server.start();
+    await until(states, (s) =>
+      s.some((x) => x.kind === "restarting" && x.reason.includes("repart")),
+    );
+    await server.stop();
+    const restarting = states.filter((s) => s.kind === "restarting");
+    expect(restarting.at(-1)).toEqual({
+      kind: "restarting",
+      reason: expect.stringMatching(/tourne déjà.*Nouvel essai : il repart dans 1 s\./),
+    });
+  });
 });
 
 describe("login shell PATH", () => {

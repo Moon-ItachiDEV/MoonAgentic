@@ -42,6 +42,8 @@ if (!(await portFree(port, values.host))) {
   console.error(
     `Le port ${port} est déjà pris (EADDRINUSE) : un autre programme l'utilise. MoonAgentic réessaie bientôt.`,
   );
+  // Leaves no socket file behind on macOS and Linux.
+  lock.release();
   process.exit(1);
 }
 const tokenFile = path.join(dataDir, "token");

@@ -73,6 +73,8 @@ export class ServerProcess {
   private current: ServerState = { kind: "stopped" };
   /** Counts stops: a restart started before the latest one does not start again. */
   private stops = 0;
+  /** Why the current run failed, as one of its lines said. */
+  private failed: string | undefined;
 
   constructor(options: ServerProcessOptions) {
     this.options = options;
@@ -150,6 +152,9 @@ export class ServerProcess {
     };
     lines(child.stdout);
     lines(child.stderr);
+    // What this run said went wrong, kept for when it ends: "already running" says more than
+    // "the server stopped".
+    this.failed = undefined;
     child.once("error", (error) => {
       this.set({
         kind: "restarting",
@@ -161,9 +166,12 @@ export class ServerProcess {
       if (!this.wanted) return;
       this.failures = Date.now() - startedAt > STEADY_MS ? 1 : this.failures + 1;
       const delay = restartDelay(this.failures);
+      const retry = `il repart dans ${Math.round(delay / 1000)} s.`;
       this.set({
         kind: "restarting",
-        reason: `Le serveur s'est arrêté : il repart dans ${Math.round(delay / 1000)} s.`,
+        reason: this.failed
+          ? `${this.failed} Nouvel essai : ${retry}`
+          : `Le serveur s'est arrêté : ${retry}`,
       });
       this.timer = setTimeout(() => this.launch(), delay);
     });
@@ -172,7 +180,12 @@ export class ServerProcess {
   private line(line: string): void {
     const event = readLine(line);
     if (!event) return;
-    if ("ready" in event) this.set({ kind: "ready", url: event.ready });
-    else this.set({ kind: "restarting", reason: event.failed });
+    if ("ready" in event) {
+      this.failed = undefined;
+      this.set({ kind: "ready", url: event.ready });
+    } else {
+      this.failed = event.failed;
+      this.set({ kind: "restarting", reason: event.failed });
+    }
   }
 }
