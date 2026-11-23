@@ -64,6 +64,9 @@ beforeAll(async () => {
   git("add", "-A");
   git("commit", "-q", "-m", "init");
   git("remote", "add", "origin", "https://github.com/moon/demo.git");
+  // Read as GitHub's, pushed to a folder: « Corriger tout seul » pushes the agent's fix.
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", path.join(dir, "remote.git")]);
+  git("config", "remote.origin.pushurl", path.join(dir, "remote.git"));
   // A stand-in for the user's GitHub CLI: it answers from pr.json, and a merge rewrites it.
   writeFileSync(
     path.join(bin, "gh"),
@@ -217,6 +220,84 @@ describe("pull requests", () => {
         390,
       );
       await shot("pr4-mobile");
+      expect(errors).toEqual([]);
+      await page.close();
+    },
+  );
+  it.skipIf(process.platform === "win32")(
+    "« Corriger tout seul » sends the agent to fix a conflict, then pushes its fix",
+    async () => {
+      const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+      const errors: Error[] = [];
+      page.on("pageerror", (err) => errors.push(err));
+      // The same thread's pull request, open again and in conflict with main.
+      github({
+        mergeable: "CONFLICTING",
+        statusCheckRollup: [run("Tests", "COMPLETED", "FAILURE")],
+      });
+      await page.goto(url);
+      await page
+        .getByText(/^Regarde https/)
+        .first()
+        .click();
+      await page.getByRole("button", { name: /^Code/ }).click();
+      const panel = page.getByRole("complementary", { name: "À revoir" });
+      const pr = panel.getByLabel("Pull request");
+      await pr.getByText("Conflits avec main").waitFor();
+      const watch = pr.getByRole("switch", { name: "Corriger tout seul" });
+      await pr.getByText("3 fois au plus").waitFor();
+      expect(await watch.getAttribute("aria-checked")).toBe("false");
+
+      // The first task is still waiting on the user: no other task is sent to a thread at work.
+      const allow = page.getByRole("button", { name: /Autoriser/ }).first();
+      // Whatever the agent asks along the way is allowed, until it is done.
+      const idle = () =>
+        expect
+          .poll(
+            async () => {
+              if (await allow.count()) await allow.click().catch(() => undefined);
+              return panel.getByText("L'agent travaille encore").count();
+            },
+            { timeout: 20_000 },
+          )
+          .toBe(0);
+      await idle();
+
+      await watch.click();
+      await pr.getByText("1 correction sur 3 (dernière : conflits).").waitFor();
+      expect(await watch.getAttribute("aria-checked")).toBe("true");
+      await page.getByText("Pull request · correction automatique").waitFor();
+      // The task as the user sees it in the thread (the demo agent then names its plan after it).
+      await page
+        .locator(".u", { hasText: "La pull request #42 a des conflits avec main : corrige-les." })
+        .waitFor();
+      await idle();
+      // Once the agent is done, MoonAgentic pushes the branch.
+      await expect
+        .poll(
+          () => {
+            try {
+              return execFileSync(
+                "git",
+                ["for-each-ref", "--format=%(refname)", "refs/heads/moon"],
+                {
+                  cwd: path.join(dir, "remote.git"),
+                },
+              )
+                .toString()
+                .trim();
+            } catch {
+              return "";
+            }
+          },
+          { timeout: 20_000 },
+        )
+        .toMatch(/^refs\/heads\/moon\//);
+      if (shots) await page.screenshot({ path: path.join(shots, "pr5-corriger-tout-seul.png") });
+
+      // Off again: the watch is forgotten.
+      await watch.click();
+      await expect.poll(() => watch.getAttribute("aria-checked")).toBe("false");
       expect(errors).toEqual([]);
       await page.close();
     },

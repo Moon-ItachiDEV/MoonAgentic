@@ -1,8 +1,19 @@
-import type { PullRequestInfo, Thread } from "@moonagentic/protocol";
+import {
+  PR_WATCH_TRIES,
+  type PrWatch,
+  type PullRequestInfo,
+  type Thread,
+} from "@moonagentic/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { prStates } from "../pr-states.ts";
-import { checksSummary, mergeBlocker, mergeWarning, STATE_LABEL } from "../pull-request.ts";
+import {
+  checksSummary,
+  mergeBlocker,
+  mergeWarning,
+  STATE_LABEL,
+  watchLabel,
+} from "../pull-request.ts";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 
 /** How often GitHub is asked again while an open pull request is on screen. */
@@ -109,12 +120,51 @@ export function usePullRequest(thread: Thread, stamp: unknown) {
   return { pr, error, loading, refresh, merge };
 }
 
+function WatchRow(props: { watch: PrWatch | undefined; onWatch: (on: boolean) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const on = !!props.watch;
+  return (
+    <div className="rv-prs-w">
+      <div className="rv-prs-wt">
+        <b>Corriger tout seul</b>
+        <span>{watchLabel(props.watch, PR_WATCH_TRIES)}</span>
+        {(error ?? props.watch?.error) && (
+          <span className="err">{error ?? `Envoi impossible : ${props.watch?.error}`}</span>
+        )}
+      </div>
+      <button
+        className={`set-sw${on ? " on" : ""}`}
+        role="switch"
+        aria-checked={on}
+        aria-label="Corriger tout seul"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          setError(null);
+          props.onWatch(!on).then(
+            () => setBusy(false),
+            (e: unknown) => {
+              setBusy(false);
+              setError(e instanceof Error ? e.message : String(e));
+            },
+          );
+        }}
+      />
+    </div>
+  );
+}
+
 /** The state of the thread's pull request in the review panel: CI, conflicts, and the merge. */
 export function PullRequestStatus(props: {
   pr: PullRequestInfo;
   loading: boolean;
   onRefresh: () => void;
   onMerge: () => Promise<void>;
+  /** « Corriger tout seul » as it is now; left out while it is off. */
+  watch?: PrWatch | undefined;
+  /** Turns it on or off; left out where the thread cannot (a team's, one in the project folder). */
+  onWatch?: ((on: boolean) => Promise<void>) | undefined;
 }) {
   const { pr } = props;
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
@@ -167,6 +217,7 @@ export function PullRequestStatus(props: {
               {blocker}
             </p>
           )}
+          {props.onWatch && <WatchRow watch={props.watch} onWatch={props.onWatch} />}
           {pr.state === "open" && (
             <button
               className="btn sm rv-prs-m"
