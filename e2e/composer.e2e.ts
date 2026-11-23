@@ -720,17 +720,19 @@ describe("composer", () => {
     if (shots) await page.waitForTimeout(400);
     await shot(page, "p4-mobile");
 
-    // In the settings, each kind of work is sent to an agent; the server keeps the choice.
+    // In the settings, each kind of work is sent to an agent and a model in one pick; the
+    // server keeps the choice. Without favorites, every model is offered.
     await page.setViewportSize({ width: 1280, height: 820 });
     await page.evaluate(() => {
       history.pushState(null, "", "/reglages/coordinator");
       dispatchEvent(new PopStateEvent("popstate"));
     });
-    await page.getByLabel("Agent pour Bug").selectOption({ label: "Agent de démo" });
-    await page.getByLabel("Modèle pour Bug").selectOption({ label: "Démo précis" });
+    const bug = page.getByLabel("Modèle pour Bug");
+    expect(await bug.locator("option", { hasText: "Tous les modèles" }).count()).toBe(0);
+    await bug.selectOption("demo\nprecis");
     await page.reload();
-    await expect.poll(() => page.getByLabel("Modèle pour Bug").inputValue()).toBe("precis");
-    expect(await page.getByLabel("Agent pour Tests").inputValue()).toBe("");
+    await expect.poll(() => bug.inputValue()).toBe("demo\nprecis");
+    expect(await page.getByLabel("Modèle pour Tests").inputValue()).toBe("");
     await shot(page, "p8-reglages-coordinateur");
     await page.close();
   });

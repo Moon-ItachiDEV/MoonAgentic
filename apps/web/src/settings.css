@@ -452,3 +452,9 @@
     flex-basis: 100%;
   }
 }
+.set-route {
+  padding-left: 8px;
+}
+.set-route .ag {
+  flex: none;
+}
