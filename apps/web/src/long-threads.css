@@ -28,3 +28,27 @@
 .diff > .tool-more {
   margin: 6px 8px 8px;
 }
+
+/* « Afficher les messages précédents », above the first message of a long thread shown. */
+.earlier {
+  align-self: center;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.earlier:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--line2);
+}
+.earlier:disabled {
+  cursor: default;
+}
+/* Marks where the messages start: takes no room, not even the feed's gap. */
+.feed-top {
+  margin-bottom: -18px;
+}

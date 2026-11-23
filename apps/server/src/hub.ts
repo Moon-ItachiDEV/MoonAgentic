@@ -78,7 +78,7 @@ import { type QuotaReader, Quotas } from "./quotas.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
-import { light } from "./timeline.ts";
+import { light, TimelineLog } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
 import type { Store } from "./store.ts";
 
@@ -247,6 +247,10 @@ export class Hub {
   /** Projects being removed, which take no new thread meanwhile. */
   private readonly removingProjects = new Set<string>();
   /** The text each thread's agent is streaming, ahead of what is written down. */
+  /** Names this run of the server: a screen's mark from another run means nothing here. */
+  private readonly epoch = randomUUID();
+  /** What changed in each timeline since the server started. */
+  private readonly logs = new Map<string, TimelineLog>();
   private readonly drafts = new Map<
     string,
     { item: TextItem; dirty: boolean; timer?: NodeJS.Timeout }
@@ -533,7 +537,7 @@ export class Hub {
         const id = this.createThread(message);
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.timeline(id) });
+        client.send(this.opening(id));
         return;
       }
       case "thread.leave":
@@ -556,10 +560,31 @@ export class Hub {
         if (this.store.getThread(message.threadId)?.unread) {
           this.updateThread(message.threadId, { unread: false });
         }
+        client.send(
+          this.changesSince(message.threadId, message.since) ?? this.opening(message.threadId),
+        );
+        return;
+      case "thread.page": {
+        this.requireThread(message.threadId);
+        const page = this.store.pageItems(message.threadId, message.before, message.reach);
         client.send({
-          type: "items",
+          type: "page",
+          requestId: message.requestId,
           threadId: message.threadId,
-          items: this.timeline(message.threadId),
+          before: message.before,
+          items: page.items.map(light),
+          first: page.first,
+          earlier: page.earlier,
+        });
+        return;
+      }
+      case "thread.read":
+        this.requireThread(message.threadId);
+        client.send({
+          type: "timeline",
+          requestId: message.requestId,
+          threadId: message.threadId,
+          items: this.items(message.threadId).map(light),
         });
         return;
       case "thread.send": {
@@ -583,7 +608,7 @@ export class Hub {
         const id = this.openCoordinator(message.projectId, message.agentId, message.model);
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.timeline(id) });
+        client.send(this.opening(id));
         return;
       }
       case "thread.cancel":
@@ -699,7 +724,7 @@ export class Hub {
         });
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.timeline(id) });
+        client.send(this.opening(id));
         return;
       }
       case "team.stop":
@@ -1533,11 +1558,7 @@ export class Hub {
       removed.flatMap((i) => (i.kind === "user" ? (i.images ?? []).map((image) => image.id) : [])),
     );
     this.broadcast({ type: "thread", thread });
-    this.sendToViewers(threadId, {
-      type: "items",
-      threadId,
-      items: this.timeline(threadId),
-    });
+    this.timelineCut(threadId);
     // A ref left behind only keeps an old tree alive, so failing here is harmless.
     await dropCheckpoints(
       workspace.path,
@@ -1640,6 +1661,7 @@ export class Hub {
       this.setPendingRestore(threadId, undefined);
       clearTimeout(this.drafts.get(threadId)?.timer);
       this.drafts.delete(threadId);
+      this.logs.delete(threadId);
       this.coordinators.forget(threadId);
       this.attachments.forget(threadId);
       this.store.deleteThread(threadId);
@@ -1715,11 +1737,7 @@ export class Hub {
       const last = this.store.lastItem(threadId);
       if (last?.kind === "handoff" && last.from === agentId) {
         this.store.removeItemsFrom(threadId, last.id);
-        this.sendToViewers(threadId, {
-          type: "items",
-          threadId,
-          items: this.timeline(threadId),
-        });
+        this.timelineCut(threadId);
       } else if (last?.kind === "handoff") {
         this.putItem(threadId, { ...last, to: agentId });
       } else {
@@ -2277,7 +2295,8 @@ export class Hub {
     }
     draft.item = { ...draft.item, text: draft.item.text + text };
     draft.dirty = true;
-    this.sendToViewers(threadId, { type: "append", threadId, itemId: draft.item.id, text });
+    const rev = this.log(threadId).touch(draft.item.id);
+    this.sendToViewers(threadId, { type: "append", threadId, itemId: draft.item.id, text, rev });
     draft.timer ??= setTimeout(() => this.flushText(threadId, false), TEXT_FLUSH_MS);
   }
 
@@ -2303,9 +2322,57 @@ export class Hub {
     return this.store.listItems(threadId);
   }
 
-  /** The thread's items as a screen gets them: large tool results stay here until asked for. */
-  private timeline(threadId: string): Item[] {
-    return this.items(threadId).map(light);
+  private log(threadId: string): TimelineLog {
+    let log = this.logs.get(threadId);
+    if (!log) this.logs.set(threadId, (log = new TimelineLog()));
+    return log;
+  }
+
+  /**
+   * The thread as a screen gets it on opening: the end of its timeline, a page of it, with
+   * large tool results left here until asked for, and the mark to come back with.
+   */
+  private opening(threadId: string): ServerMessage {
+    // Written down, but kept open: the agent may still be adding to it.
+    this.flushText(threadId, false);
+    const page = this.store.pageItems(threadId);
+    return {
+      type: "items",
+      threadId,
+      items: page.items.map(light),
+      first: page.first,
+      earlier: page.earlier,
+      epoch: this.epoch,
+      rev: this.log(threadId).rev,
+    };
+  }
+
+  /**
+   * What a screen that held the thread up to `since` is missing: the items changed since,
+   * those it holds or that came after. Nothing when it is no longer known, after a restart,
+   * a step back or too many changes: the screen is then sent the timeline's end again.
+   */
+  private changesSince(
+    threadId: string,
+    since: { epoch: string; rev: number; first: number } | undefined,
+  ): ServerMessage | undefined {
+    if (since?.epoch !== this.epoch) return undefined;
+    const log = this.log(threadId);
+    const ids = log.since(since.rev);
+    if (!ids) return undefined;
+    this.flushText(threadId, false);
+    const items = ids
+      .map((id) => this.store.getItemAt(threadId, id))
+      .filter((found) => found !== undefined && found.seq >= since.first)
+      .map((found) => ({ item: light(found!.item), seq: found!.seq }))
+      .sort((a, b) => a.seq - b.seq);
+    return { type: "changes", threadId, items, rev: log.rev };
+  }
+
+  /** Items were removed from the timeline: every screen showing it gets its end again. */
+  private timelineCut(threadId: string): void {
+    this.log(threadId).reset();
+    this.sendToViewers(threadId, this.opening(threadId));
   }
 
   private upsertTool(threadId: string, update: acp.ToolCall | acp.ToolCallUpdate): void {
@@ -2490,8 +2557,9 @@ export class Hub {
   private putItem(threadId: string, item: Item): void {
     // Another item ends the text being streamed, which keeps its place before it.
     if (this.drafts.get(threadId)?.item.id !== item.id) this.flushText(threadId);
-    this.store.putItem(threadId, item);
-    this.sendToViewers(threadId, { type: "item", threadId, item: light(item) });
+    const seq = this.store.putItem(threadId, item);
+    const rev = this.log(threadId).touch(item.id);
+    this.sendToViewers(threadId, { type: "item", threadId, item: light(item), seq, rev });
   }
 
   private updateThread(threadId: string, patch: Parameters<Store["updateThread"]>[1]): void {

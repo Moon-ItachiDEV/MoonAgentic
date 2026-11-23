@@ -15,8 +15,9 @@ export const isTeamThread = (thread: Thread) => !!thread.team || !!thread.role;
  * word. What is left is what the user reads: their own messages and the answers to them,
  * each turn's last word for the team (cut short), and what waits on the user.
  * The lead's answers to the engine are its plan and its calls, which the team card shows.
+ * `partial` says the items are the end of a longer timeline, not all of it.
  */
-export function teamFeed(thread: Thread, items: Item[]): FeedBlock[] {
+export function teamFeed(thread: Thread, items: Item[], partial = false): FeedBlock[] {
   const blocks: FeedBlock[] = [];
   let start = 0;
   while (start < items.length) {
@@ -24,7 +25,8 @@ export function teamFeed(thread: Thread, items: Item[]): FeedBlock[] {
     while (end < items.length && items[end]?.kind !== "user") end++;
     const first = items[start];
     // Threads from before the mark: a team thread's first message was always the engine's.
-    const byTeam = first?.kind === "user" && (!!first.byTeam || (start === 0 && !!thread.role));
+    const byTeam =
+      first?.kind === "user" && (!!first.byTeam || (start === 0 && !partial && !!thread.role));
     const turn = Array.from({ length: end - start }, (_, i) => start + i);
     const lastAgent = turn.findLast((i) => items[i]?.kind === "agent");
     // In order, so the thread reads as it ran: a hidden item joins the detail just before
