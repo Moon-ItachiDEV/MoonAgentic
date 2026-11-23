@@ -6,11 +6,20 @@ import {
   type Thread,
   type ToolContent,
 } from "@moonagentic/protocol";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { messageTokens } from "../commands.ts";
 import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
+import { useLiveText } from "../live-text.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { AgentPlan } from "./AgentPlan.tsx";
 import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
@@ -42,7 +51,7 @@ export function ThreadView({
   items,
   agents,
   threads,
-  onOpenThread,
+  onOpenThread: openThread,
   intro,
 }: {
   /** Shown above the conversation, such as a coordinator's ways to start. */
@@ -62,7 +71,15 @@ export function ThreadView({
       ? { lead, team: lead.team }
       : undefined;
   const view = useRef<HTMLDivElement>(null);
+  const feed = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  // The same function from one pass to the next, so a message already drawn is left alone
+  // while another one is being written.
+  const opener = useRef(openThread);
+  useLayoutEffect(() => {
+    opener.current = openThread;
+  });
+  const onOpenThread = useCallback((id: string) => opener.current(id), []);
   const agent = agents.find((a) => a.id === thread.agentId);
   // Who wrote each item: the thread's agent, or the one it was handed over from.
   const authors: string[] = [];
@@ -111,11 +128,24 @@ export function ThreadView({
     el.classList.add("flash");
   }, [items, thread.id, focusTick, reveal]);
 
-  // Keep following new output while the reader is at the bottom.
+  // Keep following new output while the reader is at the bottom: at once for a new message
+  // or another thread...
+  const count = items?.length;
   useLayoutEffect(() => {
     const el = view.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [items, thread.status]);
+  }, [count, thread.id, thread.status]);
+  // ...and whenever what is shown grows: a text being written is drawn a little after it
+  // arrives, and measuring the page at each piece of it would cost a layout each time.
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined" || !feed.current) return;
+    const grown = new ResizeObserver(() => {
+      const el = view.current;
+      if (el && pinned.current) el.scrollTop = el.scrollHeight;
+    });
+    grown.observe(feed.current);
+    return () => grown.disconnect();
+  }, []);
 
   // A question the agent asked with a tool can be answered until the user writes again.
   const lastQuestion = items?.findLast(
@@ -180,7 +210,7 @@ export function ThreadView({
         pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
       }}
     >
-      <div className="feed">
+      <div className="feed" ref={feed}>
         {intro}
         {/* A team started before the timeline was recorded has nothing to draw. */}
         {!!strip?.team.timeline?.length && (
@@ -296,7 +326,7 @@ const startsAgentBlock = (items: Item[], index: number) =>
     .find((i) => i.kind === "agent" || i.kind === "user" || i.kind === "handoff")
     ?.kind.startsWith("agent");
 
-function FeedItem({
+const FeedItem = memo(function FeedItem({
   item,
   thread,
   agents,
@@ -406,10 +436,13 @@ function FeedItem({
           {/* The team card shows the plan; its raw JSON is for the server only. */}
           {clamp ? (
             <Clamp>
-              <Markdown text={item.text} />
+              <Answer text={item.text} live={live} />
             </Clamp>
           ) : (
-            <Markdown text={thread.role === "lead" ? withoutTeamJson(item.text) : item.text} />
+            <Answer
+              text={thread.role === "lead" ? withoutTeamJson(item.text) : item.text}
+              live={live}
+            />
           )}
         </div>
       );
@@ -433,6 +466,11 @@ function FeedItem({
     case "permission":
       return <PermissionCard item={item} threadId={thread.id} />;
   }
+});
+
+/** An answer: while it is being written, its Markdown is worked out a few times a second. */
+function Answer({ text, live }: { text: string; live: boolean }) {
+  return <Markdown text={useLiveText(text, live)} />;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HIDDEN_FRAME_MS } from "./frame.ts";
 import {
   ASK_TIMEOUT_MS,
   Connection,
@@ -324,5 +325,36 @@ describe("Connection", () => {
     const promise = conn.ask({ type: "search", requestId: "req-after", query: "ok" });
     socket.emitMessage(JSON.stringify({ type: "searched", requestId: "req-after", hits: [] }));
     await expect(promise).resolves.toEqual({ type: "searched", requestId: "req-after", hits: [] });
+  });
+  it("tells the page once per frame while an agent writes, and at once for anything else", async () => {
+    const { conn, socket } = await setupConnection();
+    socket.open();
+    const thread = { id: "t1", title: "Fil", status: "running" };
+    const answer = { id: "i1", kind: "agent", text: "" };
+    socket.emitMessage(JSON.stringify({ type: "items", threadId: "t1", items: [answer] }));
+    let told = 0;
+    conn.subscribe(() => (told += 1));
+    const text = () => (conn.getState().items["t1"]![0] as { text: string }).text;
+
+    for (const piece of ["Bon", "jour", " à", " toi"]) {
+      socket.emitMessage(
+        JSON.stringify({ type: "append", threadId: "t1", itemId: "i1", text: piece }),
+      );
+    }
+    // What was written is known at once; the page hears of it at the next frame, once.
+    expect(text()).toBe("Bonjour à toi");
+    expect(told).toBe(0);
+    await vi.advanceTimersByTimeAsync(HIDDEN_FRAME_MS);
+    expect(told).toBe(1);
+    await vi.advanceTimersByTimeAsync(HIDDEN_FRAME_MS * 5);
+    expect(told).toBe(1);
+
+    // The end of the turn does not wait for a frame, and the frame it overtook says nothing more.
+    socket.emitMessage(JSON.stringify({ type: "append", threadId: "t1", itemId: "i1", text: "." }));
+    socket.emitMessage(JSON.stringify({ type: "thread", thread: { ...thread, status: "idle" } }));
+    expect(told).toBe(2);
+    expect(text()).toBe("Bonjour à toi.");
+    await vi.advanceTimersByTimeAsync(HIDDEN_FRAME_MS * 5);
+    expect(told).toBe(2);
   });
 });
