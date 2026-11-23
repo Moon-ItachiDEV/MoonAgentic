@@ -1,7 +1,7 @@
 {
   "name": "@moonagentic/desktop",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "MoonAgentic dans une fenêtre, avec son icône près de l'horloge pour tourner en arrière-plan.",
   "author": "MoonAgentic",
   "type": "module",
