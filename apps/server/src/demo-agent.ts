@@ -277,6 +277,23 @@ const app = acp
 
     if (ask.includes("boom")) throw new Error("Le démo a planté exprès.");
 
+    // A goal over several turns: reached on the turn its text names (« atteint au tour 3 »),
+    // blocked when it says it cannot be done alone, else one more step each turn.
+    const goalTurn = /^Objectif fixé par l'utilisateur \(tour (\d+) sur \d+/m.exec(ask);
+    if (goalTurn) {
+      const turn = Number(goalTurn[1]);
+      const at = Number(/atteint au tour (\d+)/.exec(ask)?.[1] ?? 0);
+      await say(
+        ask.includes("impossible sans toi")
+          ? "Je ne peux pas continuer seul.\n\nOBJECTIF BLOQUÉ : il me faut la clé d'API"
+          : at && turn >= at
+            ? `Tour ${turn} : tout est vérifié.\n\nOBJECTIF ATTEINT`
+            : `Tour ${turn} : j'avance, il reste du travail.`,
+        "agent_message_chunk",
+      );
+      return { stopReason: "end_turn" };
+    }
+
     // A longer task in five steps, each with its tool, so a plan can be seen moving on.
     if (ask.includes("en 5 étapes")) {
       const steps: [string, acp.ToolKind, string][] = [

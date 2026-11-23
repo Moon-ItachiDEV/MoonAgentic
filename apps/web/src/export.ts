@@ -15,7 +15,14 @@ export function threadMarkdown(thread: Thread, items: Item[], agents: AgentInfo[
   items.forEach((item, i) => {
     switch (item.kind) {
       case "user":
-        lines.push(item.from === "coordinator" ? "## Coordinateur" : "## Toi", "");
+        lines.push(
+          item.from === "coordinator"
+            ? "## Coordinateur"
+            : item.from === "goal"
+              ? "## Objectif (relance automatique)"
+              : "## Toi",
+          "",
+        );
         if (item.text) lines.push(item.text, "");
         // The export is text alone: an image is named, not carried.
         for (const image of item.images ?? []) lines.push(`*Image jointe : ${image.name}*`, "");

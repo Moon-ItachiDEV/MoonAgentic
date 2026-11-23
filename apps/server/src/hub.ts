@@ -4,7 +4,13 @@ import { existsSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
-import { DEFAULT_MAX_TURNS, MAX_QUEUED_MESSAGES, threadPullRequest } from "@moonagentic/protocol";
+import {
+  DEFAULT_MAX_TURNS,
+  GOAL_MORE_TURNS,
+  GOAL_TURNS,
+  MAX_QUEUED_MESSAGES,
+  threadPullRequest,
+} from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   AgentSetting,
@@ -34,6 +40,7 @@ import type {
 import type { Agents } from "./agents.ts";
 import { cloneGithubRepo, githubRepos, githubStatus, parseGithubRepo } from "./github.ts";
 import { githubAccount, type LoginResult } from "./github-account.ts";
+import { goalContext, goalMessage, goalVerdict } from "./goal.ts";
 import { mergePlan, noteTool } from "./plan-steps.ts";
 import { defaultParent, findClones, usualRoots } from "./local-clones.ts";
 import {
@@ -445,6 +452,10 @@ export class Hub {
       for (const t of this.store.listThreads()) {
         if (t.kind === "coordinator" && !t.archived) this.coordinators.drainLine(t.id);
       }
+      // A goal at work when the server stopped goes on where it was, a turn further.
+      for (const t of this.store.listThreads()) {
+        if (t.goal?.state === "active") this.continueGoal(t.id);
+      }
     });
   }
 
@@ -648,6 +659,14 @@ export class Hub {
         return;
       case "thread.queueSend":
         this.sendQueuedNow(message.threadId, message.id);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "thread.goal":
+        this.setGoal(message.threadId, message.text, message.maxTurns);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "thread.goalControl":
+        this.controlGoal(message.threadId, message.action);
         client.send({ type: "done", requestId: message.requestId });
         return;
       case "coordinator.open": {
@@ -1001,6 +1020,8 @@ export class Hub {
     auto?: boolean | undefined;
     /** The images sent with the first message. */
     attachments?: string[] | undefined;
+    /** The text is a goal the agent works toward, over this many turns at most. */
+    goal?: { maxTurns?: number | undefined } | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
@@ -1031,6 +1052,17 @@ export class Hub {
       ...(input.role ? { role: input.role } : {}),
       ...(input.worksIn ? { worksIn: input.worksIn } : {}),
       ...(input.team ? { team: input.team } : {}),
+      ...(input.goal && input.text.trim() && !input.openedBy && !input.held
+        ? {
+            goal: {
+              text: input.text.trim(),
+              state: "active" as const,
+              turns: 1,
+              maxTurns: input.goal.maxTurns ?? GOAL_TURNS,
+              startedAt: now,
+            },
+          }
+        : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -1045,7 +1077,7 @@ export class Hub {
           this.send(
             thread.id,
             input.text,
-            undefined,
+            thread.goal ? goalContext(thread.goal) : undefined,
             input.byTeam,
             undefined,
             input.auto,
@@ -1226,6 +1258,117 @@ export class Hub {
   }
 
   /**
+   * Gives the thread a goal, in place of the one it had: its agent works toward it turn after
+   * turn. It starts at once on a free thread, else when the turn under way ends.
+   */
+  setGoal(threadId: string, text: string, maxTurns = GOAL_TURNS): void {
+    const thread = this.requireLiveThread(threadId);
+    if (thread.team || thread.role || thread.kind === "coordinator") {
+      throw new Error(
+        "Un objectif se donne à un fil d'agent, pas à une équipe ni au coordinateur.",
+      );
+    }
+    this.updateThread(threadId, {
+      goal: { text: text.trim(), state: "active", turns: 0, maxTurns, startedAt: Date.now() },
+    });
+    this.continueGoal(threadId);
+  }
+
+  /** Pauses the thread's goal, takes it up again, or drops it. */
+  controlGoal(threadId: string, action: "pause" | "resume" | "stop"): void {
+    const goal = this.requireThread(threadId).goal;
+    if (action === "stop") {
+      if (goal) this.updateThread(threadId, { goal: null });
+      return;
+    }
+    if (!goal) throw new Error("Ce fil n'a pas d'objectif.");
+    if (action === "pause") {
+      // The turn under way goes to its end; nothing follows it.
+      if (goal.state === "active") {
+        this.updateThread(threadId, {
+          goal: { ...goal, state: "paused", reason: "Mis en pause." },
+        });
+      }
+      return;
+    }
+    if (goal.state === "reached") {
+      throw new Error("Cet objectif est atteint : donnes-en un nouveau avec /goal.");
+    }
+    if (goal.state === "active") return;
+    this.requireLiveThread(threadId);
+    const { reason: _reason, endedAt: _ended, ...rest } = goal;
+    // Its turns spent: taken up again, it gets a few more.
+    const spent = goal.turns >= goal.maxTurns;
+    this.updateThread(threadId, {
+      goal: {
+        ...rest,
+        state: "active",
+        maxTurns: spent ? goal.turns + GOAL_MORE_TURNS : goal.maxTurns,
+      },
+    });
+    this.continueGoal(threadId);
+  }
+
+  /**
+   * What the turn that just ended means for the thread's goal: the agent said it is reached
+   * or blocked, or the user stopped the turn, or it failed, or its last turn is spent.
+   */
+  private settleGoal(threadId: string, stopped: boolean, failed: boolean): void {
+    const goal = this.store.getThread(threadId)?.goal;
+    if (!goal || (goal.state !== "active" && goal.state !== "paused")) return;
+    const now = Date.now();
+    // Set while another turn was under way: that turn's answer says nothing of the goal.
+    const verdict = goal.turns > 0 ? goalVerdict(this.lastReply(threadId)) : undefined;
+    const { reason: _reason, ...rest } = goal;
+    if (verdict && "reached" in verdict) {
+      this.updateThread(threadId, { goal: { ...rest, state: "reached", endedAt: now } });
+    } else if (verdict) {
+      this.updateThread(threadId, {
+        goal: { ...rest, state: "blocked", reason: verdict.blocked, endedAt: now },
+      });
+    } else if (goal.state !== "active") {
+      return;
+    } else if (stopped) {
+      this.updateThread(threadId, { goal: { ...rest, state: "paused", reason: "Tour arrêté." } });
+    } else if (failed) {
+      this.updateThread(threadId, {
+        goal: { ...rest, state: "paused", reason: "Le dernier tour a échoué." },
+      });
+    } else if (goal.turns >= goal.maxTurns) {
+      this.updateThread(threadId, { goal: { ...rest, state: "exhausted", endedAt: now } });
+    }
+  }
+
+  /**
+   * Sends the goal's next turn, when the goal is at work and the thread free: the goal itself
+   * the first time, then a short line, with what the agent must know given unseen.
+   */
+  private continueGoal(threadId: string): boolean {
+    const thread = this.store.getThread(threadId);
+    const goal = thread?.goal;
+    if (!thread || !goal || goal.state !== "active" || this.turns.has(threadId)) return false;
+    const pause = (reason: string) => {
+      this.updateThread(threadId, { goal: { ...goal, state: "paused", reason } });
+      return false;
+    };
+    if (thread.archived) return pause("Le fil est résolu.");
+    if (goal.turns >= goal.maxTurns) {
+      this.updateThread(threadId, { goal: { ...goal, state: "exhausted", endedAt: Date.now() } });
+      return false;
+    }
+    const next = { ...goal, turns: goal.turns + 1 };
+    try {
+      if (next.turns === 1) this.send(threadId, `Objectif : ${goal.text}`, goalContext(next));
+      else this.send(threadId, goalMessage(next), goalContext(next), undefined, "goal");
+    } catch (error) {
+      // Busy for a moment, with a step back or a change of setting: the user takes it up.
+      return pause(`Le tour suivant n'a pas pu partir : ${describe(error)}`);
+    }
+    this.updateThread(threadId, { goal: next });
+    return true;
+  }
+
+  /**
    * Sends a message that waits without waiting for the turn's end: the first one, or the one
    * named, which then goes first. A turn under way is stopped, and the message leaves as
    * soon as the agent has stopped.
@@ -1278,7 +1421,7 @@ export class Hub {
     text: string,
     context?: string,
     byTeam?: boolean,
-    from?: "coordinator",
+    from?: "coordinator" | "goal",
     auto?: boolean,
     /** The images joined to the message, already sent to the server. */
     attachments?: readonly string[],
@@ -1359,12 +1502,15 @@ export class Hub {
       // Unless they stopped it for a message that waits to go now.
       const failed = this.store.getThread(threadId)?.status === "error";
       const atOnce = this.sendAfterStop.delete(threadId);
+      // The goal learns what this turn said; it goes on after the messages that wait.
+      if (!this.closed) this.settleGoal(threadId, cancelled && !atOnce, failed);
       if (
         !this.closed &&
         (atOnce || !cancelled) &&
         this.sendNextQueued(threadId, failed && !atOnce)
       )
         return;
+      if (!this.closed && this.continueGoal(threadId)) return;
       // A place is free: the next thread in line behind the same coordinator starts.
       const openedBy = this.closed ? undefined : this.store.getThread(threadId)?.openedBy;
       if (openedBy) this.coordinators.drainLine(openedBy);

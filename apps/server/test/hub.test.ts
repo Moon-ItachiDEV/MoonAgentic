@@ -2,7 +2,13 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Item, ServerMessage, Thread } from "@moonagentic/protocol";
+import {
+  GOAL_MORE_TURNS,
+  GOAL_TURNS,
+  type Item,
+  type ServerMessage,
+  type Thread,
+} from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { backupNow } from "../src/backups.ts";
@@ -2086,6 +2092,171 @@ describe("messages written while the agent works", () => {
     await hub.setArchived(threadId, true);
     expect(() => hub.queueMessage(threadId, "Encore")).toThrow("résolu");
   }, 30_000);
+});
+
+describe("a goal the agent works toward", () => {
+  const said = (store: Store, threadId: string) =>
+    store.listItems(threadId).flatMap((i) => (i.kind === "user" ? [i] : []));
+  const goalOf = (store: Store, threadId: string) => store.getThread(threadId)?.goal;
+  const settled = (store: Store, threadId: string, state: string) =>
+    expect.poll(() => goalOf(store, threadId)?.state, { timeout: 20_000 }).toBe(state);
+
+  it("takes turn after turn until the agent says it is reached", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Les tests passent, atteint au tour 3",
+      goal: {},
+    });
+    await settled(store, threadId, "reached");
+    await hub.whenIdle(threadId);
+    const goal = goalOf(store, threadId)!;
+    expect(goal).toMatchObject({ text: "Les tests passent, atteint au tour 3", turns: 3 });
+    expect(goal.maxTurns).toBe(GOAL_TURNS);
+    expect(goal.endedAt).toBeGreaterThanOrEqual(goal.startedAt);
+    // The goal as the user wrote it, then a short line for each turn after, marked as such.
+    expect(said(store, threadId).map((i) => [i.text, i.from])).toEqual([
+      ["Les tests passent, atteint au tour 3", undefined],
+      [`Continue vers l'objectif (tour 2 sur ${GOAL_TURNS}).`, "goal"],
+      [`Continue vers l'objectif (tour 3 sur ${GOAL_TURNS}).`, "goal"],
+    ]);
+    // Nothing follows a goal reached, and it cannot be taken up again.
+    expect(said(store, threadId)).toHaveLength(3);
+    await expect(
+      hub.handle(client, {
+        type: "thread.goalControl",
+        requestId: "r",
+        threadId,
+        action: "resume",
+      }),
+    ).rejects.toThrow("atteint");
+    await hub.handle(client, {
+      type: "thread.goalControl",
+      requestId: "s",
+      threadId,
+      action: "stop",
+    });
+    expect(store.getThread(threadId)).not.toHaveProperty("goal");
+  }, 30_000);
+
+  it("stops at its last turn, gets a few more when taken up again, and says when it is blocked", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Premier message",
+    });
+    await hub.whenIdle(threadId);
+    await hub.handle(client, {
+      type: "thread.goal",
+      requestId: "g",
+      threadId,
+      text: "Jamais fini",
+      maxTurns: 2,
+    });
+    await settled(store, threadId, "exhausted");
+    await hub.whenIdle(threadId);
+    expect(goalOf(store, threadId)).toMatchObject({ turns: 2, maxTurns: 2 });
+    expect(said(store, threadId).map((i) => i.text)).toEqual([
+      "Premier message",
+      "Objectif : Jamais fini",
+      "Continue vers l'objectif (tour 2 sur 2).",
+    ]);
+    // Taken up again: a few more turns, then spent once more.
+    await hub.handle(client, {
+      type: "thread.goalControl",
+      requestId: "r",
+      threadId,
+      action: "resume",
+    });
+    await expect
+      .poll(() => goalOf(store, threadId)?.turns, { timeout: 20_000 })
+      .toBe(2 + GOAL_MORE_TURNS);
+    await settled(store, threadId, "exhausted");
+    await hub.whenIdle(threadId);
+
+    // A new goal replaces it; the agent says it cannot go on, and why.
+    await hub.handle(client, {
+      type: "thread.goal",
+      requestId: "g2",
+      threadId,
+      text: "Déployer, impossible sans toi",
+    });
+    await settled(store, threadId, "blocked");
+    await hub.whenIdle(threadId);
+    expect(goalOf(store, threadId)).toMatchObject({
+      turns: 1,
+      reason: "il me faut la clé d'API",
+    });
+  }, 40_000);
+
+  it("waits for the turn under way, pauses with a stop, and goes on after a restart", async () => {
+    const { dir, hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+    });
+    // The agent asks before it acts: its turn is under way.
+    await expect.poll(() => store.getThread(threadId)?.status, { timeout: 15_000 }).toBe("waiting");
+    await hub.handle(client, {
+      type: "thread.goal",
+      requestId: "g",
+      threadId,
+      text: "Tout est fini, atteint au tour 2",
+    });
+    // Nothing is said while the turn runs.
+    expect(goalOf(store, threadId)).toMatchObject({ state: "active", turns: 0 });
+    // Paused by the user, then the turn stopped: nothing follows.
+    await hub.handle(client, {
+      type: "thread.goalControl",
+      requestId: "p",
+      threadId,
+      action: "pause",
+    });
+    expect(goalOf(store, threadId)).toMatchObject({ state: "paused", reason: "Mis en pause." });
+    await hub.handle(client, {
+      type: "thread.goalControl",
+      requestId: "r",
+      threadId,
+      action: "resume",
+    });
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+    // Taken up again before the stop: the stop pauses it, and says so.
+    expect(goalOf(store, threadId)).toMatchObject({ state: "paused", reason: "Tour arrêté." });
+    expect(said(store, threadId)).toHaveLength(1);
+
+    // Taken up while the server stops: the next server goes on with it.
+    await hub.handle(client, {
+      type: "thread.setPermissionMode",
+      threadId,
+      permissionMode: "full",
+    });
+    await hub.close();
+    const again = new Store(path.join(dir, "state.sqlite"));
+    again.updateThread(threadId, { goal: { ...goalOf(again, threadId)!, state: "active" } });
+    const restarted = new Hub(again, new Agents({ demo: true }), {
+      worktreesDir: path.join(dir, ".worktrees"),
+      homeDir: path.join(dir, ".home"),
+    });
+    // Closed before the first server's folder is removed: Windows keeps an open database.
+    cleanups.unshift(async () => {
+      await restarted.close();
+      again.close();
+    });
+    await settled(again, threadId, "reached");
+    await restarted.whenIdle(threadId);
+    expect(said(again, threadId).map((i) => i.text)).toEqual([
+      "Corrige la réponse",
+      "Objectif : Tout est fini, atteint au tour 2",
+      `Continue vers l'objectif (tour 2 sur ${GOAL_TURNS}).`,
+    ]);
+  }, 40_000);
 });
 
 describe("a planner card started from the board", () => {
