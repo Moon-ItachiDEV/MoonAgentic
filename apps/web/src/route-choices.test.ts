@@ -72,7 +72,7 @@ describe("routeChoices", () => {
 
   it("keeps a route to an agent that is gone", () => {
     const r = routeChoices(all, {}, { agentId: "old" }, false);
-    expect(r.groups[0]?.agent.id).toBe("old");
+    expect(flat(r)[0]).toEqual(["old", ["Modèle par défaut (indisponible)"]]);
   });
 });
 

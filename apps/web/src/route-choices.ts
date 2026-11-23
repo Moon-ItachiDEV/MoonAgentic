@@ -60,7 +60,7 @@ export function routeChoices(
             model: route.model,
             label: route.model ?? "Modèle par défaut",
           };
-      if (agent && !agent.available) option.label += " (indisponible)";
+      if (!agent?.available) option.label += " (indisponible)";
       const group = groups.find((g) => g.agent.id === route.agentId);
       if (group) group.options.unshift(option);
       else

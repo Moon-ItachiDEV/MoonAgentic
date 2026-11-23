@@ -262,8 +262,6 @@ function NotificationsRow() {
   );
 }
 
-const ALL_MODELS = "\u0000all";
-
 /**
  * The single agent + model menu of one coordinator route: the favorites (or every model when
  * there are none), grouped by agent, with the chosen agent's badge beside it.
@@ -273,10 +271,10 @@ function RouteSelect(props: {
   agents: AgentInfo[];
   favorites: Favorites;
   route: { agentId: string; model?: string } | undefined;
+  showAll: boolean;
 }) {
   const { kind, route } = props;
-  const [showAll, setShowAll] = useState(false);
-  const { groups, favoritesOnly } = routeChoices(props.agents, props.favorites, route, showAll);
+  const { groups } = routeChoices(props.agents, props.favorites, route, props.showAll);
   const agent = route && props.agents.find((a) => a.id === route.agentId);
   return (
     <label className="set-select set-route">
@@ -285,7 +283,6 @@ function RouteSelect(props: {
         aria-label={`Modèle pour ${KIND_LABEL[kind]}`}
         value={route ? routeValue(route.agentId, route.model) : ""}
         onChange={(e) => {
-          if (e.target.value === ALL_MODELS) return setShowAll(true);
           const picked = parseRouteValue(e.target.value);
           connection.send({
             type: "coordinator.setRoute",
@@ -305,7 +302,6 @@ function RouteSelect(props: {
             ))}
           </optgroup>
         ))}
-        {favoritesOnly && <option value={ALL_MODELS}>Tous les modèles…</option>}
       </select>
     </label>
   );
@@ -329,6 +325,8 @@ export function SettingsPage(props: {
     readPref("permissionMode") === "full" ? "full" : "supervised",
   );
   const [isolated, setIsolated] = useState(() => readPref("isolated") !== "false");
+  // The coordinator's menus: favorites only, until « Afficher tous les modèles ».
+  const [allModels, setAllModels] = useState(false);
   const theme = useSyncExternalStore(subscribeTheme, readTheme);
   const title = SECTIONS.find((s) => s.id === props.section)?.label ?? "";
 
@@ -501,6 +499,12 @@ export function SettingsPage(props: {
         return `${agent?.name ?? m.agentId}${model ? ` · ${model}` : ""}`;
       };
       const team = props.coordinator.team;
+      const hasFavorites = routeChoices(
+        props.agents,
+        props.favorites,
+        undefined,
+        false,
+      ).favoritesOnly;
       body = (
         <>
           <p className="set-empty">
@@ -519,11 +523,21 @@ export function SettingsPage(props: {
                     agents={props.agents}
                     favorites={props.favorites}
                     route={route}
+                    showAll={allModels}
                   />
                 </Row>
               );
             })}
           </div>
+          {hasFavorites && (
+            <button
+              className="btn quiet sm set-more"
+              aria-pressed={allModels}
+              onClick={() => setAllModels((on) => !on)}
+            >
+              {allModels ? "Seulement mes favoris" : "Afficher tous les modèles"}
+            </button>
+          )}
           <div className="set-card">
             <Row
               title="Fils en même temps"

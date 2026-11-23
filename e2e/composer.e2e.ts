@@ -728,7 +728,7 @@ describe("composer", () => {
       dispatchEvent(new PopStateEvent("popstate"));
     });
     const bug = page.getByLabel("Modèle pour Bug");
-    expect(await bug.locator("option", { hasText: "Tous les modèles" }).count()).toBe(0);
+    expect(await page.getByRole("button", { name: "Afficher tous les modèles" }).count()).toBe(0);
     await bug.selectOption("demo\nprecis");
     await page.reload();
     await expect.poll(() => bug.inputValue()).toBe("demo\nprecis");

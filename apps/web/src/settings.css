@@ -458,3 +458,7 @@
 .set-route .ag {
   flex: none;
 }
+.set-more {
+  align-self: flex-start;
+  margin-top: -6px;
+}
