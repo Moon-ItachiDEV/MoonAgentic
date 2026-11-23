@@ -183,6 +183,12 @@ export function App() {
     setPickedProjectId(id);
     writePref("project", id);
   };
+  /** With no project yet, the home page's conversation goes to « Discussions ». */
+  const needDiscussions = async () => {
+    const id = await connection.request({ type: "project.discussions", requestId: newId() });
+    pickProject(id);
+    return id;
+  };
   const go = (next: Parameters<typeof navigate>[0]) => {
     setDrawer(false);
     setReviewOpen(false);
@@ -375,6 +381,7 @@ export function App() {
           project={project}
           {...(placeholder ? { placeholder } : {})}
           onNewProject={() => setCreatingProject(true)}
+          {...(state.projects.length ? {} : { onNeedProject: needDiscussions })}
           projects={state.projects}
           onPickProject={pickProject}
           mcpServers={state.mcpServers}
