@@ -384,7 +384,13 @@ export class Hub {
     this.recovered = this.finishRestores();
     // Tasks that were due while the server was off start once what was interrupted is put right.
     void this.recovered.then(() => {
-      if (!this.closed) this.scheduler.start();
+      if (this.closed) return;
+      this.scheduler.start();
+      // Threads left in line when the server stopped start once places are free: until
+      // now, only the end of another turn of their coordinator made them move.
+      for (const t of this.store.listThreads()) {
+        if (t.kind === "coordinator" && !t.archived) this.drainLine(t.id);
+      }
     });
   }
 

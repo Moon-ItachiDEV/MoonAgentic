@@ -45,6 +45,8 @@ pnpm start
 
 Ouvre le lien affiché dans le terminal (`http://127.0.0.1:4747/?token=…`).
 
+`pnpm start` relance le serveur tout seul s'il plante (après 1 s, puis de plus en plus tard si les plantages se suivent, jusqu'à 1 min). Ce qu'il affiche est aussi écrit, jeton masqué, dans `~/.moonagentic/logs/` (un fichier par jour, 14 jours gardés), et une copie de la base est faite chaque jour dans `~/.moonagentic/backups/` (7 jours gardés). Pour revenir à une copie, arrête MoonAgentic et remplace `~/.moonagentic/state.sqlite` par elle (en supprimant `state.sqlite-wal` et `state.sqlite-shm` à côté).
+
 ### Essayer sans compte ni clé
 
 ```bash
