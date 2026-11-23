@@ -601,7 +601,7 @@ describe("composer", () => {
     // The threads stay beside the conversation, the new one among them with its real state.
     const beside = page.locator(".pp-panel .pp-row", { hasText: "Export Safari" });
     await beside.waitFor();
-    await expect.poll(() => card.locator(".oc-state").textContent()).toBe("En attente");
+    await expect.poll(() => card.locator(".oc-state").textContent()).toBe("Attend ta réponse.");
     // Beside the coordinator a line is a title and what goes on: the rest is in the thread.
     expect(await beside.locator(".pp-agent").isVisible()).toBe(false);
     // What the new thread waits for is asked above the coordinator's composer, to the user.

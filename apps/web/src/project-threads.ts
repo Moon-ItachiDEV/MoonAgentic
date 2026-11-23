@@ -6,7 +6,7 @@ import {
   threadGroup,
   type Thread,
   type ThreadGroup,
-  type WorkKind,
+  type RouteKind,
 } from "@moonagentic/protocol";
 
 export const GROUP_LABEL: Record<ThreadGroup, string> = {
@@ -133,7 +133,8 @@ export const pinnedFirst = <P extends { pinned?: boolean }>(projects: readonly P
 ];
 
 /** The kinds of work a coordinator sends to an agent, as the user reads them. */
-export const KIND_LABEL: Record<WorkKind, string> = {
+export const KIND_LABEL: Record<RouteKind, string> = {
+  default: "Par défaut",
   question: "Question",
   bug: "Bug",
   fonctionnalite: "Fonctionnalité",

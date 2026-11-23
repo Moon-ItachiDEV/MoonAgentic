@@ -1,6 +1,6 @@
 import {
   DEFAULT_PARALLEL,
-  WORK_KINDS,
+  ROUTE_KINDS,
   type AgentInfo,
   type CoordinatorSettings,
   type Project,
@@ -261,10 +261,10 @@ export function ProjectPage(props: {
             <dd>{props.settings?.parallel ?? DEFAULT_PARALLEL}</dd>
             <dt>Qui fait quoi</dt>
             <dd>
-              {WORK_KINDS.some((k) => props.settings?.routes[k]) ? (
+              {ROUTE_KINDS.some((k) => props.settings?.routes[k]) ? (
                 <ul className="pp-routes">
-                  {WORK_KINDS.map((kind) => {
-                    const route = props.settings?.routes[kind];
+                  {ROUTE_KINDS.map((kind) => {
+                    const route = props.settings?.routes[kind] ?? props.settings?.routes.default;
                     return (
                       <li key={kind}>
                         <span>{KIND_LABEL[kind]}</span>

@@ -12,7 +12,7 @@ import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
-import { GROUP_LABEL } from "../project-threads.ts";
+import { GROUP_LABEL, threadLine } from "../project-threads.ts";
 import { Clamp } from "./Clamp.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TeamCard } from "./TeamCard.tsx";
@@ -272,10 +272,10 @@ function FeedItem({
           </div>
         );
       }
-      const group = threadGroup(
-        opened,
-        threads.filter((t) => t.parentId === item.threadId),
-      );
+      const members = threads.filter((t) => t.parentId === item.threadId);
+      const group = threadGroup(opened, members);
+      // What it waits for, in its own words: a state alone would not say what to do.
+      const why = group === "waiting" ? threadLine(opened, members) : "";
       return (
         <button
           className="opened-line"
@@ -285,7 +285,7 @@ function FeedItem({
         >
           <IconBranch size={13} />
           <span className="oc-t">{opened.title}</span>
-          <span className="oc-state">{opened.held ? "En file" : GROUP_LABEL[group]}</span>
+          <span className="oc-state">{opened.held ? "En file" : why || GROUP_LABEL[group]}</span>
         </button>
       );
     }
