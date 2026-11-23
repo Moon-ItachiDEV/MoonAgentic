@@ -206,7 +206,58 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       );
     `);
   },
+  // 4. The search's own index (V2), so finding a message no longer reads every message.
+  // `search_docs` numbers each message that can be found, in the order they were written,
+  // and says whether the index has its latest text; `search_fts` holds that text, folded,
+  // cut in groups of three letters so any part of a word is found. Which messages hold a
+  // group is all it keeps (`detail = none`): half the size, and the text itself settles
+  // the rest. The index is filled outside this step, a little at a time.
+  (db) => {
+    // Only what the user or an agent said; a team's own messages to its agents are left out.
+    const found = `json_extract(NEW.data, '$.kind') IN ('user', 'agent')
+      AND json_extract(NEW.data, '$.byTeam') IS NOT 1`;
+    // A message written again, as an answer that grows, is only marked: its text is
+    // indexed later, once, instead of at each write.
+    const mark = `
+      UPDATE search_docs SET stale = 1
+        WHERE thread_id = NEW.thread_id AND item_id = NEW.id AND stale = 0;
+      INSERT INTO search_docs (thread_id, item_id) SELECT NEW.thread_id, NEW.id
+        WHERE NOT EXISTS (
+          SELECT 1 FROM search_docs WHERE thread_id = NEW.thread_id AND item_id = NEW.id
+        );`;
+    db.exec(`
+      CREATE TABLE search_docs (
+        n INTEGER PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        stale INTEGER NOT NULL DEFAULT 1,
+        UNIQUE (thread_id, item_id)
+      );
+      CREATE INDEX search_docs_stale ON search_docs(n) WHERE stale = 1;
+      CREATE VIRTUAL TABLE search_fts USING fts5(
+        text, tokenize = 'trigram case_sensitive 1', detail = none
+      );
+      CREATE TRIGGER items_search_insert AFTER INSERT ON items WHEN ${found} BEGIN ${mark} END;
+      CREATE TRIGGER items_search_update AFTER UPDATE OF data ON items WHEN ${found}
+        BEGIN ${mark} END;
+      -- Fires for a thread's or a project's messages too, deleted with it.
+      CREATE TRIGGER items_search_delete AFTER DELETE ON items BEGIN
+        DELETE FROM search_fts WHERE rowid = (
+          SELECT n FROM search_docs WHERE thread_id = OLD.thread_id AND item_id = OLD.id
+        );
+        DELETE FROM search_docs WHERE thread_id = OLD.thread_id AND item_id = OLD.id;
+      END;
+      INSERT INTO search_docs (thread_id, item_id)
+        SELECT thread_id, id FROM items
+          WHERE json_extract(data, '$.kind') IN ('user', 'agent')
+            AND json_extract(data, '$.byTeam') IS NOT 1
+          ORDER BY json_extract(data, '$.at'), rowid;
+    `);
+  },
 ];
+
+/** How many messages the search's index takes in one write. */
+const INDEX_BATCH = 100;
 
 /**
  * Brings the database up to the schema this version knows, one step at a time, each in a
@@ -259,9 +310,6 @@ export class Store {
   constructor(file: string) {
     this.file = file;
     this.db = new DatabaseSync(file);
-    this.db.function("moon_fold", { deterministic: true }, (text) =>
-      typeof text === "string" ? fold(text) : null,
-    );
     this.db.exec(`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`);
     migrate(this.db, file);
   }
@@ -566,19 +614,50 @@ export class Store {
   }
 
   /**
-   * Messages from the user or an agent that contain `query`, newest first. A team's own
-   * messages to its agents are left out: they are long, and not the user's words.
+   * Puts in the search's index the messages written since it was last brought up to date.
+   * With a time allowance it stops once it is spent and returns true: there is more to do.
+   */
+  indexSearch(allowanceMs: number = Infinity): boolean {
+    const until = performance.now() + allowanceMs;
+    for (;;) {
+      const stale = this.sql(
+        `SELECT d.n, i.data FROM search_docs d
+           JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
+           WHERE d.stale = 1 ORDER BY d.n LIMIT ?`,
+      ).all(INDEX_BATCH) as { n: number; data: string }[];
+      if (!stale.length) return false;
+      this.transaction(() => {
+        for (const row of stale) {
+          const item = JSON.parse(row.data) as Item;
+          const text = item.kind === "user" || item.kind === "agent" ? fold(item.text) : "";
+          this.sql(`DELETE FROM search_fts WHERE rowid = ?`).run(row.n);
+          if (text) this.sql(`INSERT INTO search_fts (rowid, text) VALUES (?, ?)`).run(row.n, text);
+          this.sql(`UPDATE search_docs SET stale = 0 WHERE n = ?`).run(row.n);
+        }
+      });
+      if (stale.length < INDEX_BATCH) return false;
+      if (performance.now() >= until) return true;
+    }
+  }
+
+  /**
+   * Messages from the user or an agent that contain `query`, the latest written first. A
+   * team's own messages to its agents are left out: they are long, and not the user's words.
    */
   searchItems(query: string, limit = 30): SearchHit[] {
-    const pattern = `%${fold(query).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    // What was written since the index was last filled is found too.
+    this.indexSearch();
+    // The folded text is looked for as it is, `*`, `?` and `[` included. From three letters
+    // the index names the few messages to look in; shorter, the folded texts are read, the
+    // latest first, until enough are found. No message is opened either way but those shown.
+    const pattern = `*${fold(query).replace(/[*?[]/g, (c) => `[${c}]`)}*`;
     const rows = this.sql(
-      `SELECT items.thread_id, items.id, items.data FROM items
-         JOIN threads ON threads.id = items.thread_id
-         WHERE json_extract(items.data, '$.kind') IN ('user', 'agent')
-           AND json_extract(items.data, '$.byTeam') IS NOT 1
-           AND moon_fold(json_extract(items.data, '$.text')) LIKE ? ESCAPE '\\'
-         ORDER BY threads.updated_at DESC, items.seq DESC
-         LIMIT ?`,
+      `SELECT i.thread_id, i.id, i.data FROM (
+           SELECT rowid AS n FROM search_fts WHERE text GLOB ? ORDER BY rowid DESC LIMIT ?
+         ) hit
+         JOIN search_docs d ON d.n = hit.n
+         JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
+         ORDER BY hit.n DESC`,
     ).all(pattern, limit) as { thread_id: string; id: string; data: string }[];
     return rows.flatMap((row): SearchHit[] => {
       const item = JSON.parse(row.data) as Item;
