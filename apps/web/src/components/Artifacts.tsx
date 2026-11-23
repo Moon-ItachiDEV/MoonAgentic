@@ -175,7 +175,9 @@ export function Artifacts({
   }
   const all = list?.artifacts ?? [];
   const n = counts(all);
-  const shown = filtered(all, filter);
+  // A kind none is left of since the last look: back to all of them.
+  const active: ArtifactFilter = filter !== "all" && n[filter] === 0 ? "all" : filter;
+  const shown = filtered(all, active);
   return (
     <div className="view art-view">
       <div className="art-head">
@@ -198,8 +200,8 @@ export function Artifacts({
           {FILTERS.map((f) => (
             <button
               key={f.id}
-              className={filter === f.id ? "on" : ""}
-              aria-pressed={filter === f.id}
+              className={active === f.id ? "on" : ""}
+              aria-pressed={active === f.id}
               disabled={f.id !== "all" && n[f.id] === 0}
               onClick={() => setFilter(f.id)}
             >

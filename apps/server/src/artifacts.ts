@@ -62,8 +62,6 @@ const TYPES: Record<string, string> = {
   ".mp3": "audio/mpeg",
   ".wav": "audio/wav",
   ".ogg": "audio/ogg",
-  ".json": "application/json; charset=utf-8",
-  ".txt": "text/plain; charset=utf-8",
 };
 
 export const artifactKind = (file: string): ArtifactKind | undefined =>
@@ -107,7 +105,9 @@ export async function findArtifacts(
       const real = kind && resolveInside(ws.path, file);
       if (!kind || !real) continue;
       try {
-        const { size, mtimeMs } = await stat(real);
+        const found = await stat(real);
+        if (!found.isFile()) continue;
+        const { size, mtimeMs } = found;
         shown.push({
           threadId: thread.id,
           threadTitle: thread.title,
@@ -136,7 +136,11 @@ export const artifactUrl = (ticket: string, file: string) =>
  * folder that the folder's listing holds, so a page finds its images and styles beside it.
  */
 export class ArtifactLinks {
-  private readonly links = new Map<string, { threadId: string; expiresAt: number }>();
+  /** Each address, with the device it was given to (none for the computer itself). */
+  private readonly links = new Map<
+    string,
+    { threadId: string; deviceId?: string; expiresAt: number }
+  >();
   private readonly workspaceOf: (threadId: string) => Workspace | undefined;
   private readonly now: () => number;
 
@@ -145,8 +149,8 @@ export class ArtifactLinks {
     this.now = now;
   }
 
-  /** A new address for the files of this thread's folder. */
-  issue(threadId: string): { ticket: string; expiresAt: number } {
+  /** A new address for the files of this thread's folder, given to that device. */
+  issue(threadId: string, deviceId?: string): { ticket: string; expiresAt: number } {
     const now = this.now();
     for (const [key, link] of this.links) if (link.expiresAt <= now) this.links.delete(key);
     while (this.links.size >= MAX_LINKS) {
@@ -156,8 +160,16 @@ export class ArtifactLinks {
     }
     const ticket = randomBytes(32).toString("base64url");
     const expiresAt = now + ARTIFACT_LINK_TTL_MS;
-    this.links.set(ticket, { threadId, expiresAt });
+    this.links.set(ticket, { threadId, ...(deviceId ? { deviceId } : {}), expiresAt });
     return { ticket, expiresAt };
+  }
+
+  /**
+   * Stops at once the addresses given to the devices `whose` names: a revoked phone's, or the
+   * computer's own when its token is renewed.
+   */
+  forget(whose: (deviceId: string | undefined) => boolean): void {
+    for (const [key, link] of this.links) if (whose(link.deviceId)) this.links.delete(key);
   }
 
   /**
@@ -179,8 +191,10 @@ export class ArtifactLinks {
     const real = await listedWorktreeFile(this.workspaceOf(link.threadId), file);
     if (!real) return undefined;
     try {
-      const { size } = await stat(real);
-      return size <= MAX_SERVED_BYTES ? { file: real, type, size } : undefined;
+      const found = await stat(real);
+      return found.isFile() && found.size <= MAX_SERVED_BYTES
+        ? { file: real, type, size: found.size }
+        : undefined;
     } catch {
       return undefined;
     }

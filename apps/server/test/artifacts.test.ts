@@ -122,6 +122,18 @@ describe("artifacts", { timeout: 40_000 }, () => {
   });
 
   it.skipIf(process.platform === "win32")(
+    "leaves out a folder whose name looks like a page, and serves nothing from it",
+    async () => {
+      const { hub, store, dir, threadId } = await threadFolder();
+      // Git lists a link as a file, whatever it leads to.
+      symlinkSync(path.join(dir, "docs"), path.join(dir, "dossier.html"));
+      expect((await findArtifacts(store.listThreads())).artifacts).toEqual([]);
+      const { ticket } = hub.artifactLinks.issue(threadId);
+      expect(await hub.artifactLinks.resolve(ticket, "dossier.html")).toBeUndefined();
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "leaves out a link leading out of the folder",
     async () => {
       const { root, store, dir } = await threadFolder();
@@ -169,6 +181,24 @@ describe("artifacts", { timeout: 40_000 }, () => {
       (id) => store.getThread(id)?.workspace,
       () => now,
     );
+    // Data a page could only read with a script, which never runs here: not served.
+    writeFileSync(path.join(dir, "donnees.json"), "{}");
+    writeFileSync(path.join(dir, "lisez.txt"), "x");
+    const reader = real.issue(threadId);
+    expect(await real.resolve(reader.ticket, "donnees.json")).toBeUndefined();
+    expect(await real.resolve(reader.ticket, "lisez.txt")).toBeUndefined();
+    // A file made after the folder was last listed is found all the same.
+    expect(await real.resolve(reader.ticket, "docs/maquette.html")).toBeDefined();
+    writeFileSync(path.join(dir, "docs/tout-neuf.png"), PNG);
+    expect(await real.resolve(reader.ticket, "docs/tout-neuf.png")).toMatchObject({
+      type: "image/png",
+    });
+    // The addresses of a revoked device stop at once; the others stay.
+    const phone = real.issue(threadId, "telephone");
+    const computer = real.issue(threadId);
+    real.forget((deviceId) => deviceId === "telephone");
+    expect(await real.resolve(phone.ticket, "docs/maquette.html")).toBeUndefined();
+    expect(await real.resolve(computer.ticket, "docs/maquette.html")).toBeDefined();
     const issued = real.issue(threadId);
     expect(await real.resolve(issued.ticket, "docs/maquette.html")).toMatchObject({
       type: "text/html; charset=utf-8",

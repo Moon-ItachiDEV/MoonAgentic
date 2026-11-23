@@ -445,6 +445,10 @@ export function createHttpServer(options: {
   const shutOut = (whose: (who: Who) => boolean, code: number, reason: string) => {
     for (const [key, { who }] of wsTickets) if (whose(who)) wsTickets.delete(key);
     for (const [socket, who] of sockets) if (whose(who)) socket.close(code, reason);
+    // The addresses it was given to show artifacts stop too.
+    hub.artifactLinks.forget((deviceId) =>
+      whose(deviceId ? { owner: false, deviceId } : { owner: true }),
+    );
   };
   const ofDevice = (id: string) => (who: Who) => !who.owner && who.deviceId === id;
 
@@ -597,6 +601,8 @@ export function createHttpServer(options: {
         // Those are the ones open now: one this window opens with the new token stays. Paired
         // devices have tokens of their own: they stay too.
         for (const [key, { who: w }] of wsTickets) if (w.owner) wsTickets.delete(key);
+        // So do the addresses given to show artifacts, which the old token was enough to get.
+        hub.artifactLinks.forget((deviceId) => deviceId === undefined);
         const old = [...sockets].filter(([, w]) => w.owner).map(([socket]) => socket);
         res.once("close", () => {
           for (const socket of old) socket.close(TOKEN_RENEWED, "token renewed");

@@ -791,7 +791,7 @@ export class Hub {
         if (!(await listedWorktreeFile(workspace, message.path))) {
           throw new Error("Ce fichier n'est plus dans la copie de travail de ce fil.");
         }
-        const { ticket, expiresAt } = this.artifactLinks.issue(message.threadId);
+        const { ticket, expiresAt } = this.artifactLinks.issue(message.threadId, client.deviceId);
         client.send({
           type: "artifactLink",
           requestId: message.requestId,
