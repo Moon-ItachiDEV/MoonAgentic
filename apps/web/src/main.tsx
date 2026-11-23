@@ -17,6 +17,7 @@ import "./offline.css";
 import "./project.css";
 import "./phone.css";
 import "./update.css";
+import "./plan.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

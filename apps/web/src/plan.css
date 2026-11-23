@@ -1,0 +1,98 @@
+/* The agent's own plan: one card, steps turn green as the agent finishes them. */
+.agent-plan {
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+.agent-plan-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  color: var(--fg);
+  text-align: left;
+}
+.agent-plan-h svg {
+  color: var(--faint);
+  transition: transform 0.2s cubic-bezier(0.23, 1, 0.32, 1);
+}
+.agent-plan.open .agent-plan-h svg {
+  transform: rotate(90deg);
+}
+.agent-plan-h .tt {
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+}
+.agent-plan-n {
+  font: 11.5px var(--mono);
+  color: var(--faint);
+}
+.agent-plan-l {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 2px 14px 12px;
+  list-style: none;
+}
+.agent-plan-l li {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--muted);
+  min-width: 0;
+}
+.agent-plan-t {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.agent-plan-l li.done {
+  color: var(--faint);
+}
+.agent-plan-l li.done .agent-plan-t {
+  text-decoration: line-through;
+  text-decoration-color: var(--line2);
+}
+.agent-plan-l li.now,
+.agent-plan-l li.held {
+  color: var(--fg);
+}
+.agent-plan-ic {
+  width: 15px;
+  height: 15px;
+  margin-top: 2px;
+  border-radius: 50%;
+  border: 1.5px dashed var(--line2);
+  display: grid;
+  place-items: center;
+  flex: none;
+  transition:
+    background-color 0.2s ease-out,
+    border-color 0.2s ease-out;
+}
+.agent-plan-l li.done .agent-plan-ic {
+  background: var(--ok);
+  border: 1.5px solid var(--ok);
+  color: var(--bg);
+}
+/* The step at work turns only while the turn runs: a stopped turn keeps a still ring. */
+.agent-plan-l li.held .agent-plan-ic {
+  border-style: solid;
+  border-color: var(--accent);
+}
+.agent-plan-l li.now .agent-plan-ic {
+  border-style: solid;
+  border-color: var(--accent);
+  border-top-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-plan-l li.now .agent-plan-ic {
+    animation: none;
+    border-top-color: var(--accent);
+  }
+}

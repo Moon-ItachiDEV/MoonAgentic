@@ -1047,46 +1047,6 @@ svg {
   gap: 8px;
   align-items: center;
 }
-.plan {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.plan li {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  font-size: 13.5px;
-  color: var(--muted);
-}
-.plan li.done {
-  color: var(--faint);
-  text-decoration: line-through;
-  text-decoration-color: var(--line2);
-}
-.plan li.now {
-  color: var(--fg);
-}
-.cir {
-  width: 15px;
-  height: 15px;
-  border-radius: 50%;
-  border: 1.5px solid var(--line2);
-  display: grid;
-  place-items: center;
-  flex: none;
-}
-.plan li.done .cir {
-  background: var(--fg);
-  border-color: var(--fg);
-  color: var(--bg);
-}
-.plan li.now .cir {
-  border-color: var(--accent);
-}
-
 .approve {
   border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
   border-radius: 18px;

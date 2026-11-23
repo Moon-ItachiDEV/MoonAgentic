@@ -438,6 +438,14 @@ const app = acp
       status: "completed",
       content: [{ type: "content", content: { type: "text", text: "export const answer = 41;" } }],
     });
+    // The code is read: the plan moves on, as a real agent's todo list does.
+    await update({
+      sessionUpdate: "plan",
+      entries: [
+        { content: "Lire le code concerné", priority: "high", status: "completed" },
+        { content: "Proposer la modification", priority: "high", status: "in_progress" },
+      ],
+    });
     await say(
       `Tu m'as demandé : « ${ask} » (modèle ${models.get(sessionId) ?? "rapide"}). ` +
         (firstAsk ? `J'ai reçu l'historique, qui commence par « ${firstAsk} ». ` : "") +

@@ -12,6 +12,7 @@ import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
+import { AgentPlan } from "./AgentPlan.tsx";
 import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { GROUP_LABEL, threadLine } from "../project-threads.ts";
 import { Clamp } from "./Clamp.tsx";
@@ -418,30 +419,7 @@ function FeedItem({
       }
       return <ToolRow item={item} live={live} />;
     case "plan":
-      return (
-        <div className="card">
-          <div className="card-h">Plan</div>
-          <ul className="plan">
-            {item.entries.map((entry, i) => (
-              <li
-                key={i}
-                className={
-                  entry.status === "completed"
-                    ? "done"
-                    : entry.status === "in_progress"
-                      ? "now"
-                      : ""
-                }
-              >
-                <span className="cir">
-                  {entry.status === "completed" && <IconCheck size={9} />}
-                </span>
-                {entry.content}
-              </li>
-            ))}
-          </ul>
-        </div>
-      );
+      return <AgentPlan entries={item.entries} live={live} />;
     case "permission":
       return <PermissionCard item={item} threadId={thread.id} />;
   }
