@@ -167,6 +167,12 @@ describe("Réglages → Accès distant", () => {
       await again.getByText("il a expiré ou a déjà servi").waitFor();
       if (shots) await again.screenshot({ path: path.join(shots, "appairer-telephone.png") });
 
+      // Already paired, the phone opening a used link stays connected, and is told why.
+      await phone.goto(`${new URL(url).origin}/#pair=${code}`);
+      await phone.getByText("Appairage refusé").waitFor();
+      await phone.getByRole("combobox", { name: "Message" }).waitFor();
+      await phone.goto(`${new URL(url).origin}/reglages/remote`);
+
       // Renewing the computer's token: the old one is refused, the phone stays connected.
       await page.getByRole("button", { name: "Renouveler", exact: true }).click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Renouveler" }).click();
@@ -191,6 +197,8 @@ describe("Réglages → Accès distant", () => {
       await page.getByRole("alertdialog").getByRole("button", { name: "Révoquer" }).click();
       await page.getByText("Aucun pour l'instant.").waitFor();
       await phone.getByRole("heading", { name: "Appairer cet appareil" }).waitFor();
+      // The failed link from before is not shown as the reason.
+      expect(await phone.getByText("il a expiré").count()).toBe(0);
 
       // A window still on the old link is shown the door too.
       const other = await (await browser.newContext()).newPage();

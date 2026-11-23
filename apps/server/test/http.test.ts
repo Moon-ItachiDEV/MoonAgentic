@@ -438,6 +438,39 @@ describe("the HTTP server", () => {
     expect((await call("/api/auth", { token: phone })).status).toBe(401);
   });
 
+  it("takes a pairing only as JSON from its own page, and no token is not a wrong one", async () => {
+    const { origin } = await serve({ rateLimit: { maxAuthFailures: 3 } });
+    // What another site open in the browser could send without asking first.
+    const plain = await fetch(`http://${origin}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: JSON.stringify({ code: "AAAA2222", name: "x" }),
+    });
+    expect(plain.status).toBe(415);
+    const elsewhere = await fetch(`http://${origin}/api/pair`, {
+      method: "POST",
+      headers: { "content-type": "application/json", origin: "https://exemple.com" },
+      body: JSON.stringify({ code: "AAAA2222", name: "x" }),
+    });
+    expect(elsewhere.status).toBe(403);
+    // Requests with no token at all never lock the user out.
+    for (let i = 0; i < 6; i++) {
+      expect((await fetch(`http://${origin}/api/auth`)).status).toBe(401);
+      expect((await fetch(`http://${origin}/api/ws-ticket`, { method: "POST" })).status).toBe(401);
+    }
+    expect(
+      (await fetch(`http://${origin}/api/auth`, { headers: { authorization: `Bearer ${TOKEN}` } }))
+        .status,
+    ).toBe(204);
+    expect(
+      (
+        await fetch(`http://${origin}/api/devices/revoke`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+        })
+      ).status,
+    ).toBe(405);
+  });
+
   it("counts wrong pairing codes as failed sign-ins", async () => {
     const { origin } = await serve({ rateLimit: { maxAuthFailures: 3 } });
     const pair = () =>

@@ -433,13 +433,19 @@ export function createHttpServer(options: {
       res.setHeader(name, value);
     const given = bearerToken(req.headers.authorization);
     const remoteIp = req.socket.remoteAddress ?? "unknown";
+    // Only a wrong token counts against this address, not a missing one: another site open in
+    // the browser can send requests here without a token, never with one, and must not be
+    // able to lock the user out.
+    const countFailure = () => {
+      if (given) authFailures.record(remoteIp);
+    };
     if (req.url === "/api/auth") {
       const limit = apiLimiter.take(remoteIp);
       if (!limit.ok) return tooMany(res, limit.retryAfterSec);
       const authLimit = authFailures.check(remoteIp);
       if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
       if (!identify(given)) {
-        authFailures.record(remoteIp);
+        countFailure();
         res.writeHead(401).end();
         return;
       }
@@ -457,7 +463,7 @@ export function createHttpServer(options: {
       }
       const who = identify(given);
       if (!who) {
-        authFailures.record(remoteIp);
+        countFailure();
         res.writeHead(401).end();
         return;
       }
@@ -534,7 +540,7 @@ export function createHttpServer(options: {
       if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
       const who = identify(given);
       if (!who) {
-        authFailures.record(remoteIp);
+        countFailure();
         res.writeHead(401).end();
         return;
       }
@@ -555,9 +561,13 @@ export function createHttpServer(options: {
         }
         token = next;
         // Every window still on the old token is shown out, once this one has the new one.
-        // Paired devices have tokens of their own: they stay.
-        res.once("close", () => shutOut((w) => w.owner, TOKEN_RENEWED, "token renewed"));
+        // Those are the ones open now: one this window opens with the new token stays. Paired
+        // devices have tokens of their own: they stay too.
         for (const [key, { who: w }] of wsTickets) if (w.owner) wsTickets.delete(key);
+        const old = [...sockets].filter(([, w]) => w.owner).map(([socket]) => socket);
+        res.once("close", () => {
+          for (const socket of old) socket.close(TOKEN_RENEWED, "token renewed");
+        });
         json(res, 200, { token });
         return;
       }
@@ -578,6 +588,17 @@ export function createHttpServer(options: {
       if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
       if (req.method !== "POST") {
         res.writeHead(405).end();
+        return;
+      }
+      // JSON only: another site cannot send it without the browser asking first, which this
+      // server never allows, so it cannot try codes from a page open on this computer.
+      if (!/^application\/json\s*(;|$)/i.test(req.headers["content-type"] ?? "")) {
+        dropRest(req);
+        return json(res, 415, { message: "Une demande d'appairage s'envoie en JSON." });
+      }
+      if (!allowedWsOrigin(req.headers.origin, req.headers.host)) {
+        dropRest(req);
+        res.writeHead(403).end();
         return;
       }
       void readJson(req, MAX_PAIR_BODY).then((body) => {
@@ -609,7 +630,7 @@ export function createHttpServer(options: {
       if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
       const who = identify(given);
       if (!who) {
-        authFailures.record(remoteIp);
+        countFailure();
         res.writeHead(401).end();
         return;
       }
@@ -630,7 +651,8 @@ export function createHttpServer(options: {
         });
         return;
       }
-      res.writeHead(req.url === "/api/pair/start" || req.url === "/api/devices" ? 405 : 404).end();
+      const known = ["/api/pair/start", "/api/devices", "/api/devices/revoke"];
+      res.writeHead(known.includes(req.url ?? "") ? 405 : 404).end();
       return;
     }
     const asked = parseUrl(req.url ?? "/")?.pathname ?? "";
@@ -641,7 +663,7 @@ export function createHttpServer(options: {
       const authLimit = authFailures.check(remoteIp);
       if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
       if (!identify(given)) {
-        authFailures.record(remoteIp);
+        countFailure();
         res.writeHead(401).end();
         return;
       }

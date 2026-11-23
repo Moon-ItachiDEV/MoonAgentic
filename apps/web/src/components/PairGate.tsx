@@ -42,7 +42,7 @@ export function PairGate() {
             autoComplete="one-time-code"
             autoCapitalize="characters"
             spellCheck={false}
-            maxLength={12}
+            maxLength={32}
             value={code}
             onChange={(e) => setCode(e.target.value)}
           />

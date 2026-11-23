@@ -69,14 +69,17 @@ export function RemoteAccess() {
   const [devices, setDevices] = useState<PairedDevice[] | null | undefined>(undefined);
   const [pairing, setPairing] = useState<{ code: string; expiresAt: number } | null>(null);
   const [pairError, setPairError] = useState<string | null>(null);
+  const [devicesError, setDevicesError] = useState<string | null>(null);
   const [justPaired, setJustPaired] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
-    connection.devices().then(setDevices, (e: unknown) => {
-      setDevices([]);
-      setPairError(e instanceof Error ? e.message : String(e));
-    });
+    // Unknown until the server says: nothing of the computer's own part is shown before.
+    connection
+      .devices()
+      .then(setDevices, (e: unknown) =>
+        setDevicesError(e instanceof Error ? e.message : String(e)),
+      );
   }, []);
   // While a code is shown: the time left moves on, and the list is asked again, so the new
   // device shows up as soon as it pairs.
@@ -240,6 +243,16 @@ export function RemoteAccess() {
               {pairError && <p className="ra-err">{pairError}</p>}
             </div>
             {link && <QrCode text={link} />}
+          </div>
+        )}
+        {devicesError && devices === undefined && (
+          <div className="set-row">
+            <div className="set-tx">
+              <b>Appareils</b>
+              <p className="ra-err">
+                Impossible de savoir quels appareils sont appairés : {devicesError}
+              </p>
+            </div>
           </div>
         )}
         {devices === null && (

@@ -184,9 +184,15 @@ export class Connection {
     if (pairCode) {
       // Opened from a pairing link: this device gets its own token first.
       this.pair(pairCode).catch((error: unknown) => {
-        this.pairError = error instanceof Error ? error.message : String(error);
-        if (this.usableToken()) void this.open();
-        else this.set({ ...this.state, status: "unauthorized" });
+        const why = error instanceof Error ? error.message : String(error);
+        if (this.usableToken()) {
+          // Already paired: it connects as before, and says why the link did nothing.
+          this.notify(`Appairage refusé : ${why}`);
+          void this.open();
+        } else {
+          this.pairError = why;
+          this.set({ ...this.state, status: "unauthorized" });
+        }
       });
     } else if (!this.usableToken()) {
       this.state = { ...this.state, status: "unauthorized" };
@@ -498,6 +504,8 @@ export class Connection {
     socket.onopen = () => {
       opened = true;
       this.retry = 0;
+      // Connected: a pairing that failed earlier says nothing about a later loss of access.
+      this.pairError = null;
       this.set({
         ...this.state,
         status: "open",
