@@ -30,7 +30,7 @@ jobs:
             target: --win
             files: apps/desktop/release/*.exe
           - name: Mac
-            os: macos-14
+            os: macos-latest
             target: --mac
             files: apps/desktop/release/*.dmg
     runs-on: ${{ matrix.os }}
