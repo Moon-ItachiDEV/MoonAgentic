@@ -1,0 +1,62 @@
+# Installers built by .github/workflows/desktop.yml, published on the repository's Releases.
+appId: com.moonagentic.desktop
+productName: MoonAgentic
+copyright: MoonAgentic
+directories:
+  output: release
+  buildResources: assets
+files:
+  - dist/**
+  - assets/**
+  - package.json
+# The server and the interface, gathered by `pnpm stage`. Outside the app's archive: Node runs
+# the server's TypeScript from plain files, and agents start programs from its packages.
+extraResources:
+  - from: stage
+    to: moonagentic
+    filter: ["**/*"]
+# No native module to rebuild: the server uses Node's own SQLite.
+npmRebuild: false
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: assets/icon.ico
+# The installer's look: the Orbite logo on the welcome and finish pages (164×314), a small
+# one on the others (150×57), French texts in assets/installer.nsh.
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  language: "1036"
+  installerLanguages: [fr_FR]
+  multiLanguageInstaller: false
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+  installerSidebar: assets/installerSidebar.bmp
+  uninstallerSidebar: assets/uninstallerSidebar.bmp
+  installerHeader: assets/installerHeader.bmp
+  shortcutName: MoonAgentic
+  uninstallDisplayName: MoonAgentic
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  runAfterFinish: true
+  artifactName: MoonAgentic-${version}-windows-x64.${ext}
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+  icon: assets/icon.png
+  category: public.app-category.developer-tools
+  # No paid certificate: the app gets an ad-hoc signature, which Apple Silicon requires.
+  identity: null
+  artifactName: MoonAgentic-${version}-mac-arm64.${ext}
+linux:
+  executableName: moonagentic
+  target: [dir]
+  icon: assets/icon.png
+publish:
+  provider: github
+  owner: Moon-ItachiDEV
+  repo: MoonAgentic
+  releaseType: release

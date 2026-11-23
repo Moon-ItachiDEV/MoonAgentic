@@ -74,6 +74,25 @@ async function callMoonAgentic(sessionId: string, name: string, args: unknown): 
 /** The folder each session works in. */
 const cwds = new Map<string, string>();
 
+/** A file of 1,200 lines: a result too large to travel with the timeline. */
+const BIG_FILE = Array.from(
+  { length: 1200 },
+  (_, n) => `export const ligne${n + 1} = ${n + 1};`,
+).join("\n");
+
+/** A long answer with all that Markdown costs to draw: titles, lists, a table, code. */
+const LONG_ANSWER = Array.from(
+  { length: 12 },
+  (_, n) =>
+    `## Partie ${n + 1}\n\n` +
+    "Voici une explication assez longue pour ressembler à une vraie réponse, avec du **gras**, " +
+    "du `code` en ligne et un [lien](https://example.com). Elle continue sur plusieurs phrases " +
+    "pour que le texte grandisse pendant que tu le lis.\n\n" +
+    "- un premier point, avec quelques mots de plus\n- un deuxième point\n- un troisième\n\n" +
+    "| Fichier | Rôle |\n| --- | --- |\n| `app.ts` | le point d'entrée |\n| `hub.ts` | l'état |\n\n" +
+    "```ts\nexport function answer(): number {\n  return 42;\n}\n```\n\n",
+).join("");
+
 const CONTEXT_SIZE = 200_000;
 
 const modeChoices = [
@@ -143,7 +162,10 @@ const app = acp
         // Stands for an agent that says it resumes sessions but fails to, and can reload them.
         ...(modelStyle === "resume-fail" ? { sessionCapabilities: { resume: {} } } : {}),
         mcpCapabilities: { http: false, sse: false },
-        promptCapabilities: { embeddedContext: process.env.MOONAGENTIC_DEMO_EMBED !== "0" },
+        promptCapabilities: {
+          embeddedContext: process.env.MOONAGENTIC_DEMO_EMBED !== "0",
+          image: process.env.MOONAGENTIC_DEMO_IMAGES !== "0",
+        },
       },
       agentInfo: { name: "moonagentic-demo", version: "0.1.0" },
     };
@@ -232,11 +254,13 @@ const app = acp
     const texts = params.prompt.flatMap((b) => (b.type === "text" ? [b.text] : []));
     // Files and skills the message points at come after its text, as links or as content.
     const attached = params.prompt.flatMap((b) =>
-      b.type === "resource_link"
-        ? [`${b.name} (lien)`]
-        : b.type === "resource" && "text" in b.resource
-          ? [`${decodeURIComponent(b.resource.uri.split("/").pop() ?? "")} (texte)`]
-          : [],
+      b.type === "image"
+        ? [`${b.mimeType}, ${Buffer.from(b.data, "base64").length} octets (image)`]
+        : b.type === "resource_link"
+          ? [`${b.name} (lien)`]
+          : b.type === "resource" && "text" in b.resource
+            ? [`${decodeURIComponent(b.resource.uri.split("/").pop() ?? "")} (texte)`]
+            : [],
     );
     // The last block is the user's message; one before it carries the earlier conversation.
     const ask = texts.at(-1) ?? "";
@@ -252,6 +276,50 @@ const app = acp
     };
 
     if (ask.includes("boom")) throw new Error("Le démo a planté exprès.");
+
+    // A longer task in five steps, each with its tool, so a plan can be seen moving on.
+    if (ask.includes("en 5 étapes")) {
+      const steps: [string, acp.ToolKind, string][] = [
+        ["Lire le code concerné", "read", "Lire src/app.ts"],
+        ["Chercher où answer est utilisé", "search", "Chercher answer dans src"],
+        ["Modifier la valeur de answer", "edit", "Modifier src/app.ts"],
+        ["Lancer les tests", "execute", "`pnpm test`"],
+        ["Résumer le changement", "think", "Relire le diff"],
+      ];
+      const plan = (at: number) =>
+        update({
+          sessionUpdate: "plan",
+          entries: steps.map(([content], i) => ({
+            content,
+            priority: "medium" as const,
+            status:
+              i < at
+                ? ("completed" as const)
+                : i === at
+                  ? ("in_progress" as const)
+                  : ("pending" as const),
+          })),
+        });
+      for (const [i, [, kind, title]] of steps.entries()) {
+        await plan(i);
+        await update({
+          sessionUpdate: "tool_call",
+          toolCallId: `step-${i}`,
+          title,
+          kind,
+          status: "in_progress",
+        });
+        await delay(900 + i * 300);
+        await update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: `step-${i}`,
+          status: "completed",
+        });
+      }
+      await plan(steps.length);
+      await say("Fait en 5 étapes : answer vaut 42 et les tests passent.", "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
     const usage = async (tokens: number, priced = true) => {
       used.set(sessionId, tokens);
       // Priced like a real agent, which says what the session has cost so far.
@@ -322,6 +390,11 @@ const app = acp
       await say("Contexte compacté.", "agent_message_chunk");
       // Only the tokens this time, as some agents do.
       await usage(3_000, false);
+      return { stopReason: "end_turn" };
+    }
+    if (ask.trim() === "/flux") {
+      // Stands for a fast model: a long Markdown answer, sent word by word without a pause.
+      await say(LONG_ANSWER, "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
     if (ask.trim() === "/fige") {
@@ -490,7 +563,23 @@ const app = acp
       title: "Lire src/app.ts",
       kind: "read",
       status: "completed",
-      content: [{ type: "content", content: { type: "text", text: "export const answer = 41;" } }],
+      content: [
+        {
+          type: "content",
+          content: {
+            type: "text",
+            text: ask.includes("gros fichier") ? BIG_FILE : "export const answer = 41;",
+          },
+        },
+      ],
+    });
+    // The code is read: the plan moves on, as a real agent's todo list does.
+    await update({
+      sessionUpdate: "plan",
+      entries: [
+        { content: "Lire le code concerné", priority: "high", status: "completed" },
+        { content: "Proposer la modification", priority: "high", status: "in_progress" },
+      ],
     });
     await say(
       `Tu m'as demandé : « ${ask} » (modèle ${models.get(sessionId) ?? "rapide"}). ` +

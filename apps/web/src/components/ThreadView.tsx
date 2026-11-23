@@ -6,17 +6,29 @@ import {
   type Thread,
   type ToolContent,
 } from "@moonagentic/protocol";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { messageTokens } from "../commands.ts";
+import { imageBlob } from "../attachments.ts";
 import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { openQuestion as askedQuestion } from "../decision.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
+import { useLiveText } from "../live-text.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
+import { AgentPlan } from "./AgentPlan.tsx";
 import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { GROUP_LABEL, threadLine } from "../project-threads.ts";
 import { Clamp } from "./Clamp.tsx";
 import { Markdown } from "./Markdown.tsx";
+import { MessageImages } from "./MessageImages.tsx";
 import { TeamCard } from "./TeamCard.tsx";
 import { TeamStrip } from "./TeamStrip.tsx";
 import { withoutTeamJson } from "../team-json.ts";
@@ -42,7 +54,7 @@ export function ThreadView({
   items,
   agents,
   threads,
-  onOpenThread,
+  onOpenThread: openThread,
   intro,
 }: {
   /** Shown above the conversation, such as a coordinator's ways to start. */
@@ -62,7 +74,17 @@ export function ThreadView({
       ? { lead, team: lead.team }
       : undefined;
   const view = useRef<HTMLDivElement>(null);
+  const feed = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  /** Where the view was scrolled to when last looked at: going up from there is the reader's doing. */
+  const scrolledTo = useRef(0);
+  // The same function from one pass to the next, so a message already drawn is left alone
+  // while another one is being written.
+  const opener = useRef(openThread);
+  useLayoutEffect(() => {
+    opener.current = openThread;
+  });
+  const onOpenThread = useCallback((id: string) => opener.current(id), []);
   const agent = agents.find((a) => a.id === thread.agentId);
   // Who wrote each item: the thread's agent, or the one it was handed over from.
   const authors: string[] = [];
@@ -82,6 +104,7 @@ export function ThreadView({
   // Set before the effects below, so the timeline sent back on opening keeps that message.
   useLayoutEffect(() => {
     pinned.current = !hasFocus(thread.id);
+    scrolledTo.current = 0;
   }, [thread.id]);
 
   // A message picked in the quick search is shown once the timeline is here.
@@ -111,11 +134,24 @@ export function ThreadView({
     el.classList.add("flash");
   }, [items, thread.id, focusTick, reveal]);
 
-  // Keep following new output while the reader is at the bottom.
+  // Keep following new output while the reader is at the bottom: at once for a new message
+  // or another thread...
+  const count = items?.length;
   useLayoutEffect(() => {
     const el = view.current;
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
-  }, [items, thread.status]);
+  }, [count, thread.id, thread.status]);
+  // ...and whenever what is shown grows: a text being written is drawn a little after it
+  // arrives, and measuring the page at each piece of it would cost a layout each time.
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined" || !feed.current) return;
+    const grown = new ResizeObserver(() => {
+      const el = view.current;
+      if (el && pinned.current) el.scrollTop = el.scrollHeight;
+    });
+    grown.observe(feed.current);
+    return () => grown.disconnect();
+  }, []);
 
   // A question the agent asked with a tool can be answered until the user writes again.
   const openQuestion = askedQuestion(items, thread)?.id;
@@ -150,6 +186,13 @@ export function ThreadView({
           showBy={thread.kind !== "coordinator" && (showBy ?? startsAgentBlock(items!, i))}
           openQuestion={openQuestion}
           live={working && i > lastUser}
+          ask={
+            item.kind === "plan"
+              ? items!
+                  .slice(0, i)
+                  .findLast((it): it is Extract<Item, { kind: "user" }> => it.kind === "user")?.text
+              : undefined
+          }
           clamp={clamp}
           threads={threads}
           onOpenThread={onOpenThread}
@@ -164,10 +207,14 @@ export function ThreadView({
       ref={view}
       onScroll={(e) => {
         const el = e.currentTarget;
-        pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        // Back near the end, the reader follows again. Only going up leaves it: an answer
+        // that grew a lot since the last look makes the page longer, not the reader gone.
+        if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) pinned.current = true;
+        else if (el.scrollTop < scrolledTo.current) pinned.current = false;
+        scrolledTo.current = el.scrollTop;
       }}
     >
-      <div className="feed">
+      <div className="feed" ref={feed}>
         {intro}
         {/* A team started before the timeline was recorded has nothing to draw. */}
         {!!strip?.team.timeline?.length && (
@@ -283,7 +330,7 @@ const startsAgentBlock = (items: Item[], index: number) =>
     .find((i) => i.kind === "agent" || i.kind === "user" || i.kind === "handoff")
     ?.kind.startsWith("agent");
 
-function FeedItem({
+const FeedItem = memo(function FeedItem({
   item,
   thread,
   agents,
@@ -291,6 +338,7 @@ function FeedItem({
   showBy,
   openQuestion,
   live,
+  ask,
   clamp,
   threads,
   onOpenThread,
@@ -306,6 +354,8 @@ function FeedItem({
   openQuestion: string | undefined;
   /** Part of the turn the agent is working on now. */
   live: boolean;
+  /** For a plan, what the user asked in its turn. */
+  ask?: string | undefined;
   /** A long answer shows its start, with a way to read the rest. */
   clamp?: boolean | undefined;
 }) {
@@ -390,10 +440,13 @@ function FeedItem({
           {/* The team card shows the plan; its raw JSON is for the server only. */}
           {clamp ? (
             <Clamp>
-              <Markdown text={item.text} />
+              <Answer text={item.text} live={live} />
             </Clamp>
           ) : (
-            <Markdown text={thread.role === "lead" ? withoutTeamJson(item.text) : item.text} />
+            <Answer
+              text={thread.role === "lead" ? withoutTeamJson(item.text) : item.text}
+              live={live}
+            />
           )}
         </div>
       );
@@ -411,35 +464,17 @@ function FeedItem({
       if (item.questions) {
         return <QuestionCard item={item} open={item.form === "open" || item.id === openQuestion} />;
       }
-      return <ToolRow item={item} live={live} />;
+      return <ToolRow item={item} live={live} threadId={thread.id} />;
     case "plan":
-      return (
-        <div className="card">
-          <div className="card-h">Plan</div>
-          <ul className="plan">
-            {item.entries.map((entry, i) => (
-              <li
-                key={i}
-                className={
-                  entry.status === "completed"
-                    ? "done"
-                    : entry.status === "in_progress"
-                      ? "now"
-                      : ""
-                }
-              >
-                <span className="cir">
-                  {entry.status === "completed" && <IconCheck size={9} />}
-                </span>
-                {entry.content}
-              </li>
-            ))}
-          </ul>
-        </div>
-      );
+      return <AgentPlan entries={item.entries} live={live} ask={ask} threadId={thread.id} />;
     case "permission":
       return <PermissionCard item={item} />;
   }
+});
+
+/** An answer: while it is being written, its Markdown is worked out a few times a second. */
+function Answer({ text, live }: { text: string; live: boolean }) {
+  return <Markdown text={useLiveText(text, live)} />;
 }
 
 /**
@@ -505,13 +540,20 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
     setBusy(true);
     setError(null);
     try {
+      // Its images are read before the message goes, to come back in the composer with it.
+      const files = await Promise.all(
+        (item.images ?? []).map(async (image) => {
+          const blob = await imageBlob(thread.id, image.id).catch(() => undefined);
+          return blob && new File([blob], image.name, { type: image.mime });
+        }),
+      ).then((read) => read.filter((file): file is File => !!file));
       await connection.request({
         type: "thread.restore",
         requestId: newId(),
         threadId: thread.id,
         itemId: item.id,
       });
-      fillComposer(thread.id, item.text);
+      fillComposer(thread.id, item.text, files);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
@@ -521,17 +563,20 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
   return (
     <div className="u-wrap">
       {item.from === "coordinator" && <div className="u-from">Coordinateur</div>}
-      <div className="u">
-        {messageTokens(item.text).map((part, i) =>
-          part.kind ? (
-            <span key={i} className={`tok ${part.kind}`}>
-              {part.text}
-            </span>
-          ) : (
-            part.text
-          ),
-        )}
-      </div>
+      {!!item.images?.length && <MessageImages threadId={thread.id} images={item.images} />}
+      {item.text && (
+        <div className="u">
+          {messageTokens(item.text).map((part, i) =>
+            part.kind ? (
+              <span key={i} className={`tok ${part.kind}`}>
+                {part.text}
+              </span>
+            ) : (
+              part.text
+            ),
+          )}
+        </div>
+      )}
       {canRestore &&
         (confirming ? (
           <div className="u-confirm" role="group" aria-label="Revenir à ce message">
@@ -606,9 +651,49 @@ function QuestionCard({ item, open }: { item: Extract<Item, { kind: "tool" }>; o
   );
 }
 
-function ToolRow({ item, live }: { item: Extract<Item, { kind: "tool" }>; live: boolean }) {
+/** How much of a tool's result is drawn at first: the rest waits for « Afficher tout ». */
+const TOOL_SHOWN_LINES = 400;
+
+function ToolRow({
+  item,
+  live,
+  threadId,
+}: {
+  item: Extract<Item, { kind: "tool" }>;
+  live: boolean;
+  threadId: string;
+}) {
   const [open, setOpen] = useState(false);
-  const hasBody = item.content.length > 0;
+  const hasBody = item.content.length > 0 || !!item.omitted;
+  // A large result is not in the timeline: it is asked for when the line is opened, and
+  // again if the tool went on since.
+  const [whole, setWhole] = useState<{ of: string; content: ToolContent[] }>();
+  const [failed, setFailed] = useState<string>();
+  const [tries, setTries] = useState(0);
+  const version = `${item.status}/${item.omitted ?? 0}`;
+  const missing = open && !!item.omitted && whole?.of !== version;
+  useEffect(() => {
+    if (!missing) return;
+    let current = true;
+    setFailed(undefined);
+    connection
+      .ask({ type: "item.get", requestId: newId(), threadId, itemId: item.id })
+      .then((reply) => {
+        if (!current) return;
+        setWhole({
+          of: version,
+          content: reply.item.kind === "tool" ? reply.item.content : [],
+        });
+      })
+      .catch((error: unknown) => {
+        if (current) setFailed(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      current = false;
+    };
+  }, [missing, version, threadId, item.id, tries]);
+  // What was read stays on screen while a newer version is on its way.
+  const content = item.omitted ? whole?.content : item.content;
   return (
     <div className={`tool${open ? " open" : ""}`}>
       <button
@@ -626,13 +711,42 @@ function ToolRow({ item, live }: { item: Extract<Item, { kind: "tool" }>; live: 
       </button>
       {open && (
         <div className="tool-body">
-          {item.content.map((c, i) => (
+          {/* Said even above an older result: it is then known not to be the latest. */}
+          {missing && failed && (
+            <p className="tool-wait" role="alert">
+              {failed}
+              {content ? " Ce résultat n'est pas le dernier. " : " "}
+              <button className="tool-more" onClick={() => setTries((n) => n + 1)}>
+                Réessayer
+              </button>
+            </p>
+          )}
+          {content?.map((c, i) => (
             <ToolBody key={i} content={c} />
           ))}
+          {!content && !failed && (
+            <p className="tool-wait" role="status">
+              Chargement du résultat…
+            </p>
+          )}
         </div>
       )}
     </div>
   );
+}
+
+/** Lines beyond the first ones, behind a button: a file of thousands is not drawn at once. */
+function useShownLines<T>(lines: T[]): { shown: T[]; more: ReactNode } {
+  const [all, setAll] = useState(false);
+  const hidden = all ? 0 : Math.max(0, lines.length - TOOL_SHOWN_LINES);
+  return {
+    shown: hidden ? lines.slice(0, TOOL_SHOWN_LINES) : lines,
+    more: hidden > 0 && (
+      <button className="tool-more" onClick={() => setAll(true)}>
+        Afficher tout ({hidden} {hidden > 1 ? "lignes de plus" : "ligne de plus"})
+      </button>
+    ),
+  };
 }
 
 function ToolStatusIcon({ status, glyph }: { status: string; glyph: GlyphKind }) {
@@ -653,7 +767,24 @@ function ToolStatusIcon({ status, glyph }: { status: string; glyph: GlyphKind })
 }
 
 function ToolBody({ content }: { content: ToolContent }) {
-  if (content.type === "text") return <pre>{content.text}</pre>;
+  return content.type === "text" ? (
+    <ToolText text={content.text} />
+  ) : (
+    <ToolDiff content={content} />
+  );
+}
+
+function ToolText({ text }: { text: string }) {
+  const { shown, more } = useShownLines(text.split("\n"));
+  return (
+    <>
+      <pre>{shown.join("\n")}</pre>
+      {more}
+    </>
+  );
+}
+
+function ToolDiff({ content }: { content: Extract<ToolContent, { type: "diff" }> }) {
   const lines = [
     ...(content.oldText ?? "")
       .split("\n")
@@ -661,17 +792,19 @@ function ToolBody({ content }: { content: ToolContent }) {
       .map((l) => ({ t: "del", l })),
     ...content.newText.split("\n").map((l) => ({ t: "add", l })),
   ];
+  const { shown, more } = useShownLines(lines);
   return (
     <div className="diff">
       <div className="diff-h">{content.path}</div>
       <div className="diff-b">
-        {lines.map((line, i) => (
+        {shown.map((line, i) => (
           <div key={i} className={line.t}>
             {line.t === "add" ? "+ " : "- "}
             {line.l}
           </div>
         ))}
       </div>
+      {more}
     </div>
   );
 }

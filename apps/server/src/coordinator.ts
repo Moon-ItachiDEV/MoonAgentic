@@ -264,6 +264,11 @@ export class Coordinators {
           env: [
             { name: BRIDGE_URL_ENV, value: this.url },
             { name: BRIDGE_BOOTSTRAP_ENV, value: bootstrap },
+            // In the desktop app, this program is Electron, which acts as Node only when told:
+            // said here too, for agents that start MCP servers with only the variables given.
+            ...(process.env.ELECTRON_RUN_AS_NODE
+              ? [{ name: "ELECTRON_RUN_AS_NODE", value: "1" }]
+              : []),
           ],
         },
       },

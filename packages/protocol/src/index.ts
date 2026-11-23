@@ -489,6 +489,11 @@ export interface PermissionOption {
 export interface PlanEntry {
   content: string;
   status: "pending" | "in_progress" | "completed";
+  /** When the server saw the agent start this step, and finish it. */
+  startedAt?: number;
+  endedAt?: number;
+  /** What the agent used while on this step: a file, a command, a tool, at most three. */
+  tools?: string[];
 }
 
 export type ToolContent =
@@ -521,11 +526,31 @@ export interface PendingQuestion {
   at: number;
 }
 
+/** The kinds of image a message can carry. SVG is left out: it can carry scripts. */
+export const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+export type ImageType = (typeof IMAGE_TYPES)[number];
+/** The largest image the server keeps. */
+export const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+export const MAX_IMAGES_PER_MESSAGE = 8;
+
+/** An image sent with a message, kept by the server with the message's thread. */
+export interface ImageRef {
+  id: string;
+  /** The file's name, as it was sent or made up from its kind. */
+  name: string;
+  mime: ImageType;
+  /** In bytes. */
+  size: number;
+}
+
 export type Item =
   | {
       id: string;
       kind: "user";
+      /** Empty when the message is only images. */
       text: string;
+      /** The images sent with the message: read at `/api/attachments/<thread>/<id>`. */
+      images?: ImageRef[];
       /** Written by the team's engine, not by the user: a member's brief, a fix, a check. */
       byTeam?: true;
       /** Written by the project's coordinator, an agent, not typed by the user. */
@@ -543,6 +568,11 @@ export type Item =
       toolKind: string;
       status: ToolStatus;
       content: ToolContent[];
+      /**
+       * How many characters of `content` are left out of this copy: a large result does not
+       * travel with the timeline, it is asked for with `item.get` when its line is opened.
+       */
+      omitted?: number;
       /** What the tool asks the user, when it is a question. */
       questions?: ToolQuestion[];
       /**
@@ -827,6 +857,8 @@ export type ServerMessage =
   /** What `$` and `/` can offer in a thread's folder, beyond the agent's own commands. */
   | { type: "catalog"; requestId: string; skills: Skill[]; commands: ProjectCommand[] }
   | { type: "searched"; requestId: string; hits: SearchHit[] }
+  /** An item whole, with what its copy in the timeline left out. */
+  | { type: "fullItem"; requestId: string; threadId: string; item: Item }
   | {
       type: "shipped";
       requestId: string;
@@ -865,6 +897,12 @@ export type ServerMessage =
 
 const id = z.string().min(1).max(200);
 const text = z.string().min(1).max(200_000);
+/** A message's text, which may be empty when images say it all. */
+const messageText = z.string().max(200_000);
+/** The images joined to a message, already sent to `POST /api/attachments`. */
+const attachments = z.array(id).max(MAX_IMAGES_PER_MESSAGE).optional();
+const saysSomething = (m: { text: string; attachments?: string[] | undefined }) =>
+  m.text.trim().length > 0 || (m.attachments?.length ?? 0) > 0;
 const planTitle = z.string().trim().min(1).max(200);
 const planDescription = z.string().trim().max(4000);
 /** Names an MCP secret may take: an environment variable, or an HTTP header (RFC 9110 token). */
@@ -904,21 +942,24 @@ export const ClientMessage = z.discriminatedUnion("type", [
     name: z.string().trim().min(1).max(120),
     path: z.string().min(1).max(4096),
   }),
-  z.object({
-    type: z.literal("thread.create"),
-    requestId: id,
-    projectId: id,
-    agentId: id,
-    permissionMode: z.enum(["supervised", "full"]),
-    model: id.optional(),
-    settings: z
-      .record(id, id)
-      .refine((r) => Object.keys(r).length <= 20)
-      .optional(),
-    /** Gives the thread its own branch and worktree, when the project is a git repository. */
-    isolated: z.boolean().optional(),
-    text,
-  }),
+  z
+    .object({
+      type: z.literal("thread.create"),
+      requestId: id,
+      projectId: id,
+      agentId: id,
+      permissionMode: z.enum(["supervised", "full"]),
+      model: id.optional(),
+      settings: z
+        .record(id, id)
+        .refine((r) => Object.keys(r).length <= 20)
+        .optional(),
+      /** Gives the thread its own branch and worktree, when the project is a git repository. */
+      isolated: z.boolean().optional(),
+      text: messageText,
+      attachments,
+    })
+    .refine(saysSomething),
   /**
    * Opens the project's coordinator, made with this agent the first time. Answers
    * `created` with its thread.
@@ -963,10 +1004,14 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("thread.setUnread"), threadId: id, unread: z.boolean() }),
   /** Marks every thread of the project as read. */
   z.object({ type: z.literal("project.markRead"), projectId: id }),
-  z.object({ type: z.literal("thread.send"), threadId: id, text }),
+  z
+    .object({ type: z.literal("thread.send"), threadId: id, text: messageText, attachments })
+    .refine(saysSomething),
   z.object({ type: z.literal("thread.cancel"), threadId: id }),
   /** Puts the files back as they were before this message and forgets what came after. */
   z.object({ type: z.literal("thread.restore"), requestId: id, threadId: id, itemId: id }),
+  /** Asks for an item whole: a tool's large result, when its line is opened. */
+  z.object({ type: z.literal("item.get"), requestId: id, threadId: id, itemId: id }),
   /** Hands the thread to another agent, which gets the conversation so far. */
   z.object({ type: z.literal("thread.switchAgent"), threadId: id, agentId: id }),
   z.object({

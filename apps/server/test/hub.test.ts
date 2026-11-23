@@ -10,6 +10,7 @@ import { historyBefore } from "../src/history.ts";
 import { type Client, Hub } from "../src/hub.ts";
 import { LEGACY_MODE, modelOption } from "../src/session.ts";
 import { Store } from "../src/store.ts";
+import { TOOL_INLINE_CHARS } from "../src/timeline.ts";
 
 class TestClient implements Client {
   openThreadIds?: Set<string>;
@@ -1026,6 +1027,83 @@ describe("Composer: files, skills, commands, pins and search", () => {
     );
   });
 
+  it("sends an image with a message, as the image itself to an agent that takes images", async () => {
+    const { dir, hub, store, projectId } = setup();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+    const first = hub.attachments.add(png, "capture.png");
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "",
+      attachments: [first.id],
+    });
+    await hub.whenIdle(threadId);
+    // Images alone name the conversation and still give the agent something to answer.
+    expect(store.getThread(threadId)?.title).toBe("Image");
+    const [sent] = store.listItems(threadId);
+    expect(sent).toMatchObject({ kind: "user", text: "", images: [first] });
+    expect(lastTurnSaid(store.listItems(threadId))).toContain("regarde l'image jointe");
+    expect(lastTurnSaid(store.listItems(threadId))).toContain(
+      "Pièces jointes : image/png, 12 octets (image).",
+    );
+    expect(hub.attachments.find(threadId, first.id)?.image).toEqual(first);
+
+    // An image that is not there stops the message: nothing is written, nothing is sent.
+    const before = store.listItems(threadId).length;
+    expect(() =>
+      hub.send(threadId, "Et celle-ci ?", undefined, undefined, undefined, undefined, ["absente"]),
+    ).toThrow("n'est plus là");
+    expect(store.listItems(threadId)).toHaveLength(before);
+    expect(store.getThread(threadId)?.status).toBe("idle");
+    const threads = store.listThreads().length;
+    expect(() =>
+      hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        text: "Regarde",
+        attachments: ["absente"],
+      }),
+    ).toThrow("n'est plus là");
+    expect(store.listThreads()).toHaveLength(threads);
+
+    // The thread's images go with it.
+    await hub.deleteThread(threadId);
+    expect(existsSync(path.join(dir, "attachments", threadId))).toBe(false);
+  });
+
+  it("links the image's file for an agent that takes no image, and names it in a hand-off", async () => {
+    process.env.MOONAGENTIC_DEMO_IMAGES = "0";
+    cleanups.push(() => {
+      delete process.env.MOONAGENTIC_DEMO_IMAGES;
+    });
+    const { hub, store, projectId } = setup();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+    const image = hub.attachments.add(png, "maquette.png");
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Regarde la maquette",
+      attachments: [image.id],
+    });
+    await hub.whenIdle(threadId);
+    expect(lastTurnSaid(store.listItems(threadId))).toContain(
+      "Pièces jointes : maquette.png (lien).",
+    );
+    // The agent that takes over is told where the earlier image is.
+    const file = hub.attachments.find(threadId, image.id)!.file;
+    expect(
+      historyBefore(
+        store.listItems(threadId),
+        "none",
+        (id) => id,
+        (id) => hub.attachments.find(threadId, id)?.file,
+      ),
+    ).toContain(`Utilisateur : Regarde la maquette [image jointe : ${file}]`);
+  });
+
   it("only links them for an agent that takes no embedded content", async () => {
     process.env.MOONAGENTIC_DEMO_EMBED = "0";
     cleanups.push(() => {
@@ -1113,6 +1191,14 @@ describe("Composer: files, skills, commands, pins and search", () => {
       text: "Où est la fonction 100% fiable ?",
     });
     await hub.whenIdle(threadId);
+    // What the turn said reaches the search's index by itself, a moment after it ends.
+    const waiting = () =>
+      (
+        store.db.prepare(`SELECT count(*) AS n FROM search_docs WHERE stale = 1`).get() as {
+          n: number;
+        }
+      ).n;
+    await expect.poll(waiting).toBe(0);
     await hub.handle(client, { type: "search", requestId: "s1", query: "100%" });
     // The demo agent repeats the question, so its answer matches too, newest first.
     expect(client.messages.at(-1)).toMatchObject({
@@ -1146,6 +1232,50 @@ describe("Composer: files, skills, commands, pins and search", () => {
       type: "searched",
       hits: [{ threadId: briefed, kind: "agent" }],
     });
+  });
+
+  it("keeps a tool's large result out of the timeline until it is asked for", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Lis le gros fichier",
+    });
+    await hub.handle(client, { type: "thread.open", threadId });
+    await hub.whenIdle(threadId);
+    const stored = store
+      .listItems(threadId)
+      .find((i) => i.kind === "tool" && i.title === "Lire src/app.ts");
+    if (stored?.kind !== "tool" || stored.content[0]?.type !== "text") throw new Error("no read");
+    const chars = stored.content[0].text.length;
+    expect(chars).toBeGreaterThan(TOOL_INLINE_CHARS);
+
+    // As it happens, and when the thread is opened: the line without its result, counted.
+    const light = { id: stored.id, kind: "tool", content: [], omitted: chars };
+    const live = client.messages.filter((m) => m.type === "item" && m.item.id === stored.id);
+    expect(live.at(-1)).toMatchObject({ item: light });
+    await hub.handle(client, { type: "thread.open", threadId });
+    const opened = client.messages.at(-1);
+    if (opened?.type !== "items") throw new Error("no timeline");
+    expect(opened.items.find((i) => i.id === stored.id)).toMatchObject(light);
+    // A small result travels with its line: the edit's two lines.
+    const edit = opened.items.find((i) => i.kind === "tool" && i.toolKind === "edit");
+    expect(edit).toMatchObject({ content: [{ type: "diff", path: "src/app.ts" }] });
+    expect(edit).not.toHaveProperty("omitted");
+    expect(JSON.stringify(opened).length).toBeLessThan(chars);
+
+    // Opened, the line asks for the whole of it.
+    await hub.handle(client, { type: "item.get", requestId: "g1", threadId, itemId: stored.id });
+    expect(client.messages.at(-1)).toEqual({
+      type: "fullItem",
+      requestId: "g1",
+      threadId,
+      item: stored,
+    });
+    await expect(
+      hub.handle(client, { type: "item.get", requestId: "g2", threadId, itemId: "inconnu" }),
+    ).rejects.toThrow("n'est plus dans le fil");
   });
 
   it("pins a thread for every device", async () => {

@@ -3,9 +3,25 @@ import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import { AGENT_QUIET_MS, AGENT_SILENCE_STOP_MS, type AgentSetting } from "@moonagentic/protocol";
 import type { AgentLaunch } from "./agents.ts";
+import type { ImageBlock } from "./attachments.ts";
 import type { PromptLink } from "./files.ts";
 import { acpMcpServers, type McpServerRecord } from "./mcp.ts";
 import { killTree, spawnPlan } from "./spawn.ts";
+
+/**
+ * In the desktop app, `process.execPath` is Electron, told to act as Node by
+ * ELECTRON_RUN_AS_NODE: only the adapters run with it keep that variable. Any other agent
+ * (`agy`, `cursor`, a custom one) would pass it on to every Electron program it starts.
+ */
+export function electronEnv(
+  command: string,
+  env: NodeJS.ProcessEnv = process.env,
+  execPath: string = process.execPath,
+): NodeJS.ProcessEnv {
+  if (!("ELECTRON_RUN_AS_NODE" in env) || command === execPath) return env;
+  const { ELECTRON_RUN_AS_NODE: _, ...rest } = env;
+  return rest;
+}
 
 export interface SessionHandlers {
   onUpdate(update: acp.SessionUpdate): void;
@@ -445,7 +461,7 @@ export class AgentSession {
     const plan = spawnPlan(launch.command, launch.args);
     const child = spawn(plan.command, plan.args, {
       cwd,
-      env: agentEnv(process.env),
+      env: electronEnv(launch.command, agentEnv(process.env)),
       // Overlapped only where asked (see AgentLaunch); it is a plain pipe off Windows anyway.
       stdio: [launch.overlappedStdin ? "overlapped" : "pipe", "pipe", "pipe"],
       // Its own process group on Unix, so stopping it also stops what it started.
@@ -725,7 +741,7 @@ export class AgentSession {
   async prompt(
     text: string,
     history?: string,
-    links: PromptLink[] = [],
+    links: (PromptLink | ImageBlock)[] = [],
     inactivityMs: number = this.inactivityMs,
   ): Promise<acp.StopReason> {
     const prompt: acp.ContentBlock[] = [

@@ -1,6 +1,6 @@
 import type { Schedule, Thread } from "@moonagentic/protocol";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Composer, useNarrow } from "./components/Composer.tsx";
+import { Composer as PlainComposer, useNarrow } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
@@ -35,8 +35,9 @@ import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { ProjectPage } from "./components/ProjectPage.tsx";
 import { HomeCards } from "./components/HomeCards.tsx";
+import { steady, useSame } from "./steady.tsx";
 import { coordinatorOf, listedThreads } from "./project-threads.ts";
-import { Sidebar } from "./components/Sidebar.tsx";
+import { Sidebar as PlainSidebar } from "./components/Sidebar.tsx";
 import { TabBar } from "./components/TabBar.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
@@ -74,6 +75,11 @@ const useWide = () =>
     },
     () => wideQuery?.matches ?? true,
   );
+
+// While an agent writes, the page is told sixty times a second: the side bar and the
+// composer show none of that text, and stay as they are.
+const Sidebar = steady(PlainSidebar);
+const Composer = steady(PlainComposer);
 
 export function App() {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
@@ -117,7 +123,14 @@ export function App() {
   /** On a narrow screen, what the project's page shows: the coordinator or the threads. */
   const [projectTab, setProjectTab] = useState<"chat" | "threads">("chat");
   // Lists show every thread but the coordinators.
-  const listed = useMemo(() => ({ ...state, threads: listedThreads(state.threads) }), [state]);
+  const listedThreadsNow = useMemo(() => listedThreads(state.threads), [state.threads]);
+  const listed = useMemo(
+    () => ({ ...state, threads: listedThreadsNow }),
+    [state, listedThreadsNow],
+  );
+  // The side bar shows no message: text being written does not change what it is given.
+  const { items: _items, reviews: _reviews, ...lists } = state;
+  const sideState = useSame({ ...lists, threads: listedThreadsNow });
   // A coordinator lives on its project's page: its own address, reached from a notification
   // or an old link, leads there, and « back » does not come here again.
   const strayProjectId =
@@ -394,7 +407,7 @@ export function App() {
         </ErrorBoundary>
       ) : (
         <Sidebar
-          state={listed}
+          state={sideState}
           activeThreadId={thread?.id}
           activeProjectId={project?.id}
           onPlanner={route.name === "planner"}

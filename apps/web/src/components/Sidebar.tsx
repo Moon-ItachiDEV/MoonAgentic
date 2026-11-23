@@ -48,7 +48,8 @@ function ThreadStatus({ status }: { status: LineStatus }) {
 }
 
 export function Sidebar(props: {
-  state: State;
+  /** All but the messages: the side bar shows none, and is not drawn again for them. */
+  state: Omit<State, "items" | "reviews">;
   activeThreadId: string | undefined;
   activeProjectId: string | undefined;
   /** True on the planner's page. */

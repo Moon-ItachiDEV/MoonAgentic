@@ -1,3 +1,4 @@
+import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import os from "node:os";
@@ -8,6 +9,7 @@ import type {
   CustomAgentInput,
   AgentSetting,
   ClientMessage,
+  ImageRef,
   Item,
   McpServerInput,
   PendingQuestion,
@@ -31,6 +33,7 @@ import type {
 import type { Agents } from "./agents.ts";
 import { cloneGithubRepo, githubRepos, githubStatus, parseGithubRepo } from "./github.ts";
 import { githubAccount, type LoginResult } from "./github-account.ts";
+import { mergePlan, noteTool } from "./plan-steps.ts";
 import { defaultParent, findClones, usualRoots } from "./local-clones.ts";
 import {
   branchExists,
@@ -77,6 +80,7 @@ import { type QuotaReader, Quotas } from "./quotas.ts";
 import { formContent, formQuestions, toolQuestions, type FormQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
+import { light } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
 import type { Store } from "./store.ts";
 
@@ -100,11 +104,22 @@ type TextItem = Extract<Item, { kind: "agent" | "thought" }>;
 
 /** How often streamed text is written down; viewers get each piece at once. */
 const TEXT_FLUSH_MS = 250;
+/**
+ * The search's index is filled a short stretch at a time, with a pause in between, so the
+ * server keeps answering while a long history is taken in.
+ */
+const INDEX_STRETCH_MS = 20;
+const INDEX_PAUSE_MS = 50;
 
-const titleFrom = (text: string) => {
+const titleFrom = (text: string, images = 0) => {
   const line = text.trim().split("\n")[0] ?? "";
-  return line.length > 60 ? `${line.slice(0, 57).trimEnd()}…` : line || "Nouvelle discussion";
+  if (line.length > 60) return `${line.slice(0, 57).trimEnd()}…`;
+  // A message of images alone has no words to name the conversation with.
+  return line || (images > 1 ? "Images" : images ? "Image" : "Nouvelle discussion");
 };
+
+/** What an agent is told when the message is images alone: it needs some words to answer. */
+const IMAGES_ONLY = "(Message sans texte : regarde l'image jointe.)";
 
 const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolContent[] =>
   (content ?? []).flatMap((c): ToolContent[] => {
@@ -136,6 +151,8 @@ export interface HubOptions {
   quotaReaders?: Record<string, QuotaReader>;
   /** How often every quota is read again; 0 for only when asked or after a turn. */
   quotaEveryMs?: number;
+  /** Where the images sent with messages are kept; beside the worktrees unless given. */
+  attachmentsDir?: string;
 }
 
 /** The setting that lists the projects kept at the top. */
@@ -234,6 +251,8 @@ export class Hub {
 
   /** Where threads with their own branch get their worktree. */
   private readonly worktreesDir: string;
+  /** The images sent with messages. */
+  readonly attachments: Attachments;
   /**
    * Threads busy with their branch or their agent (a push, a step back, a hand-off), with
    * what to answer a message or another such step meanwhile.
@@ -249,6 +268,7 @@ export class Hub {
     { item: TextItem; dirty: boolean; timer?: NodeJS.Timeout }
   >();
   private closed = false;
+  private indexTimer: ReturnType<typeof setTimeout> | undefined;
 
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
@@ -272,6 +292,9 @@ export class Hub {
     this.store = store;
     this.agents = agents;
     this.worktreesDir = options.worktreesDir;
+    this.attachments = new Attachments(
+      options.attachmentsDir ?? path.join(path.dirname(options.worktreesDir), "attachments"),
+    );
     this.forceStopMs = options.forceStopMs ?? FORCE_STOP_MS;
     this.pool = new AgentPool({
       idleMs: options.idleMs,
@@ -377,6 +400,8 @@ export class Hub {
         this.confirmTeamPermission(coordinatorId, task, signal),
     });
     store.recoverAfterRestart();
+    // Messages the index does not have yet: all of them, the first time after an update.
+    this.indexSearchSoon();
     this.teams.recover();
     this.recovered = this.finishRestores();
     // Tasks that were due while the server was off start once what was interrupted is put right.
@@ -528,7 +553,7 @@ export class Hub {
         const id = this.createThread(message);
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.items(id) });
+        client.send({ type: "items", threadId: id, items: this.timeline(id) });
         return;
       }
       case "thread.leave":
@@ -554,7 +579,7 @@ export class Hub {
         client.send({
           type: "items",
           threadId: message.threadId,
-          items: this.items(message.threadId),
+          items: this.timeline(message.threadId),
         });
         return;
       case "thread.send": {
@@ -565,6 +590,10 @@ export class Hub {
           held ? `${held}\n\n${message.text}` : message.text,
           this.leadContext(message.threadId) ??
             this.coordinators.coordinatorContext(message.threadId),
+          undefined,
+          undefined,
+          undefined,
+          message.attachments,
         );
         // Only once it is sent: a refusal keeps the brief where it was.
         if (held) this.updateThread(message.threadId, { held: null });
@@ -574,12 +603,24 @@ export class Hub {
         const id = this.openCoordinator(message.projectId, message.agentId, message.model);
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.items(id) });
+        client.send({ type: "items", threadId: id, items: this.timeline(id) });
         return;
       }
       case "thread.cancel":
         await this.cancel(message.threadId);
         return;
+      case "item.get": {
+        this.requireThread(message.threadId);
+        const item = this.store.getItem(message.threadId, message.itemId);
+        if (!item) throw new Error("Cet élément n'est plus dans le fil.");
+        client.send({
+          type: "fullItem",
+          requestId: message.requestId,
+          threadId: message.threadId,
+          item,
+        });
+        return;
+      }
       case "thread.restore":
         await this.restore(message.threadId, message.itemId);
         client.send({ type: "done", requestId: message.requestId });
@@ -678,7 +719,7 @@ export class Hub {
         });
         watch(client, id);
         client.send({ type: "created", requestId: message.requestId, id });
-        client.send({ type: "items", threadId: id, items: this.items(id) });
+        client.send({ type: "items", threadId: id, items: this.timeline(id) });
         return;
       }
       case "team.stop":
@@ -870,13 +911,15 @@ export class Hub {
     held?: boolean | undefined;
     /** Started by the server itself, a planned task: waits for a place when all are taken. */
     auto?: boolean | undefined;
+    /** The images sent with the first message. */
+    attachments?: string[] | undefined;
   }): string {
     const project = this.store.getProject(input.projectId);
     if (!project || this.removingProjects.has(project.id)) throw new Error("Projet introuvable.");
     this.agents.launch(input.agentId);
     const now = Date.now();
     const id = randomUUID();
-    const title = titleFrom(input.title ?? input.text);
+    const title = titleFrom(input.title ?? input.text, input.attachments?.length);
     // The worktree itself is made when the agent first starts, so creating stays instant.
     const workspace =
       input.isolated && !input.worksIn && this.withGit(project).git
@@ -906,10 +949,28 @@ export class Hub {
     this.store.addThread(thread);
     this.broadcast({ type: "thread", thread });
     // A team's merge thread starts with no message: its branch is filled first.
-    if (input.text && !input.held) {
+    if ((input.text || input.attachments?.length) && !input.held) {
       if (input.openedBy)
         this.coordinators.sendFromCoordinator(thread.id, input.text, input.byTeam);
-      else this.send(thread.id, input.text, undefined, input.byTeam, undefined, input.auto);
+      else {
+        try {
+          this.send(
+            thread.id,
+            input.text,
+            undefined,
+            input.byTeam,
+            undefined,
+            input.auto,
+            input.attachments,
+          );
+        } catch (error) {
+          // An image that is no longer there: no empty conversation is left behind for it.
+          if (!(error instanceof AttachmentRefused)) throw error;
+          this.store.deleteThread(thread.id);
+          this.broadcast({ type: "threadRemoved", threadId: thread.id });
+          throw error;
+        }
+      }
     }
     return thread.id;
   }
@@ -1028,11 +1089,15 @@ export class Hub {
     byTeam?: boolean,
     from?: "coordinator",
     auto?: boolean,
+    /** The images joined to the message, already sent to the server. */
+    attachments?: readonly string[],
   ): void {
     const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
     const busy = this.busy.get(threadId);
     if (busy) throw new Error(busy);
+    // From here the images are the thread's own; one that is missing stops the message.
+    const images = attachments?.length ? this.attachments.bind(threadId, attachments) : [];
     // A step back left over from a failure must never replay over the turns that follow.
     if (this.pendingRestores()[threadId]) this.setPendingRestore(threadId, undefined);
     const itemId = `user:${randomUUID()}`;
@@ -1040,6 +1105,7 @@ export class Hub {
       id: itemId,
       kind: "user",
       text,
+      ...(images.length ? { images } : {}),
       ...(byTeam ? { byTeam: true as const } : {}),
       ...(from ? { from } : {}),
       at: Date.now(),
@@ -1049,9 +1115,11 @@ export class Hub {
     this.cancelled.delete(threadId);
     this.pool.clearIdle(threadId);
     const queued = !!(byTeam || from || auto);
-    const turn = this.runTurn(thread, text, itemId, context, queued).finally(() => {
+    const turn = this.runTurn(thread, text, itemId, context, queued, images).finally(() => {
       const cancelled = this.cancelled.has(threadId);
       this.turns.delete(threadId);
+      // What was said in this turn can be searched for without waiting on a search.
+      this.indexSearchSoon();
       // A place is free for the first turn in line.
       if (!this.closed) this.admit();
       this.turnIds.delete(threadId);
@@ -1484,11 +1552,16 @@ export class Hub {
       this.setPendingRestore(threadId, undefined);
       return { removed, thread };
     });
+    // The images of the messages taken out go too: the composer got them back to send again.
+    this.attachments.remove(
+      threadId,
+      removed.flatMap((i) => (i.kind === "user" ? (i.images ?? []).map((image) => image.id) : [])),
+    );
     this.broadcast({ type: "thread", thread });
     this.sendToViewers(threadId, {
       type: "items",
       threadId,
-      items: this.items(threadId),
+      items: this.timeline(threadId),
     });
     // A ref left behind only keeps an old tree alive, so failing here is harmless.
     await dropCheckpoints(
@@ -1593,6 +1666,7 @@ export class Hub {
       clearTimeout(this.drafts.get(threadId)?.timer);
       this.drafts.delete(threadId);
       this.coordinators.forget(threadId);
+      this.attachments.forget(threadId);
       this.store.deleteThread(threadId);
       this.broadcast({ type: "threadRemoved", threadId });
       this.planner.threadDeleted(threadId);
@@ -1669,7 +1743,7 @@ export class Hub {
         this.sendToViewers(threadId, {
           type: "items",
           threadId,
-          items: this.items(threadId),
+          items: this.timeline(threadId),
         });
       } else if (last?.kind === "handoff") {
         this.putItem(threadId, { ...last, to: agentId });
@@ -1839,9 +1913,26 @@ export class Hub {
     this.catalog.toggleFavorite(agentId, model, starred);
   }
 
+  /** Brings the search's index up to date in the background, a stretch at a time. */
+  private indexSearchSoon(): void {
+    if (this.indexTimer || this.closed) return;
+    this.indexTimer = setTimeout(() => {
+      this.indexTimer = undefined;
+      if (this.closed) return;
+      try {
+        if (this.store.indexSearch(INDEX_STRETCH_MS)) this.indexSearchSoon();
+      } catch (error) {
+        // The search fills its index itself before it answers: nothing is lost here.
+        console.warn("Index de recherche :", error);
+      }
+    }, INDEX_PAUSE_MS);
+    this.indexTimer.unref();
+  }
+
   /** Stops every agent and resolves once their turns have ended. */
   async close(): Promise<void> {
     this.closed = true;
+    clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
     this.quotas.close();
     this.scheduler.close();
@@ -1883,6 +1974,7 @@ export class Hub {
     context?: string,
     /** Waits for a place when the server runs as many turns as it may. */
     queued?: boolean,
+    images: readonly ImageRef[] = [],
   ): Promise<void> {
     try {
       // Behind those already in line, so none is overtaken.
@@ -1906,10 +1998,19 @@ export class Hub {
       // the agent could not resume its earlier session.
       const history =
         !continuing && session.fresh
-          ? historyBefore(this.items(thread.id), itemId, this.catalog.name)
+          ? historyBefore(
+              this.items(thread.id),
+              itemId,
+              this.catalog.name,
+              (id) => this.attachments.find(thread.id, id)?.file,
+            )
           : undefined;
-      const prompt = context ? `${context}\n\n${text}` : text;
-      const stopReason = await session.prompt(prompt, history, this.linksFor(session, text));
+      const said = text.trim() || !images.length ? text : IMAGES_ONLY;
+      const prompt = context ? `${context}\n\n${said}` : said;
+      const stopReason = await session.prompt(prompt, history, [
+        ...this.linksFor(session, text),
+        ...this.attachments.blocks(thread.id, images, !!session.promptCapabilities.image),
+      ]);
       const error =
         stopReason === "refusal"
           ? "L'agent a refusé de continuer."
@@ -2217,14 +2318,22 @@ export class Hub {
         this.catalog.rememberCommands(thread.agentId, commands);
         return;
       }
-      case "plan":
+      case "plan": {
+        const id = `plan:${this.turnIds.get(threadId) ?? "late"}`;
+        const before = this.store.getItem(threadId, id);
+        const now = Date.now();
         this.putItem(threadId, {
-          id: `plan:${this.turnIds.get(threadId) ?? "late"}`,
+          id,
           kind: "plan",
-          entries: update.entries.map((e) => ({ content: e.content, status: e.status })),
-          at: Date.now(),
+          entries: mergePlan(
+            before?.kind === "plan" ? before.entries : undefined,
+            update.entries.map((e) => ({ content: e.content, status: e.status })),
+            now,
+          ),
+          at: before?.at ?? now,
         });
         return;
+      }
       default:
         return;
     }
@@ -2277,6 +2386,11 @@ export class Hub {
     return this.store.listItems(threadId);
   }
 
+  /** The thread's items as a screen gets them: large tool results stay here until asked for. */
+  private timeline(threadId: string): Item[] {
+    return this.items(threadId).map(light);
+  }
+
   private upsertTool(threadId: string, update: acp.ToolCall | acp.ToolCallUpdate): void {
     // Agents may number their tool calls from scratch on every turn or session, so the turn
     // is part of the item's id: a later call never replaces an earlier turn's card.
@@ -2284,6 +2398,13 @@ export class Hub {
     const existing = this.store.getItem(threadId, id) as ToolItem | undefined;
     const content = update.content ? toolContent(update.content) : undefined;
     const questions = toolQuestions(update.rawInput) ?? existing?.questions;
+    // A new call joins the step of the agent's plan it is on.
+    if (!existing && update.title) {
+      const planId = `plan:${this.turnIds.get(threadId) ?? "late"}`;
+      const plan = this.store.getItem(threadId, planId);
+      const entries = plan?.kind === "plan" ? noteTool(plan.entries, update.title) : undefined;
+      if (plan?.kind === "plan" && entries) this.putItem(threadId, { ...plan, entries });
+    }
     this.putItem(threadId, {
       id,
       kind: "tool",
@@ -2510,7 +2631,7 @@ export class Hub {
     // Another item ends the text being streamed, which keeps its place before it.
     if (this.drafts.get(threadId)?.item.id !== item.id) this.flushText(threadId);
     this.store.putItem(threadId, item);
-    this.sendToViewers(threadId, { type: "item", threadId, item });
+    this.sendToViewers(threadId, { type: "item", threadId, item: light(item) });
   }
 
   private updateThread(threadId: string, patch: Parameters<Store["updateThread"]>[1]): void {

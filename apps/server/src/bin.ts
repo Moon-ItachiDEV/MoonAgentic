@@ -18,4 +18,6 @@ if (values.dev) {
   });
   process.on("SIGINT", () => supervisor.stop());
   process.on("SIGTERM", () => supervisor.stop());
+  // Started by the desktop app: it closes the channel to stop, the one way Windows has.
+  if (process.send) process.once("disconnect", () => supervisor.stop());
 }
