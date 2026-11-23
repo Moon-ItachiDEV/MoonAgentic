@@ -690,6 +690,11 @@ export function ReviewPanel({
                     }
                   : undefined
               }
+              remarks={
+                workspace?.base
+                  ? { threadId: thread.id, busy: thread.status === "running" }
+                  : undefined
+              }
             />
           ) : (
             workspace?.prUrl && (

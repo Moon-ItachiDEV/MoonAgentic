@@ -29,6 +29,9 @@ export const LONG_ASKS_MS: Readonly<Record<string, number>> = {
   "team.ship": 7 * 60_000,
   // GitHub has 2 minutes to merge, and is then asked how the pull request stands.
   "workspace.mergePr": 3 * 60_000,
+  // GitHub is asked for the pull request, then for its remarks: 30 s each at most.
+  "workspace.prRemarks": 75_000,
+  "workspace.sendRemarks": 75_000,
   // The remote is asked for its branch first, then git merges.
   "workspace.forecast": 2 * 60_000,
   "workspace.sync": 3 * 60_000,
@@ -157,23 +160,25 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
                       ? Extract<ServerMessage, { type: "localClones" }>
                       : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
                         ? Extract<ServerMessage, { type: "pullRequest" }>
-                        : T extends "workspace.forecast"
-                          ? Extract<ServerMessage, { type: "forecast" }>
-                          : T extends "workspace.files"
-                            ? Extract<ServerMessage, { type: "worktreeFiles" }>
-                            : T extends "workspace.readFile"
-                              ? Extract<ServerMessage, { type: "worktreeFile" }>
-                              : T extends "project.branches"
-                                ? Extract<ServerMessage, { type: "projectBranches" }>
-                                : T extends "project.deleteBranches"
-                                  ? Extract<ServerMessage, { type: "branchesDeleted" }>
-                                  : T extends "artifacts.list"
-                                    ? Extract<ServerMessage, { type: "artifacts" }>
-                                    : T extends "artifacts.open"
-                                      ? Extract<ServerMessage, { type: "artifactLink" }>
-                                      : T extends "push.state"
-                                        ? Extract<ServerMessage, { type: "pushState" }>
-                                        : ServerMessage;
+                        : T extends "workspace.prRemarks"
+                          ? Extract<ServerMessage, { type: "prRemarks" }>
+                          : T extends "workspace.forecast"
+                            ? Extract<ServerMessage, { type: "forecast" }>
+                            : T extends "workspace.files"
+                              ? Extract<ServerMessage, { type: "worktreeFiles" }>
+                              : T extends "workspace.readFile"
+                                ? Extract<ServerMessage, { type: "worktreeFile" }>
+                                : T extends "project.branches"
+                                  ? Extract<ServerMessage, { type: "projectBranches" }>
+                                  : T extends "project.deleteBranches"
+                                    ? Extract<ServerMessage, { type: "branchesDeleted" }>
+                                    : T extends "artifacts.list"
+                                      ? Extract<ServerMessage, { type: "artifacts" }>
+                                      : T extends "artifacts.open"
+                                        ? Extract<ServerMessage, { type: "artifactLink" }>
+                                        : T extends "push.state"
+                                          ? Extract<ServerMessage, { type: "pushState" }>
+                                          : ServerMessage;
 
 export class Connection {
   private state: State = initialState;

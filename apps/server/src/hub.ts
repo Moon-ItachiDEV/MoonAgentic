@@ -29,6 +29,7 @@ import type {
   PermissionMode,
   Project,
   PullRequestInfo,
+  PullRequestRemark,
   QueuedMessage,
   ReviewFile,
   ServerMessage,
@@ -46,7 +47,7 @@ import type { Agents } from "./agents.ts";
 import { cloneGithubRepo, githubRepos, githubStatus, parseGithubRepo } from "./github.ts";
 import { githubAccount, type LoginResult } from "./github-account.ts";
 import { goalContext, goalMessage, goalVerdict } from "./goal.ts";
-import { nextFix } from "./pr-watch.ts";
+import { nextFix, remarksMessage } from "./pr-watch.ts";
 import { mergePlan, noteTool } from "./plan-steps.ts";
 import { defaultParent, findClones, usualRoots } from "./local-clones.ts";
 import {
@@ -806,6 +807,28 @@ export class Hub {
         );
         return;
       }
+      case "workspace.prRemarks": {
+        const reply = await this.pullRequestRemarks(message.threadId).then(
+          (found) => ({
+            type: "prRemarks" as const,
+            requestId: message.requestId,
+            remarks: found?.remarks ?? [],
+            ...(found ? { number: found.pr.number } : {}),
+          }),
+          (error: unknown) => ({
+            type: "prRemarks" as const,
+            requestId: message.requestId,
+            remarks: [],
+            error: describe(error),
+          }),
+        );
+        client.send(reply);
+        return;
+      }
+      case "workspace.sendRemarks":
+        await this.sendRemarks(message.threadId, message.ids);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "github.repos":
         client.send({
           type: "githubRepos",
@@ -1902,7 +1925,7 @@ export class Hub {
     text: string,
     context?: string,
     byTeam?: boolean,
-    from?: "coordinator" | "goal" | "pr",
+    from?: "coordinator" | "goal" | "pr" | "remarks",
     auto?: boolean,
     /** The images joined to the message, already sent to the server. */
     attachments?: readonly string[],
@@ -2296,6 +2319,49 @@ export class Hub {
     // GitHub may answer after the hub has closed, and its store with it.
     if (on && !this.closed) await this.notePullRequest(threadId, pr);
     return pr;
+  }
+
+  /**
+   * The open review remarks of the pull request of the thread's branch. None to read: no
+   * pull request, one already merged or closed, or nothing here that can ask GitHub.
+   */
+  async pullRequestRemarks(
+    threadId: string,
+  ): Promise<{ pr: PullRequestInfo; remarks: PullRequestRemark[] } | undefined> {
+    const on = await this.branchOnGithub(threadId);
+    if (!on?.github.remarks) return undefined;
+    const pr = await on.github.find(on.repo, on.branch);
+    if (!pr || (pr.state !== "open" && pr.state !== "draft")) return undefined;
+    return { pr, remarks: await on.github.remarks(on.repo, pr.number) };
+  }
+
+  /**
+   * Sends the agent the remarks picked, read again from GitHub: their words never come from
+   * the client, and one resolved since is left out.
+   */
+  async sendRemarks(threadId: string, ids: readonly string[]): Promise<void> {
+    const thread = this.requireLiveThread(threadId);
+    if (!thread.workspace?.base) {
+      throw new Error("Seul un fil qui travaille sur sa propre branche a une pull request.");
+    }
+    if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
+    const found = await this.pullRequestRemarks(threadId);
+    if (!found) throw new Error("Cette branche n'a plus de pull request ouverte sur GitHub.");
+    const wanted = new Set(ids);
+    const picked = found.remarks.filter((r) => wanted.has(r.id));
+    if (!picked.length) {
+      throw new Error("Ces remarques ne sont plus ouvertes sur GitHub : actualise la liste.");
+    }
+    // GitHub took its time: the thread may have been locked, archived, removed or set to
+    // work since, and is looked at again before anything is sent.
+    if (this.closed) throw new Error("MoonAgentic s'arrête.");
+    if (this.lockedThread(threadId)) {
+      throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    }
+    this.requireLiveThread(threadId);
+    if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
+    const { text, context } = remarksMessage(found.pr, picked);
+    this.send(threadId, text, context, undefined, "remarks");
   }
 
   /**
