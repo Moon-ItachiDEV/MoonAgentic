@@ -604,22 +604,41 @@ export interface Schedule {
 export type { PullRequestCheck, PullRequestInfo } from "./pull-request.ts";
 import type { PullRequestInfo } from "./pull-request.ts";
 
-/** What MoonAgentic sees of GitHub through the user's own `git` and `gh`; it keeps no token. */
+/**
+ * What MoonAgentic knows of GitHub on the machine running it: the account signed in from
+ * MoonAgentic itself (its token stays on that machine, sealed by the system), or else what the
+ * user's own `git` and `gh` know.
+ */
 export interface GithubStatus {
   /** `git` is installed. */
   git: boolean;
   /** GitHub CLI (`gh`) is installed. */
   gh: boolean;
-  /** The account `gh` is signed in to, when it is. */
+  /** The signed-in account, when there is one. */
   login?: string;
   /**
-   * How git proves who it is to github.com when it pushes: `gh` lent for each clone and push
-   * (after git's own helpers), or only its own credential helper, or nothing.
+   * Who signed in: MoonAgentic's own « Se connecter à GitHub », or the user's `gh`. MoonAgentic's
+   * own sign-in wins when both are there.
    */
-  gitAuth: "helper" | "gh" | "none";
-  /** Why `gh` could not tell who is signed in, in its own words. */
+  account?: "moonagentic" | "gh";
+  /** True when « Se connecter à GitHub » can be offered here. */
+  canSignIn: boolean;
+  /** Where MoonAgentic's own sign-in is kept, so the user is told the truth about it. */
+  vault?: GithubVault;
+  /**
+   * How git proves who it is to github.com when it pushes: MoonAgentic's sign-in, `gh` lent for
+   * each clone and push (after git's own helpers), or only its own credential helper, or nothing.
+   */
+  gitAuth: "token" | "helper" | "gh" | "none";
+  /** Why the account could not be read, in GitHub's or `gh`'s own words. */
   error?: string;
 }
+
+/**
+ * Where MoonAgentic keeps its GitHub sign-in: sealed with the Windows account (DPAPI), in the
+ * macOS keychain or the Linux secret service, or, with none of them, a file only the user reads.
+ */
+export type GithubVault = "windows" | "macos" | "linux" | "file";
 
 /** A repository the user can reach on GitHub. */
 export interface GithubRepo {
@@ -629,6 +648,24 @@ export interface GithubRepo {
   private: boolean;
   /** Its last push, as a timestamp. */
   pushedAt?: number;
+}
+
+/** A git folder found on the machine running MoonAgentic, so nothing is cloned twice. */
+export interface LocalClone {
+  path: string;
+  /** Its folder's name. */
+  name: string;
+  /** The GitHub repository its `origin` points to, as `owner/name`. */
+  repo?: string;
+  /** The project already using this folder. */
+  projectId?: string;
+}
+
+/** A sign-in started from MoonAgentic: the code to type on GitHub, and where. */
+export interface GithubDeviceCode {
+  userCode: string;
+  verificationUri: string;
+  expiresAt: number;
 }
 
 /** The kinds of work a coordinator opens a thread for. */
@@ -732,6 +769,17 @@ export type ServerMessage =
     }
   | { type: "github"; requestId: string; status: GithubStatus }
   | { type: "githubRepos"; requestId: string; repos: GithubRepo[] }
+  /** Reply to `github.login`: the code to type on GitHub. */
+  | { type: "githubDevice"; requestId: string; device: GithubDeviceCode }
+  /** How a sign-in started from MoonAgentic ended, sent to every client. */
+  | {
+      type: "githubLogin";
+      state: "done" | "failed" | "cancelled";
+      login?: string;
+      error?: string;
+    }
+  /** Reply to `local.clones`: where projects go by default, and the git folders found. */
+  | { type: "localClones"; requestId: string; parent: string; clones: LocalClone[] }
   /**
    * A pull request as it is now. Without `pr`: there is none, or nothing here can ask
    * GitHub (no `gh`, no GitHub remote); `error` says why when asking failed.
@@ -1006,8 +1054,19 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("agent.removeCustom"), agentId: id }),
   /** Asks what `git` and `gh` know of GitHub on the machine running MoonAgentic. */
   z.object({ type: z.literal("github.status"), requestId: id }),
-  /** Lists the repositories the signed-in `gh` account can reach, last pushed first. */
+  /** Lists the repositories the signed-in account can reach, last pushed first. */
   z.object({ type: z.literal("github.repos"), requestId: id }),
+  /**
+   * Starts « Se connecter à GitHub »: the reply holds a code to type on github.com, and a
+   * `githubLogin` message follows once the user said yes there, or no, or let it expire.
+   */
+  z.object({ type: z.literal("github.login"), requestId: id }),
+  /** Stops a sign-in still waiting for the user on GitHub. */
+  z.object({ type: z.literal("github.loginCancel"), requestId: id }),
+  /** Forgets MoonAgentic's own GitHub sign-in; `gh`'s, if any, is left alone. */
+  z.object({ type: z.literal("github.logout"), requestId: id }),
+  /** Where new projects go, and the git folders already on the machine. */
+  z.object({ type: z.literal("local.clones"), requestId: id }),
   /** Asks GitHub for the pull request of a thread's branch, with its checks. */
   z.object({ type: z.literal("workspace.pr"), requestId: id, threadId: id }),
   /**

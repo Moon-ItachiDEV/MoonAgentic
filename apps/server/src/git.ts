@@ -11,7 +11,8 @@ import os from "node:os";
 import path from "node:path";
 import type { ReviewFile } from "@moonagentic/protocol";
 import { findOnPath } from "./agents.ts";
-import { ghCredentialArgs } from "./github.ts";
+import { githubAccount } from "./github-account.ts";
+import { githubGitAuth } from "./github.ts";
 
 const MAX_PATCH_LINES = 2000;
 /** The review lists at most this many files; the rest are only counted. */
@@ -534,11 +535,12 @@ export async function ship(
   const remotes = (await git(dir, ["remote"])).split("\n").filter(Boolean);
   const remote = remotes.includes("origin") ? "origin" : remotes[0];
   if (!remote) throw new Error("Ce dépôt n'a pas de remote où pousser la branche.");
-  // Without a credential helper of its own, git signs in through the user's `gh`.
+  // With MoonAgentic's own GitHub sign-in, or else the user's `gh` after git's own helpers.
+  const auth = await githubGitAuth();
   await git(
     dir,
-    [...ghCredentialArgs(), "push", "-u", remote, options.branch],
-    undefined,
+    [...auth.args, "push", "-u", remote, options.branch],
+    auth.env,
     NETWORK_TIMEOUT_MS,
   );
   const repo = githubRepo(await git(dir, ["remote", "get-url", remote]));
@@ -623,7 +625,11 @@ async function openPullRequest(
       execFile(
         gh,
         args,
-        { cwd: dir, env: { ...process.env, ...NO_PROMPT }, timeout: NETWORK_TIMEOUT_MS },
+        {
+          cwd: dir,
+          env: { ...process.env, ...NO_PROMPT, ...githubAccount()?.ghEnv() },
+          timeout: NETWORK_TIMEOUT_MS,
+        },
         (error, stdout, stderr) =>
           error ? reject(new Error(stderr.trim() || error.message)) : resolve(stdout),
       );

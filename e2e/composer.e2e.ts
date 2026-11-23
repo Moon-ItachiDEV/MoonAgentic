@@ -117,8 +117,12 @@ describe("composer", () => {
     await page.goto(url);
 
     await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByLabel("Dossier").fill(project);
-    await page.getByRole("button", { name: "Créer" }).click();
+
+    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
+
+    await page.getByLabel("Dossier", { exact: true }).fill(project);
+
+    await page.getByRole("button", { name: "Ajouter le projet" }).click();
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
     // The demo agent, not a real one that may be installed on this machine.
     await pickAgent(page, /Agent de démo/);
@@ -262,22 +266,22 @@ describe("composer", () => {
       const page = await browser.newPage();
       await page.goto(url);
       await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-      await page.getByRole("radio", { name: "Cloner depuis GitHub" }).click();
+      // GitHub comes first, signed in here through the user's own `gh`.
       // The list arrives: it used to stay on « Chargement de tes dépôts… » forever.
       const list = page.getByRole("list", { name: "Tes dépôts GitHub" });
       await expect.poll(() => list.getByRole("button").count()).toBe(2);
       await page.getByRole("textbox", { name: "Dépôt" }).fill("https://github.com/moon");
       await page.getByText("C'est l'adresse du compte @moon").waitFor();
       await expect.poll(() => page.getByRole("button", { name: "Cloner" }).isDisabled()).toBe(true);
-      // A name does not make a profile address clonable.
-      await page.getByRole("textbox", { name: "Nom" }).fill("site");
-      await expect.poll(() => page.getByRole("button", { name: "Cloner" }).isDisabled()).toBe(true);
-      await page.getByRole("textbox", { name: "Nom" }).fill("");
+      await page.getByRole("textbox", { name: "Dépôt" }).fill("");
       await list.getByRole("button", { name: /moon\/site/ }).click();
-      expect(await page.getByRole("textbox", { name: "Dépôt" }).inputValue()).toBe("moon/site");
-      expect(await page.getByRole("textbox", { name: "Nom" }).getAttribute("placeholder")).toBe(
-        "site",
-      );
+      // Picked: where it goes is said, and can be changed.
+      await page.getByText("Sera cloné dans").waitFor();
+      expect(await page.locator(".np-where .mono").textContent()).toMatch(/[\\/]site$/);
+      await page.getByRole("button", { name: "Changer", exact: true }).last().click();
+      expect(
+        await page.getByRole("textbox", { name: "Nom du dossier" }).getAttribute("placeholder"),
+      ).toBe("site");
       await expect
         .poll(() => page.getByRole("button", { name: "Cloner" }).isDisabled())
         .toBe(false);
@@ -376,8 +380,9 @@ describe("composer", () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
     await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByLabel("Dossier").fill(repo);
-    await page.getByRole("button", { name: "Créer" }).click();
+    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
+    await page.getByLabel("Dossier", { exact: true }).fill(repo);
+    await page.getByRole("button", { name: "Ajouter le projet" }).click();
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
 
     await composer(page).fill("/equipe Corrige answer et documente-la");

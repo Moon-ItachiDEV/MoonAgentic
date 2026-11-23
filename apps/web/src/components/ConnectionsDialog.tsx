@@ -2,6 +2,8 @@ import type { AgentInfo, GithubStatus, McpServerInfo } from "@moonagentic/protoc
 import { useCallback, useEffect, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { githubStatusText } from "../github.ts";
+import { GithubMark, GithubSignIn } from "./GithubSignIn.tsx";
+import { GITHUB_APP_ACCESS } from "./NewProjectDialog.tsx";
 import { splitCommandLine } from "../mcp-input.ts";
 import { agentStatus } from "../status.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
@@ -63,14 +65,17 @@ function AgentRow(props: { agent: AgentInfo; checking: boolean; onCheck: () => v
   );
 }
 
-/** GitHub as the user's own `git` and `gh` see it on the machine running MoonAgentic. */
+/** GitHub on the machine running MoonAgentic: its own sign-in, or the user's `git` and `gh`. */
 function GithubRow() {
   const [status, setStatus] = useState<GithubStatus | null>(null);
   const [checking, setChecking] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const check = useCallback(() => {
     setChecking(true);
     setError(null);
+    setConfirming(false);
     connection
       .ask({ type: "github.status", requestId: newId() })
       .then((reply) => setStatus(reply.status))
@@ -78,11 +83,17 @@ function GithubRow() {
       .finally(() => setChecking(false));
   }, []);
   useEffect(check, [check]);
+  const logout = () => {
+    connection
+      .ask({ type: "github.logout", requestId: newId() })
+      .then(check, (e: unknown) => setError(e instanceof Error ? e.message : String(e)));
+  };
   const text = status && githubStatusText(status);
+  const own = status?.account === "moonagentic";
   return (
     <li className="cx-row">
       <span className="ag gh" aria-hidden>
-        GH
+        <GithubMark size={15} />
       </span>
       <div className="cx-tx">
         <div className="cx-top">
@@ -92,12 +103,42 @@ function GithubRow() {
           </span>
         </div>
         {text && <small>{text.detail}</small>}
-        {status?.error && !status.login && status.gh && (
-          <small className="cx-err">{status.error}</small>
+        {own && (
+          <small>
+            Se déconnecter oublie la connexion sur cette machine. Pour la retirer aussi chez GitHub
+            :{" "}
+            <a href={GITHUB_APP_ACCESS} target="_blank" rel="noreferrer">
+              réglages GitHub
+            </a>
+            .
+          </small>
         )}
+        {status?.error && !status.login && <small className="cx-err">{status.error}</small>}
         {error && <small className="cx-err">{error}</small>}
+        {signingIn && (
+          <GithubSignIn
+            onSignedIn={() => {
+              setSigningIn(false);
+              check();
+            }}
+          />
+        )}
       </div>
       <div className="cx-acts">
+        {status && !own && status.canSignIn && !signingIn && (
+          <button className="btn sm pri" disabled={checking} onClick={() => setSigningIn(true)}>
+            Se connecter
+          </button>
+        )}
+        {own && (
+          <button
+            className={`btn sm ${confirming ? "danger" : ""}`}
+            disabled={checking}
+            onClick={() => (confirming ? logout() : setConfirming(true))}
+          >
+            {confirming ? "Confirmer ?" : "Se déconnecter"}
+          </button>
+        )}
         <button className="btn sm" disabled={checking} onClick={check}>
           Vérifier
         </button>

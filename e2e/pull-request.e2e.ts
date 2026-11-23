@@ -136,8 +136,9 @@ describe("pull requests", () => {
       };
       await page.goto(url);
       await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-      await page.getByLabel("Dossier").fill(repo);
-      await page.getByRole("button", { name: "Créer" }).click();
+      await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
+      await page.getByLabel("Dossier", { exact: true }).fill(repo);
+      await page.getByRole("button", { name: "Ajouter le projet" }).click();
       const composer = page.getByRole("combobox", { name: "Message" });
       await expect.poll(() => composer.isEnabled()).toBe(true);
       await page.locator(".agentchip").click();
