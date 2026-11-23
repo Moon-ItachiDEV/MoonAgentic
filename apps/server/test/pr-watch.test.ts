@@ -167,6 +167,9 @@ async function watched() {
   return { hub, store, github, threadId, client, pushed, fixes };
 }
 
+/** An agent's turn and a git push take seconds on a slow machine: no wait keeps the default one. */
+const SLOW = { timeout: 15_000 };
+
 describe("a thread that fixes its pull request", { timeout: 40_000 }, () => {
   it("sends its agent once per failure, pushes the fix, and gives up after the last try", async () => {
     const { hub, store, github, threadId, client, pushed, fixes } = await watched();
@@ -176,11 +179,11 @@ describe("a thread that fixes its pull request", { timeout: 40_000 }, () => {
     expect(fixes()).toEqual([]);
 
     await hub.handle(client, { type: "thread.watchPr", requestId: "w1", threadId, on: true });
-    await expect.poll(() => fixes().length).toBe(1);
+    await expect.poll(() => fixes().length, SLOW).toBe(1);
     expect(fixes()[0]).toContain("La CI de la pull request #42 a échoué");
     await hub.whenIdle(threadId);
     // The branch is pushed once the agent is done.
-    await expect.poll(pushed, { timeout: 15_000 }).toBeTruthy();
+    await expect.poll(pushed, SLOW).toBeTruthy();
     expect(store.getThread(threadId)?.prWatch).toMatchObject({
       tries: 1,
       max: PR_WATCH_TRIES,
@@ -195,12 +198,10 @@ describe("a thread that fixes its pull request", { timeout: 40_000 }, () => {
     // A conflict after that, on the new commit, is the next try.
     github.pr = { ...failing(pushed()!), conflicts: true };
     await hub.pullRequest(threadId);
-    await expect.poll(() => fixes().length).toBe(2);
+    await expect.poll(() => fixes().length, SLOW).toBe(2);
     expect(fixes()[1]).toContain("conflits avec main");
     await hub.whenIdle(threadId);
-    await expect
-      .poll(() => store.getThread(threadId)?.prWatch?.last, { timeout: 15_000 })
-      .toBe("conflict");
+    await expect.poll(() => store.getThread(threadId)?.prWatch?.last, SLOW).toBe("conflict");
 
     // Out of tries: the next failure is left to the user.
     store.updateThread(threadId, {
@@ -210,13 +211,10 @@ describe("a thread that fixes its pull request", { timeout: 40_000 }, () => {
     // Once the last fix is pushed, which takes git a while on a slow machine; each read is
     // awaited, so none is left when the hub closes.
     await expect
-      .poll(
-        async () => {
-          await hub.pullRequest(threadId);
-          return store.getThread(threadId)?.prWatch?.exhausted;
-        },
-        { timeout: 15_000 },
-      )
+      .poll(async () => {
+        await hub.pullRequest(threadId);
+        return store.getThread(threadId)?.prWatch?.exhausted;
+      }, SLOW)
       .toBe(true);
     expect(fixes()).toHaveLength(2);
 
@@ -251,8 +249,8 @@ describe("a thread that fixes its pull request", { timeout: 40_000 }, () => {
     });
     github.pr = failing();
     await hub.handle(client, { type: "thread.watchPr", requestId: "w1", threadId, on: true });
-    await expect.poll(() => fixes().length).toBe(1);
-    await expect.poll(() => hub.snapshot().requests.length).toBe(1);
+    await expect.poll(() => fixes().length, SLOW).toBe(1);
+    await expect.poll(() => hub.snapshot().requests.length, SLOW).toBe(1);
     // Off before the agent is done: its work stays on the branch, unpushed.
     await hub.handle(client, { type: "thread.watchPr", requestId: "w2", threadId, on: false });
     const [request] = hub.snapshot().requests;
