@@ -1,0 +1,421 @@
+/* Pull requests in the side bar, their card beside it, and the timeline of steps shared with
+   the review panel. Drawn from the reference mockup (ade/maquette, « Suivi des PR » v11). */
+
+/* The timeline: green for what passed, red for what failed, a grey ring for what comes, an
+   amber ring for the step that waits for the user. */
+.tl2 {
+  display: grid;
+  margin: 10px 0 14px;
+  padding: 0;
+  list-style: none;
+}
+.t2 {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  column-gap: 10px;
+  align-items: center;
+  padding: 5px 0;
+  font-size: 13px;
+  color: var(--fg);
+}
+.t2:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 9.25px;
+  top: 15px;
+  bottom: -15px;
+  width: 1.5px;
+  background: var(--track);
+}
+.t2.t2-done:not(:last-child)::before {
+  background: var(--ok);
+}
+.t2-m {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--surface);
+}
+.t2-m.ok {
+  color: var(--ok-tx);
+}
+.t2-m.err {
+  color: var(--err-tx);
+}
+.t2-l {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: inherit;
+  text-decoration: none;
+}
+a.t2-l:hover {
+  text-decoration: underline;
+}
+.t2.t2-failed .t2-l {
+  font-weight: 500;
+}
+.t2.t2-next,
+.t2.t2-yours {
+  color: var(--faint);
+}
+.t2-ring {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--track);
+}
+.t2.t2-yours .t2-ring {
+  box-shadow: inset 0 0 0 1.5px var(--warn);
+}
+.t2-spin {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1.6px solid var(--track);
+  border-top-color: var(--accent);
+  animation: t2-spin 0.9s linear infinite;
+}
+@keyframes t2-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .t2-spin {
+    animation: none;
+  }
+}
+
+/* The side bar's block. */
+.spr {
+  margin-top: 4px;
+}
+.spr-h {
+  gap: 8px;
+  justify-content: flex-start;
+}
+.spr-fold {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: inherit;
+}
+.spr-fold:hover {
+  color: var(--fg);
+}
+.spr-h .spr-cts {
+  margin-left: auto;
+}
+.spr-chev {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: inherit;
+}
+.spr-chev:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.spr-chev svg {
+  transform: rotate(90deg);
+  transition: transform 0.2s var(--ease);
+}
+.spr-chev.shut svg {
+  transform: none;
+}
+.spr-live {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
+}
+.spr-cts {
+  display: inline-flex;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.spr-cts .r {
+  color: var(--err-tx);
+}
+.spr-cts .g {
+  color: var(--ok-tx);
+}
+.spr-cts span::before {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: 2px;
+}
+.spr-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: 100%;
+  padding: 7px 10px;
+  border-radius: 10px;
+  text-align: left;
+  color: var(--fg);
+  text-decoration: none;
+}
+.spr-row:hover {
+  background: var(--hover);
+}
+.spr-row.on {
+  background: var(--surface);
+  box-shadow: var(--raise);
+}
+.spr-row > :first-child {
+  margin-top: 2px;
+  flex: none;
+}
+.spr-ic {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+}
+.spr-ic.err {
+  color: var(--err-tx);
+}
+.spr-ic.warn {
+  color: var(--warn);
+}
+.spr-ic.faint {
+  color: var(--faint);
+}
+.spr-ic.mg,
+.spr-merged .mg {
+  color: var(--merged);
+}
+.spr-ic.num {
+  border-radius: 50%;
+  background: var(--ok-tx);
+  color: var(--surface);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.spr-b {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+}
+.spr-t {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  min-width: 0;
+}
+.spr-t span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.spr-t i {
+  flex: none;
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--faint);
+}
+.spr-row small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+.spr-row small.err {
+  color: var(--err-tx);
+}
+.spr-row small.warn {
+  color: var(--warn);
+}
+.spr-row small.ok {
+  color: var(--ok-tx);
+}
+.spr-merged {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.spr-merged:hover {
+  background: var(--hover);
+}
+.spr-merged > svg {
+  margin-left: auto;
+  transition: transform 0.2s var(--ease);
+}
+.spr-merged.open > svg {
+  transform: rotate(90deg);
+}
+
+/* A pull request's card, beside the side bar: 360 px, never taller than the window, radius
+   20 around a 12 px padding, 34 px buttons at radius 8. */
+.prc {
+  position: fixed;
+  z-index: 40;
+  left: var(--left, 276px);
+  top: var(--top, 80px);
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--float);
+  animation: prc-in 0.18s cubic-bezier(0.23, 1, 0.32, 1);
+}
+@keyframes prc-in {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prc {
+    animation: none;
+  }
+}
+.prc-id {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.prc-n {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 500;
+  text-decoration: none;
+  flex: none;
+}
+.prc-n:hover {
+  background: var(--hover);
+}
+.prc-br {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  letter-spacing: 0;
+}
+.prc h3 {
+  margin: 10px 4px 8px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+.prc .tl2 {
+  padding: 0 4px;
+}
+.prc-wait,
+.prc-err {
+  margin: 8px 4px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.prc-err {
+  color: var(--err-tx);
+}
+.prc-acts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 6px;
+}
+.prc-acts .btn {
+  height: 34px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+/* On a phone: a sheet from the bottom, 44 px buttons. */
+@media (max-width: 860px) {
+  .prc {
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: 8px;
+    width: auto;
+    max-width: none;
+    max-height: 80dvh;
+    border-radius: 20px;
+    padding: 16px 12px max(12px, env(safe-area-inset-bottom));
+    animation-name: prc-up;
+  }
+  .prc-acts .btn {
+    height: 44px;
+    border-radius: 12px;
+    font-size: 14px;
+  }
+}
+@keyframes prc-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+}
+
+/* Beside « Planner »: a live glyph, the cards waiting for the user in amber, else those in
+   progress in grey. */
+.nav .pind {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pind-n {
+  font-size: 12px;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.pind-a {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  background: var(--warnbg);
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

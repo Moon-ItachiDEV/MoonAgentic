@@ -8,14 +8,15 @@
   gap: 5px;
   height: 26px;
   padding: 0 9px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 8px;
   font-size: 12px;
   color: var(--muted);
 }
 .pl-run:hover {
   color: var(--fg);
-  border-color: var(--accent);
+  background: var(--hover);
 }
 
 /* The launch, in the card's detail: which agent, with what access. */
@@ -23,18 +24,19 @@
   display: grid;
   gap: 12px;
   padding: 14px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 12px;
   background: var(--surface);
 }
 .pl-launch p {
   margin: 0;
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.45;
   color: var(--muted);
 }
 .pl-launch .error {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .pl-check {
   display: flex;

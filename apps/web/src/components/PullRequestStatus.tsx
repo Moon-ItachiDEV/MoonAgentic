@@ -2,7 +2,10 @@ import type { PullRequestInfo, Thread } from "@moonagentic/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { prStates } from "../pr-states.ts";
-import { checksSummary, mergeBlocker, mergeWarning, STATE_LABEL } from "../pull-request.ts";
+import { canMerge } from "../pr-board.ts";
+import { checksSummary, mergeWarning, STATE_LABEL } from "../pull-request.ts";
+import { IconMerge } from "./icons.tsx";
+import { PrTimeline } from "./PrTimeline.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 
 /** How often GitHub is asked again while an open pull request is on screen. */
@@ -109,7 +112,7 @@ export function usePullRequest(thread: Thread, stamp: unknown) {
   return { pr, error, loading, refresh, merge };
 }
 
-/** The state of the thread's pull request in the review panel: CI, conflicts, and the merge. */
+/** The state of the thread's pull request in the review panel: its steps, then the merge. */
 export function PullRequestStatus(props: {
   pr: PullRequestInfo;
   loading: boolean;
@@ -119,7 +122,6 @@ export function PullRequestStatus(props: {
   const { pr } = props;
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const ci = checksSummary(pr.checks);
-  const blocker = mergeBlocker(pr);
   const live = pr.state === "open" || pr.state === "draft";
 
   return (
@@ -133,61 +135,28 @@ export function PullRequestStatus(props: {
           {props.loading ? "…" : "Actualiser"}
         </button>
       </div>
-      {live ? (
-        <>
-          <p className={`rv-prs-l ${ci.tone}`} role="status">
-            <span className="rv-prs-dot" aria-hidden />
-            {ci.label}
-          </p>
-          {ci.failed.length > 0 && (
-            <ul className="rv-prs-f">
-              {ci.failed.map((check, i) => (
-                // Two workflows may each have a job of the same name.
-                <li key={`${i}:${check.name}`}>
-                  {check.url ? (
-                    <a href={check.url} target="_blank" rel="noopener noreferrer">
-                      {check.name}
-                    </a>
-                  ) : (
-                    check.name
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-          {pr.conflicts === false && pr.state === "open" && (
-            <p className="rv-prs-l ok">
-              <span className="rv-prs-dot" aria-hidden />
-              Pas de conflit avec {pr.base}
-            </p>
-          )}
-          {blocker && (
-            <p className="rv-prs-l err">
-              <span className="rv-prs-dot" aria-hidden />
-              {blocker}
-            </p>
-          )}
-          {pr.state === "open" && (
-            <button
-              className="btn sm rv-prs-m"
-              disabled={!!blocker}
-              onClick={() =>
-                setConfirm({
-                  title: `Merger la pull request #${pr.number} ?`,
-                  text: mergeWarning(pr),
-                  action: "Merger",
-                  run: props.onMerge,
-                })
-              }
-            >
-              Merger la pull request
-            </button>
-          )}
-        </>
-      ) : (
-        <p className="rv-prs-l none">
-          {pr.state === "merged" ? `Mergée dans ${pr.base}.` : "Fermée sans être mergée."}
+      {live && (
+        <p className={`rv-prs-l ${ci.tone}`} role="status">
+          {ci.label}
         </p>
+      )}
+      <PrTimeline pr={pr} />
+      {/* Only what can be done from here: a merge GitHub would refuse is not offered. */}
+      {canMerge(pr) && (
+        <button
+          className="btn pri sm rv-prs-m"
+          onClick={() =>
+            setConfirm({
+              title: `Fusionner la pull request #${pr.number} ?`,
+              text: mergeWarning(pr),
+              action: "Fusionner",
+              run: props.onMerge,
+            })
+          }
+        >
+          <IconMerge size={14} />
+          Fusionner la pull request
+        </button>
       )}
       {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
     </div>

@@ -36,7 +36,9 @@ import {
 } from "./icons.tsx";
 import { Wordmark } from "./MoonMark.tsx";
 import { Presence } from "./Presence.tsx";
+import { SidePullRequests } from "./SidePullRequests.tsx";
 import { StateGlyph } from "./StateGlyph.tsx";
+import { type PlannerSignal, plannerSignal, plannerSignalText } from "../planner.ts";
 
 /** A menu this tall always fits: it opens upwards when the row is that close to the bottom. */
 const MENU_ROOM = 150;
@@ -150,6 +152,8 @@ export function Sidebar(props: {
   };
 
   const scheduled = state.schedules.filter((s) => s.enabled).length;
+  const planSignal = plannerSignal(state.plan, state.threads, state.agents);
+  const planText = plannerSignalText(planSignal);
   const live = state.threads.filter((t) => !t.archived);
   // A resolved team counts once, as its lead: its members are put away with it.
   const resolvedLeads = new Set(state.threads.filter((t) => t.archived).map((t) => t.id));
@@ -514,9 +518,11 @@ export function Sidebar(props: {
           className={props.onPlanner ? "on" : ""}
           aria-current={props.onPlanner ? "page" : undefined}
           onClick={props.onOpenPlanner}
+          title={planText || undefined}
         >
           <IconList />
           Planner
+          <PlannerSign signal={planSignal} />
         </button>
         <button
           className={props.onArtifacts ? "on" : ""}
@@ -547,6 +553,7 @@ export function Sidebar(props: {
         {pinned.flatMap((t) => tree(t, "pin:"))}
         {recent.length > 0 && <div className="sec-h">Récents</div>}
         {recent.flatMap((t) => tree(t, "recent:"))}
+        <SidePullRequests threads={state.threads} onOpenThread={props.onOpenThread} />
       </div>
       {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}
       <SideQuotas agents={state.agents} onOpen={props.onOpenSubscriptions} />
@@ -566,6 +573,25 @@ export function Sidebar(props: {
         </button>
       </div>
     </aside>
+  );
+}
+
+/**
+ * Beside « Planner »: a live glyph while an agent works on a card, the cards that wait for
+ * the user in amber, else those in progress in grey; nothing while nothing moves.
+ */
+function PlannerSign({ signal: s }: { signal: PlannerSignal }) {
+  if (!s.live && !s.waiting && !s.active) return null;
+  return (
+    // Hidden from screen readers: the line keeps « Planner » as its name, its title says the rest.
+    <span className="pind" aria-hidden>
+      {s.live && <StateGlyph kind="travaille" size={14} />}
+      {s.waiting > 0 ? (
+        <span className="pind-a">{s.waiting}</span>
+      ) : s.active > 0 ? (
+        <span className="pind-n">{s.active}</span>
+      ) : null}
+    </span>
   );
 }
 

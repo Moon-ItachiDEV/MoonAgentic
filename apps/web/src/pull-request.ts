@@ -13,7 +13,7 @@ export function pullRequestUrl(href: string): { url: string; number: number } | 
 export const STATE_LABEL: Record<PullRequestInfo["state"], string> = {
   open: "ouverte",
   draft: "brouillon",
-  merged: "mergée",
+  merged: "fusionnée",
   closed: "fermée",
 };
 
@@ -54,9 +54,10 @@ export function checksSummary(checks: PullRequestCheck[]): {
 
 /** Why this pull request cannot be merged from here right now, when it cannot. */
 export function mergeBlocker(pr: PullRequestInfo): string | null {
-  if (pr.state === "draft") return "Brouillon : marque-la prête sur GitHub pour pouvoir la merger.";
+  if (pr.state === "draft")
+    return "Brouillon : marque-la prête sur GitHub pour pouvoir la fusionner.";
   if (pr.state !== "open") return null;
-  if (pr.conflicts) return `Conflits avec ${pr.base} : à résoudre avant de merger.`;
+  if (pr.conflicts) return `Conflits avec ${pr.base} : à résoudre avant de fusionner.`;
   return null;
 }
 
@@ -65,8 +66,8 @@ export function mergeWarning(pr: PullRequestInfo): string {
   const ci = checksSummary(pr.checks);
   const notes = [
     ci.tone === "err" ? "La CI est rouge." : ci.tone === "warn" ? "La CI tourne encore." : "",
-    pr.blocked ? "Les règles du dépôt bloquent ce merge : GitHub le refusera sans doute." : "",
+    pr.blocked ? "Les règles du dépôt bloquent cette fusion : GitHub la refusera sans doute." : "",
     pr.conflicts === null ? "GitHub n'a pas fini de vérifier les conflits." : "",
   ].filter(Boolean);
-  return [`« ${pr.title} » sera mergée dans ${pr.base}.`, ...notes].join(" ");
+  return [`« ${pr.title} » sera fusionnée dans ${pr.base}.`, ...notes].join(" ");
 }

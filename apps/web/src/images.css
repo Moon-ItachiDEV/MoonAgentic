@@ -58,15 +58,15 @@
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 50%;
-  background: var(--surface);
+  background: var(--card);
   color: var(--muted);
   cursor: pointer;
 }
 .cimg-x:hover {
   color: var(--fg);
-  border-color: var(--line2);
+  background: var(--hover);
 }
 /* A finger needs more than 20 px: the press area is wider than what is drawn. */
 .cimg-x::after {
@@ -88,7 +88,7 @@
   border-radius: inherit;
   background: color-mix(in srgb, var(--surface) 92%, var(--accent));
   color: var(--fg);
-  font-size: 13.5px;
+  font-size: 13px;
   pointer-events: none;
 }
 
@@ -104,7 +104,8 @@
   width: 112px;
   height: 112px;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 14px;
   background: var(--card);
   overflow: hidden;
@@ -135,7 +136,7 @@
   height: 40px;
   padding: 0 12px;
   color: var(--faint);
-  font-size: 12.5px;
+  font-size: 12px;
   cursor: default;
 }
 
@@ -149,7 +150,7 @@
   max-width: 100%;
   max-height: calc(100dvh - 48px);
   border-radius: 10px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--float);
   cursor: default;
   animation: pop 0.14s ease-out;
 }
@@ -162,9 +163,9 @@
   display: grid;
   place-items: center;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 50%;
-  background: var(--surface);
+  background: var(--card);
   color: var(--fg);
   cursor: pointer;
 }

@@ -99,7 +99,7 @@ describe("planner", () => {
     const launch = detail.getByRole("form", { name: "Lancer la tâche 1" });
     await launch.waitFor();
     // The demo agent, not a real one that may be installed on this machine.
-    await launch.getByLabel("Agent", { exact: true }).selectOption({ label: "Agent de démo" });
+    await launch.getByLabel("Modèle", { exact: true }).selectOption("demo\n");
     // It asks before it acts: the card is seen at work for as long as it waits.
     await launch.getByLabel("Accès de l'agent").selectOption("supervised");
     if (shots) {

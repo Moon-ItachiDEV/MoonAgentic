@@ -63,7 +63,7 @@ describe("a pull request, as told to the user", () => {
   });
 
   it("says what is not green before merging", () => {
-    expect(mergeWarning(pr())).toBe("« Ajoute le suivi » sera mergée dans main.");
+    expect(mergeWarning(pr())).toBe("« Ajoute le suivi » sera fusionnée dans main.");
     expect(mergeWarning(pr({ checks: [check("Tests", "failed")] }))).toContain("CI est rouge");
     expect(mergeWarning(pr({ checks: [check("Tests", "pending")] }))).toContain("tourne encore");
     expect(mergeWarning(pr({ blocked: true }))).toContain("règles du dépôt");

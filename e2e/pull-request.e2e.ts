@@ -186,9 +186,23 @@ describe("pull requests", () => {
       await pr.getByText("CI rouge · 1 check en échec").waitFor();
       await pr.getByRole("link", { name: "Tests" }).waitFor();
       await pr.getByText("Conflits avec main").waitFor();
-      const merge = pr.getByRole("button", { name: "Merger la pull request" });
-      expect(await merge.isDisabled()).toBe(true);
+      // A merge GitHub would refuse is not offered at all.
+      const merge = pr.getByRole("button", { name: "Fusionner la pull request" });
+      expect(await merge.count()).toBe(0);
       await shot("pr2-rouge-conflit");
+
+      // The side bar follows it too: its line opens a card with the same steps.
+      const side = page.locator(".spr");
+      await side.getByText("Échec de la CI").waitFor();
+      await side.getByRole("button", { name: /#42/ }).click();
+      const card = page.getByRole("dialog", { name: "Pull request #42" });
+      await card.getByText("Conflits avec main").waitFor();
+      await card.getByRole("button", { name: "Corriger la CI" }).waitFor();
+      expect(await card.getByRole("button", { name: "Fusionner" }).count()).toBe(0);
+      await card.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+      await shot("pr5-barre-carte");
+      await side.getByRole("button", { name: /#42/ }).click();
+      await card.waitFor({ state: "detached" });
 
       // All green: merging asks first, then the pull request turns violet everywhere.
       github({
@@ -202,10 +216,10 @@ describe("pull requests", () => {
       await pr.getByText("Pas de conflit avec main").waitFor();
       await shot("pr1-verte");
       await merge.click();
-      const confirm = page.getByRole("alertdialog", { name: "Merger la pull request #42 ?" });
-      await confirm.getByText("sera mergée dans main").waitFor();
-      await confirm.getByRole("button", { name: "Merger" }).click();
-      await pr.getByText("Mergée dans main.", { exact: true }).waitFor();
+      const confirm = page.getByRole("alertdialog", { name: "Fusionner la pull request #42 ?" });
+      await confirm.getByText("sera fusionnée dans main").waitFor();
+      await confirm.getByRole("button", { name: "Fusionner" }).click();
+      await pr.getByText("Fusionnée dans main", { exact: true }).waitFor();
       expect(await pr.locator(".prchip").getAttribute("data-state")).toBe("merged");
       await expect.poll(() => chip.getAttribute("data-state")).toBe("merged");
       expect(await merge.count()).toBe(0);

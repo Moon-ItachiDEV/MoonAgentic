@@ -3,7 +3,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
+  border: 1px solid transparent;
   background: color-mix(in srgb, var(--warn) 7%, var(--surface));
   color: var(--fg);
   border-radius: 14px;
@@ -23,8 +23,8 @@
 }
 .quiet button {
   flex: none;
-  border: 1px solid var(--line);
-  background: var(--surface);
+  border: 1px solid transparent;
+  background: var(--card);
   color: var(--fg);
   border-radius: 999px;
   padding: 6px 12px;

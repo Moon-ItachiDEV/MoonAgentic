@@ -2,6 +2,8 @@
    Under 860px the sidebar becomes a drawer over a single column. */
 :root {
   --bg: #fafafa;
+  --side: #f4f4f6;
+  --seg-on: #ffffff;
   --surface: #ffffff;
   --card: #f3f3f4;
   --sunken: #efeff1;
@@ -16,6 +18,18 @@
   --ok: #1f8a50;
   --warn: #9a6008;
   --err: #cc3d3d;
+  --ok-tx: #1a7a46;
+  --err-tx: #c23535;
+  --okbg: #e8f5ee;
+  --errbg: #fbeeee;
+  --warnbg: #fbf3e4;
+  --accbg: #eceffd;
+  --merged: #7a4fd6;
+  --mergedbg: #f1ecfc;
+  --track: #e6e6ea;
+  --float:
+    0 0 0 0.5px rgba(24, 24, 40, 0.07), 0 1px 2px rgba(20, 20, 30, 0.05),
+    0 8px 16px -8px rgba(20, 20, 30, 0.12), 0 28px 56px -24px rgba(20, 20, 30, 0.28);
   --add-bg: rgba(31, 138, 80, 0.09);
   --add-fg: #1d7a47;
   --del-bg: rgba(204, 61, 61, 0.08);
@@ -28,6 +42,9 @@
   --a-demo: #52525b;
   --scrim: rgba(20, 20, 24, 0.28);
   --shadow: 0 20px 50px -18px rgba(20, 20, 30, 0.25), 0 3px 10px rgba(20, 20, 30, 0.06);
+  --raise:
+    0 0 0 0.5px rgba(24, 24, 40, 0.06), 0 1px 2px rgba(24, 24, 40, 0.04),
+    0 4px 14px -6px rgba(24, 24, 40, 0.08);
   --sans: "Geist Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --mono:
     "Geist Mono Variable", ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
@@ -38,6 +55,8 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #111113;
+    --side: #131315;
+    --seg-on: #2c2c31;
     --surface: #18181b;
     --card: #1b1b1e;
     --sunken: #212125;
@@ -52,12 +71,25 @@
     --ok: #52c585;
     --warn: #e2a740;
     --err: #f06c6c;
+    --ok-tx: var(--ok);
+    --err-tx: var(--err);
+    --okbg: #15271d;
+    --errbg: #2c1818;
+    --warnbg: #2a2114;
+    --accbg: #1c2140;
+    --merged: #a88bf0;
+    --mergedbg: #221b33;
+    --track: #2b2b30;
+    --float:
+      0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 1px 2px rgba(0, 0, 0, 0.3),
+      0 12px 28px -6px rgba(0, 0, 0, 0.5), 0 28px 56px -16px rgba(0, 0, 0, 0.55);
     --add-bg: rgba(82, 197, 133, 0.1);
     --add-fg: #73d69c;
     --del-bg: rgba(240, 108, 108, 0.1);
     --del-fg: #f28c8c;
     --scrim: rgba(0, 0, 0, 0.5);
     --shadow: 0 20px 50px -18px rgba(0, 0, 0, 0.6), 0 3px 10px rgba(0, 0, 0, 0.3);
+    --raise: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 4px 14px -6px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
   }
 }
@@ -75,6 +107,7 @@ body {
   background: var(--bg);
   color: var(--fg);
   font: 14px/1.5 var(--sans);
+  letter-spacing: -0.01em;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;
 }
@@ -91,6 +124,12 @@ textarea,
 select {
   font: inherit;
   color: inherit;
+}
+code,
+kbd,
+pre,
+samp {
+  letter-spacing: 0;
 }
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -120,8 +159,8 @@ svg {
 
 /* Sidebar */
 .side {
-  background: var(--bg);
-  border-right: 1px solid var(--line);
+  background: var(--side);
+  border-right: 1px solid transparent;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -190,7 +229,7 @@ svg {
   align-items: center;
   justify-content: space-between;
   padding: 16px 10px 6px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--faint);
 }
 .thr {
@@ -204,14 +243,14 @@ svg {
   text-overflow: ellipsis;
 }
 .thr .aux {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--faint);
   margin-left: auto;
 }
 .side-foot {
   flex: none;
   padding: 10px 16px 14px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid transparent;
   font-size: 12px;
   color: var(--faint);
   display: flex;
@@ -220,7 +259,7 @@ svg {
 }
 .empty-note {
   padding: 6px 10px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--faint);
 }
 
@@ -276,7 +315,7 @@ svg {
   min-width: 0;
   text-align: center;
   font-weight: 500;
-  font-size: 13.5px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -388,7 +427,7 @@ svg {
   padding: 14px 18px 4px;
   min-height: 48px;
   max-height: 180px;
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1.5;
 }
 .composer textarea::placeholder {
@@ -484,7 +523,7 @@ svg {
   color: var(--warn);
 }
 .gauge.full {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .gauge-pop {
   position: absolute;
@@ -497,9 +536,9 @@ svg {
   gap: 4px;
   padding: 12px 14px;
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 14px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--float);
   font-size: 13px;
 }
 .gauge-pop span {
@@ -599,9 +638,9 @@ svg {
   min-width: 260px;
   max-width: calc(100vw - 48px);
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 16px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--float);
   padding: 6px;
   display: grid;
   gap: 1px;
@@ -648,7 +687,7 @@ svg {
   margin-top: 4px;
   max-height: 4.2em;
   overflow: hidden;
-  color: var(--err);
+  color: var(--err-tx);
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-word;
@@ -657,7 +696,8 @@ svg {
   display: inline-flex;
   margin-top: 6px;
   padding: 4px 10px;
-  border: 1px solid var(--line2);
+  border: 1px solid transparent;
+  background: var(--card);
   border-radius: 999px;
   color: var(--fg);
   font-size: 12px;
@@ -710,9 +750,10 @@ svg {
 }
 .menu .seg button {
   padding: 5px 11px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  background: var(--card);
   border-radius: 999px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .menu .seg button[aria-checked="true"] {
@@ -780,13 +821,13 @@ svg {
   justify-content: flex-end;
   gap: 6px;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 12px;
   text-align: right;
 }
 .u-err {
   margin: 0;
-  color: var(--err);
-  font-size: 12.5px;
+  color: var(--err-tx);
+  font-size: 12px;
 }
 .handoff {
   align-self: center;
@@ -820,7 +861,7 @@ svg {
 }
 .md code {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 12px;
   padding: 1px 5px;
   border-radius: 5px;
   background: var(--card);
@@ -835,7 +876,7 @@ svg {
   border-radius: 12px;
   padding: 10px 14px;
   overflow-x: auto;
-  font-size: 12.5px;
+  font-size: 12px;
 }
 .md pre code {
   padding: 0;
@@ -866,7 +907,7 @@ svg {
 .thought .md {
   margin-top: 6px;
   padding-left: 14px;
-  border-left: 1px solid var(--line);
+  border-left: 1px solid transparent;
   white-space: pre-wrap;
 }
 
@@ -898,7 +939,7 @@ svg {
   white-space: nowrap;
 }
 .tool-h .meta {
-  font: 11.5px var(--mono);
+  font: 12px var(--mono);
   color: var(--faint);
   white-space: nowrap;
 }
@@ -910,7 +951,7 @@ svg {
   transform: rotate(90deg);
 }
 .tool-body {
-  border-left: 1px solid var(--line);
+  border-left: 1px solid transparent;
   margin-left: 6px;
   padding: 4px 0 4px 14px;
   display: grid;
@@ -926,7 +967,8 @@ svg {
   max-height: 320px;
 }
 .diff {
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 12px;
   overflow: hidden;
   font: 12px/1.55 var(--mono);
@@ -935,7 +977,7 @@ svg {
   padding: 6px 12px;
   background: var(--card);
   color: var(--muted);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid transparent;
 }
 .diff-b {
   overflow-x: auto;
@@ -1019,10 +1061,10 @@ svg {
   }
 }
 .ok-ic {
-  color: var(--ok);
+  color: var(--ok-tx);
 }
 .err-ic {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .pend-ic {
   width: 12px;
@@ -1033,7 +1075,8 @@ svg {
 }
 
 .card {
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 18px;
   background: var(--surface);
   padding: 12px 14px;
@@ -1042,13 +1085,13 @@ svg {
 }
 .card-h {
   font-weight: 500;
-  font-size: 13.5px;
+  font-size: 13px;
   display: flex;
   gap: 8px;
   align-items: center;
 }
 .approve {
-  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--line));
+  border: 1px solid transparent;
   border-radius: 18px;
   padding: 14px;
   display: grid;
@@ -1059,7 +1102,7 @@ svg {
   display: flex;
   gap: 10px;
   align-items: flex-start;
-  font-size: 13.5px;
+  font-size: 13px;
 }
 .approve .q svg {
   color: var(--warn);
@@ -1086,7 +1129,7 @@ svg {
   color: var(--muted);
 }
 .approve.done {
-  border-color: var(--line);
+  background: var(--card);
   color: var(--muted);
   padding: 10px 14px;
   font-size: 13px;
@@ -1094,34 +1137,41 @@ svg {
 
 .btn {
   height: 32px;
-  padding: 0 14px;
-  border-radius: 999px;
+  padding: 0 12px;
+  border-radius: 9px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   font-size: 13px;
   font-weight: 500;
-  border: 1px solid var(--line);
-  background: var(--surface);
+  border: 1px solid transparent;
+  background: var(--card);
   white-space: nowrap;
 }
 .btn:hover {
-  border-color: var(--line2);
-  background: var(--card);
+  background: var(--hover);
 }
 .btn.pri {
   background: var(--fg);
   color: var(--bg);
-  border-color: var(--fg);
 }
 .btn.pri:hover {
   opacity: 0.88;
 }
 .btn.sm {
   height: 28px;
-  padding: 0 11px;
-  font-size: 12.5px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+/* The main action an agent does for you: tinted with the accent, filled, never outlined. */
+.btn.acc {
+  background: var(--accbg);
+  color: var(--accent);
+}
+.btn.acc:hover {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
 }
 .btn.quiet {
   border-color: transparent;
@@ -1133,9 +1183,8 @@ svg {
   background: var(--hover);
 }
 .btn.danger {
-  color: var(--err);
-  border-color: var(--err);
-  background: var(--del-bg);
+  color: var(--err-tx);
+  background: var(--errbg);
 }
 .btn:disabled {
   opacity: 0.4;
@@ -1150,7 +1199,7 @@ svg {
   align-items: center;
 }
 .failed {
-  border: 1px solid color-mix(in srgb, var(--err) 35%, var(--line));
+  border: 1px solid transparent;
   background: color-mix(in srgb, var(--err) 6%, var(--surface));
   color: var(--fg);
   border-radius: 14px;
@@ -1160,7 +1209,7 @@ svg {
   overflow-wrap: anywhere;
 }
 .failed b {
-  color: var(--err);
+  color: var(--err-tx);
   font-weight: 500;
   display: block;
   margin-bottom: 2px;
@@ -1255,16 +1304,16 @@ svg {
 .dialog {
   width: min(440px, 100%);
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 20px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--float);
   padding: 20px;
   display: grid;
   gap: 14px;
 }
 .dialog h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.01em;
 }
@@ -1281,9 +1330,9 @@ svg {
 }
 .field input {
   height: 38px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 10px;
-  background: var(--bg);
+  background: var(--sunken);
   padding: 0 12px;
   outline: none;
   color: var(--fg);
@@ -1296,9 +1345,9 @@ svg {
 }
 .field select {
   height: 38px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 10px;
-  background: var(--bg);
+  background: var(--sunken);
   padding: 0 10px;
   color: var(--fg);
   min-width: 0;
@@ -1313,7 +1362,7 @@ svg {
   gap: 8px;
 }
 .dialog .error {
-  color: var(--err);
+  color: var(--err-tx);
   font-size: 13px;
   margin: 0;
 }
@@ -1323,10 +1372,11 @@ svg {
   gap: 6px;
   height: 30px;
   padding: 0 11px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  background: var(--card);
   border-radius: 999px;
   color: var(--fg);
-  font-size: 12.5px;
+  font-size: 12px;
   flex: none;
 }
 .review-btn:hover {
@@ -1344,7 +1394,7 @@ svg {
   flex-wrap: wrap;
 }
 .rv-branch code {
-  font: 12.5px var(--mono);
+  font: 12px var(--mono);
   color: var(--fg);
 }
 .n-add {
@@ -1361,7 +1411,8 @@ svg {
   gap: 6px;
 }
 .rv-file {
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 12px;
   overflow: hidden;
   font: 12px/1.55 var(--mono);
@@ -1391,7 +1442,7 @@ svg {
   font-family: var(--sans);
 }
 .rv-file .diff-b {
-  border-top: 1px solid var(--line);
+  border-top: 1px solid transparent;
   max-height: 420px;
 }
 .diff-b .hunk {
@@ -1411,9 +1462,9 @@ svg {
   color: var(--faint);
 }
 .field textarea {
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 10px;
-  background: var(--bg);
+  background: var(--sunken);
   padding: 9px 12px;
   outline: none;
   color: var(--fg);
@@ -1443,7 +1494,8 @@ svg {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 12px;
 }
 .mcp-tx {
@@ -1531,7 +1583,7 @@ svg {
   gap: 12px;
   align-items: center;
   max-width: calc(100vw - 32px);
-  box-shadow: var(--shadow);
+  box-shadow: var(--float);
 }
 .toast button {
   color: var(--bg);
@@ -1561,7 +1613,7 @@ svg {
 }
 .gate code {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 12px;
   background: var(--card);
   padding: 2px 6px;
   border-radius: 6px;
@@ -1708,7 +1760,7 @@ svg {
   color: var(--fg);
 }
 .sg-hint {
-  font: 12.5px var(--mono);
+  font: 12px var(--mono);
   color: var(--faint);
 }
 .sg-by {
@@ -1717,7 +1769,7 @@ svg {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--faint);
 }
 .u .tok {
@@ -1789,9 +1841,9 @@ svg {
   display: flex;
   flex-direction: column;
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 18px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--float);
   overflow: hidden;
 }
 .qs-in {
@@ -1799,7 +1851,7 @@ svg {
   align-items: center;
   gap: 10px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid transparent;
   color: var(--faint);
 }
 .qs-in input {
@@ -1811,12 +1863,13 @@ svg {
   background: none;
   color: var(--fg);
   font: inherit;
-  font-size: 15px;
+  font-size: 16px;
 }
 kbd {
-  font: 11px var(--mono);
+  font: 12px var(--mono);
   color: var(--faint);
-  border: 1px solid var(--line2);
+  border: 1px solid transparent;
+  background: var(--card);
   border-radius: 6px;
   padding: 2px 6px;
   white-space: nowrap;
@@ -1868,7 +1921,7 @@ kbd {
 .qs-empty {
   padding: 18px 10px;
   color: var(--faint);
-  font-size: 13.5px;
+  font-size: 13px;
 }
 
 /* Picking the files to ship in « À revoir » */
@@ -1938,7 +1991,8 @@ kbd {
   align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 12px;
 }
 .cx-tx {
@@ -1972,7 +2026,7 @@ kbd {
   overflow-wrap: anywhere;
 }
 .cx-tx small.cx-err {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .cx-acts {
   display: flex;
@@ -1993,7 +2047,8 @@ kbd {
   display: grid;
   gap: 8px;
   padding: 10px 12px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 12px;
 }
 .rq-thread {
@@ -2005,7 +2060,7 @@ kbd {
   border: none;
   background: none;
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 12px;
   text-align: left;
   cursor: pointer;
 }
@@ -2018,7 +2073,7 @@ kbd {
   white-space: nowrap;
 }
 .rq-q {
-  font-size: 13.5px;
+  font-size: 13px;
   overflow-wrap: anywhere;
 }
 .dialog .rq-row .row {
@@ -2032,7 +2087,7 @@ kbd {
   border-radius: 9px;
   background: var(--accent);
   color: #fff;
-  font-size: 11px;
+  font-size: 12px;
   display: inline-grid;
   place-items: center;
 }
@@ -2062,7 +2117,7 @@ kbd {
   min-width: 0;
 }
 .menu.thread-menu button.danger {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .thr-row.proj .aux {
   margin-right: 4px;
@@ -2078,11 +2133,12 @@ kbd {
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 18px;
   background: var(--surface);
   color: var(--muted);
-  font-size: 13.5px;
+  font-size: 13px;
 }
 .archived-bar span {
   flex: 1;
@@ -2125,7 +2181,8 @@ kbd {
 .dialog.team .seg button {
   min-width: 40px;
   height: 38px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  background: var(--card);
   border-radius: 10px;
   color: var(--muted);
 }
@@ -2139,7 +2196,7 @@ kbd {
   color: var(--muted);
 }
 .team-phase.failed {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .team-tasks {
   list-style: none;
@@ -2153,7 +2210,7 @@ kbd {
   grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 8px;
-  font-size: 13.5px;
+  font-size: 13px;
 }
 .team-task small {
   color: var(--muted);
@@ -2185,7 +2242,7 @@ kbd {
   min-width: 0;
 }
 .team-note {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
   overflow-wrap: anywhere;
   min-width: 0;
@@ -2214,7 +2271,7 @@ kbd {
   flex-wrap: wrap;
 }
 .team-task .lnk.sm {
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .team-links .btn.sm {
@@ -2264,7 +2321,7 @@ kbd {
   white-space: nowrap;
 }
 .team-detail-h .meta {
-  font: 11.5px var(--mono);
+  font: 12px var(--mono);
   color: var(--faint);
   white-space: nowrap;
 }
@@ -2276,7 +2333,7 @@ kbd {
   transform: rotate(90deg);
 }
 .team-detail-b {
-  border-left: 1px solid var(--line);
+  border-left: 1px solid transparent;
   margin-left: 6px;
   padding: 4px 0 4px 14px;
   display: grid;
@@ -2296,7 +2353,7 @@ kbd {
 }
 .clamp-more {
   margin-top: 2px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -2329,7 +2386,7 @@ kbd {
 }
 .dialog.team .hint {
   color: var(--muted);
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 400;
 }
 
@@ -2339,7 +2396,7 @@ kbd {
   top: 0;
   z-index: 6;
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 12px;
   box-shadow:
     0 0 0 6px var(--bg),
@@ -2419,7 +2476,7 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .tl-n {
@@ -2434,7 +2491,7 @@ kbd {
 }
 .tl-body {
   padding: 4px 12px 10px;
-  border-top: 1px solid var(--line);
+  border-top: 1px solid transparent;
   animation: tlIn 0.22s var(--ease);
 }
 @keyframes tlIn {
@@ -2472,14 +2529,14 @@ kbd {
   line-height: 1.2;
 }
 .tl-who b {
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .tl-who small {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--faint);
   white-space: nowrap;
   overflow: hidden;
@@ -2582,10 +2639,10 @@ kbd {
   color: var(--surface);
   font-size: 9px;
   font-style: normal;
-  font-weight: 700;
+  font-weight: 600;
 }
 .tl-st {
-  font-size: 11.5px;
+  font-size: 12px;
   text-align: right;
   white-space: nowrap;
   color: var(--muted);
@@ -2598,10 +2655,10 @@ kbd {
   font-weight: 600;
 }
 .tl-st.ph-done {
-  color: var(--ok);
+  color: var(--ok-tx);
 }
 .tl-st.ph-failed {
-  color: var(--err);
+  color: var(--err-tx);
 }
 .tl-ax {
   display: flex;
@@ -2664,7 +2721,7 @@ kbd {
     display: none;
   }
   .tl-st {
-    font-size: 11px;
+    font-size: 12px;
   }
 }
 
@@ -2699,4 +2756,78 @@ kbd {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+/* A state, never an action: a full pill (actions keep 8-9 px corners), 22 px, 12 px/500,
+   a leading dot so the state never rests on color alone. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  background: var(--card);
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+.tag svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+.tag:is(.ok, .err, .warn, .mg):not(:has(svg, canvas))::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin-left: -1px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.tag.ok {
+  background: var(--okbg);
+  color: var(--ok-tx);
+}
+.tag.err {
+  background: var(--errbg);
+  color: var(--err-tx);
+}
+.tag.warn {
+  background: var(--warnbg);
+  color: var(--warn);
+}
+.tag.acc {
+  background: var(--accbg);
+  color: var(--accent);
+}
+.tag.mg {
+  background: var(--mergedbg);
+  color: var(--merged);
+}
+
+/* One menu for an agent and its model: the favorites first, every model on demand. */
+.model-select {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.field .model-select {
+  display: flex;
+}
+.field .model-select select {
+  flex: 1;
+  min-width: 0;
+}
+.model-select .model-all {
+  height: 24px;
+  padding: 0 8px;
+  font-size: 12px;
 }

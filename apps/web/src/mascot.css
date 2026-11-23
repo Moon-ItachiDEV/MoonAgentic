@@ -87,7 +87,8 @@
   gap: 8px;
   min-height: 36px;
   padding: 6px 9px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
+  box-shadow: var(--raise);
   border-radius: 10px;
   font-size: 13px;
   color: var(--fg);
@@ -95,11 +96,11 @@
   min-width: 0;
 }
 .mascot-tile:hover {
-  border-color: var(--faint);
+  background: var(--hover);
 }
 .mascot-tile[aria-pressed="true"] {
-  border-color: var(--accent, var(--fg));
-  box-shadow: inset 0 0 0 1px var(--accent, var(--fg));
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 4px var(--accent-soft);
 }
 .mascot-swatch {
   flex: none;
