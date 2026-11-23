@@ -8,6 +8,7 @@ import {
   app,
   BrowserWindow,
   Menu,
+  type MenuItemConstructorOptions,
   Notification,
   nativeImage,
   powerSaveBlocker,
@@ -40,6 +41,7 @@ let window: BrowserWindow | undefined;
 let tray: Tray | undefined;
 let quitting = false;
 let sleepBlocker: number | undefined;
+/** The interface is shown, or on its way: the status page no longer replaces it. */
 let appLoaded = false;
 
 if (!app.requestSingleInstanceLock()) {
@@ -56,7 +58,8 @@ const server = new ServerProcess({
   command: process.execPath,
   script: path.join(serverDir, "src", "bin.ts"),
   args: ["--port", String(PORT), "--data-dir", dataDir],
-  env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+  // Read at each start: on macOS, after the terminal's PATH is adopted.
+  env: () => ({ ...process.env, ELECTRON_RUN_AS_NODE: "1" }),
   onState: (state) => stateChanged(state),
 });
 
@@ -122,6 +125,15 @@ function createWindow(show: boolean): void {
   });
   contents.session.setPermissionRequestHandler((wc, permission, callback) => {
     callback(isServerPage(wc.getURL()) && ALLOWED.has(permission));
+  });
+  // The server can go down between saying it is ready and the page loading: the status page
+  // comes back, and the interface is loaded again once the server is ready.
+  contents.on("did-fail-load", (_event, code, _description, url, isMainFrame) => {
+    // -3 is a load replaced by another one, not a failure.
+    if (!isMainFrame || code === -3 || !isServerPage(url)) return;
+    appLoaded = false;
+    if (server.state.kind === "ready") setTimeout(() => showStatus(server.state), 1_000);
+    else showStatus(server.state);
   });
   window.on("close", (event) => {
     if (quitting) return;
@@ -197,12 +209,27 @@ function createTray(): void {
 
 const loginItemOptions = () => (process.platform === "win32" ? { args: [HIDDEN_ARG] } : {});
 
+/** Starting with the session, where Electron can set it up: Windows and macOS. */
+function loginItemMenu(): MenuItemConstructorOptions[] {
+  if (process.platform !== "win32" && process.platform !== "darwin") return [];
+  return [
+    {
+      label: process.platform === "darwin" ? "Ouvrir à la connexion" : "Lancer avec Windows",
+      type: "checkbox",
+      checked: app.getLoginItemSettings(loginItemOptions()).openAtLogin,
+      click: (item) => {
+        app.setLoginItemSettings({ openAtLogin: item.checked, ...loginItemOptions() });
+        updateTray();
+      },
+    },
+  ];
+}
+
 function updateTray(): void {
   if (!tray) return;
   const label = stateLabel(server.state, PORT);
   tray.setToolTip(`MoonAgentic · ${label}`);
   const ready = server.state.kind === "ready";
-  const startsWithSystem = app.getLoginItemSettings(loginItemOptions()).openAtLogin;
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Ouvrir MoonAgentic", click: () => showWindow() },
@@ -216,15 +243,7 @@ function updateTray(): void {
           if (url) void shell.openExternal(url);
         },
       },
-      {
-        label: process.platform === "darwin" ? "Ouvrir à la connexion" : "Lancer avec Windows",
-        type: "checkbox",
-        checked: startsWithSystem,
-        click: (item) => {
-          app.setLoginItemSettings({ openAtLogin: item.checked, ...loginItemOptions() });
-          updateTray();
-        },
-      },
+      ...loginItemMenu(),
       {
         label: "Empêcher la mise en veille",
         type: "checkbox",

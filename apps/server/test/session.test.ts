@@ -5,6 +5,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AgentSession,
+  agentEnv,
   jsonLines,
   needsSignIn,
   PROMPT_INACTIVITY_MS,
@@ -490,5 +491,19 @@ describe("prompt inactivity watchdog", () => {
     expect(Date.now() - answeredAt).toBeGreaterThanOrEqual(180);
     expect(closeSpy).toHaveBeenCalledTimes(1);
     await stuck.exitPromise;
+  });
+});
+
+describe("agentEnv", () => {
+  const env = { PATH: "/bin", ELECTRON_RUN_AS_NODE: "1" };
+
+  it("keeps ELECTRON_RUN_AS_NODE only for adapters run by the app's own program", () => {
+    expect(agentEnv("/app/MoonAgentic", env, "/app/MoonAgentic")).toEqual(env);
+    expect(agentEnv("/usr/local/bin/agy", env, "/app/MoonAgentic")).toEqual({ PATH: "/bin" });
+  });
+
+  it("leaves the environment as is outside the desktop app", () => {
+    const plain = { PATH: "/bin" };
+    expect(agentEnv("/usr/local/bin/agy", plain, "/usr/bin/node")).toBe(plain);
   });
 });

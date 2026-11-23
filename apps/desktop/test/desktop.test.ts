@@ -43,14 +43,15 @@ describe("restartDelay", () => {
 });
 
 describe("ServerProcess", () => {
-  const run = (mode: string) => {
+  const run = (mode: string, platform?: NodeJS.Platform) => {
     const states: ServerState[] = [];
     const server = new ServerProcess({
       command: process.execPath,
       script: fake,
       args: ["--port", "4999"],
-      env: { ...process.env, FAKE_MODE: mode },
+      env: () => ({ ...process.env, FAKE_MODE: mode }),
       onState: (state) => states.push(state),
+      ...(platform ? { platform } : {}),
     });
     return { server, states };
   };
@@ -71,6 +72,26 @@ describe("ServerProcess", () => {
     expect(server.state).toEqual({ kind: "ready", url: "http://127.0.0.1:4999/?token=abc" });
     await server.stop();
     expect(states.map((s) => s.kind)).toEqual(["starting", "ready", "stopping", "stopped"]);
+  });
+
+  it("waits for the launcher to end when only its channel can ask it to (Windows)", async () => {
+    const { server, states } = run("steady", "win32");
+    server.start();
+    await until(states, (s) => s.some((x) => x.kind === "ready"));
+    await server.stop();
+    expect(states.map((s) => s.kind)).toEqual(["starting", "ready", "stopping", "stopped"]);
+  });
+
+  it("does not start again when quitting during a restart", async () => {
+    const { server, states } = run("steady");
+    server.start();
+    await until(states, (s) => s.some((x) => x.kind === "ready"));
+    const restarting = server.restart();
+    await server.stop();
+    await restarting;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(server.state.kind).toBe("stopped");
+    expect(states.filter((s) => s.kind === "starting")).toHaveLength(1);
   });
 
   it("starts the launcher again when it ends by itself", async () => {

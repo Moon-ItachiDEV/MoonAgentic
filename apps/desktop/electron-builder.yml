@@ -21,11 +21,26 @@ win:
   target:
     - target: nsis
       arch: [x64]
-  icon: assets/icon.png
+  icon: assets/icon.ico
+# The installer's look: the Orbite logo on the welcome and finish pages (164×314), a small
+# one on the others (150×57), French texts in assets/installer.nsh.
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  language: "1036"
+  installerLanguages: [fr_FR]
+  multiLanguageInstaller: false
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+  installerSidebar: assets/installerSidebar.bmp
+  uninstallerSidebar: assets/uninstallerSidebar.bmp
+  installerHeader: assets/installerHeader.bmp
+  shortcutName: MoonAgentic
+  uninstallDisplayName: MoonAgentic
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  runAfterFinish: true
   artifactName: MoonAgentic-${version}-windows-x64.${ext}
 mac:
   target:

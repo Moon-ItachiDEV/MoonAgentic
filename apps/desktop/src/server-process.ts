@@ -45,7 +45,8 @@ export interface ServerProcessOptions {
   /** The server's own launcher (`apps/server/src/bin.ts`), which restarts it after a crash. */
   script: string;
   args: string[];
-  env: NodeJS.ProcessEnv;
+  /** Read at each start, so that a PATH found later (see shell-path.ts) reaches the server. */
+  env: () => NodeJS.ProcessEnv;
   onState: (state: ServerState) => void;
   platform?: NodeJS.Platform;
 }
@@ -61,6 +62,8 @@ export class ServerProcess {
   private failures = 0;
   private timer: NodeJS.Timeout | undefined;
   private current: ServerState = { kind: "stopped" };
+  /** Counts stops: a restart started before the latest one does not start again. */
+  private stops = 0;
 
   constructor(options: ServerProcessOptions) {
     this.options = options;
@@ -78,6 +81,7 @@ export class ServerProcess {
 
   /** Stops the server and its agents; resolves once it is gone. */
   async stop(): Promise<void> {
+    this.stops += 1;
     this.wanted = false;
     clearTimeout(this.timer);
     const child = this.child;
@@ -92,17 +96,21 @@ export class ServerProcess {
         clearTimeout(limit);
         resolve();
       });
-      // On Unix the launcher stops the server, which stops its agents. Windows has no such
-      // signal: the launcher is ended, and the server, seeing its channel to it close, stops
-      // its agents by itself.
-      if ((this.options.platform ?? process.platform) === "win32") child.kill();
-      else child.kill("SIGTERM");
+      // Closing the channel asks the launcher to stop the server, which stops its agents,
+      // then the launcher ends: the one way to ask that works on Windows too. On Unix the
+      // signal says the same.
+      if (child.connected) child.disconnect();
+      if ((this.options.platform ?? process.platform) !== "win32") child.kill("SIGTERM");
     });
     this.set({ kind: "stopped" });
   }
 
   async restart(): Promise<void> {
-    await this.stop();
+    const stopped = this.stop();
+    const stops = this.stops;
+    await stopped;
+    // Quitting while this restart waited stops for good.
+    if (stops !== this.stops) return;
     this.failures = 0;
     this.start();
   }
@@ -117,8 +125,9 @@ export class ServerProcess {
     this.set({ kind: "starting" });
     const startedAt = Date.now();
     const child = spawn(this.options.command, [this.options.script, ...this.options.args], {
-      env: this.options.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      env: this.options.env(),
+      // The channel carries no message: closing it asks the launcher to stop.
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
       windowsHide: true,
     });
     this.child = child;
