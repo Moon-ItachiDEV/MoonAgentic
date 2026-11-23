@@ -12,7 +12,9 @@ import type {
   ImageRef,
   Item,
   McpServerInput,
+  PendingQuestion,
   PendingRequest,
+  QuestionAnswer,
   PermissionMode,
   Project,
   PullRequestInfo,
@@ -75,7 +77,7 @@ import { Scheduler } from "./scheduler.ts";
 import { shipTarget, Teams, teamStatus } from "./team.ts";
 import { RESERVED_MCP_NAME } from "./mcp.ts";
 import { type QuotaReader, Quotas } from "./quotas.ts";
-import { toolQuestions } from "./questions.ts";
+import { formContent, formQuestions, toolQuestions, type FormQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
 import { light, TimelineLog } from "./timeline.ts";
@@ -237,6 +239,16 @@ export class Hub {
   private readonly pendingPermissions = new Map<
     string,
     { threadId: string; resolve: (r: acp.RequestPermissionResponse) => void }
+  >();
+  /**
+   * Questions an agent holds its turn on, by item: each also waits in `pendingPermissions`,
+   * so whatever cancels a permission request (a stop, the agent ending) cancels it too.
+   */
+  /** What the user said with a refusal, by thread: their next message, once the turn is over. */
+  private readonly followUps = new Map<string, string>();
+  private readonly pendingForms = new Map<
+    string,
+    { form: FormQuestions; answer: (r: acp.CreateElicitationResponse) => void }
   >();
 
   /** Where threads with their own branch get their worktree. */
@@ -437,6 +449,7 @@ export class Hub {
       coordinator: this.coordinators.coordinatorSettings(),
       favorites: this.catalog.favorites(),
       requests: this.pendingRequests(),
+      questions: this.pendingQuestions(),
       mcpServers: this.catalog.mcpServerInfos(),
       ...(mcpSecretsError ? { mcpSecretsError } : {}),
       agents: this.catalog.list(),
@@ -869,7 +882,15 @@ export class Hub {
         this.catalog.removeCustomAgent(message.agentId);
         return;
       case "permission.respond":
-        this.respondToPermission(message.threadId, message.itemId, message.optionId);
+        this.respondToPermission(
+          message.threadId,
+          message.itemId,
+          message.optionId,
+          message.followUp,
+        );
+        return;
+      case "question.respond":
+        this.respondToQuestion(message.threadId, message.itemId, message.answers);
         return;
     }
   }
@@ -1162,6 +1183,17 @@ export class Hub {
         if (!this.closed) this.teams.turnEnded(threadId, cancelled);
       } catch (error) {
         console.error("Équipe :", error);
+      }
+      // What the user said with a refusal is their next message, now that the agent can
+      // take one. A turn they stopped starts nothing, so the words go with it.
+      const followUp = this.followUps.get(threadId);
+      this.followUps.delete(threadId);
+      if (followUp && !this.closed && !cancelled && !this.turns.has(threadId)) {
+        try {
+          this.send(threadId, followUp);
+        } catch (error) {
+          console.error("Message après un refus :", error);
+        }
       }
       // A turn the user stopped starts nothing by itself: what waits goes after the next one.
       if (!this.closed && !cancelled) this.coordinators.sendQueued(threadId);
@@ -1822,8 +1854,19 @@ export class Hub {
     });
   }
 
+  /** Every question an agent holds its turn on, oldest first. */
+  private pendingQuestions(): PendingQuestion[] {
+    return [...this.pendingForms.keys()].flatMap((itemId): PendingQuestion[] => {
+      const threadId = this.pendingPermissions.get(itemId)?.threadId;
+      const item = threadId ? this.store.getItem(threadId, itemId) : undefined;
+      if (!threadId || item?.kind !== "tool" || item.form !== "open" || !item.questions) return [];
+      return [{ threadId, itemId, questions: item.questions, at: item.at }];
+    });
+  }
+
   private broadcastRequests(): void {
     this.broadcast({ type: "requests", requests: this.pendingRequests() });
+    this.broadcast({ type: "questions", questions: this.pendingQuestions() });
   }
 
   setPermissionMode(threadId: string, permissionMode: PermissionMode): void {
@@ -1838,7 +1881,11 @@ export class Hub {
     }
   }
 
-  respondToPermission(threadId: string, itemId: string, optionId: string): void {
+  /**
+   * Answers a permission request. `followUp`, the user's own words with a refusal, goes
+   * to the agent as their next message as soon as the turn that asked is over.
+   */
+  respondToPermission(threadId: string, itemId: string, optionId: string, followUp?: string): void {
     const pending = this.pendingPermissions.get(itemId);
     const item = this.store.getItem(threadId, itemId);
     if (!pending || pending.threadId !== threadId || item?.kind !== "permission") {
@@ -1846,12 +1893,42 @@ export class Hub {
     }
     if (!item.options.some((o) => o.optionId === optionId)) throw new Error("Choix inconnu.");
     this.pendingPermissions.delete(itemId);
+    if (followUp?.trim() && this.turns.has(threadId)) this.followUps.set(threadId, followUp.trim());
     this.putItem(threadId, { ...item, outcome: optionId });
     this.broadcastRequests();
     if (![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)) {
       this.updateThread(threadId, { status: "running" });
     }
     pending.resolve({ outcome: { outcome: "selected", optionId } });
+  }
+
+  /** Answers a question the agent holds its turn on; the turn goes on with it. */
+  respondToQuestion(threadId: string, itemId: string, answers: QuestionAnswer[]): void {
+    const pending = this.pendingPermissions.get(itemId);
+    const asked = this.pendingForms.get(itemId);
+    const item = this.store.getItem(threadId, itemId);
+    if (!pending || !asked || pending.threadId !== threadId || item?.kind !== "tool") {
+      throw new Error("Cette question n'attend plus de réponse.");
+    }
+    const content = formContent(asked.form, answers);
+    if (asked.form.fields.some((f) => !(f.key in content) && !(f.custom && f.custom in content))) {
+      throw new Error("Réponds à chaque question.");
+    }
+    this.pendingPermissions.delete(itemId);
+    this.pendingForms.delete(itemId);
+    this.putItem(threadId, {
+      ...item,
+      form: "answered",
+      status: "completed",
+      answers: asked.form.fields.map((f) =>
+        [content[f.key] ?? [], f.custom ? (content[f.custom] ?? []) : []].flat().join(", "),
+      ),
+    });
+    this.broadcastRequests();
+    if (![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)) {
+      this.updateThread(threadId, { status: "running" });
+    }
+    asked.answer({ action: "accept", content });
   }
 
   /** Lists the agent's models before its first thread, from the project's folder if given. */
@@ -2165,6 +2242,7 @@ export class Hub {
           this.updateThread(thread.id, { quietSince: since ?? null });
         },
         requestPermission: (request, signal) => this.requestPermission(thread.id, request, signal),
+        elicit: (request, signal) => this.requestForm(thread.id, request, signal),
         onExit: (reason) => {
           if (!owns()) return;
           this.pool.exited(thread.id);
@@ -2425,6 +2503,14 @@ export class Hub {
       status: update.status ?? existing?.status ?? "pending",
       content: content ?? existing?.content ?? [],
       ...(questions ? { questions } : {}),
+      // A question the agent holds its turn on keeps what the form asked and its answer.
+      ...(existing?.form
+        ? {
+            form: existing.form,
+            questions: existing.questions ?? questions ?? [],
+            ...(existing.answers ? { answers: existing.answers } : {}),
+          }
+        : {}),
       at: existing?.at ?? Date.now(),
     });
   }
@@ -2499,6 +2585,53 @@ export class Hub {
   }
 
   /**
+   * A question the agent asks with a form and holds its turn on (Claude Code's own questions).
+   * It waits above the composer like a permission request; a form that is not made of
+   * choices, or asked where nobody answers (a team's member), is declined at once.
+   */
+  private requestForm(
+    threadId: string,
+    request: acp.CreateElicitationRequest,
+    signal: AbortSignal,
+  ): Promise<acp.CreateElicitationResponse> {
+    const thread = this.requireThread(threadId);
+    const asked = request as { mode?: unknown; requestedSchema?: unknown; toolCallId?: unknown };
+    const form =
+      asked.mode === "form" ? formQuestions(request.message, asked.requestedSchema) : undefined;
+    if (!form || thread.parentId || signal.aborted) return Promise.resolve({ action: "decline" });
+    // The question is the tool call's own card when the agent names it, else a card of its own.
+    const call =
+      typeof asked.toolCallId === "string"
+        ? `tool:${this.turnIds.get(threadId) ?? "late"}:${asked.toolCallId}`
+        : undefined;
+    const existing = call
+      ? (this.store.getItem(threadId, call) as ToolItem | undefined)
+      : undefined;
+    const id = existing?.kind === "tool" && call ? call : `tool:ask:${randomUUID()}`;
+    this.putItem(threadId, {
+      id,
+      kind: "tool",
+      title: existing?.title ?? "Question",
+      toolKind: existing?.toolKind ?? "other",
+      status: "pending",
+      content: existing?.content ?? [],
+      questions: form.questions,
+      form: "open",
+      at: existing?.at ?? Date.now(),
+    });
+    this.updateThread(threadId, { status: "waiting" });
+    // Waiting for the user takes no place: the next turn in line may start.
+    this.admit();
+    return new Promise((resolve) => {
+      this.pendingForms.set(id, { form, answer: resolve });
+      // Cancelled as a permission request is: by a stop, or by the agent ending.
+      this.pendingPermissions.set(id, { threadId, resolve: () => resolve({ action: "cancel" }) });
+      this.broadcastRequests();
+      signal.addEventListener("abort", () => this.settlePermission(id), { once: true });
+    });
+  }
+
+  /**
    * Asks the user once before a supervised coordinator launches a saved full-access team.
    * Reuses the same permission card and « À traiter » queue as agent permissions.
    */
@@ -2565,6 +2698,8 @@ export class Hub {
     const item = this.store.getItem(pending.threadId, itemId);
     if (item?.kind === "permission")
       this.putItem(pending.threadId, { ...item, outcome: "cancelled" });
+    if (this.pendingForms.delete(itemId) && item?.kind === "tool")
+      this.putItem(pending.threadId, { ...item, form: "cancelled", status: "failed" });
     pending.resolve({ outcome: { outcome: "cancelled" } });
     this.broadcastRequests();
   }

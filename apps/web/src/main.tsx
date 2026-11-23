@@ -11,6 +11,7 @@ import "./github.css";
 import "./remote.css";
 import "./pull-request.css";
 import "./composer.css";
+import "./decision.css";
 import "./long-threads.css";
 import "./images.css";
 import "./quotas.css";
