@@ -1,8 +1,9 @@
 /* The agent's own plan: one card, steps turn green as the agent finishes them. */
+/* As wide as a step list reads well, not the whole thread: the same width open or folded. */
 .agent-plan {
+  width: min(100%, 420px);
   padding: 0;
   gap: 0;
-  overflow: hidden;
 }
 .agent-plan-h {
   display: flex;
@@ -13,10 +14,21 @@
   font-size: 13.5px;
   color: var(--fg);
   text-align: left;
+  border-radius: 18px;
+}
+/* Inside the card: the ring would sit on its border otherwise. */
+.agent-plan-h:focus-visible {
+  outline-offset: -2px;
+  border-radius: 18px;
+}
+.agent-plan-h:hover svg {
+  color: var(--fg);
 }
 .agent-plan-h svg {
   color: var(--faint);
-  transition: transform 0.2s cubic-bezier(0.23, 1, 0.32, 1);
+  transition:
+    transform 0.2s cubic-bezier(0.23, 1, 0.32, 1),
+    color 0.15s ease-out;
 }
 .agent-plan.open .agent-plan-h svg {
   transform: rotate(90deg);
@@ -28,6 +40,7 @@
 }
 .agent-plan-n {
   font: 11.5px var(--mono);
+  font-variant-numeric: tabular-nums;
   color: var(--faint);
 }
 .agent-plan-l {
