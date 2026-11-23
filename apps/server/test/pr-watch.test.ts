@@ -198,19 +198,25 @@ describe("a thread that fixes its pull request", { timeout: 40_000 }, () => {
     await expect.poll(() => fixes().length).toBe(2);
     expect(fixes()[1]).toContain("conflits avec main");
     await hub.whenIdle(threadId);
-    await expect.poll(() => store.getThread(threadId)?.prWatch?.last).toBe("conflict");
+    await expect
+      .poll(() => store.getThread(threadId)?.prWatch?.last, { timeout: 15_000 })
+      .toBe("conflict");
 
     // Out of tries: the next failure is left to the user.
     store.updateThread(threadId, {
       prWatch: { ...store.getThread(threadId)!.prWatch!, tries: PR_WATCH_TRIES },
     });
     github.pr = failing("c".repeat(40));
-    // Once the last fix is pushed; each read is awaited, so none is left when the hub closes.
+    // Once the last fix is pushed, which takes git a while on a slow machine; each read is
+    // awaited, so none is left when the hub closes.
     await expect
-      .poll(async () => {
-        await hub.pullRequest(threadId);
-        return store.getThread(threadId)?.prWatch?.exhausted;
-      })
+      .poll(
+        async () => {
+          await hub.pullRequest(threadId);
+          return store.getThread(threadId)?.prWatch?.exhausted;
+        },
+        { timeout: 15_000 },
+      )
       .toBe(true);
     expect(fixes()).toHaveLength(2);
 
