@@ -32,7 +32,7 @@ import {
 import { connection, newId } from "../connection.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { quotaWarning, roomiest } from "../quotas.ts";
-import { useQuotas } from "../use-quotas.ts";
+import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { ContextGauge } from "./ContextGauge.tsx";
 import {
@@ -173,7 +173,7 @@ export function Composer(props: {
   const running = thread?.status === "running" || thread?.status === "waiting";
   // Nearly out on its subscription: said over the composer, with an agent that has room.
   const quotas = useQuotas();
-  const [quotaSeen, setQuotaSeen] = useState(() => readPref("quotaSeen"));
+  const quotaSeen = useQuotaSeen();
   const warning = agent
     ? quotaWarning(
         quotas.find((q) => q.agentId === agent.id),
@@ -585,7 +585,7 @@ export function Composer(props: {
   const seconds = voice ? Math.floor((Date.now() - voice.started) / 1000) : 0;
   const heardText = voice ? `${voice.heard.final} ` : "";
 
-  const notice = warning && warning.key !== quotaSeen && !voice && (
+  const notice = warning && agent && quotaSeen[agent.id] !== warning.key && !voice && (
     <div className={`qt-notice ${warning.level}`} role="status">
       <span className="qt-dot" aria-hidden />
       <div className="qt-msg">
@@ -606,10 +606,7 @@ export function Composer(props: {
         <button
           className="ib"
           aria-label="Masquer cet avertissement"
-          onClick={() => {
-            setQuotaSeen(warning.key);
-            writePref("quotaSeen", warning.key);
-          }}
+          onClick={() => dismissQuotaWarning(agent.id, warning.key)}
         >
           <IconClose />
         </button>

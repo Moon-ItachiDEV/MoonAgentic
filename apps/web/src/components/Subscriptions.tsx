@@ -1,6 +1,6 @@
 import type { AgentInfo, AgentQuota, QuotaWindow } from "@moonagentic/protocol";
-import { useEffect, useState } from "react";
-import { connection } from "../connection.ts";
+import { useEffect, useRef, useState } from "react";
+import { connection, newId } from "../connection.ts";
 import { useQuotas } from "../use-quotas.ts";
 import { formatPercent, formatReset, quotaLevel, readAgo } from "../quotas.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
@@ -14,6 +14,14 @@ function useMinute(): number {
     return () => clearInterval(timer);
   }, []);
   return now;
+}
+
+function linkHost(url: string): string {
+  try {
+    return new URL(url).host.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
 }
 
 /** One window: its name, the share used, a bar, and when it frees up. */
@@ -32,6 +40,7 @@ function WindowRow({ w, now }: { w: QuotaWindow; now: number }) {
         aria-valuemin={0}
         aria-valuemax={100}
         aria-valuenow={Math.min(100, Math.round(w.usedPercent))}
+        aria-valuetext={formatPercent(w.usedPercent)}
       >
         <i style={{ width: `${Math.min(100, w.usedPercent)}%` }} />
       </div>
@@ -52,15 +61,23 @@ function WindowRow({ w, now }: { w: QuotaWindow; now: number }) {
 
 function QuotaCard({ agent, quota, now }: { agent: AgentInfo; quota: AgentQuota; now: number }) {
   const [asking, setAsking] = useState(false);
-  // The button turns until new figures arrive, or a moment if nothing changes.
-  useEffect(() => setAsking(false), [quota.readAt]);
+  const mounted = useRef(true);
   useEffect(() => {
-    if (!asking) return;
-    const timer = setTimeout(() => setAsking(false), 15_000);
-    return () => clearTimeout(timer);
-  }, [asking]);
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const readable = quota.state === "ok";
-  const sub = quota.plan ?? (quota.state === "none" ? "Sans abonnement" : "Limites non lisibles");
+  const loading = quota.state === "loading";
+  const canRefresh = !quota.fixed && quota.state !== "none" && !loading;
+  const sub =
+    quota.plan ??
+    (loading
+      ? "Lecture en cours…"
+      : quota.state === "none"
+        ? "Sans abonnement"
+        : "Limites non lisibles");
   return (
     <section className="qt-card" aria-label={agent.name}>
       <div className="qt-head">
@@ -69,16 +86,25 @@ function QuotaCard({ agent, quota, now }: { agent: AgentInfo; quota: AgentQuota;
           <b>{agent.name}</b>
           <small>{sub}</small>
         </div>
-        {quota.state !== "none" && !quota.link && (
+        {canRefresh && (
           <div className="qt-read">
-            {quota.readAt && <span className="qt-ago">{readAgo(quota.readAt, now)}</span>}
+            {quota.readAt !== undefined && (
+              <span className="qt-ago">{readAgo(quota.readAt, now)}</span>
+            )}
             <button
               className={`qt-again${asking ? " on" : ""}`}
               aria-label={`Relire les limites de ${agent.name}`}
               title="Relire maintenant"
+              disabled={asking}
               onClick={() => {
+                if (asking) return;
                 setAsking(true);
-                connection.send({ type: "quotas.refresh", agentId: agent.id });
+                connection
+                  .ask({ type: "quotas.refresh", requestId: newId(), agentId: agent.id })
+                  .catch(() => undefined)
+                  .finally(() => {
+                    if (mounted.current) setAsking(false);
+                  });
               }}
             >
               <IconRefresh size={14} />
@@ -94,12 +120,20 @@ function QuotaCard({ agent, quota, now }: { agent: AgentInfo; quota: AgentQuota;
             <span>{x.value}</span>
           </div>
         ))}
-      {!readable && (
+      {readable && quota.note && (
+        <div className="qt-stale">Chiffres précédents conservés — {quota.note}</div>
+      )}
+      {loading && (
+        <div className="qt-none">
+          <span>Lecture des limites en cours…</span>
+        </div>
+      )}
+      {!readable && !loading && (
         <div className="qt-none">
           <span>{quota.note}</span>
           {quota.link && (
             <a className="btn sm" href={quota.link} target="_blank" rel="noreferrer">
-              Voir sur {new URL(quota.link).host.replace(/^www\./, "")} ↗
+              Voir sur {linkHost(quota.link)} ↗
             </a>
           )}
         </div>
@@ -132,8 +166,8 @@ export function Subscriptions({ agents }: { agents: AgentInfo[] }) {
         </p>
       )}
       <p className="qt-foot">
-        Relu toutes les 5 minutes tant que MoonAgentic tourne, et après chaque réponse d'un agent.
-        Seuls les agents installés apparaissent.
+        Relu toutes les 5 minutes tant que MoonAgentic est ouvert, et après chaque réponse d'un
+        agent. Seuls les agents installés apparaissent.
       </p>
     </>
   );

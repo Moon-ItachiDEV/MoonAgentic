@@ -43,6 +43,7 @@ const MONTHS = [
 
 /** When a window frees up, in the user's own time: « à 14:20 », « lundi à 09:00 ». */
 export function formatReset(resetsAt: number, now = Date.now()): string {
+  if (resetsAt <= now) return "bientôt";
   const at = new Date(resetsAt);
   const today = new Date(now);
   const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
@@ -81,6 +82,25 @@ export function roomiest(
   return best?.agent;
 }
 
+/** Bucket size for `resetsAt` inside dismissal keys, absorbing ±1 s API jitter between reads. */
+const RESET_KEY_BUCKET_MS = 5 * 60_000;
+
+/** Parses the per-agent map of dismissed quota warning keys kept in preferences. */
+export function parseSeenQuotas(raw: string | null): Record<string, string> {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof v === "string") out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 /** What the warning over the composer says about an agent, when it says anything. */
 export function quotaWarning(
   quota: AgentQuota | undefined,
@@ -92,8 +112,10 @@ export function quotaWarning(
   const level = quotaLevel(worst.usedPercent);
   if (level === "ok") return undefined;
   const when = worst.resetsAt ? `Se libère ${formatReset(worst.resetsAt, now)}.` : undefined;
+  const resetBucket =
+    worst.resetsAt !== undefined ? Math.round(worst.resetsAt / RESET_KEY_BUCKET_MS) : "";
   return {
-    key: `${quota!.agentId}:${worst.label}:${worst.resetsAt ?? ""}:${level}`,
+    key: `${quota!.agentId}:${worst.label}:${resetBucket}:${level}`,
     level,
     text:
       level === "full"

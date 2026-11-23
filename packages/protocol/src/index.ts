@@ -725,12 +725,14 @@ export interface QuotaWindow {
 
 /**
  * What an agent's subscription has left, read from the agent's own service: never estimated.
- * `unreadable`: the agent gives no figures to another app, or asking failed (`note` says
- * why); `none`: the agent pays as it goes, so there is no quota to follow.
+ * `loading`: first read in progress; `unreadable`: the agent gives no figures to another app,
+ * or asking failed (`note` says why); `none`: the agent pays as it goes, so there is no quota
+ * to follow. When `state` is `ok`, `note` may still explain that a newer refresh failed
+ * temporarily and the previous figures were kept.
  */
 export interface AgentQuota {
   agentId: AgentId;
-  state: "ok" | "unreadable" | "none";
+  state: "ok" | "unreadable" | "none" | "loading";
   /** The plan, as the agent names it: « Abonnement Max », « ChatGPT Plus ». */
   plan?: string;
   windows: QuotaWindow[];
@@ -739,7 +741,9 @@ export interface AgentQuota {
   note?: string;
   /** Where the agent shows its figures itself, when they cannot be read here. */
   link?: string;
-  /** When it was last read, as a timestamp. */
+  /** True when the agent has no live reader (so re-reading cannot change this card). */
+  fixed?: boolean;
+  /** When figures were last read, as a timestamp. */
   readAt?: number;
 }
 
@@ -1088,7 +1092,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("agent.removeCustom"), agentId: id }),
   /** Reads each agent's subscription quotas again now, or only this agent's. */
-  z.object({ type: z.literal("quotas.refresh"), agentId: id.optional() }),
+  z.object({ type: z.literal("quotas.refresh"), requestId: id, agentId: id.optional() }),
   /** Asks what `git` and `gh` know of GitHub on the machine running MoonAgentic. */
   z.object({ type: z.literal("github.status"), requestId: id }),
   /** Lists the repositories the signed-in account can reach, last pushed first. */

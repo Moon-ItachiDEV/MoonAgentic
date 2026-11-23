@@ -281,6 +281,7 @@ export class Hub {
           .filter((a) => a.available)
           .map((a) => a.id),
       broadcast: (m) => this.broadcast(m),
+      active: () => this.clients.size > 0,
     });
     this.quotas.start(options.quotaEveryMs);
     this.scheduler = new Scheduler(store, (m) => this.broadcast(m), {
@@ -384,6 +385,7 @@ export class Hub {
 
   connect(client: Client): () => void {
     this.clients.add(client);
+    this.quotas.onClientConnect();
     client.send({ type: "snapshot", snapshot: this.snapshot() });
     return () => this.clients.delete(client);
   }
@@ -441,6 +443,7 @@ export class Hub {
       }
       case "quotas.refresh":
         await this.quotas.asked(message.agentId);
+        client.send({ type: "done", requestId: message.requestId });
         return;
       case "github.status":
         client.send({ type: "github", requestId: message.requestId, status: await githubStatus() });

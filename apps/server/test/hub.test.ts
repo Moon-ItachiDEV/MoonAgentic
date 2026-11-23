@@ -1376,3 +1376,47 @@ describe("teams outside git", () => {
     ).toThrow("dépôt git");
   });
 });
+
+describe("quotas on Hub", () => {
+  it("starts reading when a client connects and replies done to quotas.refresh", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-test-"));
+    mkdirSync(path.join(dir, ".home"));
+    const store = new Store(path.join(dir, "state.sqlite"));
+    let reads = 0;
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(dir, ".worktrees"),
+      homeDir: path.join(dir, ".home"),
+      quotaReaders: {
+        demo: async () => {
+          reads++;
+          return {
+            state: "ok",
+            windows: [{ label: "Session de 5 h", short: "5 h", usedPercent: 12 }],
+            extras: [],
+          };
+        },
+      },
+    });
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    // No client connected yet: no background poll ran at startup.
+    expect(reads).toBe(0);
+
+    const client = new TestClient();
+    const updated = client.next((m) => m.type === "quotas");
+    hub.connect(client);
+    const snap = client.messages.find((m) => m.type === "snapshot");
+    expect(snap?.type === "snapshot" && snap.snapshot.quotas[0]?.state).toBe("loading");
+    await updated;
+    expect(reads).toBe(1);
+
+    // Asking within ASKED_GAP_MS still replies `done` immediately so the button stops spinning.
+    await hub.handle(client, { type: "quotas.refresh", requestId: "q1", agentId: "demo" });
+    expect(client.messages).toContainEqual({ type: "done", requestId: "q1" });
+    expect(reads).toBe(1);
+  });
+});

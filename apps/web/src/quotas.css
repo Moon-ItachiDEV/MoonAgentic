@@ -50,8 +50,12 @@
   place-items: center;
   cursor: pointer;
 }
-.qt-again:hover {
+.qt-again:hover:not(:disabled) {
   color: var(--fg);
+}
+.qt-again:disabled {
+  cursor: default;
+  opacity: 0.65;
 }
 .qt-again.on svg {
   animation: qt-turn 0.9s linear infinite;
@@ -159,6 +163,13 @@
   text-decoration: none;
   color: var(--fg);
 }
+.qt-stale {
+  padding: 9px 16px 11px;
+  border-top: 1px solid var(--line);
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.45;
+}
 .qt-foot {
   margin: 4px 0 0;
   color: var(--faint);
@@ -171,7 +182,8 @@
   }
   .qt-row,
   .qt-kv,
-  .qt-none {
+  .qt-none,
+  .qt-stale {
     padding-left: 14px;
     padding-right: 14px;
   }

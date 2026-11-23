@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   formatPercent,
   formatReset,
+  parseSeenQuotas,
   quotaLevel,
   quotaWarning,
   readAgo,
@@ -27,6 +28,7 @@ describe("quotas", () => {
   it("finds the window closest to its limit", () => {
     expect(tightest(quota("a", 20, 86, 40))?.label).toBe("W1");
     expect(tightest({ ...quota("a", 20), state: "unreadable" })).toBeUndefined();
+    expect(tightest({ ...quota("a", 20), state: "loading" })).toBeUndefined();
     expect(tightest(undefined)).toBeUndefined();
   });
 
@@ -41,8 +43,10 @@ describe("quotas", () => {
     expect(formatPercent(85.6)).toBe("86 %");
   });
 
-  it("says when a window frees up in local time", () => {
+  it("says when a window frees up in local time, and handles past reset times", () => {
     const now = new Date(2026, 10, 23, 10, 0).getTime();
+    expect(formatReset(now - 60_000, now)).toBe("bientôt");
+    expect(formatReset(now, now)).toBe("bientôt");
     expect(formatReset(new Date(2026, 10, 23, 14, 20).getTime(), now)).toBe("à 14:20");
     expect(formatReset(new Date(2026, 10, 24, 9, 5).getTime(), now)).toBe("demain à 09:05");
     expect(formatReset(new Date(2026, 10, 27, 18, 40).getTime(), now)).toBe("vendredi à 18:40");
@@ -62,13 +66,39 @@ describe("quotas", () => {
     expect(roomiest([quota("a", 90), quota("b", 85)], agents, "a")).toBeUndefined();
   });
 
-  it("warns only for a window nearly spent", () => {
+  it("warns only for a window nearly spent, and keeps the key stable across minor reset jitter", () => {
     expect(quotaWarning(quota("a", 50), "A")).toBeUndefined();
-    const warn = quotaWarning(
-      { ...quota("a", 86), windows: [{ label: "Semaine", short: "semaine", usedPercent: 86 }] },
+    const baseReset = Date.parse("2026-11-23T14:00:00.000Z");
+    const w1 = quotaWarning(
+      {
+        ...quota("a", 86),
+        windows: [{ label: "Semaine", short: "semaine", usedPercent: 86, resetsAt: baseReset }],
+      },
       "Codex",
+      baseReset - 3_600_000,
     );
-    expect(warn).toMatchObject({ level: "warn", text: "Codex a utilisé 86 % (semaine)." });
+    const w2 = quotaWarning(
+      {
+        ...quota("a", 87),
+        windows: [
+          { label: "Semaine", short: "semaine", usedPercent: 87, resetsAt: baseReset + 1_200 },
+        ],
+      },
+      "Codex",
+      baseReset - 3_600_000,
+    );
+    expect(w1).toMatchObject({ level: "warn", text: "Codex a utilisé 86 % (semaine)." });
+    expect(w1?.key).toBe(w2?.key);
     expect(quotaWarning(quota("a", 100), "A")?.level).toBe("full");
+  });
+
+  it("parses per-agent dismissed warnings safely", () => {
+    expect(parseSeenQuotas(null)).toEqual({});
+    expect(parseSeenQuotas("claude:5h:123:warn")).toEqual({});
+    expect(parseSeenQuotas("[]")).toEqual({});
+    expect(parseSeenQuotas(JSON.stringify({ claude: "k1", codex: "k2", bad: 42 }))).toEqual({
+      claude: "k1",
+      codex: "k2",
+    });
   });
 });
