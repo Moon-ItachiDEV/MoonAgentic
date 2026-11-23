@@ -144,6 +144,8 @@ export interface Project {
   createdAt: number;
   /** True when the folder is in a git repository, so threads can get their own branch. */
   git?: boolean;
+  /** Kept at the top of the list of projects. */
+  pinned?: boolean;
 }
 
 /** A thread's own branch, checked out in a separate folder (a git worktree). */
@@ -323,6 +325,11 @@ export interface Thread {
    * project. It answers, or opens a thread for the work. Kept out of lists of threads.
    */
   kind?: "coordinator";
+  /**
+   * Its agent answered while no window had it open, or the user marked it so: shown until
+   * it is opened.
+   */
+  unread?: boolean;
   /** The coordinator's thread, for a thread it opened. */
   openedBy?: string;
   /** The coordinator's own name for the subject: asked again, it gets this thread back. */
@@ -776,6 +783,11 @@ export const ClientMessage = z.discriminatedUnion("type", [
     files: z.array(z.string().min(1).max(4096)).min(1).max(5000).optional(),
   }),
   z.object({ type: z.literal("thread.open"), threadId: id }),
+  /** The window no longer shows the thread: what its agent says next is unread. */
+  z.object({ type: z.literal("thread.leave"), threadId: id }),
+  z.object({ type: z.literal("thread.setUnread"), threadId: id, unread: z.boolean() }),
+  /** Marks every thread of the project as read. */
+  z.object({ type: z.literal("project.markRead"), projectId: id }),
   z.object({ type: z.literal("thread.send"), threadId: id, text }),
   z.object({ type: z.literal("thread.cancel"), threadId: id }),
   /** Puts the files back as they were before this message and forgets what came after. */
@@ -888,6 +900,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     projectId: id,
     name: z.string().trim().min(1).max(120),
   }),
+  z.object({ type: z.literal("project.setPinned"), projectId: id, pinned: z.boolean() }),
   /** Looks for project files to mention with `@`, in the thread's folder when given. */
   z.object({
     type: z.literal("files.search"),

@@ -155,6 +155,9 @@ export class Connection {
 
   send(message: ClientMessage): boolean {
     if (message.type === "thread.open") this.openThreadId = message.threadId;
+    if (message.type === "thread.leave" && this.openThreadId === message.threadId) {
+      this.openThreadId = null;
+    }
     if (this.socket?.readyState !== WebSocket.OPEN) return false;
     this.socket.send(JSON.stringify(message));
     return true;

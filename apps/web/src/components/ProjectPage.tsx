@@ -1,6 +1,7 @@
 import type { AgentInfo, Project, Thread, ThreadGroup } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
 import { connection } from "../connection.ts";
+import { notificationsOn, projectMuted, setProjectMuted } from "../notifications.ts";
 import { readPref, writePref } from "../prefs.ts";
 import {
   checksLabel,
@@ -48,6 +49,7 @@ export function ProjectPage(props: {
   onStartCoordinator?: ((agentId: string) => Promise<void>) | undefined;
 }) {
   const ready = props.agents.filter((a) => a.available);
+  const [muted, setMuted] = useState(() => projectMuted(props.project.id));
   const [coordAgent, setCoordAgent] = useState<string>();
   const [coordError, setCoordError] = useState<string>();
   const picked = ready.find((a) => a.id === coordAgent) ?? ready[0];
@@ -110,7 +112,43 @@ export function ProjectPage(props: {
                   label: "Ouvrir dans une nouvelle fenêtre",
                   run: () => window.open(location.href, "_blank", "noopener"),
                 },
+                {
+                  label: props.project.pinned ? "Désépingler" : "Épingler",
+                  run: () =>
+                    connection.send({
+                      type: "project.setPinned",
+                      projectId: props.project.id,
+                      pinned: !props.project.pinned,
+                    }),
+                },
                 { label: "Renommer", run: () => setRenaming(props.project.name) },
+                // Only where this device notifies at all: nothing to cut otherwise.
+                ...(notificationsOn()
+                  ? [
+                      {
+                        label: muted
+                          ? "Réactiver les notifications du projet"
+                          : "Couper les notifications du projet",
+                        run: () => {
+                          setProjectMuted(props.project.id, !muted);
+                          setMuted(!muted);
+                        },
+                      },
+                    ]
+                  : []),
+                // Only when something is unread: nothing to mark otherwise.
+                ...(props.threads.some((t) => t.projectId === props.project.id && t.unread)
+                  ? [
+                      {
+                        label: "Tout marquer comme lu",
+                        run: () =>
+                          void connection.send({
+                            type: "project.markRead",
+                            projectId: props.project.id,
+                          }),
+                      },
+                    ]
+                  : []),
                 { label: "Planner du projet", run: props.onOpenPlanner },
                 { label: "Retirer de MoonAgentic…", danger: true, run: props.onRemoveProject },
               ]}
@@ -191,10 +229,19 @@ export function ProjectPage(props: {
                   const team = members.get(t.id)?.length ?? 0;
                   const checks = t.pr ? checksLabel(t.pr) : "";
                   return (
-                    <div key={t.id} className="pp-row" data-group={group}>
+                    <div
+                      key={t.id}
+                      className={`pp-row${t.unread ? " unread" : ""}`}
+                      data-group={group}
+                    >
                       <span className="pp-state" data-status={t.status} aria-hidden />
                       <button className="pp-open" onClick={() => props.onOpenThread(t.id)}>
-                        <span className="pp-t">{t.title}</span>
+                        <span className="pp-t">
+                          {t.title}
+                          {t.unread && (
+                            <span className="unread-mark" title="Non lu" aria-label="Non lu" />
+                          )}
+                        </span>
                         {line && <span className="pp-line">{line}</span>}
                       </button>
                       <span className="pp-when">{shortAgo(t.updatedAt, now)}</span>
@@ -207,6 +254,19 @@ export function ProjectPage(props: {
                                 {
                                   label: t.pinned ? "Désépingler" : "Épingler",
                                   run: () => props.onTogglePin(t.id, !t.pinned),
+                                },
+                              ]),
+                          ...(t.archived
+                            ? []
+                            : [
+                                {
+                                  label: t.unread ? "Marquer comme lu" : "Marquer comme non lu",
+                                  run: () =>
+                                    void connection.send({
+                                      type: "thread.setUnread",
+                                      threadId: t.id,
+                                      unread: !t.unread,
+                                    }),
                                 },
                               ]),
                           {

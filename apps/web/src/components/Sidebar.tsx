@@ -1,7 +1,7 @@
 import type { Thread } from "@moonagentic/protocol";
-import type { State } from "../connection.ts";
+import { connection, type State } from "../connection.ts";
 import { useEffect, useRef, useState } from "react";
-import { waitingCount } from "../project-threads.ts";
+import { pinnedFirst, waitingCount } from "../project-threads.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { RECENT, recentAlwaysShown } from "../recent.ts";
 import {
@@ -22,6 +22,7 @@ import {
   IconList,
   IconGear,
   IconMore,
+  IconInbox,
   IconPin,
   IconPlug,
   IconPlus,
@@ -210,7 +211,7 @@ export function Sidebar(props: {
   ) => (
     <div
       key={opts.key}
-      className={`thr-row has-more${t.pinned ? " pinned" : ""}${opts.child ? " child" : ""}${opts.team ? " lead" : ""}${menu?.key === opts.key ? " menu-open" : ""}`}
+      className={`thr-row has-more${t.pinned ? " pinned" : ""}${opts.child ? " child" : ""}${opts.team ? " lead" : ""}${t.unread ? " unread" : ""}${menu?.key === opts.key ? " menu-open" : ""}`}
     >
       {opts.team && (
         <button
@@ -227,6 +228,7 @@ export function Sidebar(props: {
         onClick={() => props.onOpenThread(t.id)}
       >
         <span className="t">{t.title}</span>
+        {t.unread && <span className="unread-mark" title="Non lu" aria-label="Non lu" />}
         <ThreadStatus status={opts.status ?? lineStatus(t)} />
       </button>
       {/* A pinned thread keeps its pin in sight; the rest is behind « … ». */}
@@ -296,6 +298,11 @@ export function Sidebar(props: {
           }}
         >
           <span className="t">{p.name}</span>
+          {p.pinned && (
+            <span className="proj-pin" title="Projet épinglé" aria-label="Épinglé">
+              <IconPin size={11} filled />
+            </span>
+          )}
           {waiting > 0 && (
             <span
               className="dot"
@@ -392,6 +399,21 @@ export function Sidebar(props: {
                   {menuThread.pinned ? "Désépingler" : "Épingler"}
                 </button>
               )}
+              {!menuThread.archived && (
+                <button
+                  role="menuitem"
+                  onClick={act(() =>
+                    connection.send({
+                      type: "thread.setUnread",
+                      threadId: menuThread.id,
+                      unread: !menuThread.unread,
+                    }),
+                  )}
+                >
+                  <IconInbox />
+                  {menuThread.unread ? "Marquer comme lu" : "Marquer comme non lu"}
+                </button>
+              )}
               <button
                 role="menuitem"
                 onClick={act(() => props.onSetArchived(menuThread.id, !menuThread.archived))}
@@ -476,7 +498,7 @@ export function Sidebar(props: {
         {projectsOpen && state.ready && state.projects.length === 0 && (
           <div className="empty-note">Aucun projet pour l'instant.</div>
         )}
-        {(projectsOpen ? state.projects : []).flatMap(project)}
+        {(projectsOpen ? pinnedFirst(state.projects) : []).flatMap(project)}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
         {pinned.flatMap((t) => tree(t, "pin:"))}
         {recent.length > 0 && <div className="sec-h">Récents</div>}

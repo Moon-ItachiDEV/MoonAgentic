@@ -140,6 +140,9 @@ const withOrigin = (brief: string, asked: string | undefined) =>
         .join("\n")}`
     : brief;
 
+/** The setting that lists the projects kept at the top. */
+const PINNED_PROJECTS = "pinnedProjects";
+
 /** The level a coordinator starts on, as agents name it. */
 const LOW_EFFORT = /^(low|bas)$/i;
 
@@ -448,8 +451,26 @@ export class Hub {
         client.send({ type: "items", threadId: id, items: this.items(id) });
         return;
       }
+      case "thread.leave":
+        if (client.openThreadId === message.threadId) delete client.openThreadId;
+        return;
+      case "thread.setUnread":
+        this.requireThread(message.threadId);
+        this.updateThread(message.threadId, { unread: message.unread });
+        return;
+      case "project.markRead":
+        for (const t of this.store.listThreads()) {
+          if (t.projectId === message.projectId && t.unread) {
+            this.updateThread(t.id, { unread: false });
+          }
+        }
+        return;
       case "thread.open":
         client.openThreadId = message.threadId;
+        // Opened: read.
+        if (this.store.getThread(message.threadId)?.unread) {
+          this.updateThread(message.threadId, { unread: false });
+        }
         client.send({
           type: "items",
           threadId: message.threadId,
@@ -506,6 +527,17 @@ export class Hub {
         if (!this.store.getProject(message.projectId)) throw new Error("Ce projet n'existe plus.");
         this.store.renameProject(message.projectId, message.name);
         const project = this.store.getProject(message.projectId)!;
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
+      case "project.setPinned": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        const others = this.store
+          .getSetting<string[]>(PINNED_PROJECTS, [])
+          // Projects removed since are dropped on the way.
+          .filter((p) => p !== project.id && this.store.getProject(p));
+        this.store.setSetting(PINNED_PROJECTS, message.pinned ? [...others, project.id] : others);
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
@@ -1279,6 +1311,12 @@ export class Hub {
         const summary = summaryOf(this.lastReply(threadId));
         const now = this.store.getThread(threadId);
         if (summary && now && now.summary !== summary) this.updateThread(threadId, { summary });
+        // Answered with no window on it: unread, until it is opened. A team's members are
+        // read through their lead, and a coordinator on its project's page.
+        const seen = [...this.clients].some((c) => c.openThreadId === threadId);
+        if (summary && now && !seen && !cancelled && !now.parentId && now.kind !== "coordinator") {
+          this.updateThread(threadId, { unread: true });
+        }
       }
       // Last, so the team can give the thread its next message. A server stopping leaves
       // its teams as they are, for the next start to find them cut short.
@@ -2235,7 +2273,10 @@ export class Hub {
       git = isGitRepo(project.path);
       this.gitProjects.set(project.id, git);
     }
-    return git ? { ...project, git } : project;
+    const pinned = this.store.getSetting<string[]>(PINNED_PROJECTS, []).includes(project.id);
+    return git || pinned
+      ? { ...project, ...(git ? { git } : {}), ...(pinned ? { pinned } : {}) }
+      : project;
   }
 
   private async startSession(

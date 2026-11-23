@@ -26,6 +26,14 @@ export const notificationsOn = () =>
   readPref("notifications") === "true" && notificationPermission() === "granted";
 
 let worker: Promise<ServiceWorkerRegistration | undefined> | undefined;
+/** Whether this device stays quiet about one project, while it notifies of the others. */
+export const projectMuted = (projectId: string) =>
+  readPref(`notifications.muted.${projectId}`) === "true";
+
+export function setProjectMuted(projectId: string, muted: boolean): void {
+  writePref(`notifications.muted.${projectId}`, String(muted));
+}
+
 /** Phones show a notification only through a service worker; a computer does without. */
 function registration(): Promise<ServiceWorkerRegistration | undefined> {
   worker ??=
@@ -183,6 +191,9 @@ export function startNotifications(): void {
     if (!notificationsOn()) return;
     // An answer given in the app takes the notification about it away.
     for (const tag of settled) void closeNotice(tag);
-    for (const notice of notices) void notify(notice);
+    for (const notice of notices) {
+      const projectId = state.threads.find((t) => t.id === notice.threadId)?.projectId;
+      if (!projectId || !projectMuted(projectId)) void notify(notice);
+    }
   });
 }
