@@ -51,7 +51,8 @@ function gitFiles(dir: string): Promise<string[]> {
         "--exclude-standard",
         "--deduplicate",
       ],
-      { cwd: dir, maxBuffer: 64 * 1024 * 1024 },
+      // A listing that hangs falls back to walking the folder; no console window on Windows.
+      { cwd: dir, maxBuffer: 64 * 1024 * 1024, timeout: 30_000, windowsHide: true },
       (error, stdout) => {
         if (error) return reject(error);
         const files = stdout.split("\0").filter(Boolean);

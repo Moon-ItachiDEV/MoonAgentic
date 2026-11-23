@@ -1,5 +1,9 @@
 // Stands in for the server's launcher: says it is ready, then ends as told by FAKE_MODE.
 const port = process.argv[process.argv.indexOf("--port") + 1];
+if (process.env.FAKE_MODE === "already") {
+  console.error("MoonAgentic tourne déjà sur ce dossier de données (/tmp/x).");
+  process.exit(3);
+}
 console.log(`MoonAgentic est prêt : http://127.0.0.1:${port}/#token=abc`);
 if (process.env.FAKE_MODE === "crash") setTimeout(() => process.exit(1), 50);
 else setInterval(() => undefined, 1_000);

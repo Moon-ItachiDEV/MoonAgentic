@@ -79,7 +79,7 @@ import { shipTarget, Teams, teamStatus } from "./team.ts";
 import { mcpServersFor, RESERVED_MCP_NAME } from "./mcp.ts";
 import { type QuotaReader, Quotas } from "./quotas.ts";
 import { formContent, formQuestions, toolQuestions, type FormQuestions } from "./questions.ts";
-import { AgentSession, describe, needsSignIn } from "./session.ts";
+import { AgentSession, describe, needsSignIn, SettingTimeout } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
 import { light, TimelineLog } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
@@ -219,6 +219,25 @@ const TEAM_AT_WORK = "Cette équipe travaille encore : arrête-la d'abord.";
 type PendingRestore = { itemId: string; tree: string };
 
 /** Owns threads and their agent sessions, and keeps every connected client in sync. */
+/**
+ * How long closing waits in all, within the 15 s the server gives itself to stop
+ * (server.ts): what is left after it is cut short.
+ */
+const CLOSE_LIMIT_MS = 11_000;
+
+/** Resolves once `work` settles, or after `ms` at most; a failure of `work` is not passed on. */
+function within(work: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, Math.max(0, ms));
+    timer.unref();
+    const done = () => {
+      clearTimeout(timer);
+      resolve();
+    };
+    work.then(done, done);
+  });
+}
+
 export class Hub {
   private readonly store: Store;
   private readonly agents: Agents;
@@ -1458,13 +1477,16 @@ export class Hub {
       throw new Error("Attends la fin de la réponse pour changer de modèle.");
     // A message sent meanwhile waits: the agent never gets a prompt in the middle of it.
     await this.exclusive(threadId, "Attends la fin du changement de modèle.", async () => {
-      const session = await this.pool.get(threadId)?.catch(() => undefined);
+      let session = await this.pool.get(threadId)?.catch(() => undefined);
       const choices = session?.model?.choices ?? this.store.getAgentModels(thread.agentId)?.models;
       if (!choices?.some((c) => c.id === model)) throw new Error("Modèle inconnu.");
       if (session?.model) {
-        await session.setModel(model);
-        // A new model can bring other effort levels, for the picker too.
-        this.catalog.learn(thread.agentId, session.model, session.settings, false);
+        if (await this.frozeOnSetting(threadId, () => session!.setModel(model))) {
+          session = undefined;
+        } else {
+          // A new model can bring other effort levels, for the picker too.
+          this.catalog.learn(thread.agentId, session.model, session.settings, false);
+        }
       }
       const settings = session && settingValues(session.settings);
       this.updateThread(threadId, {
@@ -1474,19 +1496,39 @@ export class Hub {
     });
   }
 
+  /**
+   * Runs a change of model or setting on the thread's agent. One that gets no answer in time
+   * is stopped, and true is returned: the change is kept for the thread, and its next agent
+   * starts with it, instead of the thread waiting on a frozen one.
+   */
+  private async frozeOnSetting(threadId: string, change: () => Promise<void>): Promise<boolean> {
+    try {
+      await change();
+      return false;
+    } catch (error) {
+      if (!(error instanceof SettingTimeout)) throw error;
+      console.warn(`Fil ${threadId} : ${error.message} L'agent est arrêté.`);
+      await this.pool.stop(threadId);
+      return true;
+    }
+  }
+
   /** Changes one of the agent's settings, such as its mode, between turns. */
   async setSetting(threadId: string, settingId: string, value: string): Promise<void> {
     const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId))
       throw new Error("Attends la fin de la réponse pour changer ce réglage.");
     await this.exclusive(threadId, "Attends la fin du changement de réglage.", async () => {
-      const session = await this.pool.get(threadId)?.catch(() => undefined);
+      let session = await this.pool.get(threadId)?.catch(() => undefined);
       const offered = session?.settings ?? this.store.getAgentModels(thread.agentId)?.settings;
       const setting = offered?.find((s) => s.id === settingId);
       if (!setting?.choices.some((c) => c.id === value)) throw new Error("Réglage inconnu.");
       if (session) {
-        await session.setSetting(settingId, value);
-        this.catalog.learn(thread.agentId, session.model, session.settings, false);
+        if (await this.frozeOnSetting(threadId, () => session!.setSetting(settingId, value))) {
+          session = undefined;
+        } else {
+          this.catalog.learn(thread.agentId, session.model, session.settings, false);
+        }
       }
       // One change can move others, so a running agent's own values win.
       const settings = (session && settingValues(session.settings)) ?? {
@@ -2121,24 +2163,23 @@ export class Hub {
     this.indexTimer.unref();
   }
 
-  /** Stops every agent and resolves once their turns have ended. */
+  /**
+   * Stops every agent and resolves once their turns have ended, or once `CLOSE_LIMIT_MS` has
+   * passed. The agents are stopped first, before anything else is waited for: should
+   * something hang, the server is ended with no agent left running unseen behind it.
+   */
   async close(): Promise<void> {
     this.closed = true;
+    const deadline = Date.now() + CLOSE_LIMIT_MS;
+    const upTo = (work: Promise<unknown>) => within(work, deadline - Date.now());
     clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
     this.quotas.close();
     this.scheduler.close();
     this.teams.close();
-    // A review starting reads the changes first; it must not reach the store once closed.
-    await this.teams.settled();
     this.pool.clearTimers();
     for (const timer of this.forceStops.values()) clearTimeout(timer);
     this.forceStops.clear();
-    await this.recovered;
-    for (const threadId of new Set([...this.pendingPermissions.values()].map((p) => p.threadId))) {
-      this.settlePermissions(threadId);
-    }
-    await this.catalog.close();
     // An agent still starting is stopped now rather than waited for, and its turn ends
     // as stopped, not as failed.
     // A turn in line is stopped too, as one whose agent was starting.
@@ -2150,9 +2191,17 @@ export class Hub {
       this.cancelled.add(threadId);
       this.pool.abortStart(threadId);
     }
-    await this.pool.closeAll();
-    await Promise.all(this.turns.values());
-    await Promise.all([...this.steps].map((step) => step.catch(() => undefined)));
+    await upTo(this.pool.closeAll());
+    for (const threadId of new Set([...this.pendingPermissions.values()].map((p) => p.threadId))) {
+      this.settlePermissions(threadId);
+    }
+    // A review starting reads the changes first; it must not reach the store once closed.
+    await upTo(this.teams.settled());
+    await upTo(this.recovered);
+    await upTo(this.catalog.close());
+    // Those just started too, which find no agent to start.
+    await upTo(Promise.all(this.turns.values()));
+    await upTo(Promise.all([...this.steps].map((step) => step.catch(() => undefined))));
     // A turn that ended meanwhile armed no timer (closed), but leaves nothing behind either.
     this.pool.clear();
     // Text an agent sent after its turn ended is still written down.
