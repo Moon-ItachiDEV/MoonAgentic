@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ServerMessage, Team, TeamTask, Thread } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
-import { Planner, pieceStatus } from "../src/planner.ts";
+import { cardText, Planner, pieceStatus, threadStatus } from "../src/planner.ts";
 import { Store } from "../src/store.ts";
 
 const cleanups: (() => void)[] = [];
@@ -75,9 +75,11 @@ describe("planner", () => {
     store.addThread(thread("t"));
     store.addThread(thread("ailleurs", { projectId: "q" }));
     const card = plan.add({ projectId: "p", title: "Un", description: "Détail", due: 1000 });
-    expect(
-      plan.update(card.id, { title: "Une", status: "test", threadId: "t", due: null }),
-    ).toMatchObject({ title: "Une", status: "test", threadId: "t", description: "Détail" });
+    expect(plan.update(card.id, { title: "Une", threadId: "t", due: null })).toMatchObject({
+      title: "Une",
+      threadId: "t",
+      description: "Détail",
+    });
     const cleared = plan.update(card.id, { description: null, threadId: null });
     expect(cleared).not.toHaveProperty("description");
     expect(cleared).not.toHaveProperty("threadId");
@@ -154,13 +156,122 @@ describe("planner", () => {
     plan.threadDeleted("t");
     plan.threadDeleted("lead");
     const cards = plan.list();
+    // Each stays where its work had brought it.
     expect(cards.map((c) => [c.title, c.status])).toEqual([
-      ["Liée", "todo"],
+      ["Liée", "test"],
       ["A", "doing"],
     ]);
     expect(cards.some((c) => c.threadId || c.team)).toBe(false);
     // Free of its team, the card is the user's to move.
     expect(plan.update(cards[1]!.id, { status: "report" }).status).toBe("report");
+  });
+
+  it("places a thread's card where the thread really is", () => {
+    expect(threadStatus(thread("t", { status: "running" }))).toBe("doing");
+    // Asking the user, or waiting for its turn, is still work under way.
+    expect(threadStatus(thread("t", { status: "waiting" }))).toBe("doing");
+    expect(threadStatus(thread("t", { held: "Plus tard" }))).toBe("doing");
+    expect(threadStatus(thread("t", { status: "error" }))).toBe("report");
+    // Its turn over, the work is the user's to check.
+    expect(threadStatus(thread("t"))).toBe("test");
+    const pr = { number: 1, url: "https://github.com/a/b/pull/1", checks: "none" as const };
+    expect(threadStatus(thread("t", { pr: { ...pr, state: "open" } }))).toBe("test");
+    expect(threadStatus(thread("t", { pr: { ...pr, state: "merged" } }))).toBe("live");
+    expect(threadStatus(thread("t", { status: "error", archived: true }))).toBe("live");
+    // A thread that leads a team stands where its team does.
+    expect(threadStatus(thread("t", { team: team("coding", []) }))).toBe("doing");
+    expect(threadStatus(thread("t", { team: team("blocked", []) }))).toBe("report");
+    expect(threadStatus(thread("t", { team: team("failed", []) }))).toBe("report");
+    expect(threadStatus(thread("t", { team: team("done", []) }))).toBe("test");
+  });
+
+  it("moves a card with the thread it is linked to, and only with it", () => {
+    const { plan, store, sent } = planner();
+    store.addThread(thread("t", { status: "running" }));
+    store.addThread(thread("autre"));
+    const card = plan.add({ projectId: "p", title: "Liée" });
+    const free = plan.add({ projectId: "p", title: "Libre" });
+    // Linked, it stands at once where its thread does.
+    expect(plan.update(card.id, { threadId: "t" }).status).toBe("doing");
+    expect(() => plan.update(card.id, { status: "live" })).toThrow("suit son fil");
+    expect(() => plan.update(free.id, { threadId: "autre", status: "todo" })).not.toThrow();
+    // Its title and its days stay the user's.
+    expect(plan.update(card.id, { title: "Liée, renommée", due: 9 }).status).toBe("doing");
+
+    sent.length = 0;
+    plan.syncThread(thread("t", { status: "running" }));
+    plan.syncThread(thread("sans-carte", { status: "error" }));
+    expect(sent).toEqual([]);
+    plan.syncThread(thread("t", { status: "error" }));
+    expect(store.getPlanTask(card.id)).toMatchObject({ status: "report" });
+    plan.syncThread(thread("t"));
+    plan.syncThread(thread("t", { archived: true }));
+    const done = store.getPlanTask(card.id)!;
+    expect(done.status).toBe("live");
+    expect(done.doneAt).toBeGreaterThan(0);
+    expect(sent.map((m) => m.type === "planTask" && m.task.status)).toEqual([
+      "report",
+      "test",
+      "live",
+    ]);
+    // Unlinked in the same change, it goes where the user says.
+    expect(plan.update(card.id, { threadId: null, status: "todo" })).toMatchObject({
+      status: "todo",
+    });
+    plan.syncThread(thread("t", { status: "running" }));
+    expect(store.getPlanTask(card.id)!.status).toBe("todo");
+  });
+
+  it("brings the cards linked before to where their threads are, at start", () => {
+    const { plan, store } = planner();
+    store.addThread(thread("t", { archived: true }));
+    // As a card linked by hand once was: wherever the user had put it.
+    const now = Date.now();
+    const old = {
+      id: "c",
+      projectId: "p",
+      number: 1,
+      title: "Ancienne",
+      status: "todo" as const,
+      source: "user" as const,
+      threadId: "t",
+      createdAt: now,
+      updatedAt: now,
+    };
+    store.putPlanTask(old);
+    store.putPlanTask({ ...old, id: "d", number: 2, threadId: "disparu" });
+    plan.syncThreads();
+    expect(plan.list().map((c) => c.status)).toEqual(["live", "todo"]);
+  });
+
+  it("starts a card's work in a new thread, once", () => {
+    const { plan, store } = planner();
+    const card = plan.add({
+      projectId: "p",
+      title: "Corriger l'export",
+      description: "Sur Safari.",
+    });
+    expect(cardText(card)).toBe("Corriger l'export\n\nSur Safari.");
+    expect(cardText(plan.add({ projectId: "p", title: "Sans détail" }))).toBe("Sans détail");
+    const start = (from: { id: string }) => {
+      store.addThread(thread(`fil-${from.id}`, { status: "running" }));
+      return `fil-${from.id}`;
+    };
+    expect(plan.run(card.id, start)).toBe(`fil-${card.id}`);
+    expect(store.getPlanTask(card.id)).toMatchObject({
+      threadId: `fil-${card.id}`,
+      status: "doing",
+    });
+    expect(store.getPlanTask(card.id)!.startedAt).toBeGreaterThan(0);
+    expect(() => plan.run(card.id, start)).toThrow("déjà son fil");
+    expect(() => plan.run("inconnue", start)).toThrow("n'existe plus");
+    plan.syncTeam(thread("lead", { team: team("coding", [piece("A", "waiting")]) }));
+    const ofTeam = plan.list().find((c) => c.title === "A")!;
+    expect(() => plan.run(ofTeam.id, start)).toThrow("équipe");
+    // Its thread deleted, the card can be started again.
+    plan.threadDeleted(`fil-${card.id}`);
+    store.deleteThread(`fil-${card.id}`);
+    expect(plan.run(card.id, start)).toBe(`fil-${card.id}`);
   });
 
   it("writes down when a card's work really began and ended", () => {

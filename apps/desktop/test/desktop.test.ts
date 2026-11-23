@@ -31,6 +31,9 @@ describe("readLine", () => {
     expect(
       readLine("Le serveur s'est arrêté sur une erreur (code 1) : il redémarre dans 1 s."),
     ).toEqual({ failed: expect.stringContaining("redémarre") });
+    expect(
+      readLine("MoonAgentic tourne déjà sur ce dossier de données (/home/moi/.moonagentic)."),
+    ).toEqual({ failed: expect.stringContaining("tourne déjà") });
     expect(readLine("Sauvegarde de la base : x")).toBeUndefined();
   });
 });
@@ -102,6 +105,20 @@ describe("ServerProcess", () => {
     const kinds = states.map((s) => s.kind);
     expect(kinds.slice(0, 5)).toEqual(["starting", "ready", "restarting", "starting", "ready"]);
     expect(server.state.kind).toBe("stopped");
+  });
+
+  it("keeps saying why the server ended once it has ended", async () => {
+    const { server, states } = run("already");
+    server.start();
+    await until(states, (s) =>
+      s.some((x) => x.kind === "restarting" && x.reason.includes("repart")),
+    );
+    await server.stop();
+    const restarting = states.filter((s) => s.kind === "restarting");
+    expect(restarting.at(-1)).toEqual({
+      kind: "restarting",
+      reason: expect.stringMatching(/tourne déjà.*Nouvel essai : il repart dans 1 s\./),
+    });
   });
 });
 

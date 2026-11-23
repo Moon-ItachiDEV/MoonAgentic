@@ -36,6 +36,8 @@ export class AgentPool {
   private readonly maxLiveAgents: number;
   private readonly options: AgentPoolOptions;
   private useSeq = 0;
+  /** Set once every agent is being stopped: none starts after. */
+  private closed = false;
 
   constructor(options: AgentPoolOptions) {
     this.options = options;
@@ -71,6 +73,8 @@ export class AgentPool {
     threadId: string,
     start: (signal: AbortSignal, owns: () => boolean) => Promise<AgentSession>,
   ): Promise<AgentSession> {
+    // An agent started once all were stopped would be left running when the server ends.
+    if (this.closed) return Promise.reject(new Error("MoonAgentic s'arrête."));
     this.makeRoom(threadId);
     const stop = new AbortController();
     this.starting.set(threadId, stop);
@@ -195,11 +199,14 @@ export class AgentPool {
 
   /** Stops every running agent and resolves once they are gone. */
   async closeAll(): Promise<void> {
+    this.closed = true;
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
-    await Promise.all(
-      sessions.map((s) => s.then((session) => session.close()).catch(() => undefined)),
-    );
+    await Promise.all([
+      ...sessions.map((s) => s.then((session) => session.close()).catch(() => undefined)),
+      // Those being paused are gone too.
+      ...this.pausing.values(),
+    ]);
   }
 
   /** Forgets what is left once every turn has ended. */

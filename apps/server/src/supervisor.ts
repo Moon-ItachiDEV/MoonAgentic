@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { appendFileSync, fstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { ALREADY_RUNNING } from "./instance.ts";
 
 /** Days of log files kept. */
 export const LOG_DAYS = 14;
@@ -166,7 +167,8 @@ export interface SuperviseOptions {
 /**
  * Runs the server and starts it again whenever it ends on a failure, sooner the first time,
  * later when failures follow each other. Everything it prints also goes to a log file. Stops
- * with it when asked to (Ctrl+C), or when it ends on its own without a failure.
+ * with it when asked to (Ctrl+C), when it ends on its own without a failure, or when it found
+ * another MoonAgentic running on its data folder.
  */
 export function supervise(options: SuperviseOptions): { stop(): void } {
   const log = new DailyLog(options.logDir);
@@ -223,6 +225,8 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
       child = undefined;
       if (stopping) return exit(0);
       if (code === 0) return exit(0);
+      // Another MoonAgentic holds the data folder: starting again would change nothing.
+      if (code === ALREADY_RUNNING) return exit(ALREADY_RUNNING);
       const now = Date.now();
       crashes = [...crashes.filter((t) => now - t < CRASH_WINDOW_MS), now];
       const delay = restartDelay(crashes.length);

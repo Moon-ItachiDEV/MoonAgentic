@@ -56,6 +56,8 @@ export function Sidebar(props: {
   activeProjectId: string | undefined;
   /** True on the planner's page. */
   onPlanner: boolean;
+  /** The planned tasks are shown: they have their own address in the planner. */
+  onSchedules: boolean;
   /** True on a project's page. */
   onProject: boolean;
   onOpenPlanner: () => void;
@@ -475,7 +477,11 @@ export function Sidebar(props: {
           <IconFolder />
           Nouveau projet
         </button>
-        <button onClick={props.onOpenSchedules}>
+        <button
+          className={props.onSchedules ? "on" : ""}
+          aria-current={props.onSchedules ? "page" : undefined}
+          onClick={props.onOpenSchedules}
+        >
           <IconClock />
           Tâches planifiées
           {scheduled > 0 && <span className="aux">{scheduled}</span>}

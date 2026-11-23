@@ -4,6 +4,8 @@ import type { Store } from "./store.ts";
 
 const LAID = "planLaid";
 const FOLLOWS_TEAM = "Cette carte suit le travail de l'équipe : son état change avec lui.";
+const FOLLOWS_THREAD =
+  "Cette carte suit son fil : son état change avec lui. Délie le fil pour la déplacer à la main.";
 
 /** Where a team's piece stands on the board, from what its agents are really doing. */
 export function pieceStatus(task: TeamTask, teamDone: boolean): PlanStatus {
@@ -25,6 +27,31 @@ export function pieceStatus(task: TeamTask, teamDone: boolean): PlanStatus {
       return task.merged || teamDone ? "live" : "test";
   }
 }
+
+/**
+ * Where the card of a thread stands on the board, from what the thread is really doing:
+ * at work or asking the user, it is being done; stopped on an error, it is held back; its
+ * turn over, it is the user's to check; resolved or its pull request merged, it is delivered.
+ */
+export function threadStatus(thread: Thread): PlanStatus {
+  if (thread.archived || thread.pr?.state === "merged") return "live";
+  const team = thread.team?.phase;
+  if (thread.status === "error" || team === "failed" || team === "blocked") return "report";
+  if (
+    thread.status === "running" ||
+    thread.status === "waiting" ||
+    !!thread.held ||
+    team === "planning" ||
+    team === "coding" ||
+    team === "merging"
+  )
+    return "doing";
+  return "test";
+}
+
+/** What a thread started from a card is first told: the card's title, then its description. */
+export const cardText = (card: PlanTask): string =>
+  card.description ? `${card.title}\n\n${card.description}` : card.title;
 
 /**
  * Writes down when the card's work really began and ended, from where it now stands: it
@@ -64,6 +91,8 @@ export interface PlanPatch {
 export class Planner {
   private readonly store: Store;
   private readonly broadcast: (message: ServerMessage) => void;
+  /** The threads some card follows, so that any other thread's change costs nothing here. */
+  private followed: Set<string> | undefined;
 
   constructor(store: Store, broadcast: (message: ServerMessage) => void) {
     this.store = store;
@@ -97,8 +126,11 @@ export class Planner {
     const task = this.store.getPlanTask(id);
     if (!task) throw new Error("Cette carte n'existe plus.");
     const next: PlanTask = { ...task };
+    // A card whose thread is gone is free again, whatever it still names.
+    const linked = patch.threadId !== undefined ? patch.threadId : this.threadOf(task)?.id;
     if (patch.status !== undefined && patch.status !== task.status) {
       if (task.team) throw new Error(FOLLOWS_TEAM);
+      if (linked) throw new Error(FOLLOWS_THREAD);
       next.status = patch.status;
     }
     if (patch.title !== undefined) next.title = patch.title;
@@ -123,9 +155,59 @@ export class Planner {
           throw new Error("Ce fil n'est pas dans le projet de la carte.");
         }
         next.threadId = thread.id;
+        // From now on the card stands where its thread does.
+        next.status = threadStatus(thread);
       }
     }
     return this.put({ ...next, updatedAt: Date.now() });
+  }
+
+  /**
+   * Starts the card's work in a new thread, made by `start` from the card, and links the two.
+   * A card a team does, or one whose thread still exists, is not started again.
+   */
+  run(id: string, start: (card: PlanTask) => string): string {
+    const card = this.store.getPlanTask(id);
+    if (!card) throw new Error("Cette carte n'existe plus.");
+    if (card.team) throw new Error("Cette carte est déjà confiée à une équipe.");
+    if (this.threadOf(card)) throw new Error("Cette carte a déjà son fil : ouvre-le.");
+    const threadId = start(card);
+    const thread = this.store.getThread(threadId);
+    this.put({
+      ...card,
+      threadId,
+      status: thread ? threadStatus(thread) : "doing",
+      updatedAt: Date.now(),
+    });
+    return threadId;
+  }
+
+  /** Moves the cards that follow this thread to where it now stands. Called as it changes. */
+  syncThread(thread: Thread): void {
+    this.followed ??= new Set(this.list().flatMap((c) => (c.threadId ? [c.threadId] : [])));
+    if (!this.followed.has(thread.id)) return;
+    const status = threadStatus(thread);
+    for (const card of this.list()) {
+      if (card.threadId !== thread.id || card.team || card.status === status) continue;
+      this.put({ ...card, status, updatedAt: Date.now() });
+    }
+  }
+
+  /**
+   * Brings every linked card to where its thread stands. Called once at start: a card
+   * linked before cards followed their thread is then where its thread really is.
+   */
+  syncThreads(): void {
+    for (const card of this.list()) {
+      const thread = card.team ? undefined : this.threadOf(card);
+      if (!thread) continue;
+      const status = threadStatus(thread);
+      if (status !== card.status) this.put({ ...card, status, updatedAt: Date.now() });
+    }
+  }
+
+  private threadOf(card: PlanTask): Thread | undefined {
+    return card.threadId ? this.store.getThread(card.threadId) : undefined;
   }
 
   remove(id: string): void {
@@ -184,6 +266,7 @@ export class Planner {
   }
 
   private put(card: PlanTask): PlanTask {
+    if (card.threadId) this.followed?.add(card.threadId);
     const task = stamped(card, Date.now());
     this.store.putPlanTask(task);
     this.broadcast({ type: "planTask", task });

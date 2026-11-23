@@ -1,0 +1,53 @@
+/* Planner: starting a card's work from the board. */
+
+/* « Lancer », on a card whose work has not begun. */
+.pl-run {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pl-run:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+/* The launch, in the card's detail: which agent, with what access. */
+.pl-launch {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.pl-launch p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.pl-launch .error {
+  color: var(--err);
+}
+.pl-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.pl-launch-f {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.pl-detail-f .btn svg {
+  flex: none;
+}

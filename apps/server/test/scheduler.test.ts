@@ -196,4 +196,31 @@ describe("scheduler", () => {
     store.deleteProject("p");
     expect(plan.list()).toEqual([]);
   });
+
+  it("keeps watching the clock when saving fails, and never starts a task twice for it", () => {
+    const { store, started, clock, plan, task } = scheduler();
+    const errors: unknown[] = [];
+    const quiet = console.error;
+    console.error = (...args: unknown[]) => errors.push(args);
+    cleanups.push(() => (console.error = quiet));
+    plan.start();
+    const one = task();
+    const other = task({ title: "Autre", at: at(23, 9, 1) });
+    clock.now = at(23, 9, 5);
+    const put = store.putSchedule.bind(store);
+    let failures = 1;
+    store.putSchedule = (schedule) => {
+      if (schedule.id === one.id && failures-- > 0) throw new Error("disque plein");
+      put(schedule);
+    };
+    plan.tick();
+    // The other task started anyway, and the clock is still watched.
+    expect(started.map((s) => s.id).sort()).toEqual([one.id, other.id].sort());
+    expect(errors).toHaveLength(1);
+    expect((plan as unknown as { timer?: NodeJS.Timeout }).timer).toBeDefined();
+    // Next look: its state is saved, it does not start a second time.
+    plan.tick();
+    expect(started.map((s) => s.id).sort()).toEqual([one.id, other.id].sort());
+    expect(store.getSchedule(one.id)).toMatchObject({ enabled: false, runs: 1 });
+  });
 });
