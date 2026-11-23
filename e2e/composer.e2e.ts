@@ -170,6 +170,15 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Supervisé" }).click();
     await composer(page).press("Enter");
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
+    // The agent's plan is one card: every step done, it folds to its title and its footer.
+    const plan = page.locator(".agent-plan").last();
+    await plan.getByText("Terminé · 2 sur 2").waitFor();
+    expect(await plan.locator("li").count()).toBe(0);
+    await plan.locator(".agent-plan-h").click();
+    expect(await plan.locator("li.done").count()).toBe(2);
+    // What the agent read on a step is noted on it.
+    await plan.locator("li.done").first().getByText("app.ts").waitFor();
+    await plan.locator(".agent-plan-h").click();
     // What it said on the way is folded with its steps, under one line.
     expect(await page.getByText("Pièces jointes : app.ts (texte), SKILL.md (texte).").count()).toBe(
       0,

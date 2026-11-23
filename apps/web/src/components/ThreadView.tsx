@@ -12,6 +12,7 @@ import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
+import { AgentPlan } from "./AgentPlan.tsx";
 import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { GROUP_LABEL, threadLine } from "../project-threads.ts";
 import { Clamp } from "./Clamp.tsx";
@@ -155,6 +156,13 @@ export function ThreadView({
           showBy={thread.kind !== "coordinator" && (showBy ?? startsAgentBlock(items!, i))}
           openQuestion={openQuestion}
           live={working && i > lastUser}
+          ask={
+            item.kind === "plan"
+              ? items!
+                  .slice(0, i)
+                  .findLast((it): it is Extract<Item, { kind: "user" }> => it.kind === "user")?.text
+              : undefined
+          }
           clamp={clamp}
           threads={threads}
           onOpenThread={onOpenThread}
@@ -296,6 +304,7 @@ function FeedItem({
   showBy,
   openQuestion,
   live,
+  ask,
   clamp,
   threads,
   onOpenThread,
@@ -311,6 +320,8 @@ function FeedItem({
   openQuestion: string | undefined;
   /** Part of the turn the agent is working on now. */
   live: boolean;
+  /** For a plan, what the user asked in its turn. */
+  ask?: string | undefined;
   /** A long answer shows its start, with a way to read the rest. */
   clamp?: boolean | undefined;
 }) {
@@ -418,30 +429,7 @@ function FeedItem({
       }
       return <ToolRow item={item} live={live} />;
     case "plan":
-      return (
-        <div className="card">
-          <div className="card-h">Plan</div>
-          <ul className="plan">
-            {item.entries.map((entry, i) => (
-              <li
-                key={i}
-                className={
-                  entry.status === "completed"
-                    ? "done"
-                    : entry.status === "in_progress"
-                      ? "now"
-                      : ""
-                }
-              >
-                <span className="cir">
-                  {entry.status === "completed" && <IconCheck size={9} />}
-                </span>
-                {entry.content}
-              </li>
-            ))}
-          </ul>
-        </div>
-      );
+      return <AgentPlan entries={item.entries} live={live} ask={ask} threadId={thread.id} />;
     case "permission":
       return <PermissionCard item={item} threadId={thread.id} />;
   }

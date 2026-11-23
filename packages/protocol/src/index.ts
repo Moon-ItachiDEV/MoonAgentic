@@ -489,6 +489,11 @@ export interface PermissionOption {
 export interface PlanEntry {
   content: string;
   status: "pending" | "in_progress" | "completed";
+  /** When the server saw the agent start this step, and finish it. */
+  startedAt?: number;
+  endedAt?: number;
+  /** What the agent used while on this step: a file, a command, a tool, at most three. */
+  tools?: string[];
 }
 
 export type ToolContent =
