@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AgentQuota, QuotaWindow, ServerMessage } from "@moonagentic/protocol";
@@ -29,7 +29,6 @@ const CODEX_EXIT_GRACE_MS = 1_500;
 /** Base and ceiling backoffs when an undocumented endpoint rate-limits us (HTTP 429). */
 const RATE_LIMIT_BASE_BACKOFF_MS = 2 * 60_000;
 const MAX_BACKOFF_MS = 15 * 60_000;
-const MAX_RETRY_AFTER_MS = 30 * 60_000;
 /** Maximum bytes of stderr retained from `codex app-server` for diagnostics. */
 const MAX_STDERR_CHARS = 4_096;
 
@@ -62,21 +61,6 @@ const lastNonEmptyLine = (text: string): string => {
   return lines.at(-1) ?? "";
 };
 
-/** Parses an HTTP `Retry-After` header (positive seconds or HTTP date); ignores 0. */
-export function parseRetryAfterMs(header: string | null, now = Date.now()): number | undefined {
-  if (!header) return undefined;
-  const trimmed = header.trim();
-  if (!trimmed) return undefined;
-  if (/^\d+$/.test(trimmed)) {
-    const seconds = Number(trimmed);
-    return seconds > 0 ? Math.min(seconds * 1000, MAX_RETRY_AFTER_MS) : undefined;
-  }
-  const at = Date.parse(trimmed);
-  if (Number.isNaN(at)) return undefined;
-  const delta = at - now;
-  return delta > 0 ? Math.min(delta, MAX_RETRY_AFTER_MS) : undefined;
-}
-
 /** A timestamp from seconds or milliseconds since 1970, or from an ISO date. */
 export function toTime(value: unknown): number | undefined {
   if (typeof value === "number" && Number.isFinite(value) && value > 0)
@@ -89,16 +73,16 @@ export function toTime(value: unknown): number | undefined {
 }
 
 // ---------------------------------------------------------------------------------------
-// Claude Code: the usage its own `/usage` shows, asked with the sign-in it keeps on disk.
-// The address is not documented by Anthropic: when it changes, the card says so.
+// Claude Code: the figures behind its own `/usage`, asked of Claude Code itself through the
+// official Agent SDK. Claude Code reads and renews its own sign-in (file, macOS keychain or
+// CLAUDE_CODE_OAUTH_TOKEN): MoonAgentic never touches it. No prompt is ever sent, so asking
+// costs nothing. The SDK marks this call experimental: when it changes, the card says so.
 
-const CLAUDE_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-
-const CLAUDE_WINDOWS: { key: string; label: string; short: string }[] = [
+const CLAUDE_WINDOWS: { key: string; label: string; short: string; model?: string }[] = [
   { key: "five_hour", label: "Session de 5 h", short: "5 h" },
   { key: "seven_day", label: "Semaine, tous modèles", short: "semaine" },
-  { key: "seven_day_opus", label: "Semaine, Opus", short: "semaine Opus" },
-  { key: "seven_day_sonnet", label: "Semaine, Sonnet", short: "semaine Sonnet" },
+  { key: "seven_day_opus", label: "Semaine, Opus", short: "semaine Opus", model: "Opus" },
+  { key: "seven_day_sonnet", label: "Semaine, Sonnet", short: "semaine Sonnet", model: "Sonnet" },
 ];
 
 const CLAUDE_PLANS: Record<string, string> = {
@@ -108,26 +92,43 @@ const CLAUDE_PLANS: Record<string, string> = {
   enterprise: "Abonnement Enterprise",
 };
 
-/** Where Claude Code keeps its sign-in, when it keeps it in a file (not on macOS). */
-export function claudeCredentialsPath(env = process.env, home = os.homedir()): string {
-  return path.join(env.CLAUDE_CONFIG_DIR || path.join(home, ".claude"), ".credentials.json");
-}
+const CLAUDE_PROVIDERS: Record<string, string> = {
+  bedrock: "Amazon Bedrock",
+  vertex: "Google Vertex AI",
+  foundry: "Microsoft Foundry",
+  anthropicAws: "AWS",
+  anthropicGoogleCloud: "Google Cloud",
+  mantle: "Mantle",
+  gateway: "une passerelle d'entreprise",
+};
 
-/** Reads what Anthropic answered; exported for tests. */
+/** Reads the `rate_limits` of Claude Code's `/usage` answer; exported for tests. */
 export function parseClaudeUsage(body: unknown, plan?: string): QuotaReading {
   const data = (body ?? {}) as Record<string, unknown>;
   const windows: QuotaWindow[] = [];
-  for (const w of CLAUDE_WINDOWS) {
-    const entry = data[w.key] as { utilization?: unknown; resets_at?: unknown } | null | undefined;
+  const add = (
+    entry: { utilization?: unknown; resets_at?: unknown } | null | undefined,
+    names: { label: string; short: string; model?: string },
+  ) => {
     if (!entry || typeof entry.utilization !== "number" || !Number.isFinite(entry.utilization))
-      continue;
+      return;
     const resetsAt = toTime(entry.resets_at);
     windows.push({
-      label: w.label,
-      short: w.short,
+      label: names.label,
+      short: names.short,
+      ...(names.model ? { model: names.model } : {}),
       usedPercent: clampPercent(entry.utilization),
       ...(resetsAt ? { resetsAt } : {}),
     });
+  };
+  for (const w of CLAUDE_WINDOWS) add(data[w.key] as Parameters<typeof add>[0], w);
+  // Weekly windows of one model (Fable…), named by Anthropic.
+  if (Array.isArray(data.model_scoped)) {
+    for (const entry of data.model_scoped as Record<string, unknown>[]) {
+      const name = typeof entry?.display_name === "string" ? entry.display_name.trim() : "";
+      if (!name || windows.some((w) => w.model?.toLowerCase() === name.toLowerCase())) continue;
+      add(entry, { label: `Semaine, ${name}`, short: `semaine ${name}`, model: name });
+    }
   }
   const extras: { label: string; value: string }[] = [];
   const extra = data.extra_usage as { is_enabled?: unknown; utilization?: unknown } | undefined;
@@ -145,96 +146,127 @@ export function parseClaudeUsage(body: unknown, plan?: string): QuotaReading {
   return { state: "ok", ...(plan ? { plan } : {}), windows, extras };
 }
 
-export async function readClaudeQuota(
-  file = claudeCredentialsPath(),
-  fetcher: typeof fetch = fetch,
-  now = Date.now(),
-  signal?: AbortSignal,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<QuotaReading> {
-  if (env.ANTHROPIC_API_KEY?.trim()) {
-    return {
-      state: "none",
-      windows: [],
-      extras: [],
-      note: "Claude Code passe par une clé d'API (ANTHROPIC_API_KEY) : payé à l'usage, pas de quota d'abonnement.",
-    };
-  }
-  const missingCredentialsNote = () =>
-    process.platform === "darwin"
-      ? "Sur macOS, Claude Code garde sa connexion dans le trousseau : MoonAgentic ne la lit pas."
-      : "Connexion de Claude Code introuvable : lance « claude » puis « /login » avec ton abonnement.";
-  let oauth: { accessToken?: unknown; expiresAt?: unknown; subscriptionType?: unknown };
-  try {
-    const saved = JSON.parse(readFileSync(file, "utf8")) as {
-      claudeAiOauth?: typeof oauth;
-    } | null;
-    if (!saved || typeof saved !== "object" || !saved.claudeAiOauth) {
-      return unreadable(
-        process.platform === "darwin"
-          ? missingCredentialsNote()
-          : "Aucune connexion d'abonnement Claude Code trouvée : lance « claude » puis « /login ».",
-      );
-    }
-    oauth = saved.claudeAiOauth;
-  } catch {
-    return unreadable(missingCredentialsNote());
-  }
-  const token = typeof oauth.accessToken === "string" ? oauth.accessToken : "";
-  const expiresAt = toTime(oauth.expiresAt);
-  if (!token || (expiresAt && expiresAt <= now)) {
-    return unreadable(
-      "La connexion de Claude Code a expiré : elle se renouvelle à sa prochaine réponse.",
-    );
-  }
-  const type = typeof oauth.subscriptionType === "string" ? oauth.subscriptionType : "";
+/** What Claude Code says of its sign-in (`accountInfo()`), the fields read here. */
+export interface ClaudeAccount {
+  subscriptionType?: string;
+  tokenSource?: string;
+  apiKeySource?: string;
+  apiProvider?: string;
+}
+
+/** What Claude Code answered: its sign-in and its `/usage` figures; exported for tests. */
+export function claudeReading(account: ClaudeAccount, usage: unknown): QuotaReading {
+  const answer = (usage ?? {}) as {
+    subscription_type?: unknown;
+    rate_limits_available?: unknown;
+    rate_limits?: unknown;
+  };
+  const type =
+    typeof answer.subscription_type === "string"
+      ? answer.subscription_type
+      : (account.subscriptionType ?? "");
   const plan = CLAUDE_PLANS[type.toLowerCase()];
-  const timeoutSignal = AbortSignal.timeout(ASK_TIMEOUT_MS);
-  const requestSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-  let response: Response;
-  try {
-    response = await fetcher(CLAUDE_USAGE_URL, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "anthropic-beta": "oauth-2025-04-20",
-        Accept: "application/json",
-      },
-      signal: requestSignal,
-    });
-  } catch {
-    return unreadable("Claude n'a pas répondu : pas de réseau, ou trop lent.", {
+  if (answer.rate_limits_available === true) {
+    if (answer.rate_limits) return parseClaudeUsage(answer.rate_limits, plan);
+    // A subscription whose figures Claude Code could not fetch this time (429, network).
+    return unreadable("Claude Code n'a pas pu lire ses limites pour l'instant.", {
       transient: true,
+      retryAfterMs: RATE_LIMIT_BASE_BACKOFF_MS,
     });
   }
-  if (response.status === 401) {
-    return unreadable(
-      "La connexion de Claude Code a expiré : elle se renouvelle à sa prochaine réponse.",
+  const none = (note: string): QuotaReading => ({ state: "none", windows: [], extras: [], note });
+  if (account.apiProvider && account.apiProvider !== "firstParty") {
+    const provider = CLAUDE_PROVIDERS[account.apiProvider] ?? account.apiProvider;
+    return none(`Claude Code passe par ${provider} : payé à l'usage, pas de quota d'abonnement.`);
+  }
+  if (account.apiKeySource) {
+    return none(
+      `Claude Code passe par une clé d'API (${account.apiKeySource}) : payé à l'usage, pas de quota d'abonnement.`,
     );
   }
-  if (response.status === 403) {
-    return unreadable(
-      "Claude a refusé l'accès aux limites (403) : reconnecte-toi avec « claude » puis « /login ».",
+  if (!account.tokenSource) {
+    return unreadable("Claude Code n'est pas connecté : lance « claude » puis « /login ».");
+  }
+  return unreadable(
+    "Claude Code ne donne pas les limites de cette connexion : lance « claude » puis « /login » avec ton abonnement.",
+  );
+}
+
+export type ClaudeProbe = (
+  signal: AbortSignal,
+) => Promise<{ account: ClaudeAccount; usage: unknown }>;
+
+/**
+ * Starts Claude Code through the Agent SDK, asks its sign-in and `/usage`, and stops it.
+ * No prompt is sent, no setting, hook or MCP server of the user's is loaded, nothing is saved.
+ */
+export const probeClaude: ClaudeProbe = async (signal) => {
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
+  // Stopped while the SDK loaded: start nothing.
+  if (signal.aborted) throw new Error("Lecture annulée.");
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  signal.addEventListener("abort", stop, { once: true });
+  // The prompt never comes: Claude Code waits, answering only control requests.
+  const prompt = (async function* (): AsyncGenerator<never> {
+    await new Promise((resolve) =>
+      controller.signal.addEventListener("abort", resolve, { once: true }),
     );
-  }
-  if (response.status === 429) {
-    const retryAfterMs =
-      parseRetryAfterMs(response.headers.get("retry-after"), now) ?? RATE_LIMIT_BASE_BACKOFF_MS;
-    return unreadable("Claude limite temporairement la lecture des quotas (429).", {
-      transient: true,
-      retryAfterMs,
-    });
-  }
-  if (response.status >= 500) {
-    return unreadable(`Claude a renvoyé une erreur temporaire (${response.status}).`, {
-      transient: true,
-    });
-  }
-  if (!response.ok)
-    return unreadable(`Claude a refusé de donner ses limites (${response.status}).`);
+  })();
+  const session = query({
+    prompt,
+    options: {
+      abortController: controller,
+      cwd: os.homedir(),
+      settingSources: [],
+      strictMcpConfig: true,
+      mcpServers: {},
+      persistSession: false,
+    },
+  });
   try {
-    return parseClaudeUsage(await response.json(), plan);
-  } catch {
-    return unreadable("Claude a répondu dans une forme que MoonAgentic ne connaît pas.");
+    const account = await session.accountInfo();
+    const usage = await session.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
+      skipBehaviors: true,
+    });
+    return { account, usage };
+  } finally {
+    signal.removeEventListener("abort", stop);
+    controller.abort();
+    session.close();
+  }
+};
+
+export async function readClaudeQuota(
+  probe: ClaudeProbe = probeClaude,
+  signal?: AbortSignal,
+  timeoutMs = ASK_TIMEOUT_MS,
+): Promise<QuotaReading> {
+  if (signal?.aborted) return unreadable("Lecture annulée.", { transient: true });
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  signal?.addEventListener("abort", stop, { once: true });
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), timeoutMs);
+  });
+  try {
+    const answer = await Promise.race([probe(controller.signal), timedOut]);
+    if (answer === "timeout")
+      return unreadable("Claude Code n'a pas répondu à temps.", { transient: true });
+    return claudeReading(answer.account ?? {}, answer.usage);
+  } catch (error) {
+    if (signal?.aborted) return unreadable("Lecture annulée.", { transient: true });
+    const why = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
+    const limited = /\b429\b|rate.?limit/i.test(why);
+    return unreadable(`Claude Code n'a pas donné ses limites : ${why}`, {
+      transient: true,
+      ...(limited ? { retryAfterMs: RATE_LIMIT_BASE_BACKOFF_MS } : {}),
+    });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", stop);
+    controller.abort();
   }
 }
 
@@ -554,7 +586,7 @@ const demoReading = (): QuotaReading => {
 
 export function defaultReaders(options: { demo: boolean }): Record<string, QuotaReader> {
   const readers: Record<string, QuotaReader> = {
-    claude: (signal) => readClaudeQuota(undefined, undefined, undefined, signal),
+    claude: (signal) => readClaudeQuota(undefined, signal),
     codex: (signal) => readCodexQuota(undefined, undefined, signal),
   };
   for (const [id, reading] of Object.entries(FIXED)) readers[id] = () => Promise.resolve(reading);
