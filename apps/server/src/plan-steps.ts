@@ -12,12 +12,22 @@ export function mergePlan(
   next: Incoming[],
   now: number,
 ): PlanEntry[] {
+  // Words first, for the whole plan: a step put in front of the others must not take the
+  // place, and so the times and tools, of one that is only further down now.
   const used = new Set<number>();
-  return next.map((entry, i) => {
-    let at = before?.findIndex((b, j) => !used.has(j) && b.content === entry.content) ?? -1;
-    if (at < 0 && before?.[i] && !used.has(i)) at = i;
-    const old = at >= 0 ? before?.[at] : undefined;
+  const same = next.map((entry) => {
+    const at = before?.findIndex((b, j) => !used.has(j) && b.content === entry.content) ?? -1;
     if (at >= 0) used.add(at);
+    return at;
+  });
+  return next.map((entry, i) => {
+    let at = same[i]!;
+    // Reworded where it stood: the step nobody claimed at the same place.
+    if (at < 0 && before?.[i] && !used.has(i)) {
+      at = i;
+      used.add(i);
+    }
+    const old = at >= 0 ? before?.[at] : undefined;
     const startedAt = old?.startedAt ?? (entry.status === "in_progress" ? now : undefined);
     const endedAt =
       entry.status === "completed"

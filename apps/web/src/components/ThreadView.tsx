@@ -28,6 +28,7 @@ import { AgentPlan } from "./AgentPlan.tsx";
 import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
 import { GROUP_LABEL, threadLine } from "../project-threads.ts";
 import { Clamp } from "./Clamp.tsx";
+import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MessageImages } from "./MessageImages.tsx";
 import { TeamCard } from "./TeamCard.tsx";
@@ -53,15 +54,7 @@ const WORKING_VERB: Partial<Record<GlyphKind, string>> = {
 /** How far above what is shown the earlier messages start to be fetched, in pixels. */
 const EARLIER_MARGIN = 600;
 
-export function ThreadView({
-  thread,
-  items,
-  held,
-  agents,
-  threads,
-  onOpenThread: openThread,
-  intro,
-}: {
+interface ThreadViewProps {
   /** Shown above the conversation, such as a coordinator's ways to start. */
   intro?: ReactNode;
   thread: Thread;
@@ -73,7 +66,29 @@ export function ThreadView({
   /** Every thread, for a team's progress and a coder's lead. */
   threads: Thread[];
   onOpenThread: (id: string) => void;
-}) {
+}
+
+/**
+ * A thread's conversation. One that cannot be drawn says so in its own place: the side bar
+ * and the other threads stay, and opening another thread starts afresh.
+ */
+export function ThreadView(props: ThreadViewProps) {
+  return (
+    <ErrorBoundary resetKey={props.thread.id}>
+      <Conversation {...props} />
+    </ErrorBoundary>
+  );
+}
+
+function Conversation({
+  thread,
+  items,
+  held,
+  agents,
+  threads,
+  onOpenThread: openThread,
+  intro,
+}: ThreadViewProps) {
   const lead = thread.parentId ? threads.find((t) => t.id === thread.parentId) : undefined;
   // The team's timeline, on the lead's thread and on each of its team's threads.
   const strip = thread.team

@@ -47,6 +47,43 @@ describe("plan steps", () => {
     expect(after[1]).toMatchObject({ content: "A", startedAt: 1, tools: ["app.ts"] });
   });
 
+  it("leaves each step its own past when one is added before them", () => {
+    const before = [
+      { content: "A", status: "completed" as const, startedAt: 1, endedAt: 4, tools: ["a.ts"] },
+      { content: "B", status: "in_progress" as const, startedAt: 4, tools: ["b.ts"] },
+    ];
+    const after = mergePlan(
+      before,
+      [
+        { content: "X", status: "pending" },
+        { content: "A", status: "completed" },
+        { content: "B", status: "in_progress" },
+      ],
+      9,
+    );
+    // The new step has no past: it does not take the one of the step it pushed down.
+    expect(after[0]).toEqual({ content: "X", status: "pending" });
+    expect(after[1]).toMatchObject({ content: "A", startedAt: 1, endedAt: 4, tools: ["a.ts"] });
+    expect(after[2]).toMatchObject({ content: "B", startedAt: 4, tools: ["b.ts"] });
+  });
+
+  it("keeps the past of a step reworded where it stood", () => {
+    const before = [
+      { content: "Lire", status: "in_progress" as const, startedAt: 2, tools: ["app.ts"] },
+      { content: "Modifier", status: "pending" as const },
+    ];
+    const after = mergePlan(
+      before,
+      [
+        { content: "Lire le code", status: "completed" },
+        { content: "Modifier", status: "in_progress" },
+      ],
+      7,
+    );
+    expect(after[0]).toMatchObject({ startedAt: 2, endedAt: 7, tools: ["app.ts"] });
+    expect(after[1]).toEqual({ content: "Modifier", status: "in_progress", startedAt: 7 });
+  });
+
   it("notes up to three distinct tools on the step at work", () => {
     let plan = mergePlan(undefined, [{ content: "Lire", status: "in_progress" }], 1);
     plan = noteTool(plan, "Read /repo/src/app.ts") ?? plan;

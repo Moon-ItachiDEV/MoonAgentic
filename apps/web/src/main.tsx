@@ -27,6 +27,7 @@ import "./team-tree.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import { AppFailed, ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { startUpdateBanner } from "./components/UpdateBanner.tsx";
 import { startNotifications } from "./notifications.ts";
 import { applyTheme } from "./theme.ts";
@@ -37,6 +38,8 @@ startUpdateBanner();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary fallback={(error, reload) => <AppFailed error={error} reload={reload} />}>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );
