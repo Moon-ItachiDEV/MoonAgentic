@@ -15,12 +15,18 @@ export function historyBefore(
   items: Item[],
   itemId: string,
   agentName: (agentId: string) => string,
+  /** Where an image of the thread is kept, so the agent taking over can open it. */
+  imageFile?: (id: string) => string | undefined,
 ): string | undefined {
   const end = items.findIndex((i) => i.id === itemId);
   const entries = (end === -1 ? items : items.slice(0, end)).flatMap((item) => {
     switch (item.kind) {
       case "user":
-        return [`Utilisateur : ${clip(item.text)}`];
+        return [
+          `Utilisateur : ${clip(item.text)}${(item.images ?? [])
+            .map((image) => ` [image jointe : ${imageFile?.(image.id) ?? image.name}]`)
+            .join("")}`,
+        ];
       case "agent":
         return [`Agent : ${clip(item.text)}`];
       case "tool":
