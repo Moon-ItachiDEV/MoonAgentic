@@ -942,6 +942,7 @@ export function App() {
       <Presence show={mcpOpen}>
         <McpDialog
           servers={state.mcpServers}
+          projects={state.projects}
           secretsError={state.mcpSecretsError}
           onClose={() => setMcpOpen(false)}
         />

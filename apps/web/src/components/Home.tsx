@@ -1,5 +1,6 @@
 import type { Project, Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
+import { mcpCount } from "../mcp-scope.ts";
 import { MoonMark } from "./MoonMark.tsx";
 import { Overview } from "./Overview.tsx";
 
@@ -26,7 +27,8 @@ export function Home({
   };
 }) {
   const available = state.agents.filter((a) => a.available).length;
-  const mcp = state.mcpServers.filter((m) => m.enabled).length;
+  // Those a thread started here is given: for every project, or for this one.
+  const mcp = mcpCount(state.mcpServers, project?.id);
   const withOverview = !!overview && state.ready && state.threads.length > 0;
   return (
     <div className="view">

@@ -75,7 +75,7 @@ import { COORDINATOR_TOOLS } from "./coordinator-tools.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
 import { shipTarget, Teams, teamStatus } from "./team.ts";
-import { RESERVED_MCP_NAME } from "./mcp.ts";
+import { mcpServersFor, RESERVED_MCP_NAME } from "./mcp.ts";
 import { type QuotaReader, Quotas } from "./quotas.ts";
 import { formContent, formQuestions, toolQuestions, type FormQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
@@ -846,6 +846,9 @@ export class Hub {
       }
       case "mcp.setEnabled":
         this.catalog.setMcpEnabled(message.id, message.enabled);
+        return;
+      case "mcp.setScope":
+        this.catalog.setMcpScope(message.id, message.projectIds, message.allRoles);
         return;
       case "mcp.remove":
         await this.catalog.removeMcpServer(message.id);
@@ -1751,6 +1754,7 @@ export class Hub {
         await this.deleteOneThread(thread.id);
       }
       this.store.deleteProject(projectId);
+      this.catalog.projectRemoved(projectId);
       this.gitProjects.delete(projectId);
       this.broadcast({ type: "projectRemoved", projectId });
     })();
@@ -2238,7 +2242,7 @@ export class Hub {
     // Until the thread's own model and settings are applied, the agent's are not news.
     let ready = false;
     const coordinatorMcp = this.coordinators.coordinatorServer(thread);
-    const catalogMcp = await this.catalog.mcpServers();
+    const catalogMcp = mcpServersFor(await this.catalog.mcpServers(), thread);
     const userMcp =
       thread.kind === "coordinator"
         ? catalogMcp.filter((s) => s.name.trim().toLowerCase() !== RESERVED_MCP_NAME)

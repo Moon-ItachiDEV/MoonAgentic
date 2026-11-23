@@ -16,6 +16,7 @@ import {
   IconSwap,
 } from "./icons.tsx";
 import { Presence } from "./Presence.tsx";
+import { mcpInProject } from "../mcp-scope.ts";
 
 /** Closes a menu on a press outside `root`, or on Escape, which gives the focus back to `back`. */
 export function useDismiss(
@@ -185,7 +186,8 @@ export function Tray(props: {
   const root = useRef<HTMLDivElement>(null);
   useDismiss(!!props.menu, root, () => props.onMenu(null));
   const toggle = (menu: TrayMenu) => props.onMenu(props.menu === menu ? null : menu);
-  const servers = props.mcpServers.filter((s) => s.enabled);
+  // Those this conversation's agent is given: for every project, or for this one.
+  const servers = props.mcpServers.filter((s) => s.enabled && mcpInProject(s, props.project?.id));
   const { quota } = props;
 
   if (props.voice)
@@ -333,7 +335,9 @@ export function Tray(props: {
               </div>
             ))}
             <div className="menu-foot">
-              <span className="grow">Donnés à tous les agents</span>
+              <span className="grow">
+                {props.project ? "Donnés aux fils de ce projet" : "Donnés à cette discussion"}
+              </span>
               <button
                 className="lnk"
                 onClick={() => {

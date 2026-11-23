@@ -24,6 +24,7 @@ import {
 } from "../notifications.ts";
 import { readPref, writePref } from "../prefs.ts";
 import type { SettingsSection } from "../router.ts";
+import { mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
 import { matchSections } from "../settings-search.ts";
 import { isDark, readTheme, setTheme, subscribeTheme, type Theme } from "../theme.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
@@ -581,7 +582,7 @@ export function SettingsPage(props: {
                 <Row
                   key={s.id}
                   title={s.name}
-                  text={`${s.transport === "http" ? "HTTP" : "Commande"} · ${s.target}`}
+                  text={`${s.transport === "http" ? "HTTP" : "Commande"} · ${s.target} · ${mcpScopeLabel(scopeOf(s), props.projects)}`}
                 >
                   <span className={`set-tag${s.enabled ? " on" : ""}`}>
                     {s.enabled ? "Actif" : "Désactivé"}
@@ -591,7 +592,8 @@ export function SettingsPage(props: {
             </div>
           ) : (
             <p className="set-empty">
-              Aucun serveur MCP. Ceux que tu ajoutes ici sont donnés à chaque agent.
+              Aucun serveur MCP. Ceux que tu ajoutes ici sont donnés aux agents, pour tous les
+              projets ou ceux que tu choisis.
             </p>
           )}
           <button className="btn" onClick={props.onOpenMcp}>
