@@ -230,6 +230,29 @@ describe("web push", () => {
     expect(svc.sent).toHaveLength(1);
   });
 
+  it("says nothing of a locked project's threads", async () => {
+    const s = store();
+    const svc = service();
+    let locked = true;
+    const push = new Push(s, {
+      send: svc.send,
+      quiet: (projectId) => locked && projectId === "p1",
+    });
+    push.subscribe({ endpoint: ENDPOINT, ...browser(), muted: [] }, undefined);
+    push.know([thread()]);
+    push.threadChanged(thread({ status: "waiting" }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(svc.sent).toEqual([]);
+    // Opened again, its next news is sent, and not the one missed meanwhile.
+    locked = false;
+    push.threadChanged(thread({ status: "waiting", summary: "toujours" }));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(svc.sent).toEqual([]);
+    push.threadChanged(thread({ status: "idle" }));
+    push.threadChanged(thread({ status: "waiting" }));
+    await expect.poll(() => svc.sent.length).toBe(1);
+  });
+
   it("keeps a message within one record, a long title cut", async () => {
     const b = browser();
     expect(() => encryptPayload(Buffer.alloc(MAX_PAYLOAD), b.p256dh, b.auth)).not.toThrow();

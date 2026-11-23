@@ -70,6 +70,12 @@ describe("composer commands", () => {
       inThread: false,
     });
     expect(noPlan.some((c) => c.name === "plan")).toBe(false);
+    // /lock locks the project, from its page as from one of its threads.
+    expect(resolveSubmission("/lock", noPlan)).toEqual({
+      kind: "action",
+      action: "lock",
+      rest: "",
+    });
     expect(noPlan.some((c) => c.name === "compact")).toBe(true);
     expect(planModes(agent.settings)).toMatchObject({ plan: "plan", normal: "default" });
   });

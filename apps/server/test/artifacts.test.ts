@@ -121,6 +121,18 @@ describe("artifacts", { timeout: 40_000 }, () => {
     expect((await findArtifacts(store.listThreads())).artifacts).toEqual([]);
   });
 
+  it("serves nothing of a locked project, even from an address given before", async () => {
+    const { hub, dir, threadId, projectId } = await threadFolder();
+    makeFiles(dir);
+    const { ticket } = hub.artifactLinks.issue(threadId);
+    expect(await hub.artifactLinks.resolve(ticket, "docs/maquette.html")).toBeDefined();
+    hub.locks.setPin("123456");
+    hub.locks.lock(projectId);
+    expect(await hub.artifactLinks.resolve(ticket, "docs/maquette.html")).toBeUndefined();
+    hub.locks.unlock(projectId, "123456");
+    expect(await hub.artifactLinks.resolve(ticket, "docs/maquette.html")).toBeDefined();
+  });
+
   it.skipIf(process.platform === "win32")(
     "leaves out a folder whose name looks like a page, and serves nothing from it",
     async () => {

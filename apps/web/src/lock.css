@@ -1,0 +1,270 @@
+/* /lock: the code sheet, the padlock on a project's row, the page of a locked project. */
+.lk-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  animation: lk-in 0.25s ease both;
+}
+@keyframes lk-in {
+  from {
+    opacity: 0;
+  }
+}
+.lk-card {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  width: min(340px, 100%);
+  padding: 26px 22px 16px;
+  border-radius: 26px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  box-shadow: 0 30px 70px -30px rgba(20, 20, 30, 0.4);
+  text-align: center;
+  outline: none;
+  animation: lk-card 0.3s cubic-bezier(0.3, 1.3, 0.45, 1) both;
+}
+@keyframes lk-card {
+  from {
+    transform: scale(0.9) translateY(12px);
+    opacity: 0;
+  }
+}
+.lk-ic {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--card);
+  margin-bottom: 4px;
+  transition:
+    background 0.3s,
+    color 0.3s;
+}
+.lk-ttl {
+  font-weight: 550;
+  font-size: 16px;
+}
+.lk-sub {
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.45;
+  max-width: 270px;
+}
+.lk-slots {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 14px 0 6px;
+}
+.lk-slot-wrap {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.lk-slots em {
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--line2);
+}
+.lk-slots i {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 46px;
+  border-radius: 13px;
+  background: var(--card);
+  border: 1.5px solid transparent;
+  font: 500 19px var(--mono);
+  font-style: normal;
+  transition:
+    border-color 0.2s,
+    background 0.3s,
+    color 0.3s;
+}
+.lk-slots i.cur {
+  border-color: var(--fg);
+  animation: lk-cur 1.1s ease-in-out infinite;
+}
+@keyframes lk-cur {
+  50% {
+    border-color: var(--line2);
+  }
+}
+.lk-slots i.full {
+  animation: lk-pop 0.2s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+@keyframes lk-pop {
+  from {
+    transform: scale(0.7);
+  }
+}
+.lk-msg {
+  font-size: 12.5px;
+  color: var(--faint);
+  min-height: 18px;
+}
+.lk-card.ok .lk-slots i {
+  border-color: var(--ok);
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+  animation: lk-wave 0.4s cubic-bezier(0.3, 1.4, 0.5, 1) both;
+}
+@keyframes lk-wave {
+  40% {
+    transform: translateY(-9px);
+  }
+}
+.lk-card.ok .lk-msg {
+  color: var(--ok);
+}
+.lk-card.ok .lk-ic {
+  background: color-mix(in srgb, var(--ok) 14%, transparent);
+  color: var(--ok);
+}
+.lk-card.bad .lk-slots {
+  animation: lk-shake 0.32s;
+}
+.lk-card.bad .lk-slots i {
+  border-color: var(--err);
+  color: var(--err);
+}
+.lk-card.bad .lk-msg {
+  color: var(--err);
+}
+@keyframes lk-shake {
+  20% {
+    transform: translateX(-8px);
+  }
+  40% {
+    transform: translateX(7px);
+  }
+  60% {
+    transform: translateX(-5px);
+  }
+  80% {
+    transform: translateX(3px);
+  }
+}
+/* The pad: on touch screens and narrow windows, where there is no keyboard to type on. */
+.lk-pad {
+  display: none;
+  grid-template-columns: repeat(3, 64px);
+  gap: 8px;
+  margin: 10px 0 4px;
+}
+.lk-pad button {
+  height: 50px;
+  border-radius: 16px;
+  background: var(--card);
+  font-size: 19px;
+  color: var(--fg);
+}
+.lk-pad button:active {
+  transform: scale(0.94);
+  background: var(--line);
+}
+@media (max-width: 860px), (hover: none) {
+  .lk-pad {
+    display: grid;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lk-scrim,
+  .lk-card,
+  .lk-slots,
+  .lk-slots i,
+  .lk-card.ok .lk-slots i,
+  .lk-card.bad .lk-slots {
+    animation: none !important;
+  }
+}
+
+/* The padlock on a project's row in the side bar: in sight when locked, else on hover. */
+.thr-row.proj .pin.lock {
+  right: 60px;
+}
+.thr-row.proj.locked .thr {
+  padding-right: 90px;
+}
+.thr-row.proj.locked .pin.lock {
+  color: var(--fg);
+}
+@media (hover: hover) {
+  .thr-row.proj .pin.lock {
+    opacity: 0;
+  }
+  .thr-row.proj:hover .pin.lock,
+  .thr-row.proj .pin.lock:focus-visible,
+  .thr-row.proj.locked .pin.lock {
+    opacity: 1;
+  }
+}
+.proj-items .lk-note {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+/* A locked project's page: what it is, and the way to open it. */
+.lk-page {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 60vh;
+  padding: 24px 16px;
+  text-align: center;
+}
+.lk-page .lk-ic {
+  color: var(--fg);
+}
+.lk-page p {
+  max-width: 340px;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+/* Réglages › Général: the projects, locked ones filled. */
+.lk-h {
+  font: 550 13px var(--sans);
+  color: var(--muted);
+  margin: 22px 4px 8px;
+}
+.lk-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.lk-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.lk-chip svg {
+  opacity: 0.45;
+}
+.lk-chip[aria-pressed="true"] {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--fg);
+}
+.lk-chip[aria-pressed="true"] svg {
+  opacity: 1;
+}

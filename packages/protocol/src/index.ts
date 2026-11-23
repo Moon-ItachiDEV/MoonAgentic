@@ -174,6 +174,11 @@ export interface Project {
   git?: boolean;
   /** Kept at the top of the list of projects. */
   pinned?: boolean;
+  /**
+   * Locked with /lock: nothing of it is sent, its threads, cards, plans and requests, until
+   * the code is given. Its agents keep working.
+   */
+  locked?: boolean;
 }
 
 /** A thread's own branch, checked out in a separate folder (a git worktree). */
@@ -913,6 +918,8 @@ export interface Snapshot {
   plan: PlanTask[];
   schedules: Schedule[];
   quotas: AgentQuota[];
+  /** True once a code to lock projects with is set. */
+  lockPin?: boolean;
 }
 
 /**
@@ -1474,6 +1481,21 @@ export const ClientMessage = z.discriminatedUnion("type", [
     name: z.string().trim().min(1).max(120),
   }),
   z.object({ type: z.literal("project.setPinned"), projectId: id, pinned: z.boolean() }),
+  /** Sets the code projects are locked with, or changes it: then the current one is needed. */
+  z.object({
+    type: z.literal("lock.setPin"),
+    requestId: id,
+    pin: z.string().regex(/^\d{6}$/),
+    current: z.string().max(20).optional(),
+  }),
+  /** Locks a project, for every device, until the code is given. */
+  z.object({ type: z.literal("lock.project"), requestId: id, projectId: id }),
+  z.object({
+    type: z.literal("lock.unlock"),
+    requestId: id,
+    projectId: id,
+    pin: z.string().max(20),
+  }),
   /** Asks for Web Push's key, and whether this browser is reached already; see `pushState`. */
   z.object({
     type: z.literal("push.state"),

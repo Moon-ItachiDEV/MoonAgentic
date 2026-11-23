@@ -112,6 +112,8 @@ export function Composer(props: {
   onDelete: () => void;
   /** Opens the team launcher on the project, with the task typed so far. */
   onTeam: (task: string) => void;
+  /** /lock: locks the project with the code. */
+  onLock: (project: Project) => void;
   /** Opens the planning of a task for later, with what was typed so far. */
   onSchedule: (task: string) => void;
 }) {
@@ -495,6 +497,14 @@ export function Composer(props: {
         }
         props.onSchedule(rest);
         putText("", 0);
+        return;
+      case "lock":
+        if (!project) {
+          connection.notify("Choisis d'abord un projet.");
+          return;
+        }
+        putText("", 0);
+        props.onLock(project);
         return;
       case "goal": {
         const goal = rest.trim();
