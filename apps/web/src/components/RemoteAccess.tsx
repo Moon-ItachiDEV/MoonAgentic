@@ -2,7 +2,15 @@ import type { RemoteAccess as Access, PairedDevice } from "@moonagentic/protocol
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { encode } from "uqr";
 import { connection } from "../connection.ts";
-import { addressText, pairLink, remoteAdvice, seenAgo, shownCode } from "../remote.ts";
+import {
+  addressText,
+  installHint,
+  pairLink,
+  remoteAdvice,
+  runsInstalled,
+  seenAgo,
+  shownCode,
+} from "../remote.ts";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 
 /** Copies text, also on a page opened over plain HTTP, where the clipboard API is missing. */
@@ -117,6 +125,7 @@ export function RemoteAccess() {
     );
   };
   const owner = devices !== null && devices !== undefined;
+  const install = installHint(navigator.userAgent, runsInstalled());
 
   const load = useCallback(() => {
     setLoading(true);
@@ -263,6 +272,7 @@ export function RemoteAccess() {
                 Pour appairer un autre appareil ou en révoquer un, va sur l'ordinateur où tourne
                 MoonAgentic.
               </p>
+              {install && <p>{install}</p>}
             </div>
           </div>
         )}
