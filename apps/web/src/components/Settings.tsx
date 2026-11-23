@@ -10,8 +10,8 @@ import {
   WORK_KINDS,
   type WorkKind,
 } from "@moonagentic/protocol";
-import { type ReactNode, useState } from "react";
-import { connection } from "../connection.ts";
+import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
+import { connection, newId } from "../connection.ts";
 import {
   disableNotifications,
   enableNotifications,
@@ -22,13 +22,17 @@ import {
 } from "../notifications.ts";
 import { readPref, writePref } from "../prefs.ts";
 import type { SettingsSection } from "../router.ts";
-import { readTheme, setTheme, type Theme } from "../theme.ts";
+import { matchSections } from "../settings-search.ts";
+import { isDark, readTheme, setTheme, subscribeTheme, type Theme } from "../theme.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import {
-  IconBack,
+  IconArrowLeft,
   IconBranch,
   IconFolder,
   IconGear,
+  IconMoon,
+  IconSearch,
+  IconSun,
   IconPlug,
   IconShield,
   IconStar,
@@ -47,20 +51,55 @@ const SECTIONS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
   { id: "remote", label: "Accès distant", icon: <IconWifi size={15} /> },
 ];
 
-/** The sidebar while in the settings: back to the app, then one entry per section. */
+/** The GitHub account `gh` is signed in to, as the server reports it; nothing when none. */
+function useGithubLogin(): string | undefined {
+  const [login, setLogin] = useState<string>();
+  useEffect(() => {
+    let live = true;
+    connection
+      .ask({ type: "github.status", requestId: newId() })
+      .then((reply) => live && setLogin(reply.status.login))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
+  return login;
+}
+
+/** The sidebar while in the settings: back to the app, a search, one entry per section. */
 export function SettingsNav(props: {
   section: SettingsSection;
   onPick: (section: SettingsSection) => void;
   onBack: () => void;
 }) {
+  const [query, setQuery] = useState("");
+  const shown = matchSections(SECTIONS, query);
+  const login = useGithubLogin();
+  const theme = useSyncExternalStore(subscribeTheme, readTheme);
+  const dark = isDark(theme);
   return (
     <aside className="side set-side" aria-label="Réglages">
       <button className="set-back" onClick={props.onBack}>
-        <IconBack />
+        <IconArrowLeft size={16} />
         Retour
       </button>
+      <label className="set-search">
+        <IconSearch size={15} />
+        <input
+          type="search"
+          placeholder="Rechercher un réglage"
+          aria-label="Rechercher un réglage"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && shown[0]) props.onPick(shown[0].id);
+            if (e.key === "Escape") setQuery("");
+          }}
+        />
+      </label>
       <nav className="set-nav">
-        {SECTIONS.map((s) => (
+        {shown.map((s) => (
           <button
             key={s.id}
             className={s.id === props.section ? "on" : undefined}
@@ -71,7 +110,38 @@ export function SettingsNav(props: {
             {s.label}
           </button>
         ))}
+        {!shown.length && <p className="set-none">Aucun réglage ne correspond.</p>}
       </nav>
+      <div className="side-foot set-foot">
+        <button
+          className="ib set-gear on"
+          aria-label="Fermer les réglages"
+          title="Fermer les réglages"
+          aria-pressed
+          onClick={props.onBack}
+        >
+          <IconGear size={17} />
+        </button>
+        {login && (
+          <span className="set-me" title="Compte GitHub de gh">
+            <span className="set-avatar" aria-hidden>
+              {login.slice(0, 2).toUpperCase()}
+            </span>
+            <span className="set-who">
+              <span className="set-login">{login}</span>
+              <small>GitHub</small>
+            </span>
+          </span>
+        )}
+        <button
+          className="ib set-theme"
+          aria-label={dark ? "Passer en clair" : "Passer en sombre"}
+          title={dark ? "Passer en clair" : "Passer en sombre"}
+          onClick={() => setTheme(dark ? "light" : "dark")}
+        >
+          {dark ? <IconSun /> : <IconMoon />}
+        </button>
+      </div>
     </aside>
   );
 }
@@ -207,7 +277,7 @@ export function SettingsPage(props: {
     readPref("permissionMode") === "full" ? "full" : "supervised",
   );
   const [isolated, setIsolated] = useState(() => readPref("isolated") !== "false");
-  const [theme, setThemeState] = useState<Theme>(readTheme);
+  const theme = useSyncExternalStore(subscribeTheme, readTheme);
   const title = SECTIONS.find((s) => s.id === props.section)?.label ?? "";
 
   let body: ReactNode;
@@ -285,10 +355,7 @@ export function SettingsPage(props: {
                 { id: "light", name: "Clair" },
                 { id: "dark", name: "Sombre" },
               ]}
-              onPick={(value) => {
-                setThemeState(value);
-                setTheme(value);
-              }}
+              onPick={(value: Theme) => setTheme(value)}
             />
           </Row>
         </div>

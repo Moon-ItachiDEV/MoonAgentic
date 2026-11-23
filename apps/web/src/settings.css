@@ -126,9 +126,93 @@
   height: 34px;
   padding: 0 10px;
   border-radius: 10px;
-  color: var(--muted);
-  font-size: 14px;
+  color: var(--fg);
+  font-size: 14.5px;
   align-self: flex-start;
+}
+.set-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--muted);
+}
+.set-search:focus-within {
+  box-shadow: 0 0 0 2px var(--accent-soft, var(--border));
+}
+.set-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font: inherit;
+  font-size: 13.5px;
+  color: var(--fg);
+}
+.set-search input::-webkit-search-cancel-button {
+  display: none;
+}
+.set-none {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.set-side .set-nav {
+  flex: 1;
+  overflow-y: auto;
+  align-content: start;
+}
+.set-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.set-foot .set-gear.on {
+  background: var(--card);
+}
+.set-me {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.set-avatar {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.set-who {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 13.5px;
+  line-height: 1.2;
+}
+.set-login {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.set-who small {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.set-theme {
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
 }
 .set-back:hover {
   background: var(--hover);
@@ -145,7 +229,7 @@
   height: 35px;
   padding: 0 10px;
   border-radius: 10px;
-  font-size: 14px;
+  font-size: 14.5px;
   color: var(--fg);
   text-align: left;
 }
