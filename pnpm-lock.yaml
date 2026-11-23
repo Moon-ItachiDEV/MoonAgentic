@@ -47,6 +47,9 @@ importers:
       '@agentclientprotocol/sdk':
         specifier: ^2.9.1
         version: 2.9.1(zod@4.6.7)
+      '@anthropic-ai/claude-agent-sdk':
+        specifier: 0.3.330
+        version: 0.3.330(@anthropic-ai/sdk@1.12.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(zod@4.6.7)
       '@moonagentic/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

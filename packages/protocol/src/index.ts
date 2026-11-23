@@ -869,6 +869,11 @@ export interface QuotaWindow {
   usedPercent: number;
   /** When it frees up again, as a timestamp, when the agent says. */
   resetsAt?: number;
+  /**
+   * The one model this window limits (« Opus », « Fable »), named by the agent: reaching it
+   * stops that model only, not the agent.
+   */
+  model?: string;
 }
 
 /**
