@@ -11,6 +11,7 @@ import "./github.css";
 import "./remote.css";
 import "./pull-request.css";
 import "./composer.css";
+import "./mascot.css";
 import "./decision.css";
 import "./long-threads.css";
 import "./queue.css";

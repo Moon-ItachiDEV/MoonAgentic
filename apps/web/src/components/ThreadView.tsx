@@ -3,6 +3,7 @@ import {
   threadGroup,
   type AgentInfo,
   type Item,
+  type Mascot as MascotChoice,
   type Thread,
   type ToolContent,
 } from "@moonagentic/protocol";
@@ -43,6 +44,8 @@ import {
   isPlanModeSwitch,
 } from "../activity.ts";
 import { StateGlyph } from "./StateGlyph.tsx";
+import { Mascot } from "./Mascot.tsx";
+import { mascotExpression } from "../mascot.ts";
 import type { GlyphKind } from "../glyphs.ts";
 
 /** The working line's verb, when the agent's name stands before it. */
@@ -299,7 +302,9 @@ function Conversation({
   const team = isTeamThread(thread);
   const blocks = items ? (team ? teamFeed(thread, items, earlier > 0) : activityFeed(items)) : [];
   // What the agent does now, from the last item shown (plan mode switches are not shown).
-  const lastGlyph = activityGlyph(items?.findLast((i) => !isPlanModeSwitch(i)));
+  const lastItem = items?.findLast((i) => !isPlanModeSwitch(i));
+  const lastGlyph = activityGlyph(lastItem);
+  const mascot = agent?.mascot;
 
   const renderItem = (i: number, clamp?: boolean, showBy?: boolean) => {
     const item = items![i]!;
@@ -401,6 +406,7 @@ function Conversation({
                 revealed={!!reveal && block.indices.some((i) => items![i]?.id === reveal)}
                 onFold={() => setReveal(undefined)}
                 render={renderItem}
+                mascot={mascot && agent ? { mascot, name: agent.name } : undefined}
               />
             );
           }
@@ -422,7 +428,11 @@ function Conversation({
         )}
         {thread.status === "running" && !thread.inLine && blocks.at(-1)?.kind !== "detail" && (
           <div className="working">
-            <StateGlyph kind={lastGlyph} size={18} />
+            {mascot ? (
+              <Mascot mascot={mascot} expression={mascotExpression(lastItem)} name={agent.name} />
+            ) : (
+              <StateGlyph kind={lastGlyph} size={18} />
+            )}
             <span className="shimmer">
               {agent?.name ?? "L'agent"} {WORKING_VERB[lastGlyph] ?? "travaille…"}
             </span>
@@ -436,9 +446,12 @@ function Conversation({
           />
         )}
         {thread.status === "error" && thread.error && (
-          <div className="failed" role="alert">
-            <b>Le tour s'est arrêté</b>
-            {thread.error}
+          <div className={mascot ? "failed with-mascot" : "failed"} role="alert">
+            {mascot && agent && <Mascot mascot={mascot} expression="error" name={agent.name} />}
+            <span>
+              <b>Le tour s'est arrêté</b>
+              {thread.error}
+            </span>
           </div>
         )}
       </div>
@@ -637,6 +650,7 @@ function ActivityDetail({
   revealed,
   onFold,
   render,
+  mascot,
 }: {
   items: Item[];
   indices: number[];
@@ -645,6 +659,8 @@ function ActivityDetail({
   revealed: boolean;
   onFold: () => void;
   render: (index: number) => ReactNode;
+  /** The agent's moon, which stands in for the picture while the stretch is at work. */
+  mascot?: { mascot: MascotChoice; name: string };
 }) {
   const [opened, setOpened] = useState(false);
   const open = opened || revealed;
@@ -661,7 +677,13 @@ function ActivityDetail({
           setOpened(!open);
         }}
       >
-        {live ? <StateGlyph kind={activityGlyph(last)} size={18} /> : <IconChevron />}
+        {live && mascot ? (
+          <Mascot mascot={mascot.mascot} expression={mascotExpression(last)} name={mascot.name} />
+        ) : live ? (
+          <StateGlyph kind={activityGlyph(last)} size={18} />
+        ) : (
+          <IconChevron />
+        )}
         <span className={live ? "nm shimmer" : "nm"}>{label}</span>
         {steps > 0 && (
           <span className="meta">

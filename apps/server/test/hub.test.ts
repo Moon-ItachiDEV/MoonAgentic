@@ -741,6 +741,26 @@ describe("Hub with the demo agent", () => {
     expect(() => hub.toggleFavorite("__proto__", "x", true)).toThrow("Agent inconnu");
   });
 
+  it("gives agents their moon on every device, Hermes the crescent until told otherwise", () => {
+    const { hub, client } = setup();
+    const mascotOf = (id: string) => hub.snapshot().agents.find((a) => a.id === id)?.mascot;
+    expect(mascotOf("hermes")).toEqual({ shape: "crescent", color: "ice" });
+    expect(mascotOf("demo")).toBeUndefined();
+
+    hub.setMascot("demo", { shape: "full", color: "pink" });
+    expect(mascotOf("demo")).toEqual({ shape: "full", color: "pink" });
+    const sent = client.messages.at(-1);
+    expect(sent?.type === "agents" && sent.agents.find((a) => a.id === "demo")?.mascot).toEqual({
+      shape: "full",
+      color: "pink",
+    });
+
+    // None keeps the logo, and stays none rather than going back to the default.
+    hub.setMascot("hermes", null);
+    expect(mascotOf("hermes")).toBeUndefined();
+    expect(() => hub.setMascot("__proto__", null)).toThrow("Agent inconnu");
+  });
+
   it("hands enabled MCP servers to agents, and never shows their secrets to clients", async () => {
     const { hub, store, client, projectId } = setup();
     await hub.addMcpServer({
