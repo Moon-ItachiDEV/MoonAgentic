@@ -2,6 +2,9 @@
    remarks on any line, then commit, push and PR at the bottom. */
 .app.reviewing {
   grid-template-columns: 264px minmax(0, 1fr) minmax(440px, 46%);
+  /* One row as tall as the window: a long diff scrolls inside the panel, and commit, push
+     and PR stay in sight at its bottom instead of being pushed below the window. */
+  grid-template-rows: minmax(0, 100%);
 }
 .review-btn.on {
   background: var(--card);
@@ -16,6 +19,7 @@
 }
 .rv-panel {
   min-width: 0;
+  min-height: 0;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -389,4 +393,48 @@
 }
 .rv-panel .grow {
   flex: 1;
+}
+
+/* Remarks whose line changed since: flagged before they leave */
+.rv-lost {
+  display: grid;
+  gap: 6px;
+  /* Many of them still leave commit, push and PR in sight. */
+  max-height: 30vh;
+  overflow-y: auto;
+  padding: 8px 8px 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-radius: 12px;
+  font-size: 13px;
+}
+.rv-lost p {
+  margin: 0;
+  color: var(--warn);
+}
+.rv-lost-c {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.rv-lost-w {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+.rv-lost-w code {
+  margin-left: 6px;
+  color: var(--faint);
+}
+.rv-lost-t {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
