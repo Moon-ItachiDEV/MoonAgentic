@@ -108,6 +108,13 @@ async function pickAgent(page: Page, name: RegExp) {
   await page.getByRole("menuitemradio", { name }).click();
 }
 
+/**
+ * Waits for the composer to write in this project. The field is usable before any project
+ * exists (« Discussions » is made then), so being enabled no longer says the project is there.
+ */
+const inProject = (page: Page, name: string) =>
+  expect.poll(() => page.locator(".tray").first().textContent()).toContain(name);
+
 const options = (page: Page) => page.locator("#composer-suggest [role=option]");
 
 describe("composer", () => {
@@ -123,7 +130,7 @@ describe("composer", () => {
     await page.getByLabel("Dossier", { exact: true }).fill(project);
 
     await page.getByRole("button", { name: "Ajouter le projet" }).click();
-    await expect.poll(() => composer(page).isEnabled()).toBe(true);
+    await inProject(page, "projet");
     // The demo agent, not a real one that may be installed on this machine.
     await pickAgent(page, /Agent de démo/);
     await page.keyboard.press("Escape");
@@ -393,7 +400,7 @@ describe("composer", () => {
     await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
     await page.getByLabel("Dossier", { exact: true }).fill(repo);
     await page.getByRole("button", { name: "Ajouter le projet" }).click();
-    await expect.poll(() => composer(page).isEnabled()).toBe(true);
+    await inProject(page, "equipe");
 
     await composer(page).fill("/equipe Corrige answer et documente-la");
     await composer(page).press("Enter");

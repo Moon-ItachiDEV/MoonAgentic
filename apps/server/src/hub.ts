@@ -2,7 +2,7 @@ import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import { Push, type PushSend } from "./push.ts";
 import { randomUUID } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -534,6 +534,11 @@ export class Hub {
         return;
       case "project.create": {
         const id = this.createProject(message.name, message.path);
+        client.send({ type: "created", requestId: message.requestId, id });
+        return;
+      }
+      case "project.discussions": {
+        const id = this.discussionsProject();
         client.send({ type: "created", requestId: message.requestId, id });
         return;
       }
@@ -1117,6 +1122,21 @@ export class Hub {
     this.store.addProject(project);
     this.broadcast({ type: "project", project: this.withGit(project) });
     return project.id;
+  }
+
+  /**
+   * The project « Discussions », where conversations started without a project go: a folder
+   * beside where projects are usually made, created the first time it is needed. One already made
+   * is reused, wherever the next projects go.
+   */
+  discussionsProject(): string {
+    const made = this.store
+      .listProjects()
+      .find((p) => p.name === "Discussions" && path.basename(p.path) === "Discussions");
+    if (made && existsSync(made.path)) return made.id;
+    const folder = path.join(defaultParent(this.store.listProjects(), this.homeDir), "Discussions");
+    mkdirSync(folder, { recursive: true });
+    return this.createProject("Discussions", folder);
   }
 
   createThread(input: {

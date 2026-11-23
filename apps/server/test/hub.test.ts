@@ -2402,3 +2402,38 @@ describe("a planner card started from the board", () => {
     expect(store.listThreads()).toEqual([]);
   });
 });
+
+describe("project « Discussions »", () => {
+  it("is made under the home folder the first time, then reused", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-test-"));
+    const home = path.join(dir, ".home");
+    mkdirSync(home);
+    const store = new Store(path.join(dir, "state.sqlite"));
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(dir, ".worktrees"),
+      homeDir: home,
+    });
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    const client = new TestClient();
+    hub.connect(client);
+
+    const created = client.next((m) => m.type === "created");
+    await hub.handle(client, { type: "project.discussions", requestId: "r1" });
+    const id = ((await created) as { id: string }).id;
+    const project = store.listProjects().find((p) => p.id === id);
+    expect(project?.name).toBe("Discussions");
+    expect(project?.path).toBe(path.join(home, "Projets", "Discussions"));
+    expect(existsSync(project!.path)).toBe(true);
+
+    // Another project elsewhere does not move it.
+    const other = path.join(dir, "ailleurs", "app");
+    mkdirSync(other, { recursive: true });
+    hub.createProject("app", other);
+    expect(hub.discussionsProject()).toBe(id);
+    expect(store.listProjects()).toHaveLength(2);
+  });
+});

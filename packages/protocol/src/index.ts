@@ -1630,6 +1630,11 @@ export const ClientMessage = z.discriminatedUnion("type", [
    * Clones a GitHub repository into a new folder, `parent/name`, and makes it a project.
    * `repo` is `owner/name` or its address on github.com.
    */
+  /**
+   * The project « Discussions »: a folder of its own where a conversation goes when no project
+   * exists yet, so the home page's composer can be used at once. Made the first time.
+   */
+  z.object({ type: z.literal("project.discussions"), requestId: id }),
   z.object({
     type: z.literal("project.clone"),
     requestId: id,

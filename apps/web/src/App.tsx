@@ -183,6 +183,21 @@ export function App() {
     setPickedProjectId(id);
     writePref("project", id);
   };
+  /** With no project yet, the home page's conversation goes to « Discussions ». */
+  // A project known or added meanwhile (the dialog, another window) is the one used:
+  // « Discussions » is neither made nor picked over it.
+  const needDiscussions = async () => {
+    const known = connection.getState();
+    // Before the server has said which projects exist, none is assumed missing.
+    if (!known.ready) throw new Error("MoonAgentic se connecte encore : réessaie dans un instant.");
+    const already = known.projects[0]?.id;
+    if (already) return already;
+    const id = await connection.request({ type: "project.discussions", requestId: newId() });
+    const now = connection.getState().projects;
+    if (now.some((p) => p.id !== id)) return id;
+    pickProject(id);
+    return id;
+  };
   const go = (next: Parameters<typeof navigate>[0]) => {
     setDrawer(false);
     setReviewOpen(false);
@@ -375,6 +390,7 @@ export function App() {
           project={project}
           {...(placeholder ? { placeholder } : {})}
           onNewProject={() => setCreatingProject(true)}
+          {...(state.ready && !state.projects.length ? { onNeedProject: needDiscussions } : {})}
           projects={state.projects}
           onPickProject={pickProject}
           mcpServers={state.mcpServers}

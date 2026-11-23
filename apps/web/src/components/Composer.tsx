@@ -86,6 +86,11 @@ export function Composer(props: {
   /** What the empty field says, when it is not the usual invitation. */
   placeholder?: string;
   onNewProject: () => void;
+  /**
+   * With no project yet: makes the project « Discussions » and picks it, so what is written
+   * on the home page goes somewhere. Answers its id.
+   */
+  onNeedProject?: () => Promise<string>;
   /** The projects a new conversation can start in, picked from the tray under the box. */
   projects?: Project[];
   onPickProject?: (id: string) => void;
@@ -285,8 +290,29 @@ export function Composer(props: {
     !busy &&
     !running &&
     !!agent?.available &&
-    !!project;
+    (!!project || !!props.onNeedProject);
   const canDictate = !!project && dictationSupported();
+
+  // One request for « Discussions » at a time, however often the field is focused.
+  const needing = useRef<Promise<string | undefined> | null>(null);
+  const needProject = (): Promise<string | undefined> => {
+    if (!props.onNeedProject) return Promise.resolve(undefined);
+    needing.current ??= props
+      .onNeedProject()
+      .catch((e: unknown) => {
+        connection.notify(e instanceof Error ? e.message : String(e));
+        return undefined;
+      })
+      .finally(() => {
+        needing.current = null;
+      });
+    return needing.current;
+  };
+  // Opening the agent's menu or « + » also needs a folder: models and files are asked there.
+  useEffect(() => {
+    if (!project && (pickerOpen || plusOpen)) void needProject();
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, pickerOpen, plusOpen]);
 
   const startVoice = () => {
     if (!canDictate || voiceRef.current) return;
@@ -601,7 +627,7 @@ export function Composer(props: {
       return;
     }
     const sendTo = to ?? agentId;
-    if (!canSend || !sendTo || !project) return;
+    if (!canSend || !sendTo) return;
     const value = submission.text;
     const attachments = images.ready.length ? { attachments: images.ready.map((i) => i.id) } : {};
     if (thread) {
@@ -622,15 +648,18 @@ export function Composer(props: {
     // Where the user was when they sent it: the new thread opens only if they stayed.
     const from = location.pathname;
     try {
+      // No project yet: the conversation goes to « Discussions », made now if need be.
+      const projectId = project?.id ?? (await needProject());
+      if (!projectId) return;
       const id = await connection.request({
         type: "thread.create",
         requestId: newId(),
-        projectId: project.id,
+        projectId,
         agentId: sendTo,
         permissionMode: newMode,
         ...(model && own ? { model } : {}),
         ...(changed.length ? { settings: Object.fromEntries(changed) } : {}),
-        ...(project.git ? { isolated } : {}),
+        ...(project?.git ? { isolated } : {}),
         text: value,
         ...attachments,
         ...(goal === undefined ? {} : { goal: {} }),
@@ -724,21 +753,19 @@ export function Composer(props: {
     };
   }, [canTake]);
 
-  const placeholder = !project
-    ? "Crée d'abord un projet pour parler à un agent"
-    : voice
-      ? "Je t'écoute…"
-      : props.placeholder
-        ? props.placeholder
-        : thread && running
-          ? narrow
-            ? "Ajouter une consigne…"
-            : `Ajouter une consigne pendant que ${agent?.name ?? "l'agent"} travaille…`
-          : thread
-            ? `Répondre à ${agent?.name ?? "l'agent"}…`
-            : narrow
-              ? "Demande à tes agents…"
-              : "Demande n'importe quoi à tes agents…";
+  const placeholder = voice
+    ? "Je t'écoute…"
+    : props.placeholder
+      ? props.placeholder
+      : thread && running
+        ? narrow
+          ? "Ajouter une consigne…"
+          : `Ajouter une consigne pendant que ${agent?.name ?? "l'agent"} travaille…`
+        : thread
+          ? `Répondre à ${agent?.name ?? "l'agent"}…`
+          : narrow
+            ? "Demande à tes agents…"
+            : "Demande n'importe quoi à tes agents…";
 
   // On a phone the composer is one line until it is used, as in the mockup.
   const hasImages = images.drafts.length > 0;
@@ -953,7 +980,6 @@ export function Composer(props: {
           rows={1}
           value={text}
           placeholder={placeholder}
-          disabled={!project}
           aria-label="Message"
           role="combobox"
           aria-autocomplete="list"
@@ -975,6 +1001,9 @@ export function Composer(props: {
             images.add(files);
           }}
           onFocus={() => {
+            // With no project yet, « Discussions » is made as soon as the user comes to write,
+            // so the agent's models, files and commands are there by the time they send.
+            if (!project) void needProject();
             // Skills or commands added to the folder since show up without a reload.
             loadCatalog();
           }}
@@ -1019,7 +1048,7 @@ export function Composer(props: {
         <div className="cbar">
           <PlusMenu
             open={plusOpen}
-            disabled={!project}
+            disabled={!project && !props.onNeedProject}
             inThread={!!thread}
             onToggle={(open) => {
               setPlusOpen(open);
@@ -1051,7 +1080,7 @@ export function Composer(props: {
             mode={mode}
             open={accessOpen}
             narrow={narrow}
-            disabled={!project}
+            disabled={!project && !props.onNeedProject}
             onToggle={(open) => {
               setAccessOpen(open);
               if (open) closeMenus("access");
