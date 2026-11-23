@@ -531,12 +531,14 @@ export class Hub {
         return;
       case "thread.switchAgent":
         await this.switchAgent(message.threadId, message.agentId);
+        this.keepChoice(message.threadId);
         return;
       case "thread.setPermissionMode":
         this.setPermissionMode(message.threadId, message.permissionMode);
         return;
       case "thread.setModel":
         await this.setModel(message.threadId, message.model);
+        this.keepChoice(message.threadId);
         return;
       case "thread.setSetting":
         await this.setSetting(message.threadId, message.settingId, message.value);
@@ -877,6 +879,25 @@ export class Hub {
     return this.store.getSetting<CoordinatorSettings>("coordinator", { routes: {} });
   }
 
+  /**
+   * The agent and model the user has just given, by hand, to a thread a coordinator opened:
+   * the next threads coordinators open start with them, until a kind of work says otherwise.
+   */
+  private keepChoice(threadId: string): void {
+    const thread = this.store.getThread(threadId);
+    if (!thread?.openedBy || thread.parentId) return;
+    const settings = this.coordinatorSettings();
+    const now = settings.routes.default;
+    if (now?.agentId === thread.agentId && now.model === thread.model) return;
+    this.setCoordinatorSettings({
+      ...settings,
+      routes: {
+        ...settings.routes,
+        default: { agentId: thread.agentId, ...(thread.model ? { model: thread.model } : {}) },
+      },
+    });
+  }
+
   private setCoordinatorSettings(settings: CoordinatorSettings): void {
     this.store.setSetting("coordinator", settings);
     this.broadcast({ type: "coordinatorSettings", settings });
@@ -1190,8 +1211,10 @@ export class Hub {
           throw new Error(
             `Tu as déjà ouvert ${opened} fils pour ce message : demande à l'utilisateur avant d'en ouvrir d'autres.`,
           );
-        // Asked by name, else where the settings send this kind of work, else its own agent.
-        const route = kind ? this.coordinatorSettings().routes[kind as WorkKind] : undefined;
+        // Asked by name, else where the settings send this kind of work, else where they
+        // send any work, else its own agent.
+        const routes = this.coordinatorSettings().routes;
+        const route = (kind ? routes[kind as WorkKind] : undefined) ?? routes.default;
         const asked = str("agent", 200);
         const agentId = asked ?? route?.agentId ?? coordinator.agentId;
         const model =
@@ -1446,6 +1469,7 @@ export class Hub {
           ? `Équipe terminée : ${n} morceau${n > 1 ? "x" : ""} fusionné${n > 1 ? "s" : ""}.`
           : `Équipe en échec${team.error ? ` : ${team.error}` : "."}`,
       files: [],
+      ...(team.phase === "failed" ? { failed: true } : {}),
       at: Date.now(),
     });
   }

@@ -12,7 +12,7 @@ import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
-import { GROUP_LABEL } from "../project-threads.ts";
+import { GROUP_LABEL, threadLine } from "../project-threads.ts";
 import { Clamp } from "./Clamp.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TeamCard } from "./TeamCard.tsx";
@@ -27,7 +27,10 @@ export function ThreadView({
   agents,
   threads,
   onOpenThread,
+  intro,
 }: {
+  /** Shown above the conversation, such as a coordinator's ways to start. */
+  intro?: ReactNode;
   thread: Thread;
   items: Item[] | undefined;
   agents: AgentInfo[];
@@ -153,6 +156,7 @@ export function ThreadView({
       }}
     >
       <div className="feed">
+        {intro}
         {/* A team started before the timeline was recorded has nothing to draw. */}
         {!!strip?.team.timeline?.length && (
           <TeamStrip
@@ -268,10 +272,10 @@ function FeedItem({
           </div>
         );
       }
-      const group = threadGroup(
-        opened,
-        threads.filter((t) => t.parentId === item.threadId),
-      );
+      const members = threads.filter((t) => t.parentId === item.threadId);
+      const group = threadGroup(opened, members);
+      // What it waits for, in its own words: a state alone would not say what to do.
+      const why = group === "waiting" ? threadLine(opened, members) : "";
       return (
         <button
           className="opened-line"
@@ -281,20 +285,20 @@ function FeedItem({
         >
           <IconBranch size={13} />
           <span className="oc-t">{opened.title}</span>
-          <span className="oc-state">{opened.held ? "En file" : GROUP_LABEL[group]}</span>
+          <span className="oc-state">{opened.held ? "En file" : why || GROUP_LABEL[group]}</span>
         </button>
       );
     }
     case "result": {
       const done = threads.find((t) => t.id === item.threadId);
       return (
-        <div className="result">
+        <div className={`result${item.failed ? " failed-result" : ""}`}>
           <button
             className="result-t"
             disabled={!done}
             onClick={() => done && onOpenThread(done.id)}
           >
-            <IconCheck size={12} />
+            {item.failed ? <IconAlert size={13} /> : <IconCheck size={12} />}
             {done?.title ?? item.title}
           </button>
           <p className="result-s">{item.summary}</p>

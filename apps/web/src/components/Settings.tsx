@@ -7,9 +7,9 @@ import {
   type McpServerInfo,
   type Project,
   type TeamMember,
-  WORK_KINDS,
-  type WorkKind,
+  ROUTE_KINDS,
 } from "@moonagentic/protocol";
+import { KIND_LABEL } from "../project-threads.ts";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
 import {
@@ -145,14 +145,6 @@ export function SettingsNav(props: {
     </aside>
   );
 }
-
-const KIND_LABEL: Record<WorkKind, string> = {
-  question: "Question",
-  bug: "Bug",
-  fonctionnalite: "Fonctionnalité",
-  relecture: "Relecture",
-  tests: "Tests",
-};
 
 function Row(props: { title: string; text?: ReactNode; children?: ReactNode }) {
   return (
@@ -451,10 +443,11 @@ export function SettingsPage(props: {
         <>
           <p className="set-empty">
             Quand un coordinateur ouvre un fil, il l'envoie à l'agent choisi ici pour ce type de
-            travail. Sans choix, le fil garde l'agent du coordinateur.
+            travail, sinon à celui de « Par défaut ». Sans aucun choix, le fil garde l'agent et le
+            modèle du coordinateur.
           </p>
           <div className="set-card">
-            {WORK_KINDS.map((kind) => {
+            {ROUTE_KINDS.map((kind) => {
               const route = props.coordinator.routes[kind];
               const agent = props.agents.find((a) => a.id === route?.agentId);
               const set = (agentId: string, model?: string) =>
@@ -472,7 +465,9 @@ export function SettingsPage(props: {
                       value={route?.agentId ?? ""}
                       onChange={(e) => set(e.target.value)}
                     >
-                      <option value="">Agent du coordinateur</option>
+                      <option value="">
+                        {kind === "default" ? "Agent du coordinateur" : "Par défaut"}
+                      </option>
                       {/* A route to an agent that is gone stays shown, so it can be changed. */}
                       {route && !ready.some((a) => a.id === route.agentId) && (
                         <option value={route.agentId}>
