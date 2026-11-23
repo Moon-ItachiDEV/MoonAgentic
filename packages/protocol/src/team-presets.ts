@@ -67,7 +67,8 @@ export const TEAM_PRESETS: TeamPreset[] = [
  * offers, or else the first agent ready, on its own default model.
  */
 export function pickMember(agents: AgentInfo[], prefer: RegExp[]): TeamMember | undefined {
-  const usable = agents.filter((a) => a.available);
+  // An agent that failed to give its models (not signed in, say) cannot take a role.
+  const usable = agents.filter((a) => a.available && !a.modelsError);
   for (const pattern of prefer) {
     for (const agent of usable) {
       const model = agent.models?.find((m) => pattern.test(m.name) || pattern.test(m.id));

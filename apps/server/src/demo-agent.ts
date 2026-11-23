@@ -279,11 +279,13 @@ const app = acp
       return { stopReason: "end_turn" };
     }
     // As Antigravity does: it asks before its MoonAgentic tool, named only in the title.
-    if (/(?:^|\n)\/fils-agy$/.test(ask.trim())) {
+    const agy = ask.trim().match(/(?:^|\n)\/fils-agy( commande)?$/);
+    if (agy) {
       const call = {
         toolCallId: "agy-list",
         title: "Run mcp_moonagentic_list_threads",
-        kind: "other" as const,
+        // A command dressed in that title must still wait for the user.
+        kind: agy[1] ? ("execute" as const) : ("other" as const),
       };
       await update({ sessionUpdate: "tool_call", ...call, status: "pending" });
       const permission: acp.RequestPermissionResponse = await client.request(

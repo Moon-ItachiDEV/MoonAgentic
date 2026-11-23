@@ -185,6 +185,18 @@ describe("a project's coordinator", () => {
     expect(store.listItems(coordinatorId).some((i) => i.kind === "permission")).toBe(false);
   });
 
+  it("still asks the user for a command that only takes the title of its own tools", async () => {
+    const { hub, store, coordinatorId } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await hub.handle(client, {
+      type: "thread.send",
+      threadId: coordinatorId,
+      text: "/fils-agy commande",
+    });
+    await soon(() => store.getThread(coordinatorId)!.status).toBe("waiting");
+    expect(store.listItems(coordinatorId).some((i) => i.kind === "permission")).toBe(true);
+  });
+
   it("reaches its own project only, with its own token only", async () => {
     const { hub, otherId, tokens, post, say, hold } = await coordinated();
     const elsewhere = hub.createThread({

@@ -2534,14 +2534,15 @@ export class Hub {
     // MoonAgentic's own tools are the coordinator's work, already limited by the server:
     // asking the user before each one would make it useless.
     this.noteToolName(threadId, request.toolCall);
-    // An agent that does not name the tool is taken at its title, but never for a change.
+    // An agent that does not name the tool is taken at its title, for a call of no known kind:
+    // never a change of files nor a command.
     const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
     const own =
       thread.kind === "coordinator" &&
       (named !== undefined
         ? OWN_TOOL.test(named)
         : OWN_TOOL.test(request.toolCall.title ?? "") &&
-          !READ_ONLY_REFUSED.has(request.toolCall.kind ?? ""));
+          (!request.toolCall.kind || request.toolCall.kind === "other"));
     if ((thread.permissionMode === "full" && !edits) || own) {
       const allow =
         request.options.find((o) => o.kind === "allow_once") ??
