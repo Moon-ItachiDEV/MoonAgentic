@@ -90,6 +90,14 @@ export function cardWork(card: PlanTask, threads: Thread[], agents: AgentInfo[])
   );
 }
 
+/** The thread a card follows: its column is then that thread's real state, not the user's choice. */
+export const followedThread = (card: PlanTask, threads: Thread[]): Thread | undefined =>
+  card.team || !card.threadId ? undefined : threads.find((t) => t.id === card.threadId);
+
+/** True for a card whose work can be started from the board: the user's own, with no thread yet. */
+export const canRun = (card: PlanTask, threads: Thread[]): boolean =>
+  !card.team && !followedThread(card, threads);
+
 const pad = (n: number) => String(n).padStart(2, "0");
 
 /** The day of a due date, as a date field reads and writes it. */

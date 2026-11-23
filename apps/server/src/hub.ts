@@ -70,7 +70,7 @@ import {
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { Coordinators } from "./coordinator.ts";
 import { historyBefore } from "./history.ts";
-import { Planner } from "./planner.ts";
+import { cardText, Planner } from "./planner.ts";
 import { COORDINATOR_TOOLS } from "./coordinator-tools.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
@@ -322,6 +322,7 @@ export class Hub {
     }
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
     this.planner = new Planner(store, (m) => this.broadcast(m));
+    this.planner.syncThreads();
     this.quotas = new Quotas({
       readers: options.quotaReaders ?? {},
       available: () =>
@@ -774,6 +775,21 @@ export class Hub {
         this.planner.remove(message.id);
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "plan.run": {
+        const id = this.planner.run(message.id, (card) =>
+          this.createThread({
+            projectId: card.projectId,
+            agentId: message.agentId,
+            permissionMode: message.permissionMode,
+            model: message.model,
+            isolated: message.isolated,
+            title: card.title,
+            text: cardText(card),
+          }),
+        );
+        client.send({ type: "created", requestId: message.requestId, id });
+        return;
+      }
       case "schedule.add": {
         if (!this.store.getProject(message.projectId)) throw new Error("Projet introuvable.");
         // Checked now, so a missing agent is said at once rather than at the task's time.
@@ -1604,6 +1620,7 @@ export class Hub {
       removed.flatMap((i) => (i.kind === "user" ? (i.images ?? []).map((image) => image.id) : [])),
     );
     this.broadcast({ type: "thread", thread });
+    this.planner.syncThread(thread);
     this.timelineCut(threadId);
     // A ref left behind only keeps an old tree alive, so failing here is harmless.
     await dropCheckpoints(
@@ -2730,7 +2747,10 @@ export class Hub {
   }
 
   private updateThread(threadId: string, patch: Parameters<Store["updateThread"]>[1]): void {
-    this.broadcast({ type: "thread", thread: this.store.updateThread(threadId, patch) });
+    const thread = this.store.updateThread(threadId, patch);
+    this.broadcast({ type: "thread", thread });
+    // A card that follows this thread moves with it.
+    this.planner.syncThread(thread);
   }
 
   private sendToViewers(threadId: string, message: ServerMessage): void {

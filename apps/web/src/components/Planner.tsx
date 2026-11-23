@@ -2,6 +2,7 @@ import {
   PLAN_STATUSES,
   type AgentInfo,
   type ClientMessage,
+  type PermissionMode,
   type PlanStatus,
   type PlanTask,
   type Project,
@@ -12,15 +13,18 @@ import { useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import {
   PLAN_COLUMNS,
+  canRun,
   cardWork,
   dayToDue,
   dueDay,
   dueLabel,
+  followedThread,
   isLate,
   planLabel,
 } from "../planner.ts";
 import { readPref, writePref } from "../prefs.ts";
-import { IconClose, IconFolder } from "./icons.tsx";
+import type { PlannerView } from "../router.ts";
+import { IconClose, IconFolder, IconPlay } from "./icons.tsx";
 import { PlanSchedules } from "./PlanSchedules.tsx";
 import { PlanTimeline } from "./PlanTimeline.tsx";
 
@@ -39,11 +43,14 @@ const move = (card: PlanTask, status: PlanStatus) =>
   call({ type: "plan.update", requestId: newId(), id: card.id, status });
 
 /**
- * A project's planner: its cards by column. The user writes and moves their own cards; a
- * team's cards are laid down by its lead and move only as the team's work really does.
+ * A project's planner: its cards by column. The user writes and moves their own cards, and
+ * starts one's work in a new thread; from then on the card moves only as that thread really
+ * does. A team's cards are laid down by its lead and move with the team's work.
  */
 export function Planner({
   project,
+  view: asked,
+  onView,
   plan,
   threads,
   agents,
@@ -53,6 +60,10 @@ export function Planner({
   onNewProject,
 }: {
   project: Project | undefined;
+  /** The view its address names; the board when none. */
+  view: PlannerView | undefined;
+  /** Goes to a view's address. */
+  onView: (view: PlannerView | undefined) => void;
   plan: PlanTask[];
   /** The tasks planned for later, of every project. */
   schedules: Schedule[];
@@ -65,14 +76,13 @@ export function Planner({
 }) {
   const [filter, setFilter] = useState<Filter>("all");
   const [openId, setOpenId] = useState<string | null>(null);
+  // The card whose detail opened on its launch, from « Lancer » on the board.
+  const [launchId, setLaunchId] = useState<string | null>(null);
   const [adding, setAdding] = useState<PlanStatus | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [over, setOver] = useState<PlanStatus | null>(null);
-  // The view and its scale are this device's own choice.
-  const [view, setView] = useState<"tableau" | "timeline" | "planifiees">(() => {
-    const kept = readPref("plannerView");
-    return kept === "timeline" || kept === "planifiees" ? kept : "tableau";
-  });
+  const view = asked ?? "tableau";
+  // The timeline's scale is this device's own choice.
   const [zoom, setZoom] = useState<"sem" | "mois">(() =>
     readPref("plannerZoom") === "sem" ? "sem" : "mois",
   );
@@ -148,8 +158,9 @@ export function Planner({
               aria-selected={view === key}
               className={view === key ? "on" : ""}
               onClick={() => {
-                setView(key);
-                writePref("plannerView", key);
+                // Board or timeline: the one last looked at is where « Planner » opens.
+                if (key !== "planifiees") writePref("plannerView", key);
+                onView(key === "tableau" ? undefined : key);
               }}
             >
               {label}
@@ -161,7 +172,7 @@ export function Planner({
           onClick={() => {
             if (view === "planifiees") return onSchedule();
             // A card is written on the board, where its column is chosen.
-            setView("tableau");
+            onView(undefined);
             setAdding("todo");
           }}
         >
@@ -255,7 +266,16 @@ export function Planner({
                     work={cardWork(card, threads, agents)}
                     late={isLate(card, now)}
                     dragging={card.id === dragId}
+                    free={!card.team && !followedThread(card, threads)}
                     onOpen={() => setOpenId(card.id)}
+                    onRun={
+                      card.status === "todo" && canRun(card, threads)
+                        ? () => {
+                            setLaunchId(card.id);
+                            setOpenId(card.id);
+                          }
+                        : undefined
+                    }
                     onDrag={setDragId}
                   />
                 ))}
@@ -286,9 +306,16 @@ export function Planner({
           key={open.id}
           card={open}
           work={cardWork(open, threads, agents)}
+          project={project}
+          agents={agents}
+          followed={followedThread(open, threads)}
+          launch={launchId === open.id}
           threads={threads.filter((t) => t.projectId === project.id && !t.archived)}
           onOpenThread={onOpenThread}
-          onClose={() => setOpenId(null)}
+          onClose={() => {
+            setOpenId(null);
+            setLaunchId(null);
+          }}
         />
       )}
     </div>
@@ -300,18 +327,22 @@ function Card({
   work,
   late,
   dragging,
+  free,
   onOpen,
+  onRun,
   onDrag,
 }: {
   card: PlanTask;
   work: ReturnType<typeof cardWork>;
   late: boolean;
   dragging: boolean;
+  /** Moved by hand: a card a thread or a team works on is moved by that work. */
+  free: boolean;
   onOpen: () => void;
+  /** Opens the card on its launch, when its work can be started. */
+  onRun: (() => void) | undefined;
   onDrag: (id: string | null) => void;
 }) {
-  // A team's card is moved by the team's work, not by hand.
-  const free = !card.team;
   const step = (by: -1 | 1) => {
     const next = PLAN_STATUSES[PLAN_STATUSES.indexOf(card.status) + by];
     if (free && next) void move(card, next);
@@ -323,7 +354,7 @@ function Card({
       tabIndex={0}
       draggable={free}
       aria-label={`Tâche ${card.number} : ${card.title}, ${planLabel(card.status)}`}
-      aria-describedby={free ? "pl-help" : "pl-help-team"}
+      aria-describedby={free ? "pl-help" : card.team ? "pl-help-team" : "pl-help-thread"}
       onClick={onOpen}
       onKeyDown={(e) => {
         if (e.target !== e.currentTarget) return;
@@ -347,6 +378,19 @@ function Card({
         </span>
       </div>
       <h3>{card.title}</h3>
+      {onRun && (
+        <button
+          className="pl-run"
+          aria-label={`Lancer la tâche ${card.number}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRun();
+          }}
+        >
+          <IconPlay size={11} />
+          Lancer
+        </button>
+      )}
       {(work.agent || work.label || card.due) && (
         <div className="pl-meta">
           {(work.agent || work.label) && (
@@ -408,20 +452,35 @@ function QuickAdd({
 function Detail({
   card,
   work,
+  project,
+  agents,
+  followed,
+  launch,
   threads,
   onOpenThread,
   onClose,
 }: {
   card: PlanTask;
   work: ReturnType<typeof cardWork>;
+  project: Project;
+  agents: AgentInfo[];
+  /** The thread the card follows: its state is then that thread's. */
+  followed: Thread | undefined;
+  /** Opened from « Lancer »: the launch is shown at once. */
+  launch: boolean;
   threads: Thread[];
   onOpenThread: (id: string) => void;
   onClose: () => void;
 }) {
+  const [launching, setLaunching] = useState(launch);
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description ?? "");
   const panel = useRef<HTMLElement>(null);
-  useEffect(() => panel.current?.focus(), []);
+  // Also once the card got its thread: the launch that had the focus is gone, and Escape
+  // must still close the panel.
+  useEffect(() => {
+    panel.current?.focus();
+  }, [followed?.id]);
   // What another device writes shows here too, unless this one is being typed over.
   const known = useRef({ title: card.title, description: card.description ?? "" });
   useEffect(() => {
@@ -474,6 +533,22 @@ function Detail({
           </button>
         </div>
         <div className="pl-detail-b">
+          {launching && !card.team && !followed && (
+            <Launch
+              card={card}
+              project={project}
+              agents={agents}
+              // What is being typed is what the agent is told.
+              before={() => {
+                saveTitle();
+                saveDescription();
+              }}
+              onCancel={() => {
+                setLaunching(false);
+                panel.current?.focus();
+              }}
+            />
+          )}
           <label className="field">
             Titre
             <input
@@ -502,7 +577,7 @@ function Detail({
                   key={c.status}
                   className={`s-${c.status}${card.status === c.status ? " on" : ""}`}
                   aria-pressed={card.status === c.status}
-                  disabled={!!card.team}
+                  disabled={!!card.team || !!followed}
                   onClick={() => card.status !== c.status && void move(card, c.status)}
                 >
                   <i />
@@ -513,6 +588,13 @@ function Detail({
             {card.team && (
               <small className="pl-note">
                 Cette carte suit le travail de l'équipe : son état change avec lui.
+              </small>
+            )}
+            {followed && (
+              <small className="pl-note">
+                Cette carte suit son fil : elle passe « En test » quand l'agent a fini, et « Livré »
+                quand le fil est résolu ou sa pull request fusionnée. Choisis « Aucun » ci-dessous
+                pour la déplacer à la main.
               </small>
             )}
           </div>
@@ -563,6 +645,12 @@ function Detail({
           )}
         </div>
         <div className="pl-detail-f">
+          {!card.team && !followed && !launching && (
+            <button className="btn pri" onClick={() => setLaunching(true)}>
+              <IconPlay size={12} />
+              Lancer
+            </button>
+          )}
           {work.threadId && (
             <button
               className="btn"
@@ -590,6 +678,147 @@ function Detail({
   );
 }
 
+/**
+ * Starts a card's work: a new thread of the project gets the card's title and description,
+ * with the agent chosen here. The card then follows that thread.
+ */
+function Launch({
+  card,
+  project,
+  agents,
+  before,
+  onCancel,
+}: {
+  card: PlanTask;
+  project: Project;
+  agents: AgentInfo[];
+  before: () => void;
+  onCancel: () => void;
+}) {
+  const ready = agents.filter((a) => a.available);
+  const [agentId, setAgentId] = useState(() => {
+    const last = readPref("agent");
+    return ready.find((a) => a.id === last)?.id ?? ready[0]?.id ?? "";
+  });
+  const agent = agents.find((a) => a.id === agentId);
+  const [model, setModel] = useState("");
+  const [mode, setMode] = useState<PermissionMode>(() =>
+    readPref("permissionMode") === "full" ? "full" : "supervised",
+  );
+  const [isolated, setIsolated] = useState(() => readPref("isolated") !== "false");
+  const [busy, setBusy] = useState(false);
+  // Asked for from the foot of a long card: it comes into sight.
+  const form = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    // In braces: a recent browser answers a scroll with a promise, which is no clean-up.
+    form.current?.scrollIntoView({ block: "nearest" });
+  }, []);
+
+  // The models come from the agent itself: it is asked once, as the model picker does.
+  useEffect(() => {
+    if (!agent?.available || agent.models || agent.modelsError) return;
+    connection.send({ type: "agent.discover", agentId: agent.id, projectId: project.id });
+  }, [agent, project.id]);
+
+  const run = async () => {
+    if (!agentId || busy) return;
+    setBusy(true);
+    before();
+    try {
+      await connection.request({
+        type: "plan.run",
+        requestId: newId(),
+        id: card.id,
+        agentId,
+        permissionMode: mode,
+        ...(model ? { model } : {}),
+        ...(project.git ? { isolated } : {}),
+      });
+      // The card now has its thread: this form goes with what made it possible.
+    } catch (error) {
+      connection.notify(error instanceof Error ? error.message : String(error));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form
+      ref={form}
+      className="pl-launch"
+      aria-label={`Lancer la tâche ${card.number}`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        void run();
+      }}
+    >
+      <p>
+        Un nouveau fil de « {project.name} » reçoit le titre et la description de la carte. La carte
+        suit ensuite ce fil.
+      </p>
+      <label className="field">
+        Agent
+        <select
+          aria-label="Agent"
+          value={agentId}
+          onChange={(e) => {
+            setAgentId(e.target.value);
+            setModel("");
+          }}
+        >
+          {ready.map((a) => (
+            <option key={a.id} value={a.id}>
+              {a.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      {agent?.models && agent.models.length > 0 && (
+        <label className="field">
+          Modèle
+          <select
+            value={model || agent.defaultModel || ""}
+            onChange={(e) => setModel(e.target.value)}
+          >
+            {agent.models.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      <label className="field">
+        Accès de l'agent
+        <select value={mode} onChange={(e) => setMode(e.target.value as PermissionMode)}>
+          <option value="supervised">Il me demande avant d'agir</option>
+          <option value="full">Accès complet, sans rien demander</option>
+        </select>
+      </label>
+      {project.git && (
+        <label className="pl-check">
+          <input
+            type="checkbox"
+            checked={isolated}
+            onChange={(e) => setIsolated(e.target.checked)}
+          />
+          Branche à part
+        </label>
+      )}
+      {ready.length === 0 && (
+        <p className="error">Aucun agent n'est prêt : ouvre les Connexions.</p>
+      )}
+      <div className="pl-launch-f">
+        <button type="button" className="btn quiet" disabled={busy} onClick={onCancel}>
+          Annuler
+        </button>
+        <button className="btn pri" disabled={busy || !agentId}>
+          {busy ? "Lancement…" : "Lancer la tâche"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 /** What a screen reader hears of a card's keys. */
 const PlannerHelp = () => (
   <>
@@ -598,6 +827,9 @@ const PlannerHelp = () => (
     </p>
     <p id="pl-help-team" className="vh">
       Entrée pour ouvrir. L'état de cette carte suit le travail de l'équipe.
+    </p>
+    <p id="pl-help-thread" className="vh">
+      Entrée pour ouvrir. L'état de cette carte suit son fil.
     </p>
   </>
 );

@@ -93,8 +93,6 @@ export function App() {
     setSideOff(off);
     writePref("sideOff", String(off));
   };
-  /** Bumped to open the planner again on the view just chosen. */
-  const [plannerShown, setPlannerShown] = useState(0);
   const [creatingProject, setCreatingProject] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
@@ -187,6 +185,13 @@ export function App() {
     setReviewOpen(false);
     navigate(next);
   };
+  /** Opens the planner on its board or its timeline, the one last looked at on this device. */
+  const openPlanner = () =>
+    go(
+      readPref("plannerView") === "timeline"
+        ? { name: "planner", view: "timeline" }
+        : { name: "planner" },
+    );
   /** Opens a thread where it lives: a coordinator on its project's page. */
   const openThread = (id: string) => {
     const target = state.threads.find((t) => t.id === id);
@@ -278,7 +283,12 @@ export function App() {
       icon: <IconInbox size={15} />,
       run: () => setRequestsOpen(true),
     },
-    { label: "Planner", icon: <IconBoard size={15} />, run: () => go({ name: "planner" }) },
+    { label: "Planner", icon: <IconBoard size={15} />, run: openPlanner },
+    {
+      label: "Tâches planifiées",
+      icon: <IconClock size={15} />,
+      run: () => go({ name: "planner", view: "planifiees" }),
+    },
     { label: "Connexions", icon: <IconPlug size={15} />, run: () => setConnectionsOpen(true) },
     { label: "Serveurs MCP", icon: <IconPlug size={15} />, run: () => setMcpOpen(true) },
     ...(thread
@@ -419,15 +429,11 @@ export function App() {
           state={sideState}
           activeThreadId={thread?.id}
           activeProjectId={project?.id}
-          onPlanner={route.name === "planner"}
+          onPlanner={route.name === "planner" && route.view !== "planifiees"}
+          onSchedules={route.name === "planner" && route.view === "planifiees"}
           onProject={route.name === "project"}
-          onOpenPlanner={() => go({ name: "planner" })}
-          onOpenSchedules={() => {
-            writePref("plannerView", "planifiees");
-            // A planner already open shows that view too.
-            setPlannerShown((n) => n + 1);
-            go({ name: "planner" });
-          }}
+          onOpenPlanner={openPlanner}
+          onOpenSchedules={() => go({ name: "planner", view: "planifiees" })}
           onNewThread={() => go({ name: "home" })}
           onNewProject={() => {
             setDrawer(false);
@@ -445,7 +451,7 @@ export function App() {
             pickProject(id);
             // On the planner, picking a project shows that project's planner; anywhere else,
             // its page, with its conversations grouped by state.
-            if (route.name === "planner") go({ name: "planner" });
+            if (route.name === "planner") go(route);
             else go({ name: "project", projectId: id });
           }}
           onNewInProject={(id) => {
@@ -605,7 +611,7 @@ export function App() {
                   onDeleteThread={askDeleteThread}
                   onOpenPlanner={() => {
                     pickProject(routeProject.id);
-                    go({ name: "planner" });
+                    openPlanner();
                   }}
                   onRemoveProject={() => askRemoveProject(routeProject.id)}
                   coordinator={coordinator}
@@ -780,8 +786,10 @@ export function App() {
           <ErrorBoundary key={`planner:${project?.id ?? ""}`}>
             <Suspense fallback={<div className="view" />}>
               <Planner
-                key={`${project?.id}:${plannerShown}`}
+                key={project?.id}
                 project={project}
+                view={route.view}
+                onView={(view) => go(view ? { name: "planner", view } : { name: "planner" })}
                 plan={state.plan}
                 schedules={state.schedules}
                 onSchedule={(schedule) =>
@@ -865,9 +873,8 @@ export function App() {
             onClose={() => setScheduling(null)}
             onSaved={() => {
               setScheduling(null);
-              // The planned tasks are listed in the planner.
-              writePref("plannerView", "planifiees");
-              go({ name: "planner" });
+              // The planned tasks are listed in the planner, at their own address.
+              go({ name: "planner", view: "planifiees" });
             }}
           />
         )}

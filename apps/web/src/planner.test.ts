@@ -3,10 +3,12 @@ import { describe, expect, it } from "vitest";
 import {
   DAY,
   TIMELINE_REACH,
+  canRun,
   cardSpan,
   cardWork,
   dayToDue,
   dueDay,
+  followedThread,
   isLate,
   timeline,
   timelineTicks,
@@ -84,6 +86,26 @@ describe("cardWork", () => {
     // Not started: the card opens the lead's thread, and nothing moves.
     expect(of(1)).toEqual({ threadId: "lead", label: "attend un codeur", tone: "" });
     expect(of(2)).toMatchObject({ threadId: "coder", label: "fusionnée", tone: "" });
+  });
+});
+
+describe("a card and its thread", () => {
+  const team = { leadId: "lead", index: 0 };
+
+  it("can be started while no thread works on it", () => {
+    expect(canRun(card(), [])).toBe(true);
+    // A thread deleted since leaves the card free to start again.
+    expect(canRun(card({ threadId: "gone" }), [thread("t")])).toBe(true);
+    expect(canRun(card({ threadId: "t" }), [thread("t")])).toBe(false);
+    // A team's card is the team's work, never started by hand.
+    expect(canRun(card({ team }), [thread("lead")])).toBe(false);
+  });
+
+  it("follows the thread it is linked to, not a team's", () => {
+    expect(followedThread(card({ threadId: "t" }), [thread("t")])?.id).toBe("t");
+    expect(followedThread(card(), [thread("t")])).toBeUndefined();
+    expect(followedThread(card({ threadId: "gone" }), [thread("t")])).toBeUndefined();
+    expect(followedThread(card({ threadId: "t", team }), [thread("t")])).toBeUndefined();
   });
 });
 
