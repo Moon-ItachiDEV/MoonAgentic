@@ -581,16 +581,29 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Activer le coordinateur" }).click();
     // Its conversation takes the page, the threads beside it.
     await page.locator(".pp-panel").waitFor();
+    // Before anything is asked: ways to start, and a panel that says what will come there.
+    await page.locator(".pp-hello").getByRole("button", { name: "Établir un plan" }).waitFor();
+    // What the coordinator works with, as the server has it.
+    await page.getByRole("tab", { name: "Contexte" }).click();
+    const context = page.locator(".pp-ctx");
+    await context.getByText("Tout va à l'agent du coordinateur.").waitFor();
+    expect(await context.getByText("Agent de démo").count()).toBe(1);
+    expect(await page.locator(".pp-panel .pp-row").count()).toBe(0);
+    if (shots) await page.waitForTimeout(300);
+    await shot(page, "p13-contexte");
+    await page.getByRole("tab", { name: "Fils de discussion" }).click();
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
     await composer(page).fill("/ouvre Export Safari");
     await composer(page).press("Enter");
-    const card = page.locator(".opened-card", { hasText: "Fil ouvert : Export Safari" });
+    const card = page.locator(".opened-line", { hasText: "Export Safari" });
     await card.waitFor();
     await page.getByText("J'ai ouvert le fil « Export Safari ».").waitFor();
     // The threads stay beside the conversation, the new one among them with its real state.
     const beside = page.locator(".pp-panel .pp-row", { hasText: "Export Safari" });
     await beside.waitFor();
-    await expect.poll(() => card.locator(".oc-state").textContent()).toBe("En attente");
+    await expect.poll(() => card.locator(".oc-state").textContent()).toBe("Attend ta réponse.");
+    // Beside the coordinator a line is a title and what goes on: the rest is in the thread.
+    expect(await beside.locator(".pp-agent").isVisible()).toBe(false);
     // What the new thread waits for is asked above the coordinator's composer, to the user.
     const ask = page.locator(".pp-ask", { hasText: "Export Safari" });
     await ask.waitFor();
@@ -601,7 +614,7 @@ describe("composer", () => {
     if (shots) await page.waitForTimeout(300);
     await shot(page, "p5-coordinateur");
     // The thread opens beside the coordinator: both conversations in sight, each its composer.
-    await card.getByRole("button", { name: "Ouvrir" }).click();
+    await card.click();
     const pane = page.locator(".pp-thread");
     await pane.getByText("Corrige : Export Safari").first().waitFor();
     await card.waitFor();
@@ -630,6 +643,16 @@ describe("composer", () => {
     // From the list too, a thread opens beside the coordinator.
     await beside.locator(".pp-open, button").first().click();
     await pane.waitFor();
+    // Once the thread has finished, its own words come back to the coordinator's conversation.
+    expect(await page.locator(".result").count()).toBe(0);
+    await pane.getByRole("button", { name: "Autoriser" }).click();
+    const result = page.locator(".pp-main .result");
+    await result.waitFor();
+    await page.locator(".pp-main .new-sep").waitFor();
+    expect(await result.locator(".result-s").textContent()).toContain("C'est fait");
+    await expect.poll(() => card.locator(".oc-state").textContent()).toBe("Inactif");
+    if (shots) await page.waitForTimeout(300);
+    await shot(page, "p12-resultat");
     await pane.getByRole("button", { name: "Fils de discussion" }).click();
 
     // On a phone, the conversation and the threads take turns; nothing spills past the screen.

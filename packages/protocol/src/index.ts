@@ -536,6 +536,25 @@ export type Item =
   | { id: string; kind: "plan"; entries: PlanEntry[]; at: number }
   /** The coordinator opened a thread for a piece of work: a link to it, where it did. */
   | { id: string; kind: "opened"; threadId: string; title: string; at: number }
+  /**
+   * A thread the coordinator opened has finished what it was asked: its own last words and
+   * the files it changed, told where the user asked for the work.
+   */
+  | {
+      id: string;
+      kind: "result";
+      threadId: string;
+      title: string;
+      /** The start of the thread's last answer. */
+      summary: string;
+      /** The files changed on its branch, the first of them. */
+      files: string[];
+      /** How many more it changed. */
+      moreFiles?: number;
+      /** True when what ended is a failure, such as a team that could not finish. */
+      failed?: boolean;
+      at: number;
+    }
   /** The thread went from one agent to another; agent items before it are `from`'s. */
   | { id: string; kind: "handoff"; from: AgentId; to: AgentId; at: number };
 
@@ -610,6 +629,9 @@ export interface GithubRepo {
 /** The kinds of work a coordinator opens a thread for. */
 export const WORK_KINDS = ["question", "bug", "fonctionnalite", "relecture", "tests"] as const;
 export type WorkKind = (typeof WORK_KINDS)[number];
+/** What a route is set for: a kind of work, or all those with no route of their own. */
+export const ROUTE_KINDS = ["default", ...WORK_KINDS] as const;
+export type RouteKind = (typeof ROUTE_KINDS)[number];
 
 /** Threads a coordinator runs at once unless the settings say otherwise, and at most. */
 export const DEFAULT_PARALLEL = 3;
@@ -630,7 +652,8 @@ export interface TeamSetup {
 /** How coordinators route work: an agent and model for each kind, and the team to start. */
 export interface CoordinatorSettings {
   /** A kind left out goes to the coordinator's own agent. */
-  routes: Partial<Record<WorkKind, TeamMember>>;
+  /** Per kind of work; `default` for every kind left unset, before the coordinator's own. */
+  routes: Partial<Record<RouteKind, TeamMember>>;
   /** Kept from the last team the user started by hand. */
   team?: TeamSetup;
   /** Threads a coordinator runs at once, the others waiting in line; 3 when left out. */
@@ -774,7 +797,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   /** Sends a kind of work to an agent and model; without an agent, back to the coordinator's own. */
   z.object({
     type: z.literal("coordinator.setRoute"),
-    kind: z.enum(WORK_KINDS),
+    kind: z.enum(ROUTE_KINDS),
     agentId: id.optional(),
     model: id.optional(),
   }),

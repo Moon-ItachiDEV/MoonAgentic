@@ -13,7 +13,7 @@ import { connection, newId } from "../connection.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
-import { GROUP_LABEL } from "../project-threads.ts";
+import { GROUP_LABEL, threadLine } from "../project-threads.ts";
 import { Clamp } from "./Clamp.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { TeamCard } from "./TeamCard.tsx";
@@ -28,7 +28,10 @@ export function ThreadView({
   agents,
   threads,
   onOpenThread,
+  intro,
 }: {
+  /** Shown above the conversation, such as a coordinator's ways to start. */
+  intro?: ReactNode;
   thread: Thread;
   items: Item[] | undefined;
   agents: AgentInfo[];
@@ -111,6 +114,9 @@ export function ThreadView({
   // Only the current turn's tools are at work: one left unfinished earlier stays still.
   const lastUser = items?.findLastIndex((i) => i.kind === "user") ?? -1;
   const working = thread.status === "running" || thread.status === "waiting";
+  // What the threads brought back since the user last wrote: the first of it is marked.
+  const lastOwn = items?.findLastIndex((i) => i.kind === "user" && i.from !== "coordinator") ?? -1;
+  const firstNew = items?.findIndex((i, n) => n > lastOwn && i.kind === "result") ?? -1;
 
   const team = isTeamThread(thread);
   const blocks = items ? (team ? teamFeed(thread, items) : activityFeed(items)) : [];
@@ -119,12 +125,18 @@ export function ThreadView({
     const item = items![i]!;
     return (
       <div key={item.id} className="item" data-item={item.id}>
+        {i === firstNew && (
+          <div className="new-sep" role="separator">
+            <span>Nouveau</span>
+          </div>
+        )}
         <FeedItem
           item={item}
           thread={thread}
           agents={agents}
           agent={agents.find((a) => a.id === authors[i])}
-          showBy={showBy ?? startsAgentBlock(items!, i)}
+          // A coordinator speaks alone in its conversation: no name above each answer.
+          showBy={thread.kind !== "coordinator" && (showBy ?? startsAgentBlock(items!, i))}
           openQuestion={openQuestion}
           live={working && i > lastUser}
           clamp={clamp}
@@ -145,6 +157,7 @@ export function ThreadView({
       }}
     >
       <div className="feed">
+        {intro}
         {/* A team started before the timeline was recorded has nothing to draw. */}
         {!!strip?.team.timeline?.length && (
           <TeamStrip
@@ -283,32 +296,54 @@ function FeedItem({
     case "opened": {
       // The thread as it is now, not as it was when it was opened.
       const opened = threads.find((t) => t.id === item.threadId);
-      const members = threads.filter((t) => t.parentId === item.threadId);
-      return (
-        <div className="opened-card" data-group={opened && threadGroup(opened, members)}>
-          <span className="oc-ic" aria-hidden>
-            <IconBranch />
-          </span>
-          <div className="oc-text">
-            <div className="oc-t">Fil ouvert : {opened?.title ?? item.title}</div>
-            <div className="oc-s">
-              {opened ? (
-                <>
-                  <AgentBadge agent={agents.find((a) => a.id === opened.agentId)} small />
-                  <span>{opened.model ?? agents.find((a) => a.id === opened.agentId)?.name}</span>
-                  <span className="oc-state">
-                    {opened.held ? "En file" : GROUP_LABEL[threadGroup(opened, members)]}
-                  </span>
-                </>
-              ) : (
-                "Ce fil a été supprimé."
-              )}
-            </div>
+      if (!opened) {
+        return (
+          <div className="opened-line gone">
+            <IconBranch size={13} />
+            <span className="oc-t">{item.title}</span>
+            <span className="oc-state">Ce fil a été supprimé.</span>
           </div>
-          {opened && (
-            <button className="btn sm" onClick={() => onOpenThread(opened.id)}>
-              Ouvrir
-            </button>
+        );
+      }
+      const members = threads.filter((t) => t.parentId === item.threadId);
+      const group = threadGroup(opened, members);
+      // What it waits for, in its own words: a state alone would not say what to do.
+      const why = group === "waiting" ? threadLine(opened, members) : "";
+      return (
+        <button
+          className="opened-line"
+          data-group={group}
+          aria-label={`Ouvrir le fil ${opened.title}`}
+          onClick={() => onOpenThread(opened.id)}
+        >
+          <IconBranch size={13} />
+          <span className="oc-t">{opened.title}</span>
+          <span className="oc-state">{opened.held ? "En file" : why || GROUP_LABEL[group]}</span>
+        </button>
+      );
+    }
+    case "result": {
+      const done = threads.find((t) => t.id === item.threadId);
+      return (
+        <div className={`result${item.failed ? " failed-result" : ""}`}>
+          <button
+            className="result-t"
+            disabled={!done}
+            onClick={() => done && onOpenThread(done.id)}
+          >
+            {item.failed ? <IconAlert size={13} /> : <IconCheck size={12} />}
+            {done?.title ?? item.title}
+          </button>
+          <p className="result-s">{item.summary}</p>
+          {item.files.length > 0 && (
+            <div className="result-files">
+              {item.files.map((file) => (
+                <span key={file} className="result-file" title={file}>
+                  {file.split("/").pop()}
+                </span>
+              ))}
+              {!!item.moreFiles && <span className="result-more">+{item.moreFiles}</span>}
+            </div>
           )}
         </div>
       );

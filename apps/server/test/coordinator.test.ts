@@ -586,4 +586,67 @@ describe("a project", () => {
     await hub.handle(client, { type: "thread.setUnread", threadId: other, unread: true });
     expect(store.getThread(other)!.unread).toBe(true);
   });
+
+  it("tells in its conversation what a thread it opened has finished, in the thread's own words", async () => {
+    const { hub, store, coordinatorId, say } = await coordinated();
+    await say("/ouvre Export Safari");
+    const opened = store.listThreads().find((t) => t.openedBy === coordinatorId)!;
+    const results = () => store.listItems(coordinatorId).filter((i) => i.kind === "result");
+    // It waits on the user: nothing is finished, nothing is told.
+    await soon(() => store.getThread(opened.id)!.status).toBe("waiting");
+    expect(results()).toHaveLength(0);
+    const asked = store.listItems(opened.id).findLast((i) => i.kind === "permission")!;
+    hub.respondToPermission(opened.id, asked.id, "allow");
+    await soon(() => results().length).toBe(1);
+    const told = results()[0]!;
+    if (told.kind !== "result") throw new Error("unreachable");
+    expect(told).toMatchObject({ threadId: opened.id, title: "Export Safari" });
+    const answers = store.listItems(opened.id).filter((i) => i.kind === "agent");
+    const last = answers.at(-1)!;
+    if (last.kind !== "agent") throw new Error("unreachable");
+    expect(last.text.replace(/\s+/g, " ")).toContain(told.summary.replace(/…$/, "").slice(0, 40));
+    expect(told.files).toEqual((await hub.review(opened.id)).files.map((f) => f.path));
+
+    // What the user asks the thread themselves is answered there: it is not told again.
+    await hub.whenIdle(opened.id);
+    hub.send(opened.id, "Dis bonjour");
+    await soon(() => store.getThread(opened.id)!.status).not.toBe("running");
+    await hub.cancel(opened.id);
+    await hub.whenIdle(opened.id);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(results()).toHaveLength(1);
+  }, 90_000);
+
+  it("opens its next threads with the agent and model the user last gave one by hand", async () => {
+    const { hub, store, coordinatorId, say } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await say("/ouvre Export Safari");
+    const first = store.listThreads().find((t) => t.openedBy === coordinatorId)!;
+    await soon(() => store.getThread(first.id)!.status).toBe("waiting");
+    await hub.cancel(first.id);
+    await hub.whenIdle(first.id);
+    const back = store.getThread(first.id)!.model ?? "";
+    const other = hub
+      .snapshot()
+      .agents.find((a) => a.id === "demo")!
+      .models!.find((m) => m.id !== store.getThread(first.id)!.model)!;
+    await hub.handle(client, { type: "thread.setModel", threadId: first.id, model: other.id });
+    expect(hub.snapshot().coordinator.routes.default).toEqual({ agentId: "demo", model: other.id });
+
+    await say("/ouvre Import CSV");
+    const second = store
+      .listThreads()
+      .find((t) => t.openedBy === coordinatorId && t.id !== first.id)!;
+    expect(second.model).toBe(other.id);
+    // A thread the user opened themselves is no word on what coordinators should use.
+    const own = hub.createThread({
+      projectId: second.projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Dis bonjour",
+    });
+    await hub.whenIdle(own);
+    await hub.handle(client, { type: "thread.setModel", threadId: own, model: back || other.id });
+    expect(hub.snapshot().coordinator.routes.default?.model).toBe(other.id);
+  }, 90_000);
 });
