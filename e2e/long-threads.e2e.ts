@@ -71,6 +71,22 @@ describe("longs fils", () => {
     page.on("websocket", (socket) =>
       socket.on("framereceived", (frame) => frames.push(String(frame.payload))),
     );
+    // The first time a whole result is asked for, the answer is a failure.
+    let refusals = 1;
+    await page.routeWebSocket(/\/ws\b/, (socket) => {
+      const server = socket.connectToServer();
+      socket.onMessage((data) => {
+        const message = JSON.parse(String(data)) as { type: string; requestId?: string };
+        if (message.type !== "item.get" || refusals-- <= 0) return server.send(data);
+        socket.send(
+          JSON.stringify({
+            type: "error",
+            requestId: message.requestId,
+            message: "Connexion perdue.",
+          }),
+        );
+      });
+    });
     await page.goto(url);
     await page.getByRole("button", { name: "Nouveau projet" }).first().click();
     await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
@@ -97,8 +113,13 @@ describe("longs fils", () => {
     await page.locator(".team-detail-h").last().click();
     const read = page.locator(".tool", { hasText: "Lire src/app.ts" });
     await read.getByRole("button", { name: /Lire src\/app\.ts/ }).click();
+    // A result that could not be fetched says so, and can be asked for again.
+    await read.getByRole("alert").getByText("Connexion perdue.").waitFor();
+    expect(frames.some((f) => f.includes("ligne600"))).toBe(false);
+    await read.getByRole("button", { name: "Réessayer" }).click();
     // Opened, the line fetches its result and draws its first lines only.
     await read.getByText("export const ligne1 = 1;").waitFor();
+    expect(await read.getByRole("alert").count()).toBe(0);
     expect(frames.some((f) => f.includes("ligne600"))).toBe(true);
     expect(await read.getByText("export const ligne400 = 400;").count()).toBe(1);
     expect(await read.getByText("export const ligne401 = 401;").count()).toBe(0);

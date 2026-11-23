@@ -774,22 +774,24 @@ function ToolRow({
       </button>
       {open && (
         <div className="tool-body">
+          {/* Said even above an older result: it is then known not to be the latest. */}
+          {missing && failed && (
+            <p className="tool-wait" role="alert">
+              {failed}
+              {content ? " Ce résultat n'est pas le dernier. " : " "}
+              <button className="tool-more" onClick={() => setTries((n) => n + 1)}>
+                Réessayer
+              </button>
+            </p>
+          )}
           {content?.map((c, i) => (
             <ToolBody key={i} content={c} />
           ))}
-          {!content &&
-            (failed ? (
-              <p className="tool-wait" role="alert">
-                {failed}{" "}
-                <button className="tool-more" onClick={() => setTries((n) => n + 1)}>
-                  Réessayer
-                </button>
-              </p>
-            ) : (
-              <p className="tool-wait" role="status">
-                Chargement du résultat…
-              </p>
-            ))}
+          {!content && !failed && (
+            <p className="tool-wait" role="status">
+              Chargement du résultat…
+            </p>
+          )}
         </div>
       )}
     </div>
