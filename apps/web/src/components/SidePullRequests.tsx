@@ -259,53 +259,56 @@ function PrCard(props: {
   const failed = pr?.checks.some((c) => c.state === "failed");
 
   return (
-    <div
-      ref={ref}
-      className="prc"
-      role="dialog"
-      aria-label={`Pull request #${props.row.pr.number}`}
-      style={{ "--top": `${top}px`, "--left": `${props.left}px` } as React.CSSProperties}
-    >
-      <PrBadge pr={props.row.pr} branch={thread.workspace?.branch} />
-      <h3>{pr?.title ?? thread.title}</h3>
-      {pr ? <PrTimeline pr={pr} /> : <p className="prc-wait">{error ?? "Lecture sur GitHub…"}</p>}
-      {sendError && <p className="prc-err">{sendError}</p>}
-      {pr && (
-        <div className="prc-acts">
-          {failed && !busy && (
-            <button className="btn acc" onClick={() => ask(fixCiRequest(pr))}>
-              <IconWrench size={15} />
-              Corriger la CI
+    <>
+      <div
+        ref={ref}
+        className="prc"
+        role="dialog"
+        aria-label={`Pull request #${props.row.pr.number}`}
+        style={{ "--top": `${top}px`, "--left": `${props.left}px` } as React.CSSProperties}
+      >
+        <PrBadge pr={props.row.pr} branch={thread.workspace?.branch} />
+        <h3>{pr?.title ?? thread.title}</h3>
+        {pr ? <PrTimeline pr={pr} /> : <p className="prc-wait">{error ?? "Lecture sur GitHub…"}</p>}
+        {sendError && <p className="prc-err">{sendError}</p>}
+        {pr && (
+          <div className="prc-acts">
+            {failed && !busy && (
+              <button className="btn acc" onClick={() => ask(fixCiRequest(pr))}>
+                <IconWrench size={15} />
+                Corriger la CI
+              </button>
+            )}
+            {!failed && pr.conflicts && !busy && (
+              <button className="btn acc" onClick={() => ask(conflictFixRequest(pr))}>
+                <IconWrench size={15} />
+                Résoudre le conflit
+              </button>
+            )}
+            {canMerge(pr) && (
+              <button
+                className="btn pri"
+                onClick={() =>
+                  setConfirm({
+                    title: `Fusionner la pull request #${pr.number} ?`,
+                    text: mergeWarning(pr),
+                    action: "Fusionner",
+                    run: merge,
+                  })
+                }
+              >
+                <IconMerge size={15} />
+                Fusionner
+              </button>
+            )}
+            <button className="btn" onClick={() => props.onOpenThread(thread.id)}>
+              Ouvrir le fil
             </button>
-          )}
-          {!failed && pr.conflicts && !busy && (
-            <button className="btn acc" onClick={() => ask(conflictFixRequest(pr))}>
-              <IconWrench size={15} />
-              Résoudre le conflit
-            </button>
-          )}
-          {canMerge(pr) && (
-            <button
-              className="btn pri"
-              onClick={() =>
-                setConfirm({
-                  title: `Fusionner la pull request #${pr.number} ?`,
-                  text: mergeWarning(pr),
-                  action: "Fusionner",
-                  run: merge,
-                })
-              }
-            >
-              <IconMerge size={15} />
-              Fusionner
-            </button>
-          )}
-          <button className="btn" onClick={() => props.onOpenThread(thread.id)}>
-            Ouvrir le fil
-          </button>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
+      {/* Beside the card, not in it: the dialog stacks above the side bar on its own. */}
       {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
-    </div>
+    </>
   );
 }

@@ -71,7 +71,12 @@ export function prBoard(
   now = Date.now(),
 ): { rows: PrRow[]; merged: Thread[]; red: number; green: number } {
   const open = threads.filter(
-    (t) => t.pr && (t.pr.state === "open" || t.pr.state === "draft") && t.kind !== "coordinator",
+    (t) =>
+      t.pr &&
+      (t.pr.state === "open" || t.pr.state === "draft") &&
+      t.kind !== "coordinator" &&
+      // An archived thread is out of the list: its agent is not asked to fix anything.
+      !t.archived,
   );
   // A team's pull request is shown on its lead: the member that opened it is not listed twice.
   const seen = new Set<string>();
@@ -169,9 +174,12 @@ export function prSteps(pr: PullRequestInfo): PrStep[] {
   return steps;
 }
 
-/** True when nothing GitHub said keeps the pull request from being merged from here. */
+/**
+ * True when GitHub said the pull request can be merged from here. While it still works out
+ * the conflicts (null), it cannot: the button waits for the answer.
+ */
 export function canMerge(pr: PullRequestInfo): boolean {
-  if (pr.state !== "open" || pr.conflicts || pr.blocked) return false;
+  if (pr.state !== "open" || pr.conflicts !== false || pr.blocked) return false;
   return !pr.checks.some((c) => c.state === "failed" || c.state === "pending");
 }
 

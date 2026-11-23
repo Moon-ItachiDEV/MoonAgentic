@@ -207,6 +207,28 @@ describe("pull requests", () => {
       await side.getByRole("button", { name: /#42/ }).click();
       await card.waitFor({ state: "detached" });
 
+      // On a phone the card is a sheet above the side bar's drawer, not behind it.
+      await page.getByRole("button", { name: "Fermer la revue" }).click();
+      await page.setViewportSize({ width: 390, height: 800 });
+      await page.getByRole("button", { name: "Retour" }).click();
+      await page.getByRole("button", { name: "Menu" }).click();
+      await side.getByRole("button", { name: /#42/ }).click();
+      await card.getByText("Conflits avec main").waitFor();
+      await card.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+      expect(
+        await card.evaluate((el) => {
+          const box = el.getBoundingClientRect();
+          const top = document.elementFromPoint(box.left + box.width / 2, box.top + 8);
+          return !!top && el.contains(top);
+        }),
+      ).toBe(true);
+      await shot("pr6-barre-carte-mobile");
+      await card.getByRole("button", { name: "Ouvrir le fil" }).click();
+      await card.waitFor({ state: "detached" });
+      await page.setViewportSize({ width: 1280, height: 820 });
+      await page.getByRole("button", { name: /^Code/ }).click();
+      await pr.getByText("Conflits avec main").waitFor();
+
       // All green: merging asks first, then the pull request turns violet everywhere.
       github({
         statusCheckRollup: [
