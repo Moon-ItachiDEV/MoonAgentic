@@ -677,6 +677,19 @@ export function ReviewPanel({
               loading={pull.loading}
               onRefresh={() => void pull.refresh()}
               onMerge={pull.merge}
+              watch={thread.prWatch}
+              onWatch={
+                workspace?.base && !thread.team && !thread.role && !thread.parentId
+                  ? async (on) => {
+                      await connection.request({
+                        type: "thread.watchPr",
+                        requestId: newId(),
+                        threadId: thread.id,
+                        on,
+                      });
+                    }
+                  : undefined
+              }
             />
           ) : (
             workspace?.prUrl && (

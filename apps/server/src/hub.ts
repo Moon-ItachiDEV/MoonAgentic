@@ -11,6 +11,7 @@ import {
   GOAL_MORE_TURNS,
   GOAL_TURNS,
   MAX_QUEUED_MESSAGES,
+  PR_WATCH_TRIES,
   threadPullRequest,
 } from "@moonagentic/protocol";
 import type {
@@ -44,6 +45,7 @@ import type { Agents } from "./agents.ts";
 import { cloneGithubRepo, githubRepos, githubStatus, parseGithubRepo } from "./github.ts";
 import { githubAccount, type LoginResult } from "./github-account.ts";
 import { goalContext, goalMessage, goalVerdict } from "./goal.ts";
+import { nextFix } from "./pr-watch.ts";
 import { mergePlan, noteTool } from "./plan-steps.ts";
 import { defaultParent, findClones, usualRoots } from "./local-clones.ts";
 import {
@@ -292,6 +294,8 @@ export class Hub {
    */
   /** What the user said with a refusal, by thread: their next message, once the turn is over. */
   private readonly followUps = new Map<string, string>();
+  /** Threads whose turn fixes their pull request: their branch is pushed once it ends. */
+  private readonly prFixing = new Set<string>();
   private readonly pendingForms = new Map<
     string,
     { form: FormQuestions; answer: (r: acp.CreateElicitationResponse) => void }
@@ -697,6 +701,10 @@ export class Hub {
         return;
       case "thread.goal":
         this.setGoal(message.threadId, message.text, message.maxTurns);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "thread.watchPr":
+        this.watchPr(message.threadId, message.on);
         client.send({ type: "done", requestId: message.requestId });
         return;
       case "thread.goalControl":
@@ -1403,6 +1411,76 @@ export class Hub {
   }
 
   /**
+   * « Corriger tout seul »: from now on, a pull request of the thread's branch that fails its
+   * checks or conflicts with its base sends the agent to fix it, a few times at most.
+   */
+  watchPr(threadId: string, on: boolean): void {
+    const thread = this.requireLiveThread(threadId);
+    if (!on) {
+      this.updateThread(threadId, { prWatch: null });
+      return;
+    }
+    if (!thread.workspace?.base || thread.team || thread.role || thread.parentId) {
+      throw new Error("Seul un fil qui travaille sur sa propre branche peut corriger sa PR.");
+    }
+    // Turned on again, it counts afresh, and may take up what it had given up on.
+    this.updateThread(threadId, { prWatch: { tries: 0, max: PR_WATCH_TRIES } });
+    if (this.closed) return;
+    const asked = this.pullRequest(threadId).catch(() => undefined);
+    this.steps.add(asked);
+    void asked.finally(() => this.steps.delete(asked));
+  }
+
+  /** Sends the agent to fix the pull request, when the watch calls for it and it is free. */
+  private watchTick(threadId: string, info: PullRequestInfo): void {
+    const thread = this.store.getThread(threadId);
+    const watch = thread?.prWatch;
+    if (!thread || !watch || thread.archived || this.closed) return;
+    if (this.turns.has(threadId) || this.busy.has(threadId)) return;
+    const next = nextFix(watch, info);
+    if (!next) return;
+    if ("exhausted" in next) {
+      this.updateThread(threadId, {
+        prWatch: { ...watch, handled: next.exhausted.key, exhausted: true },
+      });
+      return;
+    }
+    const fix = next.send;
+    this.prFixing.add(threadId);
+    try {
+      this.send(threadId, fix.text, fix.context, undefined, "pr");
+    } catch (error) {
+      // Busy for a moment: the next look at the pull request tries again.
+      this.prFixing.delete(threadId);
+      console.error("Correction de la PR :", error);
+      return;
+    }
+    const { error: _error, ...kept } = watch;
+    this.updateThread(threadId, {
+      prWatch: { ...kept, tries: watch.tries + 1, handled: fix.key, last: fix.kind },
+    });
+  }
+
+  /** Pushes what the agent did to fix its pull request, then lets the thread go on. */
+  private async pushFix(threadId: string): Promise<void> {
+    const watch = this.store.getThread(threadId)?.prWatch;
+    try {
+      await this.ship(
+        threadId,
+        watch?.last === "conflict"
+          ? "Fusion de la branche de base et résolution des conflits"
+          : "Correction de la CI",
+        false,
+      );
+    } catch (error) {
+      const now = this.store.getThread(threadId)?.prWatch;
+      if (now) this.updateThread(threadId, { prWatch: { ...now, error: describe(error) } });
+    }
+    if (this.closed || this.turns.has(threadId)) return;
+    if (!this.sendNextQueued(threadId, false)) this.continueGoal(threadId);
+  }
+
+  /**
    * Gives the thread a goal, in place of the one it had: its agent works toward it turn after
    * turn. It starts at once on a free thread, else when the turn under way ends.
    */
@@ -1566,7 +1644,7 @@ export class Hub {
     text: string,
     context?: string,
     byTeam?: boolean,
-    from?: "coordinator" | "goal",
+    from?: "coordinator" | "goal" | "pr",
     auto?: boolean,
     /** The images joined to the message, already sent to the server. */
     attachments?: readonly string[],
@@ -1649,6 +1727,13 @@ export class Hub {
       const atOnce = this.sendAfterStop.delete(threadId);
       // The goal learns what this turn said; it goes on after the messages that wait.
       if (!this.closed) this.settleGoal(threadId, cancelled && !atOnce, failed);
+      // A fix of the pull request is pushed before anything else goes on.
+      if (this.prFixing.delete(threadId) && !this.closed && !cancelled && !failed) {
+        const pushed = this.pushFix(threadId);
+        this.steps.add(pushed);
+        void pushed.finally(() => this.steps.delete(pushed));
+        return;
+      }
       if (
         !this.closed &&
         (atOnce || !cancelled) &&
@@ -1952,6 +2037,7 @@ export class Hub {
   private async notePullRequest(threadId: string, info: PullRequestInfo | undefined) {
     const thread = this.store.getThread(threadId);
     if (!thread) return;
+    if (info) this.watchTick(threadId, info);
     const pr = info && threadPullRequest(info);
     // A team's pull request is its merge thread's, or its only coder's: the lead shows it,
     // and is the one resolved, which puts the whole team away.

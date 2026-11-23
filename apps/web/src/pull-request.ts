@@ -1,5 +1,5 @@
 // How a pull request is described to the user: pure, so it is easy to test.
-import type { PullRequestCheck, PullRequestInfo } from "@moonagentic/protocol";
+import type { PrWatch, PullRequestCheck, PullRequestInfo } from "@moonagentic/protocol";
 
 /** The address of a pull request on github.com, without what may follow its number. */
 export function pullRequestUrl(href: string): { url: string; number: number } | undefined {
@@ -69,4 +69,18 @@ export function mergeWarning(pr: PullRequestInfo): string {
     pr.conflicts === null ? "GitHub n'a pas fini de vérifier les conflits." : "",
   ].filter(Boolean);
   return [`« ${pr.title} » sera mergée dans ${pr.base}.`, ...notes].join(" ");
+}
+
+/** What « Corriger tout seul » says of itself: what it does, or where it stands. */
+export function watchLabel(watch: PrWatch | undefined, max: number): string {
+  if (!watch) {
+    return `CI en échec ou conflit : l'agent corrige et MoonAgentic pousse la correction, ${max} fois au plus.`;
+  }
+  if (watch.exhausted) {
+    return `${watch.max} corrections envoyées sans que ça passe : la suite est à toi.`;
+  }
+  if (!watch.tries)
+    return `Surveillée : l'agent corrigera la CI ou les conflits, ${watch.max} fois au plus.`;
+  const what = watch.last === "conflict" ? "conflits" : "CI";
+  return `${watch.tries} correction${watch.tries > 1 ? "s" : ""} sur ${watch.max} (dernière : ${what}).`;
 }
