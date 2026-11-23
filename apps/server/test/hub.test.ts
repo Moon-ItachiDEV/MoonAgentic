@@ -1118,6 +1118,14 @@ describe("Composer: files, skills, commands, pins and search", () => {
       text: "Où est la fonction 100% fiable ?",
     });
     await hub.whenIdle(threadId);
+    // What the turn said reaches the search's index by itself, a moment after it ends.
+    const waiting = () =>
+      (
+        store.db.prepare(`SELECT count(*) AS n FROM search_docs WHERE stale = 1`).get() as {
+          n: number;
+        }
+      ).n;
+    await expect.poll(waiting).toBe(0);
     await hub.handle(client, { type: "search", requestId: "s1", query: "100%" });
     // The demo agent repeats the question, so its answer matches too, newest first.
     expect(client.messages.at(-1)).toMatchObject({
