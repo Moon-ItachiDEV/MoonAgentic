@@ -1,6 +1,6 @@
 import type { Team, Thread } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
-import { noticesFor, settledTags } from "./notices.ts";
+import { noticesFor, settledTags } from "@moonagentic/protocol";
 
 const thread = (over: Partial<Thread> = {}): Thread => ({
   id: "t1",

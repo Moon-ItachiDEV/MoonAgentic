@@ -1,5 +1,6 @@
-// What is worth a notification when threads change: pure, so it is easy to test.
-import type { Thread } from "@moonagentic/protocol";
+// What is worth a notification when threads change: pure, so the page and the server (for
+// Web Push) say the same. Easy to test.
+import type { Thread } from "./index.ts";
 
 export interface Notice {
   /** One per thread and kind: a newer one replaces the one still on screen. */

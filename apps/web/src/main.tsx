@@ -39,10 +39,12 @@ import { App } from "./App.tsx";
 import { AppFailed, ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { startUpdateBanner } from "./components/UpdateBanner.tsx";
 import { startNotifications } from "./notifications.ts";
+import { startPush } from "./push.ts";
 import { applyTheme } from "./theme.ts";
 
 applyTheme();
 startNotifications();
+startPush();
 startUpdateBanner();
 
 createRoot(document.getElementById("root")!).render(

@@ -23,6 +23,7 @@ import {
   showNotice,
 } from "../notifications.ts";
 import { readPref, writePref } from "../prefs.ts";
+import { disablePush, enablePush, pushOn, pushReached, pushSupport } from "../push.ts";
 import type { SettingsSection } from "../router.ts";
 import { mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
 import { matchSections } from "../settings-search.ts";
@@ -206,6 +207,67 @@ function Toggle(props: {
   );
 }
 
+const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * Web Push for this device: the same notices, even with MoonAgentic closed. Shown as the
+ * server sees it: on only when it really reaches this browser.
+ */
+function PushRow() {
+  const support = pushSupport();
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(pushOn());
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!pushOn()) return;
+    let live = true;
+    pushReached().then(
+      (reached) => {
+        if (!live) return;
+        setOn(reached);
+        setBusy(false);
+        if (!reached) setError("Ce navigateur n'est plus abonné : réactive-les.");
+      },
+      (e: unknown) => {
+        if (!live) return;
+        setBusy(false);
+        setError(reason(e));
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  const text =
+    support === "unsupported"
+      ? "Ce navigateur ne les reçoit pas. Sur iPhone, ouvre MoonAgentic depuis l'écran d'accueil."
+      : (error ??
+        "Les mêmes alertes, même quand MoonAgentic est fermé. Elles passent par le service de notifications du navigateur (Google, Apple, Mozilla ou Microsoft), chiffrées pour cet appareil : ce service ne peut pas les lire. Il faut que l'ordinateur de MoonAgentic ait accès à Internet.");
+  return (
+    <Row title="Même quand l'app est fermée" text={text}>
+      <Toggle
+        label="Recevoir quand l'app est fermée"
+        on={on}
+        disabled={support !== "ok" || busy}
+        onChange={(next) => {
+          setBusy(true);
+          setError(null);
+          (next ? enablePush() : disablePush()).then(
+            () => {
+              setOn(next);
+              setBusy(false);
+            },
+            (e: unknown) => {
+              setBusy(false);
+              setError(reason(e));
+            },
+          );
+        }}
+      />
+    </Row>
+  );
+}
+
 /** Browser notifications for this device: what is shown is what the browser really allows. */
 function NotificationsRow() {
   const support = notificationSupport();
@@ -221,42 +283,47 @@ function NotificationsRow() {
           ? "Bloquées par le navigateur pour ce site : autorise-les dans ses réglages, puis réessaie."
           : "Sur cet appareil, quand un fil attend ta réponse ou qu'une équipe termine ou échoue, sauf si tu as déjà MoonAgentic sous les yeux. Il faut qu'il reste ouvert dans un onglet, même en arrière-plan.";
   return (
-    <Row title="Notifications" text={text}>
-      <div className="set-notif">
-        {on && (
-          <button
-            className="btn quiet sm"
-            onClick={() =>
-              void showNotice({
-                tag: "essai",
-                threadId: "",
-                title: "MoonAgentic",
-                body: "Les notifications marchent sur cet appareil.",
-              }).then((shown) => setTried(shown ? "sent" : "refused"))
-            }
-          >
-            {tried === "sent" ? "Envoyée" : tried === "refused" ? "Refusée" : "Essayer"}
-          </button>
-        )}
-        <Toggle
-          label="Notifications"
-          on={on}
-          disabled={support !== "ok"}
-          onChange={(next) => {
-            setTried(null);
-            if (!next) {
-              disableNotifications();
-              setOn(false);
-              return;
-            }
-            void enableNotifications().then((answer) => {
-              setPermission(answer);
-              setOn(answer === "granted");
-            });
-          }}
-        />
-      </div>
-    </Row>
+    <>
+      <Row title="Notifications" text={text}>
+        <div className="set-notif">
+          {on && (
+            <button
+              className="btn quiet sm"
+              onClick={() =>
+                void showNotice({
+                  tag: "essai",
+                  threadId: "",
+                  title: "MoonAgentic",
+                  body: "Les notifications marchent sur cet appareil.",
+                }).then((shown) => setTried(shown ? "sent" : "refused"))
+              }
+            >
+              {tried === "sent" ? "Envoyée" : tried === "refused" ? "Refusée" : "Essayer"}
+            </button>
+          )}
+          <Toggle
+            label="Notifications"
+            on={on}
+            disabled={support !== "ok"}
+            onChange={(next) => {
+              setTried(null);
+              if (!next) {
+                disableNotifications();
+                setOn(false);
+                // None at all: those sent while the app is closed stop too.
+                if (pushOn()) void disablePush().catch(() => undefined);
+                return;
+              }
+              void enableNotifications().then((answer) => {
+                setPermission(answer);
+                setOn(answer === "granted");
+              });
+            }}
+          />
+        </div>
+      </Row>
+      {on && support === "ok" && <PushRow />}
+    </>
   );
 }
 

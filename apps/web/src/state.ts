@@ -226,6 +226,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "branchesDeleted":
     case "artifacts":
     case "artifactLink":
+    case "pushState":
     case "pong":
       return state;
   }

@@ -921,6 +921,7 @@ export function createHttpServer(options: {
         send: (message: ServerMessage) => {
           if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
         },
+        ...(who.owner ? {} : { deviceId: who.deviceId }),
       };
       const disconnect = hub.connect(client);
       sockets.set(ws, who);

@@ -165,7 +165,9 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
                                     ? Extract<ServerMessage, { type: "artifacts" }>
                                     : T extends "artifacts.open"
                                       ? Extract<ServerMessage, { type: "artifactLink" }>
-                                      : ServerMessage;
+                                      : T extends "push.state"
+                                        ? Extract<ServerMessage, { type: "pushState" }>
+                                        : ServerMessage;
 
 export class Connection {
   private state: State = initialState;
