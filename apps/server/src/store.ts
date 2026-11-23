@@ -282,6 +282,20 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
       );
     `);
   },
+  // 7. Where Web Push reaches the devices that asked for it: the push service's address and
+  // the keys the browser gave to encrypt for it. A revoked device's go with it.
+  (db) => {
+    db.exec(`
+      CREATE TABLE push_subscriptions (
+        endpoint TEXT PRIMARY KEY,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        device_id TEXT,
+        muted TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL
+      );
+    `);
+  },
 ];
 
 /** How many messages the search's index takes in one write. */
@@ -330,6 +344,19 @@ export function migrate(
 }
 
 /** A paired device as kept: never its token, only the token's hash. */
+/** Where Web Push reaches one browser, as kept. */
+export interface PushSubscriptionRow {
+  endpoint: string;
+  /** The browser's public key and secret, base64url, to encrypt for it. */
+  p256dh: string;
+  auth: string;
+  /** The paired device it belongs to; none for the computer itself. */
+  deviceId?: string;
+  /** The projects it stays quiet about. */
+  muted: string[];
+  createdAt: number;
+}
+
 export interface DeviceRow {
   id: string;
   name: string;
@@ -413,9 +440,56 @@ export class Store {
     this.sql(`UPDATE devices SET last_seen = ? WHERE id = ?`).run(at, id);
   }
 
-  /** True when there was such a device. */
+  /** True when there was such a device. Where Web Push reached it goes with it. */
   removeDevice(id: string): boolean {
+    this.sql(`DELETE FROM push_subscriptions WHERE device_id = ?`).run(id);
     return Number(this.sql(`DELETE FROM devices WHERE id = ?`).run(id).changes) > 0;
+  }
+
+  listPushSubscriptions(): PushSubscriptionRow[] {
+    return (
+      this.sql(
+        `SELECT endpoint, p256dh, auth, device_id, muted, created_at FROM push_subscriptions
+         ORDER BY created_at, endpoint`,
+      ).all() as {
+        endpoint: string;
+        p256dh: string;
+        auth: string;
+        device_id: string | null;
+        muted: string;
+        created_at: number;
+      }[]
+    ).map((r) => ({
+      endpoint: r.endpoint,
+      p256dh: r.p256dh,
+      auth: r.auth,
+      ...(r.device_id ? { deviceId: r.device_id } : {}),
+      muted: JSON.parse(r.muted) as string[],
+      createdAt: r.created_at,
+    }));
+  }
+
+  /** Adds it, or replaces the one with the same address. */
+  savePushSubscription(row: PushSubscriptionRow): void {
+    this.sql(
+      `INSERT OR REPLACE INTO push_subscriptions
+         (endpoint, p256dh, auth, device_id, muted, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      row.endpoint,
+      row.p256dh,
+      row.auth,
+      row.deviceId ?? null,
+      JSON.stringify(row.muted),
+      row.createdAt,
+    );
+  }
+
+  /** True when there was one at that address. */
+  removePushSubscription(endpoint: string): boolean {
+    return (
+      Number(this.sql(`DELETE FROM push_subscriptions WHERE endpoint = ?`).run(endpoint).changes) >
+      0
+    );
   }
 
   getSetting<T>(key: string, fallback: T): T {

@@ -43,9 +43,11 @@ async function serve(
   let connected = 0;
   const images = new Attachments(path.join(webDir, "..", `${path.basename(webDir)}-images`));
   const links = new ArtifactLinks(() => undefined);
+  const push = { forget: vi.fn() };
   const hub = {
     attachments: images,
     artifactLinks: links,
+    push,
     connect: () => {
       connected += 1;
       return () => undefined;
@@ -87,7 +89,17 @@ async function serve(
     expect(res.status).toBe(200);
     return ((await res.json()) as { ticket: string }).ticket;
   };
-  return { origin, webDir, connections: () => connected, renewed, asked, ticket, images, links };
+  return {
+    origin,
+    webDir,
+    connections: () => connected,
+    renewed,
+    asked,
+    ticket,
+    images,
+    links,
+    push,
+  };
 }
 
 /** Opens a socket and returns the HTTP status on rejection, or `"open"` on success. */
@@ -366,7 +378,7 @@ describe("the HTTP server", () => {
 
   it("pairs a device with a one-time code: its own token works, the computer's stays", async () => {
     const devices = new Devices();
-    const { origin, ticket, links } = await serve({ devices });
+    const { origin, ticket, links, push } = await serve({ devices });
     const call = (url: string, init: { method?: string; token?: string; body?: unknown } = {}) =>
       fetch(`http://${origin}${url}`, {
         method: init.method ?? "GET",
@@ -425,6 +437,10 @@ describe("the HTTP server", () => {
     const renewedWhose = forget.mock.calls.at(-1)![0];
     expect(renewedWhose(undefined)).toBe(true);
     expect(renewedWhose(device.id)).toBe(false);
+    // So do the computer's browsers subscribed to Web Push: one with the old token may be a thief's.
+    const pushWhose = push.forget.mock.calls.at(-1)![0] as (id: string | undefined) => boolean;
+    expect(pushWhose(undefined)).toBe(true);
+    expect(pushWhose(device.id)).toBe(false);
     expect(phoneSocket.readyState).toBe(WebSocket.OPEN);
 
     // Revoked: its connection closes, its pending ticket and token stop working.

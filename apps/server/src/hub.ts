@@ -1,5 +1,6 @@
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
+import { Push, type PushSend } from "./push.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import os from "node:os";
@@ -160,6 +161,8 @@ const START_TIMEOUT_MS = 120_000;
 export interface HubOptions {
   /** Where threads with their own branch get their worktree. */
   worktreesDir: string;
+  /** How Web Push messages are sent; to push services over the network when not given. */
+  pushSend?: PushSend;
   homeDir?: string;
   idleMs?: number;
   maxLiveAgents?: number;
@@ -298,6 +301,8 @@ export class Hub {
   private readonly worktreesDir: string;
   /** The images sent with messages. */
   readonly attachments: Attachments;
+  /** The notifications sent to phones while MoonAgentic is closed. */
+  readonly push: Push;
   /** The addresses artifacts are shown from, each for one thread's folder. */
   readonly artifactLinks = new ArtifactLinks((id) => {
     const thread = this.store.getThread(id);
@@ -369,6 +374,11 @@ export class Hub {
       this.prTimer.unref();
     }
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
+    this.push = new Push(store, {
+      ...(options.pushSend ? { send: options.pushSend } : {}),
+      onError: (error) => console.error("Notifications push :", error),
+    });
+    this.push.know(store.listThreads());
     this.planner = new Planner(store, (m) => this.broadcast(m));
     this.quotas = new Quotas({
       readers: options.quotaReaders ?? {},
@@ -753,6 +763,22 @@ export class Hub {
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
+      case "push.state":
+        client.send({
+          type: "pushState",
+          requestId: message.requestId,
+          publicKey: this.push.publicKey(),
+          subscribed: !!message.endpoint && this.push.subscribed(message.endpoint, client.deviceId),
+        });
+        return;
+      case "push.subscribe":
+        this.push.subscribe(message, client.deviceId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "push.unsubscribe":
+        this.push.unsubscribe(message.endpoint, client.deviceId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "artifacts.list":
         client.send({
           type: "artifacts",
@@ -3270,6 +3296,8 @@ export class Hub {
   }
 
   private broadcast(message: ServerMessage): void {
+    if (message.type === "thread") this.push.threadChanged(message.thread);
+    else if (message.type === "threadRemoved") this.push.threadRemoved(message.threadId);
     for (const client of this.clients) client.send(message);
   }
 }
