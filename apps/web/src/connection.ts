@@ -4,8 +4,14 @@ import { initialState, reduce, type State } from "./state.ts";
 export type { ConnectionStatus, Review, State } from "./state.ts";
 
 const TOKEN_KEY = "moonagentic.token";
+export const ASK_TIMEOUT_MS = 60_000;
+
+export interface ConnectionOptions {
+  askTimeoutMs?: number;
+}
 
 function readToken(): string | null {
+  if (typeof location === "undefined") return null;
   const url = new URL(location.href);
   const fromUrl = url.searchParams.get("token");
   if (fromUrl) {
@@ -35,7 +41,11 @@ export function newId(): string {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-type Pending = { resolve: (reply: ServerMessage) => void; reject: (error: Error) => void };
+type Pending = {
+  resolve: (reply: ServerMessage) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 type Request = Extract<ClientMessage, { requestId: string }>;
 /** What the server answers to each kind of request. */
 type ReplyTo<T extends Request["type"]> = T extends "files.search"
@@ -58,8 +68,10 @@ export class Connection {
   private openThreadId: string | null = null;
   private retry = 0;
   private readonly token = readToken();
+  private readonly askTimeoutMs: number;
 
-  constructor() {
+  constructor(options: ConnectionOptions = {}) {
+    this.askTimeoutMs = options.askTimeoutMs ?? ASK_TIMEOUT_MS;
     if (!this.token) this.state = { ...this.state, status: "unauthorized" };
     else this.open();
   }
@@ -89,13 +101,31 @@ export class Connection {
   }
 
   /** Sends a request and resolves with the server's reply to it. */
-  ask<T extends Request>(message: T): Promise<ReplyTo<T["type"]>> {
+  ask<T extends Request>(
+    message: T,
+    timeoutMs: number = this.askTimeoutMs,
+  ): Promise<ReplyTo<T["type"]>> {
     return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (!this.pending.delete(message.requestId)) return;
+        reject(new Error("Le serveur MoonAgentic n'a pas répondu à temps."));
+      }, timeoutMs);
       this.pending.set(message.requestId, {
         resolve: (reply) => resolve(reply as ReplyTo<T["type"]>),
         reject,
+        timer,
       });
-      if (!this.send(message)) {
+      let sent = false;
+      try {
+        sent = this.send(message);
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(message.requestId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      if (!sent) {
+        clearTimeout(timer);
         this.pending.delete(message.requestId);
         reject(new Error("Pas de connexion au serveur MoonAgentic."));
       }
@@ -124,19 +154,33 @@ export class Connection {
         socket.send(JSON.stringify({ type: "thread.open", threadId: this.openThreadId }));
     };
     socket.onmessage = (event) => {
-      const message = JSON.parse(String(event.data)) as ServerMessage;
+      let message: ServerMessage;
+      try {
+        const parsed: unknown = JSON.parse(String(event.data));
+        if (!parsed || typeof parsed !== "object") return;
+        message = parsed as ServerMessage;
+      } catch (error) {
+        console.warn("Trame WebSocket invalide ignorée :", error);
+        return;
+      }
       const requestId = "requestId" in message ? message.requestId : undefined;
       if (requestId) {
         const pending = this.pending.get(requestId);
-        this.pending.delete(requestId);
-        if (message.type === "error") pending?.reject(new Error(message.message));
-        else pending?.resolve(message);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pending.delete(requestId);
+          if (message.type === "error") pending.reject(new Error(message.message));
+          else pending.resolve(message);
+        }
       }
       this.set(reduce(this.state, message));
     };
     socket.onclose = () => {
       this.socket = null;
-      for (const p of this.pending.values()) p.reject(new Error("Connexion perdue."));
+      for (const p of this.pending.values()) {
+        clearTimeout(p.timer);
+        p.reject(new Error("Connexion perdue."));
+      }
       this.pending.clear();
       this.set({ ...this.state, status: "closed" });
       const wait = Math.min(1000 * 2 ** this.retry, 10_000);

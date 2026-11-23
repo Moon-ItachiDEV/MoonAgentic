@@ -1,12 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { AgentSession, jsonLines, needsSignIn } from "../src/session.ts";
+import type * as acp from "@agentclientprotocol/sdk";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { AgentSession, jsonLines, needsSignIn, PROMPT_INACTIVITY_MS } from "../src/session.ts";
 
-const cleanups: (() => void)[] = [];
-afterEach(() => {
-  for (const cleanup of cleanups.splice(0)) cleanup();
+const cleanups: (() => void | Promise<void>)[] = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
 /** Runs chunks of an agent's output through the filter. */
@@ -203,5 +204,248 @@ describe("an agent started with an overlapped stdin (Hermes)", () => {
     });
     expect(session.sessionId).toBeTruthy();
     await session.close();
+  });
+});
+
+describe("prompt inactivity watchdog", () => {
+  async function startMockAgent(options: {
+    inactivityMs?: number;
+    onUpdate?: (update: acp.SessionUpdate) => void;
+    onConfig?: (config: { model: unknown; settings: unknown }) => void;
+    requestPermission?: (
+      request: acp.RequestPermissionRequest,
+      signal: AbortSignal,
+    ) => Promise<acp.RequestPermissionResponse>;
+  }) {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-watchdog-"));
+    const agent = path.join(dir, "agent.mjs");
+    writeFileSync(
+      agent,
+      `import { createInterface } from "node:readline";
+      const send = (msg) => console.log(JSON.stringify({ jsonrpc: "2.0", ...msg }));
+      const notify = (update) => send({ method: "session/update", params: { sessionId: "s1", update } });
+      const timers = [];
+      let pendingPermission = null;
+      const clearAll = () => {
+        for (const t of timers.splice(0)) { clearTimeout(t); clearInterval(t); }
+      };
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const msg = JSON.parse(line);
+        if (!msg.method) {
+          if (msg.id === 99 && pendingPermission) {
+            const resolve = pendingPermission;
+            pendingPermission = null;
+            resolve(msg.result);
+          }
+          return;
+        }
+        const { id, method, params } = msg;
+        if (method === "initialize") {
+          send({ id, result: { protocolVersion: 1, agentCapabilities: {} } });
+        } else if (method === "session/new") {
+          send({
+            id,
+            result: {
+              sessionId: "s1",
+              modes: {
+                availableModes: [{ id: "a", name: "Mode A" }, { id: "b", name: "Mode B" }],
+                currentModeId: "a",
+              },
+              configOptions: [
+                {
+                  id: "model",
+                  name: "Modèle",
+                  category: "model",
+                  type: "select",
+                  currentValue: "m1",
+                  options: [{ value: "m1", name: "M1" }, { value: "m2", name: "M2" }],
+                },
+              ],
+            },
+          });
+        } else if (method === "session/cancel") {
+          clearAll();
+        } else if (method === "session/prompt") {
+          const mode = params.prompt[0]?.text ?? "";
+          if (mode === "hang") return;
+          if (mode === "progress") {
+            const steps = [
+              () => notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "a" } }),
+              () => notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "b" } }),
+              () => notify({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Outil", kind: "read", status: "in_progress" }),
+              () => notify({ sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed" }),
+              () => notify({ sessionUpdate: "plan", entries: [{ content: "Étape", priority: "high", status: "in_progress" }] }),
+              () => send({ id, result: { stopReason: "end_turn" } }),
+            ];
+            steps.forEach((fn, i) => timers.push(setTimeout(fn, 110 * (i + 1))));
+          } else if (mode === "usage") {
+            timers.push(setInterval(() => {
+              notify({ sessionUpdate: "usage_update", used: 100, size: 1000 });
+            }, 60));
+          } else if (mode === "config") {
+            let tick = 0;
+            timers.push(setInterval(() => {
+              tick += 1;
+              if (tick % 2 === 1) {
+                notify({
+                  sessionUpdate: "config_option_update",
+                  configOptions: [
+                    {
+                      id: "model",
+                      name: "Modèle",
+                      category: "model",
+                      type: "select",
+                      currentValue: tick % 4 === 1 ? "m2" : "m1",
+                      options: [{ value: "m1", name: "M1" }, { value: "m2", name: "M2" }],
+                    },
+                  ],
+                });
+              } else {
+                notify({
+                  sessionUpdate: "current_mode_update",
+                  currentModeId: tick % 4 === 2 ? "b" : "a",
+                });
+              }
+            }, 60));
+          } else if (mode === "permission-finish" || mode === "permission-hang") {
+            pendingPermission = () => {
+              if (mode === "permission-finish") {
+                send({ id, result: { stopReason: "end_turn" } });
+              }
+            };
+            send({
+              id: 99,
+              method: "session/request_permission",
+              params: {
+                sessionId: "s1",
+                toolCall: { toolCallId: "t1", title: "Éditer", kind: "edit", status: "pending" },
+                options: [{ optionId: "allow", name: "Autoriser", kind: "allow_once" }],
+              },
+            });
+          }
+        }
+      });`,
+    );
+    let session: AgentSession | undefined;
+    let exited!: () => void;
+    const exitPromise = new Promise<void>((resolve) => {
+      exited = resolve;
+    });
+    cleanups.push(async () => {
+      await session?.close().catch(() => undefined);
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
+    });
+    session = await AgentSession.start({
+      launch: { command: process.execPath, args: [agent] },
+      cwd: dir,
+      previousSessionId: null,
+      ...(options.inactivityMs !== undefined ? { inactivityMs: options.inactivityMs } : {}),
+      handlers: {
+        onUpdate: (u) => options.onUpdate?.(u),
+        onConfig: (c) => options.onConfig?.(c),
+        requestPermission:
+          options.requestPermission ?? (async () => ({ outcome: { outcome: "cancelled" } })),
+        onExit: () => exited(),
+      },
+    });
+    return { session, exitPromise };
+  }
+
+  it("defaults to 10 minutes (600 000 ms)", () => {
+    expect(PROMPT_INACTIVITY_MS).toBe(600_000);
+  });
+
+  it("cancels and closes the session when no progress arrives before the deadline", async () => {
+    const { session, exitPromise } = await startMockAgent({ inactivityMs: 220 });
+    const events: string[] = [];
+    const origCancel = session.cancel.bind(session);
+    const origClose = session.close.bind(session);
+    const cancelSpy = vi.spyOn(session, "cancel").mockImplementation(async () => {
+      events.push("cancel");
+      return origCancel();
+    });
+    const closeSpy = vi.spyOn(session, "close").mockImplementation(async () => {
+      events.push("close");
+      return origClose();
+    });
+
+    await expect(session.prompt("hang")).rejects.toThrow(/inactivité/i);
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(events).toEqual(["cancel", "close"]);
+    await exitPromise;
+  });
+
+  it("resets the deadline on each real progress update", async () => {
+    const updates: acp.SessionUpdate["sessionUpdate"][] = [];
+    const { session } = await startMockAgent({
+      inactivityMs: 300,
+      onUpdate: (u) => updates.push(u.sessionUpdate),
+    });
+
+    const stopReason = await session.prompt("progress");
+    expect(stopReason).toBe("end_turn");
+    expect(updates).toEqual([
+      "agent_message_chunk",
+      "agent_thought_chunk",
+      "tool_call",
+      "tool_call_update",
+      "plan",
+    ]);
+  });
+
+  it("does not reset the deadline on usage_update", async () => {
+    const updates: acp.SessionUpdate["sessionUpdate"][] = [];
+    const { session, exitPromise } = await startMockAgent({
+      inactivityMs: 220,
+      onUpdate: (u) => updates.push(u.sessionUpdate),
+    });
+    const closeSpy = vi.spyOn(session, "close");
+
+    await expect(session.prompt("usage")).rejects.toThrow(/inactivité/i);
+    expect(updates.filter((u) => u === "usage_update").length).toBeGreaterThanOrEqual(2);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    await exitPromise;
+  });
+
+  it("does not reset the deadline on config_option_update or current_mode_update", async () => {
+    const configs: { model: unknown; settings: unknown }[] = [];
+    const { session, exitPromise } = await startMockAgent({
+      inactivityMs: 220,
+      onConfig: (c) => configs.push(c),
+    });
+    const closeSpy = vi.spyOn(session, "close");
+
+    await expect(session.prompt("config")).rejects.toThrow(/inactivité/i);
+    expect(configs.length).toBeGreaterThanOrEqual(2);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    await exitPromise;
+  });
+
+  it("pauses during requestPermission and resumes once the user answers", async () => {
+    const { session } = await startMockAgent({
+      inactivityMs: 220,
+      requestPermission: async () => {
+        await new Promise((r) => setTimeout(r, 420));
+        return { outcome: { outcome: "selected", optionId: "allow" } };
+      },
+    });
+    expect(await session.prompt("permission-finish")).toBe("end_turn");
+
+    let answeredAt = 0;
+    const stuck = await startMockAgent({
+      inactivityMs: 220,
+      requestPermission: async () => {
+        await new Promise((r) => setTimeout(r, 400));
+        answeredAt = Date.now();
+        return { outcome: { outcome: "selected", optionId: "allow" } };
+      },
+    });
+    const closeSpy = vi.spyOn(stuck.session, "close");
+    await expect(stuck.session.prompt("permission-hang")).rejects.toThrow(/inactivité/i);
+    expect(answeredAt).toBeGreaterThan(0);
+    expect(Date.now() - answeredAt).toBeGreaterThanOrEqual(180);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    await stuck.exitPromise;
   });
 });

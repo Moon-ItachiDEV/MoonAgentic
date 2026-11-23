@@ -209,6 +209,65 @@ export function jsonLines(onOther: (line: string) => void): TransformStream<Uint
   });
 }
 
+/** Fails a prompt that makes no real progress for this long. */
+export const PROMPT_INACTIVITY_MS = 10 * 60_000;
+
+const PROGRESS_UPDATES = new Set<acp.SessionUpdate["sessionUpdate"]>([
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+  "tool_call_update",
+  "plan",
+]);
+
+class InactivityWatchdog {
+  private timer: NodeJS.Timeout | undefined;
+  private active: { ms: number; onTimeout: () => void } | null = null;
+  private pauses = 0;
+
+  start(ms: number, onTimeout: () => void): void {
+    this.stop();
+    if (!Number.isFinite(ms) || ms <= 0) return;
+    this.active = { ms, onTimeout };
+    if (this.pauses === 0) this.arm();
+  }
+
+  progress(): void {
+    if (!this.active || this.pauses > 0) return;
+    this.arm();
+  }
+
+  pause(): void {
+    this.pauses += 1;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  resume(): void {
+    if (this.pauses === 0) return;
+    this.pauses -= 1;
+    if (this.pauses === 0 && this.active) this.arm();
+  }
+
+  stop(): void {
+    this.active = null;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  }
+
+  private arm(): void {
+    clearTimeout(this.timer);
+    const active = this.active;
+    if (!active) return;
+    this.timer = setTimeout(() => {
+      // Disarm before firing so late updates arriving during cancel/close cannot re-arm.
+      this.timer = undefined;
+      this.active = null;
+      active.onTimeout();
+    }, active.ms);
+  }
+}
+
 /** One agent process and its ACP session, owned by one thread. */
 export class AgentSession {
   readonly sessionId: string;
@@ -223,12 +282,16 @@ export class AgentSession {
   private readonly connection: acp.ClientConnection;
   private readonly kill: () => Promise<void>;
   private readonly state: SessionState;
+  private readonly watchdog: InactivityWatchdog;
+  private readonly inactivityMs: number;
 
   private constructor(options: {
     sessionId: string;
     connection: acp.ClientConnection;
     kill: () => Promise<void>;
     state: SessionState;
+    watchdog: InactivityWatchdog;
+    inactivityMs: number;
     fresh: boolean;
     cwd: string;
     promptCapabilities: acp.PromptCapabilities;
@@ -242,6 +305,8 @@ export class AgentSession {
     this.connection = options.connection;
     this.kill = options.kill;
     this.state = options.state;
+    this.watchdog = options.watchdog;
+    this.inactivityMs = options.inactivityMs;
   }
 
   get model(): ModelOption | undefined {
@@ -299,6 +364,8 @@ export class AgentSession {
     signal?: AbortSignal;
     /** MCP servers handed to the agent's session. */
     mcpServers?: McpServerRecord[];
+    /** Fails a prompt that makes no real progress within this duration. */
+    inactivityMs?: number;
   }): Promise<AgentSession> {
     const { launch, cwd, handlers, signal } = options;
     signal?.throwIfAborted();
@@ -367,6 +434,7 @@ export class AgentSession {
     const early: acp.SessionNotification[] = [];
     // Settings seen while starting are the agent's own; the caller then applies the thread's.
     let started = false;
+    const watchdog = new InactivityWatchdog();
     const dispatch = (params: acp.SessionNotification) => {
       if (params.sessionId !== sessionId) return;
       const update = params.update;
@@ -375,6 +443,7 @@ export class AgentSession {
       } else if (update.sessionUpdate === "current_mode_update") {
         if (state.modes) state.modes = { ...state.modes, currentModeId: update.currentModeId };
       } else {
+        if (!replaying && PROGRESS_UPDATES.has(update.sessionUpdate)) watchdog.progress();
         // A replay repeats old messages, which the timeline already holds, but its commands
         // and context use are the session's current state.
         const current =
@@ -391,9 +460,14 @@ export class AgentSession {
         if (sessionId === null) early.push(params);
         else dispatch(params);
       })
-      .onRequest("session/request_permission", ({ params, signal }) =>
-        handlers.requestPermission(params, signal),
-      );
+      .onRequest("session/request_permission", async ({ params, signal }) => {
+        watchdog.pause();
+        try {
+          return await handlers.requestPermission(params, signal);
+        } finally {
+          watchdog.resume();
+        }
+      });
 
     await spawned;
     const messages = (Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>).pipeThrough(
@@ -528,6 +602,8 @@ export class AgentSession {
         connection,
         kill,
         state,
+        watchdog,
+        inactivityMs: options.inactivityMs ?? PROMPT_INACTIVITY_MS,
         fresh,
         cwd,
         promptCapabilities: caps?.promptCapabilities ?? {},
@@ -555,17 +631,47 @@ export class AgentSession {
    * Sends the user's message, after the earlier conversation when the agent lacks it, and
    * followed by the files and skills it points at.
    */
-  async prompt(text: string, history?: string, links: PromptLink[] = []): Promise<acp.StopReason> {
+  async prompt(
+    text: string,
+    history?: string,
+    links: PromptLink[] = [],
+    inactivityMs: number = this.inactivityMs,
+  ): Promise<acp.StopReason> {
     const prompt: acp.ContentBlock[] = [
       ...(history ? [{ type: "text" as const, text: history }] : []),
       { type: "text", text },
       ...links,
     ];
-    const response = await this.connection.agent.request("session/prompt", {
+    let timedOut = false;
+    let onTimeout!: () => void;
+    const timeout = new Promise<never>((_, reject) => {
+      onTimeout = () => {
+        timedOut = true;
+        reject(new Error("L'agent ne répond plus : session interrompue après inactivité."));
+      };
+    });
+    timeout.catch(() => undefined);
+
+    const request = this.connection.agent.request("session/prompt", {
       sessionId: this.sessionId,
       prompt,
     });
-    return response.stopReason;
+    // Avoid an unhandled rejection if the watchdog closes the connection after timing out.
+    request.catch(() => undefined);
+
+    this.watchdog.start(inactivityMs, onTimeout);
+    try {
+      const response = await Promise.race([request, timeout]);
+      return response.stopReason;
+    } catch (error) {
+      if (timedOut) {
+        await this.cancel().catch(() => undefined);
+        await this.close().catch(() => undefined);
+      }
+      throw error;
+    } finally {
+      this.watchdog.stop();
+    }
   }
 
   cancel(): Promise<void> {
@@ -574,6 +680,7 @@ export class AgentSession {
 
   /** Stops the agent; resolves once its process has exited and released its folder. */
   close(): Promise<void> {
+    this.watchdog.stop();
     return this.kill();
   }
 }

@@ -6,6 +6,7 @@ import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Home } from "./components/Home.tsx";
 import {
+  IconBack,
   IconCode,
   IconShield,
   IconMenu,
@@ -19,6 +20,7 @@ import {
   IconPin,
   IconPlug,
 } from "./components/icons.tsx";
+import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
 import { MoonMark } from "./components/MoonMark.tsx";
 import { Planner } from "./components/Planner.tsx";
@@ -37,6 +39,8 @@ import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
 import { focusItem } from "./focus.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { navigate, useRoute } from "./router.ts";
+
+export { ErrorBoundary };
 
 export function App() {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
@@ -182,11 +186,29 @@ export function App() {
       className={`app${drawer ? " drawer" : ""}${route.name === "home" ? " home-route" : ""}${reviewing ? " reviewing" : ""}`}
     >
       {route.name === "settings" ? (
-        <SettingsNav
-          section={route.section}
-          onPick={(section) => go({ name: "settings", section })}
-          onBack={() => go({ name: "home" })}
-        />
+        <ErrorBoundary
+          key="settings-nav"
+          fallback={(_error, reload) => (
+            <aside className="side set-side" aria-label="Réglages">
+              <button className="set-back" onClick={() => go({ name: "home" })}>
+                <IconBack />
+                Retour
+              </button>
+              <div className="empty-note">
+                <p>Impossible d'afficher le menu.</p>
+                <button className="btn sm" type="button" onClick={reload}>
+                  Recharger
+                </button>
+              </div>
+            </aside>
+          )}
+        >
+          <SettingsNav
+            section={route.section}
+            onPick={(section) => go({ name: "settings", section })}
+            onBack={() => go({ name: "home" })}
+          />
+        </ErrorBoundary>
       ) : (
         <Sidebar
           state={state}
@@ -275,17 +297,19 @@ export function App() {
           )}
         </header>
         {route.name === "settings" ? (
-          <SettingsPage
-            section={route.section}
-            agents={state.agents}
-            favorites={state.favorites}
-            projects={state.projects}
-            projectId={project?.id}
-            mcpServers={state.mcpServers}
-            onPickProject={pickProject}
-            onOpenConnections={() => setConnectionsOpen(true)}
-            onOpenMcp={() => setMcpOpen(true)}
-          />
+          <ErrorBoundary key="settings">
+            <SettingsPage
+              section={route.section}
+              agents={state.agents}
+              favorites={state.favorites}
+              projects={state.projects}
+              projectId={project?.id}
+              mcpServers={state.mcpServers}
+              onPickProject={pickProject}
+              onOpenConnections={() => setConnectionsOpen(true)}
+              onOpenMcp={() => setMcpOpen(true)}
+            />
+          </ErrorBoundary>
         ) : route.name === "thread" ? (
           thread ? (
             <ThreadView
@@ -303,19 +327,21 @@ export function App() {
             </div>
           )
         ) : route.name === "planner" ? (
-          <Planner
-            key={project?.id}
-            project={project}
-            plan={state.plan}
-            schedules={state.schedules}
-            onSchedule={(schedule) =>
-              setScheduling(schedule ? { text: "", schedule } : { text: "" })
-            }
-            threads={state.threads}
-            agents={state.agents}
-            onOpenThread={(id) => go({ name: "thread", threadId: id })}
-            onNewProject={() => setCreatingProject(true)}
-          />
+          <ErrorBoundary key={`planner:${project?.id ?? ""}`}>
+            <Planner
+              key={project?.id}
+              project={project}
+              plan={state.plan}
+              schedules={state.schedules}
+              onSchedule={(schedule) =>
+                setScheduling(schedule ? { text: "", schedule } : { text: "" })
+              }
+              threads={state.threads}
+              agents={state.agents}
+              onOpenThread={(id) => go({ name: "thread", threadId: id })}
+              onNewProject={() => setCreatingProject(true)}
+            />
+          </ErrorBoundary>
         ) : (
           <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
         )}
