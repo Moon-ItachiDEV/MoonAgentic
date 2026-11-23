@@ -172,8 +172,11 @@ describe("/revue", () => {
       await shot("r2-en-cours");
 
       // Then they weigh each other's points, and the judge settles the one still disputed.
-      await card.getByText(/Confrontation ·/).waitFor({ timeout: 30_000 });
-      await shot("r3-confrontation");
+      // Seen only when slowed down for the captures: otherwise it may be over at once.
+      if (shots) {
+        await card.getByText(/Confrontation ·/).waitFor({ timeout: 30_000 });
+        await shot("r3-confrontation");
+      }
       await card.getByText("Relue par les 3").waitFor({ timeout: 30_000 });
       await card.getByText("1 point tranché").waitFor();
       await card.getByText("Confirmés").waitFor();
