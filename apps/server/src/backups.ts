@@ -17,8 +17,7 @@ const dayOf = (time: number) => {
 
 /**
  * Makes one copy of the database a day in `dir`, the first as the server starts, and keeps
- * the last `keep`. A copy holds what the database holds, MCP secrets included: only its
- * owner reads it.
+ * the last `keep`. Only its owner reads it; MCP secrets live apart from the database.
  */
 export function backupNow(
   store: Pick<Store, "backup">,

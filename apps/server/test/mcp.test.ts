@@ -1,10 +1,11 @@
-import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { preparePrivateDataDir } from "../src/data-dir.ts";
 import { decode } from "../src/http.ts";
 import { acpMcpServers, type McpServerRecord } from "../src/mcp.ts";
+import { defaultMcpSecretStore, fileMcpSecretStore } from "../src/mcp-secrets.ts";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -97,13 +98,48 @@ describe("preparePrivateDataDir", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-data-"));
     dirs.push(dir);
     writeFileSync(path.join(dir, "state.sqlite-wal"), "", { mode: 0o644 });
+    writeFileSync(path.join(dir, "mcp-secrets.json"), "{}", { mode: 0o644 });
     preparePrivateDataDir(dir);
     preparePrivateDataDir(path.join(dir, "new"));
     const mode = (file: string) => statSync(path.join(dir, file)).mode & 0o777;
     expect(mode(".")).toBe(0o700);
     expect(mode("state.sqlite")).toBe(0o600);
     expect(mode("state.sqlite-wal")).toBe(0o600);
+    expect(mode("mcp-secrets.json")).toBe(0o600);
     expect(mode("new")).toBe(0o700);
     expect(mode("new/state.sqlite")).toBe(0o600);
+  });
+});
+
+describe("McpSecretStore", () => {
+  it("stores MCP secrets in an owner-only file and deletes the file once empty", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-mcp-secrets-"));
+    dirs.push(dir);
+    const file = path.join(dir, "mcp-secrets.json");
+    const store = fileMcpSecretStore(file);
+    expect(store.get("s1")).toEqual({});
+    store.set("s1", { TOKEN: "clé-secrète-€" });
+    expect(existsSync(file)).toBe(true);
+    if (process.platform !== "win32") {
+      expect(statSync(file).mode & 0o777).toBe(0o600);
+    }
+    const reopened = fileMcpSecretStore(file);
+    expect(reopened.get("s1")).toEqual({ TOKEN: "clé-secrète-€" });
+    reopened.delete("s1");
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it.runIf(process.platform === "win32")("seals MCP secrets with Windows DPAPI", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-mcp-dpapi-"));
+    dirs.push(dir);
+    const dbFile = path.join(dir, "state.sqlite");
+    const store = defaultMcpSecretStore(dbFile, "win32");
+    store.set("s1", { TOKEN: "clé-windows-€-123" });
+    const sealed = readFileSync(path.join(dir, "mcp-secrets.dpapi"), "utf8");
+    expect(sealed).not.toContain("clé-windows");
+    const reopened = defaultMcpSecretStore(dbFile, "win32");
+    expect(reopened.get("s1")).toEqual({ TOKEN: "clé-windows-€-123" });
+    reopened.delete("s1");
+    expect(existsSync(path.join(dir, "mcp-secrets.dpapi"))).toBe(false);
   });
 });

@@ -1,9 +1,9 @@
 // How remote access is described to the user: pure, so it is easy to test.
 import type { RemoteAccess, RemoteAddress } from "@moonagentic/protocol";
 
-/** The link another device opens: the address, then the token that lets it in. */
+/** The link another device opens: the address, then the token in the fragment (never sent in HTTP). */
 export const remoteLink = (address: RemoteAddress, token: string) =>
-  `${address.url}/?token=${encodeURIComponent(token)}`;
+  `${address.url}/#token=${encodeURIComponent(token)}`;
 
 /** What kind of address this is, and what it means for who can read the traffic. */
 export function addressText(address: RemoteAddress): {

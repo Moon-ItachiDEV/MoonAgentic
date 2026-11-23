@@ -410,9 +410,12 @@ export function githubRepo(remoteUrl: string): string | undefined {
   const match = remoteUrl
     .trim()
     .match(
-      /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([^/]+\/[^/]+?)(?:\.git)?\/?$/,
+      /^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([A-Za-z0-9._-]{1,100}?)(?:\.git)?\/?$/i,
     );
-  return match?.[1];
+  if (!match) return undefined;
+  const [, owner, name] = match as unknown as [string, string, string];
+  if (name === "." || name === "..") return undefined;
+  return `${owner}/${name}`;
 }
 
 /** Commits everything that changed in the folder; false when nothing had. */

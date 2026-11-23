@@ -227,7 +227,7 @@ export function migrate(
   if (tables.n > 0 && file !== ":memory:") {
     const backup = `${file}.v${version}-${Date.now()}.bak`;
     db.exec(`VACUUM INTO '${backup.replaceAll("'", "''")}'`);
-    // The copy holds what the database holds, MCP secrets included: only its owner reads it.
+    // Only its owner reads a database backup.
     if (process.platform !== "win32") chmodSync(backup, 0o600);
   }
   for (let step = version; step < migrations.length; step++) {
@@ -246,8 +246,11 @@ export function migrate(
 /** Durable state: projects, threads and each thread's timeline items. */
 export class Store {
   readonly db: DatabaseSync;
+  /** The path opened for this database, or `:memory:`. */
+  readonly file: string;
 
   constructor(file: string) {
+    this.file = file;
     this.db = new DatabaseSync(file);
     this.db.function("moon_fold", { deterministic: true }, (text) =>
       typeof text === "string" ? fold(text) : null,

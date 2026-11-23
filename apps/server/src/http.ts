@@ -10,6 +10,16 @@ import { findRemoteAccess } from "./remote.ts";
 
 /** How often each connection is pinged. */
 const HEARTBEAT_MS = 30_000;
+/** Default ceiling on simultaneous WebSocket clients. */
+export const MAX_WS_CLIENTS = 64;
+/** Lifetime of a single-use WebSocket upgrade ticket returned by `POST /api/ws-ticket`. */
+export const WS_TICKET_TTL_MS = 30_000;
+const MAX_WS_TICKETS = 256;
+const DEFAULT_RATE_WINDOW_MS = 60_000;
+const DEFAULT_MAX_AUTH_FAILURES = 20;
+const DEFAULT_MAX_API_REQUESTS = 120;
+const DEFAULT_MAX_COORDINATOR_REQUESTS = 120;
+const DEFAULT_MAX_WS_UPGRADES = 60;
 
 /** A fresh access token: long enough that it cannot be guessed. */
 export const newToken = () => randomBytes(24).toString("base64url");
@@ -32,6 +42,13 @@ const LOCAL = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 /** A coordinator's call is a tool name and a brief: never large. */
 const MAX_COORDINATOR_BODY = 256 * 1024;
 
+/** Extracts the credential from a strict `Authorization: Bearer <token>` header. */
+export function bearerToken(header: string | undefined): string | null {
+  if (!header) return null;
+  const match = /^Bearer (\S+)$/.exec(header);
+  return match?.[1] ?? null;
+}
+
 const sameToken = (given: string | null, expected: string) => {
   if (!given) return false;
   const a = Buffer.from(given);
@@ -46,6 +63,103 @@ const parseUrl = (raw: string): URL | undefined => {
     return undefined;
   }
 };
+
+/**
+ * Validates the `Origin` header on a WebSocket upgrade against the request's `Host`, blocking
+ * cross-site WebSocket hijacking (CSWSH) from other web pages. Requests without an `Origin`
+ * header (non-browser clients) are allowed and still require authentication.
+ */
+export function allowedWsOrigin(
+  originHeader: string | undefined,
+  hostHeader: string | undefined,
+): boolean {
+  if (originHeader === undefined) return true;
+  if (!hostHeader) return false;
+  let origin: URL;
+  try {
+    origin = new URL(originHeader);
+  } catch {
+    return false;
+  }
+  if (origin.protocol !== "http:" && origin.protocol !== "https:") return false;
+  let target: URL;
+  try {
+    target = new URL(`${origin.protocol}//${hostHeader}`);
+  } catch {
+    return false;
+  }
+  if (
+    target.username ||
+    target.password ||
+    target.pathname !== "/" ||
+    target.search ||
+    target.hash
+  ) {
+    return false;
+  }
+  return origin.host.toLowerCase() === target.host.toLowerCase();
+}
+
+export type RateLimitVerdict = { ok: true } | { ok: false; retryAfterSec: number };
+
+/** Bounded sliding-window per-key rate limiter. */
+export class RateLimiter {
+  private readonly max: number;
+  private readonly windowMs: number;
+  private readonly maxKeys: number;
+  private readonly hits = new Map<string, number[]>();
+
+  constructor(max: number, windowMs: number, maxKeys = 1024) {
+    this.max = max;
+    this.windowMs = windowMs;
+    this.maxKeys = maxKeys;
+  }
+
+  private prune(key: string, now: number): number[] {
+    const list = this.hits.get(key);
+    if (!list) return [];
+    const cutoff = now - this.windowMs;
+    const recent = list.filter((t) => t > cutoff);
+    if (recent.length === 0) this.hits.delete(key);
+    else if (recent.length !== list.length) this.hits.set(key, recent);
+    return recent;
+  }
+
+  /** Checks whether `key` is already over the limit without counting a new hit. */
+  check(key: string, now = Date.now()): RateLimitVerdict {
+    const recent = this.prune(key, now);
+    if (recent.length < this.max) return { ok: true };
+    const retryAfterSec = Math.max(1, Math.ceil((recent[0]! + this.windowMs - now) / 1000));
+    return { ok: false, retryAfterSec };
+  }
+
+  /** Records one hit for `key` (used for auth failures). */
+  record(key: string, now = Date.now()): void {
+    const recent = this.prune(key, now);
+    if (!this.hits.has(key) && this.hits.size >= this.maxKeys) {
+      const oldest = this.hits.keys().next().value;
+      if (oldest !== undefined) this.hits.delete(oldest);
+    }
+    recent.push(now);
+    this.hits.set(key, recent);
+  }
+
+  /** Checks and consumes one slot for `key`. */
+  take(key: string, now = Date.now()): RateLimitVerdict {
+    const verdict = this.check(key, now);
+    if (!verdict.ok) return verdict;
+    this.record(key, now);
+    return verdict;
+  }
+}
+
+export interface RateLimitOptions {
+  windowMs?: number;
+  maxAuthFailures?: number;
+  maxApiRequests?: number;
+  maxCoordinatorRequests?: number;
+  maxWsUpgrades?: number;
+}
 
 /** What `staticFile` answers for a built file that is not there (an old tab's asset). */
 export const MISSING = Symbol("missing");
@@ -162,20 +276,109 @@ export function createHttpServer(options: {
   heartbeatMs?: number;
   /** How the server can be reached from elsewhere; asked again each time, as it changes. */
   remoteAccess?: (host: string, port: number) => Promise<RemoteAccess>;
+  /** Maximum number of simultaneous WebSocket clients. */
+  maxClients?: number;
+  /** Lifetime of a single-use WebSocket ticket issued by `POST /api/ws-ticket`. */
+  wsTicketTtlMs?: number;
+  /** Custom rate-limiting parameters (for tests or hardened deployments). */
+  rateLimit?: RateLimitOptions;
 }): Server {
   const { hub, webDir } = options;
   let token = options.token;
   const remote = options.remoteAccess ?? findRemoteAccess;
+  const maxClients = options.maxClients ?? MAX_WS_CLIENTS;
+  const wsTicketTtlMs = options.wsTicketTtlMs ?? WS_TICKET_TTL_MS;
+  const rateWindowMs = options.rateLimit?.windowMs ?? DEFAULT_RATE_WINDOW_MS;
+  const authFailures = new RateLimiter(
+    options.rateLimit?.maxAuthFailures ?? DEFAULT_MAX_AUTH_FAILURES,
+    rateWindowMs,
+  );
+  const apiLimiter = new RateLimiter(
+    options.rateLimit?.maxApiRequests ?? DEFAULT_MAX_API_REQUESTS,
+    rateWindowMs,
+  );
+  const coordLimiter = new RateLimiter(
+    options.rateLimit?.maxCoordinatorRequests ?? DEFAULT_MAX_COORDINATOR_REQUESTS,
+    rateWindowMs,
+  );
+  const coordAuthFailures = new RateLimiter(
+    options.rateLimit?.maxAuthFailures ?? DEFAULT_MAX_AUTH_FAILURES,
+    rateWindowMs,
+  );
+  const wsLimiter = new RateLimiter(
+    options.rateLimit?.maxWsUpgrades ?? DEFAULT_MAX_WS_UPGRADES,
+    rateWindowMs,
+  );
+  /** Single-use short-lived tickets issued for WebSocket upgrades, keyed by ticket -> expiresAt. */
+  const wsTickets = new Map<string, number>();
+  const issueWsTicket = (): string => {
+    const now = Date.now();
+    for (const [key, expiresAt] of wsTickets) {
+      if (expiresAt <= now) wsTickets.delete(key);
+    }
+    while (wsTickets.size >= MAX_WS_TICKETS) {
+      const oldest = wsTickets.keys().next().value;
+      if (oldest === undefined) break;
+      wsTickets.delete(oldest);
+    }
+    const ticket = newToken();
+    wsTickets.set(ticket, now + wsTicketTtlMs);
+    return ticket;
+  };
+  const consumeWsTicket = (given: string | null): boolean => {
+    if (!given) return false;
+    const expiresAt = wsTickets.get(given);
+    if (expiresAt === undefined) return false;
+    wsTickets.delete(given);
+    return expiresAt > Date.now();
+  };
+
   const json = (res: ServerResponse, status: number, body: unknown) => {
     res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify(body));
   };
+  const tooMany = (res: ServerResponse, retryAfterSec: number) => {
+    res.writeHead(429, {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "retry-after": String(retryAfterSec),
+    });
+    res.end(JSON.stringify({ message: "Trop de requêtes. Réessaie dans un instant." }));
+  };
+
   const server = createServer((req, res) => {
     for (const [name, value] of Object.entries(securityHeaders(req.headers.host)))
       res.setHeader(name, value);
-    const given = req.headers.authorization?.replace(/^Bearer /, "") ?? null;
+    const given = bearerToken(req.headers.authorization);
+    const remoteIp = req.socket.remoteAddress ?? "unknown";
     if (req.url === "/api/auth") {
-      res.writeHead(sameToken(given, token) ? 204 : 401).end();
+      const limit = apiLimiter.take(remoteIp);
+      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
+      const authLimit = authFailures.check(remoteIp);
+      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
+      if (!sameToken(given, token)) {
+        authFailures.record(remoteIp);
+        res.writeHead(401).end();
+        return;
+      }
+      res.writeHead(204).end();
+      return;
+    }
+    if (req.url === "/api/ws-ticket") {
+      const limit = apiLimiter.take(remoteIp);
+      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
+      const authLimit = authFailures.check(remoteIp);
+      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
+      if (req.method !== "POST") {
+        res.writeHead(405).end();
+        return;
+      }
+      if (!sameToken(given, token)) {
+        authFailures.record(remoteIp);
+        res.writeHead(401).end();
+        return;
+      }
+      json(res, 200, { ticket: issueWsTicket() });
       return;
     }
     if (req.url === COORDINATOR_PATH) {
@@ -191,6 +394,10 @@ export function createHttpServer(options: {
         res.writeHead(405).end();
         return;
       }
+      const limit = coordLimiter.take(remoteIp);
+      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
+      const authLimit = coordAuthFailures.check(remoteIp);
+      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
       const chunks: Buffer[] = [];
       let size = 0;
       req.on("data", (chunk: Buffer) => {
@@ -212,22 +419,30 @@ export function createHttpServer(options: {
           try {
             json(res, 200, { token: hub.coordinatorExchange(given ?? "") });
           } catch {
+            coordAuthFailures.record(remoteIp);
             json(res, 401, { error: "Accès refusé." });
           }
           return;
         }
         hub.coordinatorCall(given ?? "", String(body?.tool ?? ""), body?.args).then(
           (result) => json(res, 200, { result }),
-          (error: unknown) =>
+          (error: unknown) => {
+            if (error instanceof CoordinatorRefused) coordAuthFailures.record(remoteIp);
             json(res, error instanceof CoordinatorRefused ? 401 : 400, {
               error: error instanceof Error ? error.message : String(error),
-            }),
+            });
+          },
         );
       });
       return;
     }
     if (req.url === "/api/remote" || req.url === "/api/remote/token") {
+      const limit = apiLimiter.take(remoteIp);
+      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
+      const authLimit = authFailures.check(remoteIp);
+      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
       if (!sameToken(given, token)) {
+        authFailures.record(remoteIp);
         res.writeHead(401).end();
         return;
       }
@@ -246,6 +461,7 @@ export function createHttpServer(options: {
           return;
         }
         token = next;
+        wsTickets.clear();
         // Every device still on the old token is shown out, once this one has the new one.
         res.once("close", () => {
           for (const socket of wss.clients) socket.close(TOKEN_RENEWED, "token renewed");
@@ -298,6 +514,7 @@ export function createHttpServer(options: {
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  let upgrading = 0;
   // A phone that left the network never says goodbye: a connection that does not answer a
   // ping by the next one is closed, so nothing is kept for a window that is gone.
   const alive = new WeakSet<WebSocket>();
@@ -314,11 +531,50 @@ export function createHttpServer(options: {
   heartbeat.unref();
   server.on("upgrade", (req, socket, head) => {
     const url = parseUrl(req.url ?? "/");
-    if (url?.pathname !== "/ws" || !sameToken(url.searchParams.get("token"), token)) {
+    if (url?.pathname !== "/ws") {
       socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
       return;
     }
+    if (!allowedWsOrigin(req.headers.origin, req.headers.host)) {
+      socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      return;
+    }
+    const remoteIp = req.socket.remoteAddress ?? "unknown";
+    const limit = wsLimiter.take(remoteIp);
+    if (!limit.ok) {
+      socket.end(`HTTP/1.1 429 Too Many Requests\r\nRetry-After: ${limit.retryAfterSec}\r\n\r\n`);
+      return;
+    }
+    const authLimit = authFailures.check(remoteIp);
+    if (!authLimit.ok) {
+      socket.end(
+        `HTTP/1.1 429 Too Many Requests\r\nRetry-After: ${authLimit.retryAfterSec}\r\n\r\n`,
+      );
+      return;
+    }
+    const authorized =
+      consumeWsTicket(url.searchParams.get("ticket")) ||
+      sameToken(bearerToken(req.headers.authorization), token);
+    if (!authorized) {
+      authFailures.record(remoteIp);
+      socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      return;
+    }
+    if (wss.clients.size + upgrading >= maxClients) {
+      socket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+      return;
+    }
+    upgrading += 1;
+    let settled = false;
+    const finishUpgrade = () => {
+      if (settled) return;
+      settled = true;
+      upgrading -= 1;
+    };
+    socket.once("close", finishUpgrade);
+    socket.once("error", finishUpgrade);
     wss.handleUpgrade(req, socket, head, (ws) => {
+      finishUpgrade();
       const client: Client = {
         send: (message: ServerMessage) => {
           if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
@@ -364,6 +620,7 @@ export function createHttpServer(options: {
   });
   server.on("close", () => {
     clearInterval(heartbeat);
+    wsTickets.clear();
     wss.close();
   });
   return server;

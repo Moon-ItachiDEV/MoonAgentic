@@ -70,7 +70,7 @@ import { COORDINATOR_TOOLS } from "./coordinator-tools.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
 import { shipTarget, Teams, teamStatus } from "./team.ts";
-import { mcpInfo } from "./mcp.ts";
+import { mcpInfo, RESERVED_MCP_NAME } from "./mcp.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
@@ -175,8 +175,12 @@ const archiveRef = (threadId: string) => `refs/moonagentic/${threadId}/archive`;
 const workFolder = (workspace: Workspace) =>
   workspace.subdir ? path.join(workspace.path, workspace.subdir) : workspace.path;
 
-/** What a team's reviewer never does on its own, whatever its access: it reads, it does not change. */
-const READ_ONLY_REFUSED = new Set(["edit", "delete", "move"]);
+/**
+ * What a team's reviewer or a coordinator may do on its own when granted full access: only
+ * strictly read-only inspection (`read`, `search`, `think`). Commands (`execute`), file edits,
+ * network fetches and unknown/unspecified (`other`) tools still wait on the user.
+ */
+export const READ_ONLY_ALLOWED = new Set(["read", "search", "think"]);
 
 const TEAM_AT_WORK = "Cette équipe travaille encore : arrête-la d'abord.";
 
@@ -1980,11 +1984,16 @@ export class Hub {
   ): Promise<AgentSession> {
     // Until the thread's own model and settings are applied, the agent's are not news.
     let ready = false;
+    const coordinatorMcp = this.coordinators.coordinatorServer(thread);
+    const userMcp =
+      thread.kind === "coordinator"
+        ? this.catalog.mcpServers().filter((s) => s.name.trim().toLowerCase() !== RESERVED_MCP_NAME)
+        : this.catalog.mcpServers();
     const session = await AgentSession.start({
       launch: this.agents.launch(thread.agentId),
       cwd,
       previousSessionId: this.store.getSessionId(thread.id),
-      mcpServers: [...this.catalog.mcpServers(), ...this.coordinators.coordinatorServer(thread)],
+      mcpServers: [...userMcp, ...coordinatorMcp],
       signal: AbortSignal.any([stop, AbortSignal.timeout(START_TIMEOUT_MS)]),
       handlers: {
         onUpdate: (update) => this.applyUpdate(thread.id, update),
@@ -2209,11 +2218,11 @@ export class Hub {
   ): Promise<acp.RequestPermissionResponse> {
     const thread = this.requireThread(threadId);
     if (request.toolCall.title) this.upsertTool(threadId, request.toolCall);
-    // A reviewer only reads and runs checks: even with full access, a change waits on the user.
-    // Nor does a coordinator change files: it routes, and the threads it opens do the work.
-    const edits =
+    // A reviewer only reads; a coordinator only reads and routes. Even with full access,
+    // commands (`execute`), edits, network fetches and unknown (`other`) tools wait on the user.
+    const readOnlyDenied =
       (thread.role === "reviewer" || thread.kind === "coordinator") &&
-      READ_ONLY_REFUSED.has(request.toolCall.kind ?? "");
+      !READ_ONLY_ALLOWED.has(request.toolCall.kind ?? "");
     // MoonAgentic's own tools are the coordinator's work, already limited by the server:
     // asking the user before each one would make it useless.
     this.noteToolName(threadId, request.toolCall);
@@ -2222,11 +2231,12 @@ export class Hub {
     const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
     const own =
       thread.kind === "coordinator" &&
+      !!this.coordinatorUrl &&
       (named !== undefined
         ? OWN_TOOL.test(named)
         : OWN_TOOL.test(request.toolCall.title ?? "") &&
           (!request.toolCall.kind || request.toolCall.kind === "other"));
-    if ((thread.permissionMode === "full" && !edits) || own) {
+    if ((thread.permissionMode === "full" && !readOnlyDenied) || own) {
       const allow =
         request.options.find((o) => o.kind === "allow_once") ??
         request.options.find((o) => o.kind === "allow_always");

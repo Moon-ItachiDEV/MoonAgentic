@@ -374,7 +374,8 @@ describe("a project's coordinator", () => {
   }, 90_000);
 
   it("sends each kind of work where the settings say, and starts the team the user set up", async () => {
-    const { hub, store, projectId, coordinatorId, tokens, post, say, hold } = await coordinated();
+    const { hub, store, projectId, coordinatorId, tokens, post, say, hold, release } =
+      await coordinated();
     const client: Client = { send: () => undefined };
     expect(THREAD_KINDS).toEqual(WORK_KINDS);
     await hub.handle(client, {
@@ -404,12 +405,17 @@ describe("a project's coordinator", () => {
     });
     expect(store.getThread(other.result!.opened.id)).toMatchObject({ agentId: "demo" });
 
-    // No team was ever set up: the first preset, on the agents at hand, and it is told so.
+    // No team was ever set up: the first preset, on the agents at hand, inheriting the
+    // coordinator's supervised mode rather than escalating to full.
     const auto = (await call("start_team", { task_key: "auto", task: "Fais tout" })) as {
       result?: { opened: { id: string }; team?: string };
     };
     expect(auto.result?.team).toContain("Équipe par défaut");
     expect(store.getThread(auto.result!.opened.id)).toMatchObject({ role: "lead" });
+    expect(store.getThread(auto.result!.opened.id)!.team).toMatchObject({
+      coders: 2,
+      permissionMode: "supervised",
+    });
     // It is not kept as the user's own team.
     expect(hub.snapshot().coordinator.team).toBeUndefined();
     const member = { agentId: "demo" };
@@ -424,17 +430,42 @@ describe("a project's coordinator", () => {
       permissionMode: "full",
     });
     expect(hub.snapshot().coordinator.team).toMatchObject({ coders: 2, permissionMode: "full" });
+    // While the coordinator stays supervised, replaying a saved full team is capped to supervised.
     const team = await call("start_team", { task_key: "gros", task: "Refais tout" });
     const lead = store.getThread(team.result!.opened.id)!;
     expect(lead).toMatchObject({ role: "lead", openedBy: coordinatorId, taskKey: "gros" });
-    expect(lead.team).toMatchObject({ coders: 2, permissionMode: "full" });
+    expect(lead.team).toMatchObject({ coders: 2, permissionMode: "supervised" });
     expect(lead.team!.task).toContain("Refais tout");
     expect(
       (await call("start_team", { task_key: "gros", task: "Refais tout" })).result,
     ).toMatchObject({ already_open: true });
+    // Once the user explicitly puts the coordinator in full mode, start_team may launch a full team.
+    await release();
+    hub.setPermissionMode(coordinatorId, "full");
+    await hold();
+    const fullTeam = await call("start_team", { task_key: "complet", task: "Mode complet" });
+    expect(store.getThread(fullTeam.result!.opened.id)!.team).toMatchObject({
+      coders: 2,
+      permissionMode: "full",
+    });
     for (const t of store.listThreads().filter((t) => t.role === "lead")) {
       await hub.handle(client, { type: "team.stop", threadId: t.id });
     }
+  });
+
+  it("ignores any legacy user MCP server named moonagentic on coordinator threads", async () => {
+    const { store, say } = await coordinated();
+    // Simulate a pre-hardening database that already saved a user MCP server called "moonagentic".
+    store.setSetting("mcpServers", [
+      {
+        id: "legacy-collision",
+        name: "MoonAgentic",
+        enabled: true,
+        transport: { type: "stdio", command: "false", args: [], env: [] },
+      },
+    ]);
+    // The real internal bridge still wins with no duplicate shadowing.
+    expect(await say("/fils")).toBe("Ce projet a 0 fil.");
   });
 
   it("keeps the threads past what it may run at once in line, and starts them as places free", async () => {

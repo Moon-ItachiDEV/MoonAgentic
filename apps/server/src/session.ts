@@ -314,6 +314,23 @@ class InactivityWatchdog {
   }
 }
 
+/**
+ * Strips MoonAgentic's own internals, GitHub/Git credentials, and service-manager variables from
+ * the environment handed to an ACP agent process. `MOONAGENTIC_DEMO_*` stays for the demo agent
+ * used in development and tests.
+ */
+const STRIPPED_AGENT_ENV =
+  /^(?:MOONAGENTIC_(?!DEMO_)|(?:GH|GITHUB)_(?:ENTERPRISE_)?TOKEN$|GIT_(?:ASKPASS|CONFIG_COUNT|CONFIG_PARAMETERS|CONFIG_(?:KEY|VALUE)_\d+)$|(?:TAILSCALE_AUTHKEY|TS_AUTHKEY|NPM_TOKEN|NODE_AUTH_TOKEN|NOTIFY_SOCKET|LISTEN_PID|LISTEN_FDS|LISTEN_FDNAMES)$)/i;
+
+/** The environment handed to a spawned ACP agent, with MoonAgentic and host token variables removed. */
+export function agentEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (value !== undefined && !STRIPPED_AGENT_ENV.test(key)) env[key] = value;
+  }
+  return env;
+}
+
 /** One agent process and its ACP session, owned by one thread. */
 export class AgentSession {
   readonly sessionId: string;
@@ -423,7 +440,7 @@ export class AgentSession {
     const plan = spawnPlan(launch.command, launch.args);
     const child = spawn(plan.command, plan.args, {
       cwd,
-      env: process.env,
+      env: agentEnv(process.env),
       // Overlapped only where asked (see AgentLaunch); it is a plain pipe off Windows anyway.
       stdio: [launch.overlappedStdin ? "overlapped" : "pipe", "pipe", "pipe"],
       // Its own process group on Unix, so stopping it also stops what it started.

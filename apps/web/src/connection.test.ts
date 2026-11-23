@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ASK_TIMEOUT_MS, Connection, NOT_SENT, PING_MS, PONG_TIMEOUT_MS } from "./connection.ts";
+import {
+  ASK_TIMEOUT_MS,
+  Connection,
+  NOT_SENT,
+  PING_MS,
+  PONG_TIMEOUT_MS,
+  readToken,
+} from "./connection.ts";
 
 class FakeWebSocket {
   static readonly CONNECTING = 0;
@@ -43,9 +50,10 @@ class FakeWebSocket {
   }
 }
 
-function setupConnection(options: { askTimeoutMs?: number; pingMs?: number } = {}) {
+async function setupConnection(options: { askTimeoutMs?: number; pingMs?: number } = {}) {
   vi.useFakeTimers();
   FakeWebSocket.instances = [];
+  let tickets = 0;
   vi.stubGlobal("location", { href: "http://127.0.0.1:4747/" });
   vi.stubGlobal("localStorage", {
     getItem: () => "secret-token",
@@ -54,11 +62,21 @@ function setupConnection(options: { askTimeoutMs?: number; pingMs?: number } = {
   vi.stubGlobal("history", { state: null, replaceState: () => undefined });
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(null, { status: 200 })),
+    vi.fn(async (input: string) => {
+      if (input === "/api/ws-ticket") {
+        tickets += 1;
+        return new Response(JSON.stringify({ ticket: `ticket-${tickets}` }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(null, { status: 204 });
+    }),
   );
   vi.stubGlobal("WebSocket", FakeWebSocket);
   // No heartbeat unless a test is about it: the others count the timers of a request.
   const conn = new Connection({ pingMs: 0, ...options });
+  await vi.advanceTimersByTimeAsync(0);
   const socket = FakeWebSocket.instances.at(-1)!;
   return { conn, socket };
 }
@@ -69,12 +87,66 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("readToken", () => {
+  it("reads the token from #token= and strips it from the URL fragment", () => {
+    const saved: [string, string][] = [];
+    const replaced: string[] = [];
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/reglages/remote#token=frag-123&k=v" });
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: (k: string, v: string) => saved.push([k, v]),
+    });
+    vi.stubGlobal("history", {
+      state: null,
+      replaceState: (_s: unknown, _t: string, url: URL) => replaced.push(url.href),
+    });
+    expect(readToken()).toBe("frag-123");
+    expect(saved).toEqual([["moonagentic.token", "frag-123"]]);
+    expect(replaced).toEqual(["http://127.0.0.1:4747/reglages/remote#k=v"]);
+  });
+
+  it("still accepts legacy ?token= links and scrubs them", () => {
+    const replaced: string[] = [];
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/?token=old-456" });
+    vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => undefined });
+    vi.stubGlobal("history", {
+      state: null,
+      replaceState: (_s: unknown, _t: string, url: URL) => replaced.push(url.href),
+    });
+    expect(readToken()).toBe("old-456");
+    expect(replaced).toEqual(["http://127.0.0.1:4747/"]);
+  });
+});
+
 describe("Connection heartbeat", () => {
   const sentTypes = (socket: FakeWebSocket) =>
     socket.sent.map((raw) => (JSON.parse(raw) as { type: string }).type);
 
+  it("opens WebSockets with a single-use ticket and never puts the master token in the URL", async () => {
+    const { socket } = await setupConnection();
+    expect(socket.url).toBe("ws://127.0.0.1:4747/ws?ticket=ticket-1");
+    expect(socket.url).not.toContain("secret-token");
+  });
+
+  it("marks the connection unauthorized when /api/ws-ticket returns 401", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/" });
+    vi.stubGlobal("localStorage", { getItem: () => "bad-token", setItem: () => undefined });
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(null, { status: 401 })),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const conn = new Connection({ pingMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(conn.getState().status).toBe("unauthorized");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
   it("pings while open, and opens a new connection when no answer comes", async () => {
-    const { conn, socket } = setupConnection({ pingMs: PING_MS });
+    const { conn, socket } = await setupConnection({ pingMs: PING_MS });
     socket.open();
     await vi.advanceTimersByTimeAsync(PING_MS);
     expect(sentTypes(socket)).toEqual(["ping"]);
@@ -96,7 +168,7 @@ describe("Connection heartbeat", () => {
   });
 
   it("tries again at once when the device wakes, instead of waiting", async () => {
-    const { conn, socket } = setupConnection();
+    const { conn, socket } = await setupConnection();
     socket.open();
     // Several failures in a row: the wait has grown.
     socket.closeNow();
@@ -106,6 +178,7 @@ describe("Connection heartbeat", () => {
     const before = FakeWebSocket.instances.length;
 
     conn.wake();
+    await vi.advanceTimersByTimeAsync(0);
     expect(FakeWebSocket.instances).toHaveLength(before + 1);
     FakeWebSocket.instances.at(-1)!.open();
     expect(conn.getState().status).toBe("open");
@@ -116,7 +189,7 @@ describe("Connection heartbeat", () => {
   });
 
   it("says when an action could not leave, and takes it back once connected again", async () => {
-    const { conn, socket } = setupConnection();
+    const { conn, socket } = await setupConnection();
     socket.open();
     socket.closeNow();
     await vi.advanceTimersByTimeAsync(0);
@@ -138,7 +211,7 @@ describe("Connection heartbeat", () => {
 describe("Connection", () => {
   it("times out ask after 60 s by default and cleans up pending", async () => {
     expect(ASK_TIMEOUT_MS).toBe(60_000);
-    const { conn, socket } = setupConnection();
+    const { conn, socket } = await setupConnection();
     socket.open();
 
     const promise = conn.ask({ type: "search", requestId: "req-default", query: "test" });
@@ -160,7 +233,7 @@ describe("Connection", () => {
   });
 
   it("supports an injectable timeout on Connection and per ask call", async () => {
-    const { conn, socket } = setupConnection({ askTimeoutMs: 500 });
+    const { conn, socket } = await setupConnection({ askTimeoutMs: 500 });
     socket.open();
 
     const p1 = conn.ask({ type: "search", requestId: "req-1", query: "a" });
@@ -183,7 +256,7 @@ describe("Connection", () => {
   });
 
   it("clears the timeout timer when a reply or error arrives", async () => {
-    const { conn, socket } = setupConnection({ askTimeoutMs: 1_000 });
+    const { conn, socket } = await setupConnection({ askTimeoutMs: 1_000 });
     socket.open();
 
     const okPromise = conn.ask({ type: "search", requestId: "req-ok", query: "x" });
@@ -204,7 +277,7 @@ describe("Connection", () => {
   });
 
   it("rejects pending requests and cancels their timers when the socket closes", async () => {
-    const { conn, socket } = setupConnection({ askTimeoutMs: 5_000 });
+    const { conn, socket } = await setupConnection({ askTimeoutMs: 5_000 });
     socket.open();
 
     const promise = conn.ask({ type: "search", requestId: "req-close", query: "z" });
@@ -218,7 +291,7 @@ describe("Connection", () => {
   });
 
   it("rejects immediately without leaving a timer when the socket is not open", async () => {
-    const { conn } = setupConnection({ askTimeoutMs: 5_000 });
+    const { conn } = await setupConnection({ askTimeoutMs: 5_000 });
 
     await expect(
       conn.ask({ type: "search", requestId: "req-offline", query: "w" }),
@@ -228,7 +301,7 @@ describe("Connection", () => {
 
   it("ignores malformed JSON frames in onmessage without breaking the connection", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const { conn, socket } = setupConnection({ askTimeoutMs: 1_000 });
+    const { conn, socket } = await setupConnection({ askTimeoutMs: 1_000 });
     socket.open();
 
     expect(() => socket.emitMessage("{trame invalide")).not.toThrow();

@@ -901,7 +901,7 @@ function Unauthorized() {
         <h1>Lien de connexion requis</h1>
         <p>
           Ouvre MoonAgentic avec le lien affiché par le serveur au démarrage, celui qui finit par{" "}
-          <code>?token=…</code>.
+          <code>#token=…</code>.
         </p>
       </div>
     </div>

@@ -36,7 +36,7 @@ beforeAll(async () => {
     let out = "";
     server.stdout?.on("data", (chunk: Buffer) => {
       out += chunk.toString();
-      const found = /http:\/\/\S+\?token=\S+/.exec(out);
+      const found = /http:\/\/\S+#token=\S+/.exec(out);
       if (found) resolve(found[0]);
     });
     server.stderr?.on("data", (chunk: Buffer) => process.stderr.write(chunk));

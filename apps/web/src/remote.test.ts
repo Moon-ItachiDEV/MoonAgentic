@@ -14,7 +14,7 @@ describe("remote access, as told to the user", () => {
   it("builds the link another device opens", () => {
     expect(
       remoteLink({ kind: "tailscale-https", url: "https://mini.tail1234.ts.net" }, "a_b-c"),
-    ).toBe("https://mini.tail1234.ts.net/?token=a_b-c");
+    ).toBe("https://mini.tail1234.ts.net/#token=a_b-c");
   });
 
   it("warns about an address with no encryption, or open to the internet", () => {

@@ -5,6 +5,7 @@ import type {
   CoordinatorSettings,
   Item,
   PendingRequest,
+  PermissionMode,
   ServerMessage,
   TeamSetup,
   Thread,
@@ -211,7 +212,10 @@ export class Coordinators {
   }
 
   /** The first preset's team on the agents at hand, their models asked for if need be. */
-  private async presetTeam(projectId: string): Promise<TeamSetup | undefined> {
+  private async presetTeam(
+    projectId: string,
+    permissionMode: PermissionMode,
+  ): Promise<TeamSetup | undefined> {
     const unknown = this.host.catalog
       .list()
       .filter((a) => a.available && !a.models && !a.modelsError);
@@ -220,7 +224,7 @@ export class Coordinators {
       new Promise((resolve) => setTimeout(resolve, PRESET_DISCOVERY_MS)),
     ]);
     const members = defaultTeam(this.host.catalog.list());
-    return members && { ...members, coders: 2, permissionMode: "full" };
+    return members && { ...members, coders: 2, permissionMode };
   }
 
   /** Forgets every access given to a coordinator's bridge so far. */
@@ -521,7 +525,7 @@ export class Coordinators {
         if (known) return { already_open: true, opened: this.threadForCoordinator(known) };
         const saved = this.coordinatorSettings().team;
         // Never set up by hand: the first preset, on the agents at hand, rather than failing.
-        const setup = saved ?? (await this.presetTeam(scope.projectId));
+        const setup = saved ?? (await this.presetTeam(scope.projectId, coordinator.permissionMode));
         if (!setup)
           throw new Error(
             "Aucun agent n'est prêt pour former une équipe. Dis-le tout de suite à l'utilisateur, en une phrase, sans réessayer.",
@@ -531,8 +535,12 @@ export class Coordinators {
           throw new Error(
             `Tu as déjà ouvert ${opened} fils pour ce message : demande à l'utilisateur avant d'en ouvrir d'autres.`,
           );
+        // A supervised coordinator never escalates a team past its own permission mode.
+        const permissionMode: PermissionMode =
+          coordinator.permissionMode === "full" ? setup.permissionMode : "supervised";
         const id = this.host.startTeam({
           ...setup,
+          permissionMode,
           projectId: scope.projectId,
           task: withOrigin(task, this.askedSince(coordinator.id)),
           openedBy: coordinator.id,

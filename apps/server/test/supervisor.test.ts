@@ -4,10 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { backupNow } from "../src/backups.ts";
 import {
+  createLineBuffer,
   DailyLog,
   MAX_RESTART_DELAY_MS,
   redact,
   restartDelay,
+  shouldRedactOutput,
   supervise,
 } from "../src/supervisor.ts";
 import { Store } from "../src/store.ts";
@@ -23,9 +25,47 @@ const tempDir = () => {
 };
 
 describe("supervisor", () => {
-  it("keeps the access token out of the log", () => {
+  it("keeps tokens, Bearer credentials, GitHub tokens and API keys out of the log", () => {
     expect(redact("MoonAgentic est prêt : http://127.0.0.1:4747/?token=Ab_3-x9")).toBe(
       "MoonAgentic est prêt : http://127.0.0.1:4747/?token=…",
+    );
+    expect(redact("MoonAgentic est prêt : http://127.0.0.1:4747/#token=Ab_3-x9")).toBe(
+      "MoonAgentic est prêt : http://127.0.0.1:4747/#token=…",
+    );
+    expect(redact("ws /ws?ticket=abc_123-XYZ")).toBe("ws /ws?ticket=…");
+    expect(redact("Authorization: Bearer s3cret-token-99")).toBe("Authorization: Bearer …");
+    expect(redact("Bearer sans secret")).toBe("Bearer sans secret");
+    expect(redact("token ghp_1234567890abcdef and github_pat_11ABCDEF_9999")).toBe(
+      "token ghp_… and github_pat_…",
+    );
+    expect(redact("key sk-ant-api03-abcdefghijklmno and sk-proj-123456789012345")).toBe(
+      "key sk-ant-… and sk-proj-…",
+    );
+  });
+
+  it("buffers split pipe chunks into whole lines before redacting", () => {
+    const lines: string[] = [];
+    const buf = createLineBuffer((line) => lines.push(redact(line)));
+    buf.push("MoonAgentic est prêt : http://127.0.0.1:4747/#token=abc");
+    buf.push("def123\nAuthorization: Bearer ");
+    buf.push("ghp_split999999");
+    buf.flush();
+    expect(lines).toEqual([
+      "MoonAgentic est prêt : http://127.0.0.1:4747/#token=…",
+      "Authorization: Bearer …",
+    ]);
+    expect(lines.join("\n")).not.toContain("def123");
+    expect(lines.join("\n")).not.toContain("split999999");
+  });
+
+  it("detects service managers where stdout/stderr must be redacted", () => {
+    expect(shouldRedactOutput({})).toBe(false);
+    expect(shouldRedactOutput({ INVOCATION_ID: "abc" })).toBe(true);
+    expect(shouldRedactOutput({ JOURNAL_STREAM: "8:12345" })).toBe(true);
+    expect(shouldRedactOutput({ NSSM_SERVICE_NAME: "MoonAgentic" })).toBe(true);
+    expect(shouldRedactOutput({ MOONAGENTIC_REDACT_STDOUT: "1" })).toBe(true);
+    expect(shouldRedactOutput({ INVOCATION_ID: "abc", MOONAGENTIC_REDACT_STDOUT: "0" })).toBe(
+      false,
     );
   });
 
@@ -59,7 +99,7 @@ describe("supervisor", () => {
       `import { appendFileSync, existsSync } from "node:fs";
       const first = !existsSync(${JSON.stringify(runs)});
       appendFileSync(${JSON.stringify(runs)}, "x");
-      console.log("prêt ?token=secret");
+      console.log("prêt #token=secret");
       if (first) { console.error("boum"); process.exit(1); }`,
     );
     const code = await new Promise<number>((resolve) => {
@@ -73,6 +113,45 @@ describe("supervisor", () => {
     expect(logged).toContain("redémarre dans 1 s");
     expect(logged).toContain("token=…");
     expect(logged).not.toContain("secret");
+  });
+
+  it("redacts split-chunk secrets in both DailyLog and forwarded stdout when redactOutput is enabled", async () => {
+    const dir = tempDir();
+    const script = path.join(dir, "split.mjs");
+    writeFileSync(
+      script,
+      `process.stdout.write("prêt http://127.0.0.1:4747/#token=firstHalf");
+      setTimeout(() => {
+        process.stdout.write("SecondHalfSecret\\n");
+        process.stderr.write("err ghp_splitErrToken123456\\n");
+        process.exit(0);
+      }, 30);`,
+    );
+    let out = "";
+    let err = "";
+    const code = await new Promise<number>((resolve) => {
+      supervise({
+        script,
+        args: [],
+        logDir: path.join(dir, "logs"),
+        redactOutput: true,
+        stdout: { write: (chunk) => (out += String(chunk)) },
+        stderr: { write: (chunk) => (err += String(chunk)) },
+        exit: resolve,
+      });
+    });
+    expect(code).toBe(0);
+    const [file] = readdirSync(path.join(dir, "logs"));
+    const logged = readFileSync(path.join(dir, "logs", file!), "utf8");
+    for (const sink of [logged, out, err]) {
+      expect(sink).not.toContain("firstHalf");
+      expect(sink).not.toContain("SecondHalfSecret");
+      expect(sink).not.toContain("splitErrToken123456");
+    }
+    expect(out).toContain("#token=…");
+    expect(err).toContain("ghp_…");
+    expect(logged).toContain("#token=…");
+    expect(logged).toContain("ghp_…");
   });
 });
 

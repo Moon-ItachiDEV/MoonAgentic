@@ -5,6 +5,8 @@ const PRIVATE_FILES = [
   "token",
   "github-token",
   "github-token.dpapi",
+  "mcp-secrets.json",
+  "mcp-secrets.dpapi",
   "state.sqlite",
   "state.sqlite-wal",
   "state.sqlite-shm",

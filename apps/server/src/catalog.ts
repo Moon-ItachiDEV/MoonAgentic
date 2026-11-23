@@ -11,7 +11,14 @@ import type {
   ServerMessage,
 } from "@moonagentic/protocol";
 import type { Agents, CustomAgent } from "./agents.ts";
-import { mcpInfo, type McpServerRecord } from "./mcp.ts";
+import { mcpInfo, RESERVED_MCP_NAME, type McpServerRecord } from "./mcp.ts";
+import {
+  defaultMcpSecretStore,
+  extractMcpSecrets,
+  hydrateMcpSecrets,
+  type McpSecretStore,
+  stripMcpSecrets,
+} from "./mcp-secrets.ts";
 import { AgentSession, describe, type ModelOption, needsSignIn } from "./session.ts";
 import type { Store } from "./store.ts";
 
@@ -39,17 +46,22 @@ export class AgentCatalog {
   private readonly broadcast: (message: ServerMessage) => void;
   /** Where an agent checked from Connexions, before any project, is started. */
   private readonly homeDir: string;
+  /** Where MCP secret values live, kept apart from `state.sqlite` and its backups. */
+  private readonly mcpSecrets: McpSecretStore;
 
   constructor(
     store: Store,
     agents: Agents,
     broadcast: (message: ServerMessage) => void,
     homeDir: string,
+    mcpSecrets: McpSecretStore = defaultMcpSecretStore(store.file),
   ) {
     this.store = store;
     this.agents = agents;
     this.broadcast = broadcast;
     this.homeDir = homeDir;
+    this.mcpSecrets = mcpSecrets;
+    this.migrateMcpSecrets();
     agents.setCustom(this.customAgents());
   }
 
@@ -256,33 +268,58 @@ export class AgentCatalog {
     this.broadcast({ type: "favorites", favorites });
   }
 
-  mcpServers(): McpServerRecord[] {
+  private rawMcpServers(): McpServerRecord[] {
     return this.store.getSetting<McpServerRecord[]>("mcpServers", []);
+  }
+
+  /** Moves any MCP secret values saved inside `state.sqlite` by an earlier version into the secret store. */
+  private migrateMcpSecrets(): void {
+    const raw = this.rawMcpServers();
+    let changed = false;
+    const stripped = raw.map((server) => {
+      const secrets = extractMcpSecrets(server);
+      if (Object.keys(secrets).length === 0) return server;
+      changed = true;
+      this.mcpSecrets.set(server.id, { ...this.mcpSecrets.get(server.id), ...secrets });
+      return stripMcpSecrets(server);
+    });
+    if (changed) this.store.setSetting("mcpServers", stripped);
+  }
+
+  mcpServers(): McpServerRecord[] {
+    return this.rawMcpServers().map((s) => hydrateMcpSecrets(s, this.mcpSecrets.get(s.id)));
   }
 
   /** Registers an MCP server for every agent session started from now on. */
   addMcpServer(input: McpServerInput): string {
     const key = input.name.trim().toLowerCase();
-    if (this.mcpServers().some((s) => s.name.trim().toLowerCase() === key)) {
+    if (key === RESERVED_MCP_NAME) {
+      throw new Error(`Le nom « ${RESERVED_MCP_NAME} » est réservé à MoonAgentic.`);
+    }
+    if (this.rawMcpServers().some((s) => s.name.trim().toLowerCase() === key)) {
       throw new Error(`Un serveur MCP s'appelle déjà « ${input.name} ».`);
     }
     const id = randomUUID();
-    this.updateMcpServers((servers) => [...servers, { ...input, id, enabled: true }]);
+    const record: McpServerRecord = { ...input, id, enabled: true };
+    const secrets = extractMcpSecrets(record);
+    if (Object.keys(secrets).length) this.mcpSecrets.set(id, secrets);
+    this.updateMcpServers((servers) => [...servers, stripMcpSecrets(record)]);
     return id;
   }
 
   setMcpEnabled(id: string, enabled: boolean): void {
-    if (!this.mcpServers().some((s) => s.id === id)) return;
+    if (!this.rawMcpServers().some((s) => s.id === id)) return;
     this.updateMcpServers((servers) => servers.map((s) => (s.id === id ? { ...s, enabled } : s)));
   }
 
   removeMcpServer(id: string): void {
-    if (!this.mcpServers().some((s) => s.id === id)) return;
+    if (!this.rawMcpServers().some((s) => s.id === id)) return;
     this.updateMcpServers((servers) => servers.filter((s) => s.id !== id));
+    this.mcpSecrets.delete(id);
   }
 
   private updateMcpServers(change: (servers: McpServerRecord[]) => McpServerRecord[]): void {
-    const servers = change(this.mcpServers());
+    const servers = change(this.rawMcpServers());
     this.store.setSetting("mcpServers", servers);
     this.broadcast({ type: "mcpServers", servers: servers.map(mcpInfo) });
   }
