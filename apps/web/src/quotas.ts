@@ -10,11 +10,41 @@ export function quotaLevel(usedPercent: number): QuotaLevel {
   return usedPercent >= 100 ? "full" : usedPercent >= WARN_PERCENT ? "warn" : "ok";
 }
 
-/** The window closest to its limit, the one that stops the agent first. */
-export function tightest(quota: AgentQuota | undefined): QuotaWindow | undefined {
+/** Lowercase words of a model's id or name: « claude-fable-5-2 » gives « claude fable 5 2 ». */
+const modelWords = (text: string) =>
+  text
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+
+/**
+ * Whether a window limits the model in use. A window of one model (« Opus », « Fable 5.2 »)
+ * counts only when the model's id or name holds all its words, in order: « Fable 5.2 » is not
+ * « Fable 5.3 », and a leading « Claude » names no model on its own.
+ */
+export function limitsModel(window: QuotaWindow, model?: (string | undefined)[]): boolean {
+  if (!window.model) return true;
+  const words = modelWords(window.model);
+  if (words[0] === "claude") words.shift();
+  if (!words.length) return false;
+  const wanted = ` ${words.join(" ")} `;
+  return !!model?.some((m) => !!m && ` ${modelWords(m).join(" ")} `.includes(wanted));
+}
+
+/**
+ * The window closest to its limit, the one that stops the agent first. A window of one model
+ * counts only for that model: without one, only the agent's own windows count.
+ */
+export function tightest(
+  quota: AgentQuota | undefined,
+  model?: (string | undefined)[],
+): QuotaWindow | undefined {
   if (!quota || quota.state !== "ok") return undefined;
   let worst: QuotaWindow | undefined;
-  for (const w of quota.windows) if (!worst || w.usedPercent > worst.usedPercent) worst = w;
+  for (const w of quota.windows) {
+    if (!limitsModel(w, model)) continue;
+    if (!worst || w.usedPercent > worst.usedPercent) worst = w;
+  }
   return worst;
 }
 
@@ -106,8 +136,9 @@ export function quotaWarning(
   quota: AgentQuota | undefined,
   agentName: string,
   now = Date.now(),
+  model?: (string | undefined)[],
 ): { key: string; level: "warn" | "full"; text: string; when?: string } | undefined {
-  const worst = tightest(quota);
+  const worst = tightest(quota, model);
   if (!worst) return undefined;
   const level = quotaLevel(worst.usedPercent);
   if (level === "ok") return undefined;

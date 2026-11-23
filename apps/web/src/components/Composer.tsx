@@ -206,6 +206,8 @@ export function Composer(props: {
     ? quotaWarning(
         quotas.find((q) => q.agentId === agent.id),
         agent.name,
+        undefined,
+        [model, modelName],
       )
     : undefined;
   const roomier = warning && agent ? roomiest(quotas, agents, agent.id) : undefined;
@@ -762,7 +764,12 @@ export function Composer(props: {
     settings[effort.id] === effort.choices[effort.choices.length - 1]!.id;
 
   // Nearly out on its subscription: a row on top of the tray, with an agent that has room.
-  const worst = agent ? tightest(quotas.find((q) => q.agentId === agent.id)) : undefined;
+  const worst = agent
+    ? tightest(
+        quotas.find((q) => q.agentId === agent.id),
+        [model, modelName],
+      )
+    : undefined;
   const atLimit = warning?.level === "full";
   const trayQuota: TrayQuota | undefined =
     warning && agent && worst && quotaSeen[agent.id] !== warning.key
