@@ -539,3 +539,51 @@ describe("a project's coordinator", () => {
     await hub.whenIdle(next);
   }, 90_000);
 });
+
+describe("a project", () => {
+  it("is pinned for every window, and forgotten once removed", async () => {
+    const { hub, projectId, otherId } = await coordinated();
+    const sent: unknown[] = [];
+    const client: Client = { send: (m) => sent.push(m) };
+    await hub.handle(client, { type: "project.setPinned", projectId: otherId, pinned: true });
+    const pinned = () =>
+      hub
+        .snapshot()
+        .projects.filter((p) => p.pinned)
+        .map((p) => p.id);
+    expect(pinned()).toEqual([otherId]);
+    await hub.handle(client, { type: "project.setPinned", projectId, pinned: true });
+    await hub.handle(client, { type: "project.setPinned", projectId: otherId, pinned: false });
+    expect(pinned()).toEqual([projectId]);
+  });
+
+  it("marks a thread unread when its agent answers with no window on it", async () => {
+    const { hub, store, projectId } = await coordinated();
+    const client: Client = { send: () => undefined };
+    hub.connect(client);
+    const start = (text: string) =>
+      hub.createThread({ projectId, agentId: "demo", permissionMode: "full", text });
+    const away = start("Dis bonjour");
+    await hub.whenIdle(away);
+    expect(store.getThread(away)!.unread).toBe(true);
+    // Opened, it is read; answered while a window shows it, it stays read.
+    await hub.handle(client, { type: "thread.open", threadId: away });
+    expect(store.getThread(away)!.unread).toBeFalsy();
+    await hub.handle(client, { type: "thread.send", threadId: away, text: "Encore" });
+    await hub.whenIdle(away);
+    expect(store.getThread(away)!.unread).toBeFalsy();
+    // Left, then answered again: unread once more.
+    await hub.handle(client, { type: "thread.leave", threadId: away });
+    await hub.handle(client, { type: "thread.send", threadId: away, text: "Et encore" });
+    await hub.whenIdle(away);
+    expect(store.getThread(away)!.unread).toBe(true);
+
+    // By hand, one thread or the whole project.
+    const other = start("Dis au revoir");
+    await hub.whenIdle(other);
+    await hub.handle(client, { type: "project.markRead", projectId });
+    expect(store.listThreads().some((t) => t.unread)).toBe(false);
+    await hub.handle(client, { type: "thread.setUnread", threadId: other, unread: true });
+    expect(store.getThread(other)!.unread).toBe(true);
+  });
+});

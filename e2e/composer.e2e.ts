@@ -567,6 +567,14 @@ describe("composer", () => {
     await page.getByLabel("Nom du projet").press("Enter");
     await page.getByRole("heading", { name: "equipe", exact: true }).waitFor();
 
+    // Pinned from its menu, the project says so in the list, for every window.
+    await page.getByRole("button", { name: "Actions du projet" }).click();
+    await page.getByRole("menuitem", { name: "Épingler" }).click();
+    await inSidebar.getByLabel("Épinglé").waitFor();
+    await page.getByRole("button", { name: "Actions du projet" }).click();
+    await page.getByRole("menuitem", { name: "Désépingler" }).waitFor();
+    await page.keyboard.press("Escape");
+
     // The coordinator: one agent to talk to about the whole project. Its agent calls
     // MoonAgentic's own tools, here to open a thread on a branch of its own.
     await page.getByLabel("Agent du coordinateur").selectOption({ label: "Agent de démo" });

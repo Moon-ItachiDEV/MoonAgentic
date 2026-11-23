@@ -413,3 +413,19 @@
   font-size: 11.5px;
   color: var(--muted);
 }
+
+/* Unread: its agent answered while no window had it open. */
+.unread-mark {
+  flex: none;
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  vertical-align: middle;
+}
+.thr-row.unread .thr .t,
+.pp-row.unread .pp-t {
+  font-weight: 600;
+}
