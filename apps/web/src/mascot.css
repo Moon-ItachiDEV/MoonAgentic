@@ -1,4 +1,5 @@
-/* The agents' moons (Breezydev's design): each sits on its own sky, its colour's gradient. */
+/* The agents' moons (Breezydev's design). In the settings each sits on its own sky, its
+   colour's gradient; in the thread it floats alone. */
 
 [data-moon="ice"] {
   --sky-top: #2676dc;
@@ -25,18 +26,16 @@
   --sky-bottom: #a6bfd2;
 }
 
+/* In the thread the moon floats on its own with its halo, without a tile behind it. */
 .mascot {
   flex: none;
   position: relative;
-  border-radius: 30%;
-  overflow: hidden;
-  background: linear-gradient(160deg, var(--sky-top), var(--sky-bottom));
 }
 .mascot moon-mascot {
   position: absolute;
   inset-block-start: 50%;
   inset-inline-start: 50%;
-  inline-size: 122%;
+  inline-size: 140%;
   translate: -50% -50%;
 }
 
