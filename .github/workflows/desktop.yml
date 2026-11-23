@@ -1,7 +1,9 @@
 name: Desktop
 
 # Builds the desktop installers: on a pull request that touches the app, to try them (kept 7
-# days in the run's artifacts); on a `v*` tag, attached to that tag's GitHub Release.
+# days in the run's artifacts); on a `v*` tag, attached to that tag's GitHub Release. The
+# installers never publish themselves: two jobs creating the release at once made two
+# releases for v0.1.0. The `release` job creates it once, with both files.
 on:
   push:
     tags: ["v*"]
@@ -48,15 +50,31 @@ jobs:
       - run: pnpm --filter @moonagentic/desktop stage
       - name: Build the installer
         working-directory: apps/desktop
-        run: pnpm exec electron-builder ${{ matrix.target }} --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
+        run: pnpm exec electron-builder ${{ matrix.target }} --publish never
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No paid certificate: nothing to look for in the keychain.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      - if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: MoonAgentic-${{ matrix.name }}
           path: ${{ matrix.files }}
+          if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+  release:
+    name: Release
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: installer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+      - name: Create the release with both installers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release create "$GITHUB_REF_NAME" installers/*
+          --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
