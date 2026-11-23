@@ -290,7 +290,7 @@ export function App() {
             </aside>
           )}
         >
-          // Until the settings arrive, an empty side bar keeps the layout in place.
+          {/* Until the settings arrive, an empty side bar keeps the layout in place. */}
           <Suspense fallback={<aside className="side set-side" aria-label="Réglages" />}>
             <SettingsNav
               section={route.section}
