@@ -7,6 +7,7 @@ import {
   currentBranch,
   type MergeForecast,
   mergeForecast,
+  mergedBase,
   rejectFile,
   reviewChanges,
   syncTarget,
@@ -43,6 +44,7 @@ export async function rejectReviewFile(
   from?: string,
 ): Promise<void> {
   const ws = started(workspace);
+  await onItsBranch(ws);
   const { files } = await reviewChanges(ws.path, ws.base);
   const listed = files.find((f) => f.path === file);
   if (!listed) throw new Error("Ce fichier n'a plus de changement à annuler.");
@@ -52,11 +54,22 @@ export async function rejectReviewFile(
   await rejectFile(ws.path, ws.base, listed.path, listed.from);
 }
 
-/** What merging the branch the thread started from would do now. */
-export async function forecastFor(workspace: Workspace | undefined): Promise<MergeForecast> {
+/**
+ * What merging the branch the thread started from would do now, with where the branch starts:
+ * further along than `base` once that branch was merged in some other way, by the agent asked
+ * to resolve conflicts for one, so the review keeps showing the thread's work alone.
+ */
+export async function forecastFor(
+  workspace: Workspace | undefined,
+): Promise<MergeForecast & { base: string }> {
   const ws = started(workspace);
   if (!ws.baseBranch) throw new Error("Ce fil ne sait pas de quelle branche il est parti.");
-  return mergeForecast(ws.path, await syncTarget(ws.path, ws.baseBranch));
+  const target = await syncTarget(ws.path, ws.baseBranch);
+  const [forecast, base] = await Promise.all([
+    mergeForecast(ws.path, target),
+    mergedBase(ws.path, ws.base, target),
+  ]);
+  return { ...forecast, base };
 }
 
 /**
@@ -70,7 +83,7 @@ export async function syncWorkspace(
   const ws = started(workspace);
   await onItsBranch(ws);
   const forecast = await forecastFor(ws);
-  if (!forecast.behind) return { base: ws.base, target: forecast.target, merged: 0 };
+  if (!forecast.behind) return { base: forecast.base, target: forecast.target, merged: 0 };
   if (forecast.conflicts.length) {
     const n = forecast.conflicts.length;
     throw new Error(

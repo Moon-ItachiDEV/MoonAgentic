@@ -737,7 +737,8 @@ const safeRelative = (file: string): boolean =>
 /**
  * Puts one file of a review back as it was at `base`, the start of the branch: a changed or
  * removed file comes back, a new one goes. For a rename, `from` comes back and the new name
- * goes. Committed changes too: the review then shows nothing for it.
+ * goes. Committed changes too: their undoing is committed then, on these paths alone, so the
+ * branch pushed next no longer carries them. Returns that commit, if one was needed.
  */
 export async function rejectFile(dir: string, base: string, file: string, from?: string) {
   const paths = from ? [file, from] : [file];
@@ -760,6 +761,47 @@ export async function rejectFile(dir: string, base: string, file: string, from?:
       rmSync(path.join(dir, p), { force: true });
     }
   }
+  // What differs from the branch's last commit now was committed: it is undone in a commit.
+  const committed = (
+    await git(dir, [
+      "--literal-pathspecs",
+      "diff",
+      "--cached",
+      "--name-only",
+      "-z",
+      "--no-renames",
+      "HEAD",
+      "--",
+      ...paths,
+    ])
+  )
+    .split("\0")
+    .filter(Boolean);
+  if (!committed.length) return undefined;
+  return withPathspecFile(committed, async (list) => {
+    await git(dir, [
+      "--literal-pathspecs",
+      "commit",
+      "-q",
+      "-m",
+      `Annule les changements de ${file}`,
+      "--only",
+      ...pathspecArgs(list),
+    ]);
+    return (await git(dir, ["rev-parse", "HEAD"])).trim();
+  });
+}
+
+/**
+ * Where the branch starts now that `target` is merged in, whoever merged it (the agent, by
+ * hand): the last commit both share, when it comes after `base`. Otherwise `base` stays.
+ */
+export async function mergedBase(dir: string, base: string, target: string): Promise<string> {
+  const shared = await gitCode(dir, ["merge-base", "HEAD", target]);
+  const next = shared.stdout.trim();
+  if (shared.code !== 0 || !next || next === base) return base;
+  const after = await gitCode(dir, ["merge-base", "--is-ancestor", base, next]);
+  return after.code === 0 ? next : base;
 }
 
 /** Who a commit made only to look ahead is from: no one's name lands in the repository. */

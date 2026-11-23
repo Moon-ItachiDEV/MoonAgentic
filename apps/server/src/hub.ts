@@ -64,6 +64,7 @@ import {
   samePath,
   saveCheckpoint,
   ship,
+  type MergeForecast,
   type ShipResult,
 } from "./git.ts";
 import {
@@ -940,7 +941,7 @@ export class Hub {
           type: "forecast",
           requestId: message.requestId,
           threadId: message.threadId,
-          ...(await forecastFor(this.requireLiveThread(message.threadId).workspace)),
+          ...(await this.forecast(message.threadId)),
         });
         return;
       case "workspace.sync":
@@ -1715,6 +1716,21 @@ export class Hub {
     await this.exclusive(threadId, "Attends la fin de l'annulation du fichier.", () =>
       rejectReviewFile(thread.workspace, file, from),
     );
+  }
+
+  /**
+   * What merging the branch the thread started from would do now. A merge of it made some
+   * other way, by the agent, moves the start of the branch on, as « Synchroniser » does.
+   */
+  async forecast(threadId: string): Promise<MergeForecast> {
+    const workspace = this.requireLiveThread(threadId).workspace;
+    const { base, ...forecast } = await forecastFor(workspace);
+    const now = this.store.getThread(threadId)?.workspace;
+    // Only over the start it was worked out from: a sync meanwhile has the last word.
+    if (now && workspace && now.base === workspace.base && base !== now.base) {
+      this.updateThread(threadId, { workspace: { ...now, base } });
+    }
+    return forecast;
   }
 
   /**
