@@ -12,6 +12,7 @@ import "./remote.css";
 import "./pull-request.css";
 import "./composer.css";
 import "./quiet.css";
+import "./offline.css";
 import "./project.css";
 import "./phone.css";
 import "./update.css";

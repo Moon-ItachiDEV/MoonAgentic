@@ -141,6 +141,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "github":
     case "githubRepos":
     case "pullRequest":
+    case "pong":
       return state;
   }
 }
