@@ -4,7 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
-import { DEFAULT_PARALLEL, threadGroup, threadPullRequest } from "@moonagentic/protocol";
+import {
+  DEFAULT_PARALLEL,
+  defaultTeam,
+  TEAM_PRESETS,
+  threadGroup,
+  threadPullRequest,
+} from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   AgentSetting,
@@ -140,6 +146,11 @@ const withOrigin = (brief: string, asked: string | undefined) =>
         .join("\n")}`
     : brief;
 
+/** The user's messages joined to a brief, at most: the latest ones. */
+const ASKED_MESSAGES = 6;
+/** How long a coordinator's default team waits for the agents to give their models. */
+const PRESET_DISCOVERY_MS = 20_000;
+
 /** The level a coordinator starts on, as agents name it. */
 const LOW_EFFORT = /^(low|bas)$/i;
 
@@ -149,9 +160,13 @@ const FROM_COORDINATOR =
 
 /** The coordinator's tools that change something: only while it answers the user. */
 const WRITES = new Set(["open_thread", "start_team", "message_thread", "resolve_thread"]);
-/** A permission asked for one of MoonAgentic's own tools, as agents name the tools of an MCP server. */
+/**
+ * A permission asked for one of MoonAgentic's own tools, as agents name the tools of an MCP
+ * server: `mcp__moonagentic__list_threads` for Claude Code, `mcp_moonagentic_list_threads`
+ * for Antigravity, which says it only in the call's title ("Run mcp_moonagentic_…").
+ */
 const OWN_TOOL = new RegExp(
-  `^mcp__moonagentic__(${COORDINATOR_TOOLS.map((t) => t.name).join("|")})$`,
+  `^(?:Run )?mcp_{1,2}moonagentic_{1,2}(?:${COORDINATOR_TOOLS.map((t) => t.name).join("|")})$`,
 );
 
 const BRIDGE = fileURLToPath(new URL("./coordinator-bridge.ts", import.meta.url));
@@ -166,6 +181,8 @@ Ce que tu fais :
 - Une tâche trop grosse pour un seul fil, avec plusieurs morceaux indépendants, ou quand l'utilisateur demande une équipe : start_team.
 - Un sujet qui a déjà son fil : tu le relances avec message_thread plutôt que d'en ouvrir un second. Si son agent travaille, ton message attend la fin de son tour ; mode steer seulement pour une correction urgente, car il coupe le travail en cours.
 - resolve_thread seulement quand l'utilisateur dit que le sujet est clos.
+
+Si un outil échoue, dis-le tout de suite à l'utilisateur en une phrase, avec ce qu'il peut faire, au lieu de chercher longtemps un autre chemin. N'utilise pas le mode plan : tu ne codes pas, tu ouvres des fils.
 
 Après un outil, dis en une phrase ce que tu as fait. Reste bref : pas de plan, pas de récapitulatif. Réponds dans la langue de l'utilisateur.`;
 
@@ -271,7 +288,6 @@ export class Hub {
     { projectId: string; threadId: string }
   >();
   /** What the user last wrote to each coordinator, joined to the threads it opens for it. */
-  private readonly lastAsked = new Map<string, string>();
   /** Messages a coordinator left for a thread at work, given when its turn ends. */
   private readonly queued = new Map<string, string[]>();
   /** The tool behind each call of a turn, by thread, for agents that name it. */
@@ -462,8 +478,7 @@ export class Hub {
         this.send(
           message.threadId,
           held ? `${held}\n\n${message.text}` : message.text,
-          this.leadContext(message.threadId) ??
-            this.coordinatorContext(message.threadId, message.text),
+          this.leadContext(message.threadId) ?? this.coordinatorContext(message.threadId),
         );
         // Only once it is sent: a refusal keeps the brief where it was.
         if (held) this.updateThread(message.threadId, { held: null });
@@ -854,12 +869,40 @@ export class Hub {
   }
 
   /** For the user writing to a coordinator: its part, given before the message. */
-  private coordinatorContext(threadId: string, text: string): string | undefined {
+  private coordinatorContext(threadId: string): string | undefined {
     const thread = this.store.getThread(threadId);
     if (thread?.kind !== "coordinator") return undefined;
     this.openedThisTurn.delete(threadId);
-    this.lastAsked.set(threadId, text);
     return coordinatorPrompt(this.store.getProject(thread.projectId)?.name ?? "");
+  }
+
+  /**
+   * What the user asked the coordinator since it last opened a thread: every message, not
+   * only the last one, since a "continue" after a stop is not the request itself.
+   */
+  private askedSince(coordinatorId: string): string | undefined {
+    const items = this.store.listItems(coordinatorId);
+    const asked: string[] = [];
+    let i = items.findLastIndex((item) => item.kind === "user");
+    for (; i >= 0; i--) {
+      const item = items[i]!;
+      // A thread opened before the message being answered closes what came before it.
+      if (item.kind === "opened" && asked.length) break;
+      if (item.kind === "user" && !item.from && !item.byTeam) asked.unshift(item.text);
+    }
+    if (!asked.length) return undefined;
+    return asked.slice(-ASKED_MESSAGES).join("\n\n");
+  }
+
+  /** The first preset's team on the agents at hand, their models asked for if need be. */
+  private async presetTeam(projectId: string): Promise<TeamSetup | undefined> {
+    const unknown = this.catalog.list().filter((a) => a.available && !a.models && !a.modelsError);
+    await Promise.race([
+      Promise.all(unknown.map((a) => this.discover(a.id, projectId).catch(() => undefined))),
+      new Promise((resolve) => setTimeout(resolve, PRESET_DISCOVERY_MS)),
+    ]);
+    const members = defaultTeam(this.catalog.list());
+    return members && { ...members, coders: 2, permissionMode: "full" };
   }
 
   /** Forgets every access given to a coordinator's bridge so far. */
@@ -1125,7 +1168,7 @@ export class Hub {
           permissionMode: coordinator.permissionMode,
           isolated: true,
           title,
-          text: withOrigin(brief, this.lastAsked.get(coordinator.id)),
+          text: withOrigin(brief, this.askedSince(coordinator.id)),
           openedBy: coordinator.id,
           taskKey,
           // Past what it may run at once, the thread waits in line, in plain sight.
@@ -1154,10 +1197,12 @@ export class Hub {
           (t) => t.openedBy === coordinator.id && t.taskKey === taskKey && !t.archived,
         );
         if (known) return { already_open: true, opened: this.threadForCoordinator(known) };
-        const setup = this.coordinatorSettings().team;
+        const saved = this.coordinatorSettings().team;
+        // Never set up by hand: the first preset, on the agents at hand, rather than failing.
+        const setup = saved ?? (await this.presetTeam(scope.projectId));
         if (!setup)
           throw new Error(
-            "Aucune équipe n'est réglée : l'utilisateur doit en lancer une lui-même une première fois (commande /equipe), elle servira ensuite de modèle. Dis-le-lui, ou ouvre un fil simple avec open_thread.",
+            "Aucun agent n'est prêt pour former une équipe. Dis-le tout de suite à l'utilisateur, en une phrase, sans réessayer.",
           );
         const opened = this.openedThisTurn.get(coordinator.id) ?? 0;
         if (opened >= MAX_OPENED_PER_TURN)
@@ -1167,7 +1212,7 @@ export class Hub {
         const id = this.startTeam({
           ...setup,
           projectId: scope.projectId,
-          task: withOrigin(task, this.lastAsked.get(coordinator.id)),
+          task: withOrigin(task, this.askedSince(coordinator.id)),
           openedBy: coordinator.id,
           taskKey,
         });
@@ -1179,7 +1224,14 @@ export class Hub {
           title: this.requireThread(id).title,
           at: Date.now(),
         });
-        return { opened: this.threadForCoordinator(this.requireThread(id)) };
+        return {
+          opened: this.threadForCoordinator(this.requireThread(id)),
+          ...(saved
+            ? {}
+            : {
+                team: `Équipe par défaut (« ${TEAM_PRESETS[0]!.label} ») : l'utilisateur n'en a pas encore réglé. Dis-le-lui en une phrase ; il pourra en choisir une autre avec /equipe.`,
+              }),
+        };
       }
       case "message_thread": {
         const thread = one();
@@ -1714,7 +1766,6 @@ export class Hub {
       clearTimeout(this.drafts.get(threadId)?.timer);
       this.drafts.delete(threadId);
       this.queued.delete(threadId);
-      this.lastAsked.delete(threadId);
       this.openedThisTurn.delete(threadId);
       this.store.deleteThread(threadId);
       this.broadcast({ type: "threadRemoved", threadId });
@@ -2483,9 +2534,14 @@ export class Hub {
     // MoonAgentic's own tools are the coordinator's work, already limited by the server:
     // asking the user before each one would make it useless.
     this.noteToolName(threadId, request.toolCall);
+    // An agent that does not name the tool is taken at its title, but never for a change.
+    const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
     const own =
       thread.kind === "coordinator" &&
-      OWN_TOOL.test(this.toolNames.get(threadId)?.get(request.toolCall.toolCallId) ?? "");
+      (named !== undefined
+        ? OWN_TOOL.test(named)
+        : OWN_TOOL.test(request.toolCall.title ?? "") &&
+          !READ_ONLY_REFUSED.has(request.toolCall.kind ?? ""));
     if ((thread.permissionMode === "full" && !edits) || own) {
       const allow =
         request.options.find((o) => o.kind === "allow_once") ??

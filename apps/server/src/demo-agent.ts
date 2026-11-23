@@ -278,6 +278,30 @@ const app = acp
       );
       return { stopReason: "end_turn" };
     }
+    // As Antigravity does: it asks before its MoonAgentic tool, named only in the title.
+    if (/(?:^|\n)\/fils-agy$/.test(ask.trim())) {
+      const call = {
+        toolCallId: "agy-list",
+        title: "Run mcp_moonagentic_list_threads",
+        kind: "other" as const,
+      };
+      await update({ sessionUpdate: "tool_call", ...call, status: "pending" });
+      const permission: acp.RequestPermissionResponse = await client.request(
+        "session/request_permission",
+        {
+          sessionId,
+          toolCall: call,
+          options: [
+            { optionId: "allow", name: "Allow", kind: "allow_once" },
+            { optionId: "deny", name: "Deny", kind: "reject_once" },
+          ],
+        } satisfies acp.RequestPermissionRequest,
+      );
+      if (permission.outcome.outcome === "cancelled") return { stopReason: "cancelled" };
+      await update({ sessionUpdate: "tool_call_update", ...call, status: "completed" });
+      await say("Liste lue.", "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
     if (/(?:^|\n)\/fils$/.test(ask.trim())) {
       const said = await callMoonAgentic(sessionId, "list_threads", {});
       let count: number | undefined;
