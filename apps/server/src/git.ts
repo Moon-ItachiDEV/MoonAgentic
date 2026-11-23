@@ -26,12 +26,18 @@ const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GH_PROMP
 
 /** A push or a call to GitHub that hangs on the network gives up, so its thread is freed. */
 const NETWORK_TIMEOUT_MS = 5 * 60_000;
+/**
+ * A local git command waiting on a lock, a full disk or a stuck file system gives up too:
+ * a thread or a team step waiting on it would otherwise wait for good. Generous, as a first
+ * `git add -A` in a big repository can take a while.
+ */
+export const LOCAL_TIMEOUT_MS = 2 * 60_000;
 
 function git(
   cwd: string,
   args: string[],
   env?: NodeJS.ProcessEnv,
-  timeout?: number,
+  timeout = LOCAL_TIMEOUT_MS,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -41,10 +47,13 @@ function git(
         cwd,
         env: { ...process.env, ...NO_PROMPT, ...env },
         maxBuffer: 256 * 1024 * 1024,
-        ...(timeout ? { timeout } : {}),
+        timeout,
+        // No console window flashes up on Windows at each git command.
+        windowsHide: true,
       },
       (error, stdout, stderr) => {
-        if (error?.killed) reject(new Error("git n'a pas répondu à temps.", { cause: error }));
+        if (error?.killed && error.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
+          reject(new Error("git n'a pas répondu à temps.", { cause: error }));
         else if (error) reject(new Error(stderr.trim() || error.message, { cause: error }));
         else resolve(stdout);
       },
@@ -61,7 +70,7 @@ export function isGitRepo(dir: string): boolean {
     const out = execFileSync(
       "git",
       [...GIT_QUIET, "rev-parse", "--is-inside-work-tree", "--verify", "--quiet", "HEAD"],
-      { cwd: dir, stdio: ["ignore", "pipe", "ignore"] },
+      { cwd: dir, stdio: ["ignore", "pipe", "ignore"], timeout: 10_000, windowsHide: true },
     );
     return out.toString().startsWith("true");
   } catch {
@@ -638,6 +647,7 @@ async function openPullRequest(
           cwd: dir,
           env: { ...process.env, ...NO_PROMPT, ...gitQuietEnv(), ...githubAccount()?.ghEnv() },
           timeout: NETWORK_TIMEOUT_MS,
+          windowsHide: true,
         },
         (error, stdout, stderr) =>
           error ? reject(new Error(stderr.trim() || error.message)) : resolve(stdout),

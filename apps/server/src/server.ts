@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Agents } from "./agents.ts";
@@ -9,6 +9,14 @@ import { createHttpServer, newToken } from "./http.ts";
 import { GithubAccount, setGithubAccount } from "./github-account.ts";
 import { systemVault } from "./github-vault.ts";
 import { Hub } from "./hub.ts";
+import {
+  ALREADY_RUNNING,
+  ALREADY_RUNNING_LINE,
+  lockDataDir,
+  portFree,
+  readOrCreateToken,
+  writeFileAtomic,
+} from "./instance.ts";
 import { defaultReaders } from "./quotas.ts";
 import { Store } from "./store.ts";
 
@@ -17,9 +25,29 @@ const values = serverArgs();
 
 const dataDir = path.resolve(values["data-dir"]);
 preparePrivateDataDir(dataDir);
+// Before the database is opened: on start, the threads it finds running are taken for ones a
+// crash left, and stopped. Those of a MoonAgentic still running on this folder must not be.
+const lock = await lockDataDir(dataDir);
+if (!lock) {
+  console.error(
+    `${ALREADY_RUNNING_LINE} (${dataDir}). Ouvre celui-là, ou ferme-le avant d'en lancer un autre.`,
+  );
+  process.exit(ALREADY_RUNNING);
+}
+const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
+const port = Number(values.port);
+// Checked before anything starts too, so a taken port costs nothing: no agent or team is
+// started then stopped at each new try of the supervisor.
+if (!(await portFree(port, values.host))) {
+  console.error(
+    `Le port ${port} est déjà pris (EADDRINUSE) : un autre programme l'utilise. MoonAgentic réessaie bientôt.`,
+  );
+  // Leaves no socket file behind on macOS and Linux.
+  lock.release();
+  process.exit(1);
+}
 const tokenFile = path.join(dataDir, "token");
-if (!existsSync(tokenFile)) writeFileSync(tokenFile, newToken(), { mode: 0o600 });
-const token = readFileSync(tokenFile, "utf8").trim();
+const token = readOrCreateToken(tokenFile, newToken);
 
 const webDir = fileURLToPath(new URL("../../web/dist", import.meta.url));
 const store = new Store(path.join(dataDir, "state.sqlite"));
@@ -45,13 +73,11 @@ hub.attachments.sweep();
 const server = createHttpServer({
   hub,
   token,
-  // Written over the old one: the file keeps its owner-only access.
-  onTokenRenewed: (renewed) => writeFileSync(tokenFile, renewed, { mode: 0o600 }),
+  // Written whole beside the old one, then put in its place: a power cut keeps one of the two.
+  onTokenRenewed: (renewed) => writeFileAtomic(tokenFile, renewed),
   ...(!values.dev && existsSync(webDir) ? { webDir } : {}),
 });
 
-const LOOPBACK = new Set(["127.0.0.1", "::1", "localhost"]);
-const port = Number(values.port);
 server.listen(port, values.host, () => {
   // Port 0 lets the system pick a free one: the address printed is the one it picked.
   const address = server.address();
@@ -82,6 +108,7 @@ const stop = async (code: number) => {
     // Every agent is stopped, so none is left running unseen once the server is gone.
     await hub.close();
     store.close();
+    lock.release();
   } catch (error) {
     console.error("Arrêt incomplet :", error);
   }

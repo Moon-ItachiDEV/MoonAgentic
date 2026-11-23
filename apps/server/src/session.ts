@@ -167,6 +167,32 @@ function settingsOf(state: SessionState): AgentSetting[] {
   ];
 }
 
+/** An agent that does not answer a change of model or setting within this is given up on. */
+export class SettingTimeout extends Error {
+  constructor() {
+    super("L'agent n'a pas répondu à temps à ce changement de réglage.");
+    this.name = "SettingTimeout";
+  }
+}
+
+export const SETTING_TIMEOUT_MS = 30_000;
+
+/**
+ * The agent's answer to a change of model or setting, or a failure once it has waited too
+ * long: the thread waits on it, and a frozen agent would hold it for good.
+ */
+async function answered<T>(request: Promise<T>, ms = SETTING_TIMEOUT_MS): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new SettingTimeout()), ms);
+  });
+  try {
+    return await Promise.race([request, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const STDERR_TAIL = 4000;
 const KILL_GRACE_MS = 3000;
 /** ACP's "Authentication required" error code. */
@@ -404,18 +430,22 @@ export class AgentSession {
     const model = this.model;
     if (!model) throw new Error("Cet agent ne propose pas de choix de modèle.");
     if (model.configId === LEGACY_MODEL && this.state.legacy) {
-      await this.connection.agent.request(LEGACY_MODEL, {
-        sessionId: this.sessionId,
-        modelId: value,
-      });
+      await answered(
+        this.connection.agent.request(LEGACY_MODEL, {
+          sessionId: this.sessionId,
+          modelId: value,
+        }),
+      );
       this.state.legacy = { ...this.state.legacy, currentModelId: value };
       return;
     }
-    const response = await this.connection.agent.request("session/set_config_option", {
-      sessionId: this.sessionId,
-      configId: model.configId,
-      value,
-    });
+    const response = await answered(
+      this.connection.agent.request("session/set_config_option", {
+        sessionId: this.sessionId,
+        configId: model.configId,
+        value,
+      }),
+    );
     absorb(this.state, response);
   }
 
@@ -426,18 +456,22 @@ export class AgentSession {
 
   async setSetting(id: string, value: string): Promise<void> {
     if (id === LEGACY_MODE && this.state.modes) {
-      await this.connection.agent.request("session/set_mode", {
-        sessionId: this.sessionId,
-        modeId: value,
-      });
+      await answered(
+        this.connection.agent.request("session/set_mode", {
+          sessionId: this.sessionId,
+          modeId: value,
+        }),
+      );
       this.state.modes = { ...this.state.modes, currentModeId: value };
       return;
     }
-    const response = await this.connection.agent.request("session/set_config_option", {
-      sessionId: this.sessionId,
-      configId: id,
-      value,
-    });
+    const response = await answered(
+      this.connection.agent.request("session/set_config_option", {
+        sessionId: this.sessionId,
+        configId: id,
+        value,
+      }),
+    );
     absorb(this.state, response);
   }
 

@@ -10,6 +10,8 @@ import type { Store } from "./store.ts";
 const HOUR = 3_600_000;
 /** A one-time task may be planned for the minute that is ending. */
 const GRACE = 60_000;
+/** After a failure, the next look at the clock waits this long, so it never loops at once. */
+const RETRY_MS = 60_000;
 const STILL_RUNNING = "Le lancement précédent tournait encore : celui-ci a été sauté.";
 
 /**
@@ -69,6 +71,8 @@ export class Scheduler {
   private readonly host: SchedulerHost;
   private timer: NodeJS.Timeout | undefined;
   private started = false;
+  /** A task started whose new state could not be saved: saved on the next try, not started again. */
+  private readonly unsaved = new Map<string, { from: number; next: Schedule }>();
 
   constructor(store: Store, broadcast: (message: ServerMessage) => void, host: SchedulerHost) {
     this.store = store;
@@ -175,11 +179,31 @@ export class Scheduler {
 
   /** Starts every task that is due, then waits for the next one. */
   tick(): void {
-    const now = this.now();
-    for (const schedule of this.list()) {
-      if (schedule.enabled && schedule.nextAt <= now) this.fire(schedule, now);
+    let failed = false;
+    try {
+      const now = this.now();
+      for (const schedule of this.list()) {
+        if (!schedule.enabled || schedule.nextAt > now) continue;
+        // One task that cannot be saved does not keep the others from starting.
+        try {
+          const unsaved = this.unsaved.get(schedule.id);
+          // Started already, only its new state was not saved: it is saved, not started again.
+          if (unsaved?.from === schedule.nextAt) this.put(unsaved.next);
+          else this.fire(schedule, now);
+          this.unsaved.delete(schedule.id);
+        } catch (error) {
+          failed = true;
+          console.error(`Tâche planifiée « ${schedule.title} » :`, error);
+        }
+      }
+    } catch (error) {
+      failed = true;
+      console.error("Tâches planifiées :", error);
+    } finally {
+      // Whatever failed, the clock is watched again; a task still due is tried again in a
+      // while, not at once in a loop.
+      this.arm(failed ? RETRY_MS : 0);
     }
-    this.arm();
   }
 
   private fire(schedule: Schedule, now: number): void {
@@ -199,7 +223,14 @@ export class Scheduler {
       schedule.repeat === "once"
         ? { ...next, enabled: false }
         : { ...next, nextAt: nextRun(schedule.repeat, schedule.nextAt, now) };
-    this.put(next);
+    try {
+      this.put(next);
+    } catch (error) {
+      if (next.lastThreadId !== schedule.lastThreadId) {
+        this.unsaved.set(schedule.id, { from: schedule.nextAt, next });
+      }
+      throw error;
+    }
   }
 
   private firstTime(repeat: ScheduleRepeat, at: number, now: number): number {
@@ -209,22 +240,23 @@ export class Scheduler {
   }
 
   /** One timer, set for the next task due. Long waits are cut in hours, as timers drift. */
-  private arm(): void {
+  private arm(atLeast = 0): void {
     clearTimeout(this.timer);
     this.timer = undefined;
     if (!this.started) return;
-    const due = this.list()
-      .filter((s) => s.enabled)
-      .map((s) => s.nextAt);
-    if (due.length === 0) return;
-    const wait = Math.min(Math.max(0, Math.min(...due) - this.now()), HOUR);
-    this.timer = setTimeout(() => {
-      try {
-        this.tick();
-      } catch (error) {
-        console.error("Tâches planifiées :", error);
-      }
-    }, wait);
+    let wait: number;
+    try {
+      const due = this.list()
+        .filter((s) => s.enabled)
+        .map((s) => s.nextAt);
+      if (due.length === 0) return;
+      wait = Math.min(Math.max(atLeast, Math.min(...due) - this.now()), HOUR);
+    } catch (error) {
+      // The list could not be read: it is read again in a while.
+      console.error("Tâches planifiées :", error);
+      wait = RETRY_MS;
+    }
+    this.timer = setTimeout(() => this.tick(), wait);
     this.timer.unref();
   }
 
