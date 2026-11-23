@@ -467,7 +467,7 @@
 /* ---------- the tray under the box ---------- */
 .tray {
   position: relative;
-  z-index: 1;
+  /* No z-index: keeps the tray below `.composer` (z-index: 2) without trapping its menus behind it. */
   margin: -18px 8px 0;
   padding: 24px 8px 6px;
   background: var(--tray);

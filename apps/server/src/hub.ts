@@ -2048,7 +2048,7 @@ export class Hub {
       throw new Error("Attends la fin de la réponse pour changer ce réglage.");
     await this.exclusive(threadId, "Attends la fin du changement de réglage.", async () => {
       let session = await this.pool.get(threadId)?.catch(() => undefined);
-      const offered = session?.settings ?? this.store.getAgentModels(thread.agentId)?.settings;
+      const offered = session?.settings ?? this.catalog.settingsFor(thread.agentId, thread.model);
       const setting = offered?.find((s) => s.id === settingId);
       if (!setting?.choices.some((c) => c.id === value)) throw new Error("Réglage inconnu.");
       if (session) {
@@ -3080,6 +3080,7 @@ export class Hub {
           (session.fresh ? this.catalog.defaultModel(thread.agentId) : undefined);
         if (wanted && wanted !== model.current && model.choices.some((c) => c.id === wanted)) {
           await session.setModel(wanted);
+          this.catalog.learn(thread.agentId, session.model, session.settings, false);
         }
         this.updateThread(thread.id, { model: session.model?.current ?? model.current });
       }

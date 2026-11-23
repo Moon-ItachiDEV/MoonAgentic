@@ -1,12 +1,13 @@
-import type {
-  AgentInfo,
-  Favorites,
-  McpServerInfo,
-  PermissionMode,
-  ProjectCommand,
-  Project,
-  Skill,
-  Thread,
+import {
+  agentSettingsFor,
+  type AgentInfo,
+  type Favorites,
+  type McpServerInfo,
+  type PermissionMode,
+  type ProjectCommand,
+  type Project,
+  type Skill,
+  type Thread,
 } from "@moonagentic/protocol";
 import {
   type ChangeEvent,
@@ -190,8 +191,9 @@ export function Composer(props: {
     : ((agent?.models?.some((m) => m.id === pickedModel) ? pickedModel : agent?.defaultModel) ??
       undefined);
   const modelName = agent?.models?.find((m) => m.id === model)?.name ?? model;
+  const agentSettings = agentSettingsFor(agent, model);
   const settings = Object.fromEntries(
-    (agent?.settings ?? []).map((s) => {
+    agentSettings.map((s) => {
       const key = `${agent?.id}.${s.id}`;
       const picked = thread
         ? thread.settings?.[s.id]
@@ -200,7 +202,7 @@ export function Composer(props: {
     }),
   );
   // The mode shows on the chip only when it is not the agent's usual one.
-  const modeSetting = agent?.settings?.find((s) => s.kind === "mode");
+  const modeSetting = agentSettings.find((s) => s.kind === "mode");
   const modeName =
     modeSetting && settings[modeSetting.id] !== modeSetting.current
       ? modeSetting.choices.find((c) => c.id === settings[modeSetting.id])?.name
@@ -391,6 +393,7 @@ export function Composer(props: {
 
   const commands = composerCommands({
     agent,
+    model,
     agentCommands: thread?.commands,
     projectCommands: known.commands,
     inThread: !!thread,
@@ -469,7 +472,7 @@ export function Composer(props: {
     switch (action) {
       case "plan":
       case "agent": {
-        const modes = planModes(agent?.settings);
+        const modes = planModes(agentSettings);
         if (!modes || !agent) {
           connection.notify("Cet agent n'a pas de mode plan.");
           return;
@@ -653,7 +656,7 @@ export function Composer(props: {
     // Handed to another agent at its limit: that agent starts with its own model and settings.
     const own = sendTo === agentId;
     const changed = Object.entries(own ? settings : {}).filter(
-      ([id, value]) => agent?.settings?.find((s) => s.id === id)?.current !== value,
+      ([id, value]) => agentSettings.find((s) => s.id === id)?.current !== value,
     );
     // Where the user was when they sent it: the new thread opens only if they stayed.
     const from = location.pathname;
@@ -794,7 +797,7 @@ export function Composer(props: {
   const full = mode === "full";
 
   // The top level of the model's effort is « Galaxie »: a star says so on the agent's chip.
-  const effort = agent?.available ? agent.settings?.find((s) => s.kind === "effort") : undefined;
+  const effort = agent?.available ? agentSettings.find((s) => s.kind === "effort") : undefined;
   const galaxy =
     !!effort &&
     effort.choices.length > 1 &&
