@@ -1,5 +1,6 @@
 import type { Project } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
+import { mcpCount } from "../mcp-scope.ts";
 import { MoonMark } from "./MoonMark.tsx";
 
 /** « Bonsoir » from 18 h until the small hours, « Bonjour » the rest of the day. */
@@ -15,7 +16,8 @@ export function Home({
   onNewProject: () => void;
 }) {
   const available = state.agents.filter((a) => a.available).length;
-  const mcp = state.mcpServers.filter((m) => m.enabled).length;
+  // Those a thread started here is given: for every project, or for this one.
+  const mcp = mcpCount(state.mcpServers, project?.id);
   return (
     <div className="view">
       <div className="home">

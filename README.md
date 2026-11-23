@@ -11,6 +11,7 @@
   <a href="#ce-que-tu-obtiens">Fonctionnalités</a> ·
   <a href="#agents">Agents</a> ·
   <a href="#tourner-24h24">24h/24</a> ·
+  <a href="#sécurité">Sécurité</a> ·
   <a href="#contribuer">Contribuer</a> ·
   <a href="./LICENSE">MIT</a>
 </p>
@@ -29,7 +30,7 @@ Il fonctionne avec Claude Code, Codex, Antigravity, Cursor, Hermes et n'importe 
 - **Git intégré, Revue & GitHub.** Worktree et branche isolés par fil (**Branche à part**), checkpoints automatiques avant chaque tour (**Revenir ici**), panneau **Code** (onglet **Modifications**) avec commentaires ancrés par ligne de code et décochage automatique des fichiers sensibles (`.env`, `*.pem`, `*.key`, `.npmrc`…), commit/push/PR en un clic. Avec `gh`, clone tes dépôts GitHub depuis l'interface, suis l'état des PR, CI et conflits en direct et merge sans quitter MoonAgentic.
 - **Planner & tâches planifiées (`/planifier`).** Tableau Kanban à 5 colonnes (**À faire**, **En cours**, **Reporté**, **En test**, **Livré**) mêlant tes cartes et celles pilotées par les équipes, vue **Timeline** (semaines/mois) et tâches ponctuelles ou récurrentes (une seule fois, toutes les heures, tous les jours, du lundi au vendredi ou toutes les semaines) avec rattrapage unique au redémarrage.
 - **Composer complet.** Commandes `/` (même en milieu de message) + commandes projet dans `.moonagentic/commands/*.md`, mentions `@` de fichiers (respectant `.gitignore`), skills `$` détectés dans le projet et ton dossier utilisateur, dictée vocale (HTTPS ou `localhost`), recherche rapide (`Ctrl K` / `⌘ K`), jauge de contexte, `/compact` et export Markdown.
-- **Serveurs MCP centralisés.** Déclare tes serveurs MCP (`stdio` ou HTTP) une seule fois dans **Réglages → Serveurs MCP** : ils sont transmis à tous les agents compatibles pendant que leurs secrets (variables d'environnement et en-têtes) restent strictement sur ton serveur local.
+- **Serveurs MCP centralisés.** Déclare tes serveurs MCP (`stdio` ou HTTP) une seule fois dans **Réglages → Serveurs MCP** : ils sont transmis aux agents compatibles, pour tous les projets ou seulement ceux que tu choisis, pendant que leurs secrets (variables d'environnement et en-têtes) restent strictement sur ton serveur local. Dans une équipe, les relecteurs, testeurs et fusionneurs ne les reçoivent que si tu le demandes, serveur par serveur.
 - **Bureau, téléphone & 24h/24.** Un seul serveur local synchronisé en temps réel (PWA iOS/Android, barre latérale repliable), file **À traiter** pour toutes les demandes d'accord, accès distant Tailscale ou LAN avec QR code, superviseur auto-relancé, sauvegardes SQLite quotidiennes et reconnexion mobile fiable.
 - **Ouvert et local.** Sous licence MIT, protégé par jeton local, construit sur Node.js et SQLite sans dépendance lourde. Si quelque chose ne te convient pas, forke-le.
 
@@ -153,6 +154,26 @@ Tout reste sur ta machine, dans `~/.moonagentic/` (droits réservés à ton util
 - `worktrees/` — worktrees git isolés des fils en cours
 - `logs/` — journaux quotidiens rotatifs, jeton masqué (`14` jours)
 - `backups/` — sauvegardes SQLite atomiques quotidiennes (`7` jours)
+
+## Sécurité
+
+MoonAgentic est fait pour **une seule personne, sur ses propres machines**. Qui possède le lien avec jeton pilote tes agents, donc ta machine : traite ce lien comme un mot de passe.
+
+### Ce dont il te protège
+
+- **Quelqu'un d'autre sur ton réseau.** Le serveur écoute sur `127.0.0.1` par défaut. Toute l'API et la connexion WebSocket exigent le jeton, les essais ratés sont limités, et **Renouveler le jeton** coupe toutes les anciennes sessions.
+- **Un site web ouvert dans ton navigateur.** Une page d'un autre site ne peut pas se brancher sur ton serveur : la connexion WebSocket est refusée quand elle ne vient pas de la page de MoonAgentic elle-même, et rien ne répond sans le jeton.
+- **Un dossier piégé que tu viens d'ajouter.** Ajouter un projet, lister ses fichiers pour `@` ou relire ses modifications ne lance aucune commande que le dépôt aurait glissée dans ses réglages git (`core.fsmonitor`, outil de diff externe, convertisseur `textconv`). Les chemins demandés par l'interface ne sortent jamais du dossier, liens symboliques compris.
+- **Une fuite de tes secrets.** Les secrets de tes serveurs MCP et ta connexion GitHub restent sur le serveur, hors de la base et de ses sauvegardes, et ne sont jamais renvoyés au navigateur. Les journaux masquent le jeton. Les fichiers sensibles (`.env`, `*.pem`, `*.key`, `.npmrc`…) sont décochés avant un commit.
+- **Une pièce jointe piégée.** Une image est reconnue à son contenu et non à son nom, le SVG est refusé, et elle n'est relue qu'avec le jeton.
+
+### Ce qu'il ne fait pas à ta place
+
+- **Un agent a tes droits.** Il tourne sous ton compte, sans bac à sable : il peut lire ce que tu peux lire et lancer ce que tu peux lancer. En mode **Supervisé**, il demande avant de modifier ou de lancer quoi que ce soit ; en **Accès complet**, il agit sans demander. Une **Branche à part** isole son travail dans git, pas ta machine.
+- **Un agent obéit à ce qu'il lit.** Un fichier, une page web ou la réponse d'un serveur MCP peut contenir des consignes écrites pour lui. Sur un dépôt que tu ne connais pas, reste en **Supervisé** et ne branche que des serveurs MCP de confiance.
+- **Un dossier où un agent travaille est du code que tu lances.** Ses hooks git, ses filtres (Git LFS…) et ses scripts s'exécutent dès qu'un fil y fait un commit, une branche ou une commande, comme dans ton terminal. N'ajoute que des dossiers en lesquels tu as confiance.
+- **Le réseau local n'est pas chiffré.** Avec `--host 0.0.0.0`, le jeton et tes messages circulent en clair : garde ça pour un réseau à toi, et préfère Tailscale. N'utilise jamais `tailscale funnel`.
+- **Il n'y a ni comptes ni rôles.** Le jeton donne tout. Un autre compte administrateur de la même machine, ou un programme lancé sous ton compte, peut lire `~/.moonagentic`.
 
 ## Contribuer
 

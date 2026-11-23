@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { GithubRepo, GithubStatus } from "@moonagentic/protocol";
 import { findOnPath } from "./agents.ts";
+import { GIT_QUIET } from "./git-own.ts";
 import { githubAccount } from "./github-account.ts";
 
 /** No one can answer a password prompt from here, so git and gh fail instead of waiting. */
@@ -191,7 +192,10 @@ async function isCloneOf(dir: string, repo: { owner: string; name: string }): Pr
   if (!existsSync(path.join(dir, ".git"))) return false;
   try {
     const url = (
-      await run("git", ["remote", "get-url", "origin"], { cwd: dir, timeout: ASK_TIMEOUT_MS })
+      await run("git", [...GIT_QUIET, "remote", "get-url", "origin"], {
+        cwd: dir,
+        timeout: ASK_TIMEOUT_MS,
+      })
     ).trim();
     const found = parseGithubRepo(url);
     return (

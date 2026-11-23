@@ -275,7 +275,7 @@ export function ConnectionsDialog(props: {
           <span>
             {props.mcpServers.length === 0
               ? "Aucun serveur MCP."
-              : `${enabledMcp} actif${enabledMcp > 1 ? "s" : ""} sur ${props.mcpServers.length}, donnés à chaque agent au démarrage d'un fil.`}
+              : `${enabledMcp} actif${enabledMcp > 1 ? "s" : ""} sur ${props.mcpServers.length}, donnés aux agents au démarrage d'un fil.`}
           </span>
           <button className="btn sm" onClick={props.onOpenMcp}>
             Gérer
