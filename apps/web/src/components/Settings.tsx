@@ -10,7 +10,9 @@ import {
   type Project,
   type TeamMember,
   ROUTE_KINDS,
+  type RouteKind,
 } from "@moonagentic/protocol";
+import { parseRouteValue, routeChoices, routeValue } from "../route-choices.ts";
 import { KIND_LABEL } from "../project-threads.ts";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
@@ -327,6 +329,51 @@ function NotificationsRow() {
   );
 }
 
+/**
+ * The single agent + model menu of one coordinator route: the favorites (or every model when
+ * there are none), grouped by agent, with the chosen agent's badge beside it.
+ */
+function RouteSelect(props: {
+  kind: RouteKind;
+  agents: AgentInfo[];
+  favorites: Favorites;
+  route: { agentId: string; model?: string } | undefined;
+  showAll: boolean;
+}) {
+  const { kind, route } = props;
+  const { groups } = routeChoices(props.agents, props.favorites, route, props.showAll);
+  const agent = route && props.agents.find((a) => a.id === route.agentId);
+  return (
+    <label className="set-select set-route">
+      {route && <AgentBadge agent={agent ?? { id: route.agentId, short: "?" }} small />}
+      <select
+        aria-label={`Modèle pour ${KIND_LABEL[kind]}`}
+        value={route ? routeValue(route.agentId, route.model) : ""}
+        onChange={(e) => {
+          const picked = parseRouteValue(e.target.value);
+          connection.send({
+            type: "coordinator.setRoute",
+            kind,
+            ...(picked ? { agentId: picked.agentId } : {}),
+            ...(picked?.model ? { model: picked.model } : {}),
+          });
+        }}
+      >
+        <option value="">{kind === "default" ? "Agent du coordinateur" : "Par défaut"}</option>
+        {groups.map((g) => (
+          <optgroup key={g.agent.id} label={g.agent.name}>
+            {g.options.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </optgroup>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 /** One section of the settings; every value here is real and takes effect at once. */
 export function SettingsPage(props: {
   section: SettingsSection;
@@ -345,6 +392,8 @@ export function SettingsPage(props: {
     readPref("permissionMode") === "full" ? "full" : "supervised",
   );
   const [isolated, setIsolated] = useState(() => readPref("isolated") !== "false");
+  // The coordinator's menus: favorites only, until « Afficher tous les modèles ».
+  const [allModels, setAllModels] = useState(false);
   const theme = useSyncExternalStore(subscribeTheme, readTheme);
   const title = SECTIONS.find((s) => s.id === props.section)?.label ?? "";
 
@@ -511,75 +560,51 @@ export function SettingsPage(props: {
       break;
     }
     case "coordinator": {
-      const ready = props.agents.filter((a) => a.available);
       const named = (m: TeamMember) => {
         const agent = props.agents.find((a) => a.id === m.agentId);
         const model = m.model && (agent?.models?.find((x) => x.id === m.model)?.name ?? m.model);
         return `${agent?.name ?? m.agentId}${model ? ` · ${model}` : ""}`;
       };
       const team = props.coordinator.team;
+      const hasFavorites = routeChoices(
+        props.agents,
+        props.favorites,
+        undefined,
+        false,
+      ).favoritesOnly;
       body = (
         <>
           <p className="set-empty">
-            Quand un coordinateur ouvre un fil, il l'envoie à l'agent choisi ici pour ce type de
+            Quand un coordinateur ouvre un fil, il l'envoie au modèle choisi ici pour ce type de
             travail, sinon à celui de « Par défaut ». Sans aucun choix, le fil garde l'agent et le
-            modèle du coordinateur.
+            modèle du coordinateur. La liste montre tes modèles favoris ; sans favori, tous les
+            modèles.
           </p>
           <div className="set-card">
             {ROUTE_KINDS.map((kind) => {
               const route = props.coordinator.routes[kind];
-              const agent = props.agents.find((a) => a.id === route?.agentId);
-              const set = (agentId: string, model?: string) =>
-                connection.send({
-                  type: "coordinator.setRoute",
-                  kind,
-                  ...(agentId ? { agentId } : {}),
-                  ...(agentId && model ? { model } : {}),
-                });
               return (
                 <Row key={kind} title={KIND_LABEL[kind]}>
-                  <label className="set-select">
-                    <select
-                      aria-label={`Agent pour ${KIND_LABEL[kind]}`}
-                      value={route?.agentId ?? ""}
-                      onChange={(e) => set(e.target.value)}
-                    >
-                      <option value="">
-                        {kind === "default" ? "Agent du coordinateur" : "Par défaut"}
-                      </option>
-                      {/* A route to an agent that is gone stays shown, so it can be changed. */}
-                      {route && !ready.some((a) => a.id === route.agentId) && (
-                        <option value={route.agentId}>
-                          {agent?.name ?? route.agentId} (indisponible)
-                        </option>
-                      )}
-                      {ready.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.name}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {route && !!agent?.models?.length && (
-                    <label className="set-select">
-                      <select
-                        aria-label={`Modèle pour ${KIND_LABEL[kind]}`}
-                        value={route.model ?? ""}
-                        onChange={(e) => set(route.agentId, e.target.value)}
-                      >
-                        <option value="">Modèle par défaut</option>
-                        {agent.models.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
+                  <RouteSelect
+                    kind={kind}
+                    agents={props.agents}
+                    favorites={props.favorites}
+                    route={route}
+                    showAll={allModels}
+                  />
                 </Row>
               );
             })}
           </div>
+          {hasFavorites && (
+            <button
+              className="btn quiet sm set-more"
+              aria-pressed={allModels}
+              onClick={() => setAllModels((on) => !on)}
+            >
+              {allModels ? "Seulement mes favoris" : "Afficher tous les modèles"}
+            </button>
+          )}
           <div className="set-card">
             <Row
               title="Fils en même temps"
