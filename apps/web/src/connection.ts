@@ -1,4 +1,5 @@
 import type { ClientMessage, RemoteAccess, ServerMessage } from "@moonagentic/protocol";
+import { nextFrame } from "./frame.ts";
 import { initialState, reduce, type State } from "./state.ts";
 
 export type { ConnectionStatus, Review, State } from "./state.ts";
@@ -98,6 +99,8 @@ export class Connection {
   private readonly askTimeoutMs: number;
   private readonly pingMs: number;
   /** The wait before the next try, while the connection is closed. */
+  /** Calls off the frame that waits to tell the page about text just written. */
+  private callOffFrame: (() => void) | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
   private pongTimer: ReturnType<typeof setTimeout> | undefined;
@@ -354,7 +357,9 @@ export class Connection {
           else pending.resolve(message);
         }
       }
-      this.set(reduce(this.state, message));
+      const next = reduce(this.state, message);
+      if (message.type === "append") this.setSoon(next);
+      else this.set(next);
     };
     socket.onclose = (event) => this.lost(socket, opened, event.code);
   }
@@ -408,7 +413,22 @@ export class Connection {
 
   private set(next: State): void {
     this.state = next;
+    this.callOffFrame?.();
+    this.callOffFrame = undefined;
     for (const listener of this.listeners) listener();
+  }
+
+  /**
+   * Takes text an agent is writing: a fast model sends hundreds of pieces a second, and
+   * the screen only draws sixty times. The state is right at once; the page is told at
+   * the next frame, once for all the pieces that came meanwhile.
+   */
+  private setSoon(next: State): void {
+    this.state = next;
+    this.callOffFrame ??= nextFrame(() => {
+      this.callOffFrame = undefined;
+      for (const listener of this.listeners) listener();
+    });
   }
 }
 
