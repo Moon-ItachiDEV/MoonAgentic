@@ -17,10 +17,12 @@ defineMoonMascot();
  * Settings › Mascottes: each agent's moon, its shape and colour, kept by the server for every
  * device. The large moon rests here: its other faces only show what an agent really does.
  */
-export function MascotSettings({ agents }: { agents: AgentInfo[] }) {
+export function MascotSettings({ agents: all }: { agents: AgentInfo[] }) {
+  // Only Hermes and the user's Hermes bots have a moon.
+  const agents = all.filter((a) => a.mascotAllowed);
   const [picked, setPicked] = useState(() => (agents.find((a) => a.mascot) ?? agents[0])?.id);
   const agent = agents.find((a) => a.id === picked) ?? agents[0];
-  if (!agent) return <p className="set-empty">Aucun agent pour l'instant.</p>;
+  if (!agent) return <p className="set-empty">Les mascottes sont réservées à Hermes.</p>;
   const mascot = agent.mascot;
 
   const choose = (next: MascotChoice | null) =>
@@ -99,10 +101,11 @@ export function MascotSettings({ agents }: { agents: AgentInfo[] }) {
         </div>
       </div>
       <p className="set-empty">
-        La mascotte se montre dans le fil pendant que l'agent travaille, avec la tête de ce qu'il
-        fait vraiment : elle lit, code, réfléchit, lance les tests, sourit quand ils passent et
-        s'inquiète d'une erreur. Touche-la pour un clin d'œil. Gardé sur le serveur, pour tous tes
-        appareils.
+        Les mascottes sont réservées à Hermes et aux bots Hermes que tu ajoutes (un agent dont la
+        commande est « hermes », un profil par exemple). La mascotte se montre dans le fil pendant
+        que l'agent travaille, avec la tête de ce qu'il fait vraiment : elle lit, code, réfléchit,
+        lance les tests, sourit quand ils passent et s'inquiète d'une erreur. Touche-la pour un clin
+        d'œil. Gardé sur le serveur, pour tous tes appareils.
       </p>
     </>
   );

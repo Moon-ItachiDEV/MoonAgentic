@@ -81,12 +81,14 @@ export class AgentCatalog {
     return this.agents.list().map((base) => {
       const listed = Object.hasOwn(commands, base.id) ? commands[base.id] : undefined;
       const check = Object.hasOwn(checks, base.id) ? checks[base.id] : undefined;
-      const mascot = this.mascotOf(base.id);
+      const allowed = this.mascotAllowed(base.id);
+      const mascot = allowed ? this.mascotOf(base.id) : undefined;
       const agent = {
         ...base,
         ...(listed?.length ? { commands: listed } : {}),
         ...(check ? { check } : {}),
         ...(mascot ? { mascot } : {}),
+        ...(allowed ? { mascotAllowed: true as const } : {}),
       };
       const known = this.store.getAgentModels(agent.id);
       const modelsError = this.discoveryErrors.get(agent.id);
@@ -269,10 +271,25 @@ export class AgentCatalog {
     return Object.hasOwn(DEFAULT_MASCOTS, agentId) ? DEFAULT_MASCOTS[agentId] : undefined;
   }
 
+  /**
+   * Only Hermes has a moon, and the Hermes bots the user added (an agent of their own whose
+   * command is `hermes`, a profile for instance): the other agents keep their logo.
+   */
+  private mascotAllowed(agentId: string): boolean {
+    if (agentId === "hermes") return true;
+    const custom = this.customAgents().find((a) => a.id === agentId);
+    return (
+      !!custom &&
+      /^hermes(?:\.(?:exe|cmd|bat|ps1))?$/i.test(custom.command.trim().split(/[\\/]/).pop() ?? "")
+    );
+  }
+
   /** Gives the agent its moon, or none (`null`), on every device. */
   setMascot(agentId: string, mascot: Mascot | null): void {
     if (!this.agents.list().some((a) => a.id === agentId))
       throw new Error(`Agent inconnu : ${agentId}`);
+    if (!this.mascotAllowed(agentId))
+      throw new Error("Seuls Hermes et tes bots Hermes ont une mascotte.");
     const picked = this.store.getSetting<Record<string, Mascot | null>>("mascots", {});
     this.store.setSetting("mascots", { ...picked, [agentId]: mascot });
     this.broadcastAgents();

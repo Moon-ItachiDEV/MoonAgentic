@@ -44,6 +44,8 @@ export interface AgentInfo {
   check?: AgentCheck;
   /** The moon that stands for the agent while it works, when it has one. */
   mascot?: Mascot;
+  /** Hermes and the user's own Hermes bots: the only agents that can have a moon. */
+  mascotAllowed?: true;
 }
 
 /** The moon's outline: a crescent, a cratered full moon or a smooth orb. */
