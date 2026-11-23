@@ -1,12 +1,14 @@
 import type { AgentInfo } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  atMessageStart,
   composerCommands,
   fillTemplate,
   matchCommands,
   mention,
   messageTokens,
   planModes,
+  removeTrigger,
   replaceTrigger,
   resolveSubmission,
   triggerAt,
@@ -103,9 +105,17 @@ describe("composer commands", () => {
 });
 
 describe("the word being typed", () => {
-  it("finds a command at the start only, and mentions or skills anywhere", () => {
+  it("finds a command, a mention or a skill at the start of any word", () => {
     expect(triggerAt("/pl", 3)).toEqual({ kind: "/", query: "pl", start: 0, end: 3 });
-    expect(triggerAt("lis /pl", 7)).toBeNull();
+    expect(triggerAt("lis /pl", 7)).toEqual({ kind: "/", query: "pl", start: 4, end: 7 });
+    expect(triggerAt("donne ton avis sur le projet /", 30)).toEqual({
+      kind: "/",
+      query: "",
+      start: 29,
+      end: 30,
+    });
+    expect(triggerAt("ligne\n/re", 9)).toMatchObject({ kind: "/", start: 6 });
+    expect(triggerAt("et/ou", 3)).toBeNull();
     expect(triggerAt("lis @src/a", 10)).toEqual({ kind: "@", query: "src/a", start: 4, end: 10 });
     expect(triggerAt("fais $rev puis", 9)).toEqual({ kind: "$", query: "rev", start: 5, end: 9 });
     expect(triggerAt("fais $revue puis", 9)).toMatchObject({ query: "rev", end: 11 });
@@ -119,6 +129,23 @@ describe("the word being typed", () => {
       text: "lis @src/app.ts puis",
       caret: 16,
     });
+  });
+
+  it("puts a command picked mid-message in place, or takes its word out", () => {
+    const text = "donne ton avis /re puis corrige";
+    const trigger = triggerAt(text, 18)!;
+    expect(atMessageStart(text, trigger)).toBe(false);
+    expect(atMessageStart("  /re", triggerAt("  /re", 5)!)).toBe(true);
+    expect(replaceTrigger(text, trigger, "/review")).toEqual({
+      text: "donne ton avis /review puis corrige",
+      caret: 23,
+    });
+    expect(removeTrigger(text, trigger)).toEqual({
+      text: "donne ton avis puis corrige",
+      caret: 15,
+    });
+    const end = triggerAt("corrige ça /eq", 14)!;
+    expect(removeTrigger("corrige ça /eq", end)).toEqual({ text: "corrige ça ", caret: 11 });
   });
 
   it("marks files and skills in a sent message", () => {
