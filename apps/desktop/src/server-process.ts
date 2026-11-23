@@ -14,10 +14,19 @@ export type LineEvent = { ready: string } | { failed: string } | undefined;
 const READY = /MoonAgentic est prêt : (https?:\/\/\S+)/;
 const CRASHED = /Le serveur s'est arrêté sur une erreur/;
 const PORT_TAKEN = /EADDRINUSE/;
+/** Printed by a server that found another MoonAgentic on its data folder (instance.ts). */
+const ALREADY_RUNNING = /MoonAgentic tourne déjà sur ce dossier de données/;
 
 export function readLine(line: string): LineEvent {
   const ready = READY.exec(line);
   if (ready?.[1]) return { ready: ready[1] };
+  if (ALREADY_RUNNING.test(line)) {
+    return {
+      failed:
+        "MoonAgentic tourne déjà, sans doute lancé dans un terminal. Ferme-le : l'app prend " +
+        "le relais d'elle-même.",
+    };
+  }
   if (PORT_TAKEN.test(line)) {
     return {
       failed:

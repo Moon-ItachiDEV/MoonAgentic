@@ -49,7 +49,8 @@ export function killTree(child: ChildProcess, signal: "SIGTERM" | "SIGKILL"): Pr
     // Windows has no signals: taskkill ends the whole tree at once. Its own end is waited
     // for, since the process it was given can be gone a moment before the ones it started.
     return new Promise((resolve) => {
-      execFile("taskkill", ["/pid", String(pid), "/T", "/F"], (error) => {
+      const args = ["/pid", String(pid), "/T", "/F"];
+      execFile("taskkill", args, { windowsHide: true, timeout: 15_000 }, (error) => {
         if (error) child.kill();
         resolve();
       });

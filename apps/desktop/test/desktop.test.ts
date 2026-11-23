@@ -31,6 +31,9 @@ describe("readLine", () => {
     expect(
       readLine("Le serveur s'est arrêté sur une erreur (code 1) : il redémarre dans 1 s."),
     ).toEqual({ failed: expect.stringContaining("redémarre") });
+    expect(
+      readLine("MoonAgentic tourne déjà sur ce dossier de données (/home/moi/.moonagentic)."),
+    ).toEqual({ failed: expect.stringContaining("tourne déjà") });
     expect(readLine("Sauvegarde de la base : x")).toBeUndefined();
   });
 });
