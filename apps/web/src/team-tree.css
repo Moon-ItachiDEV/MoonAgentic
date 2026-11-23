@@ -1,0 +1,678 @@
+/* A team as a tree of cards, in the team's strip: the lead, each piece with its reviewer and
+   tester under it, the merge, the pull request. Desktop only: a phone keeps the steps. */
+:root {
+  --tt-wire: #d3d3d9;
+  --tt-hi: #ececf0;
+  --tt-lo: #d9d9df;
+  --tt-edge: rgba(255, 255, 255, 0.9);
+  --tt-tray: rgba(24, 24, 27, 0.035);
+  --tt-tray-line: rgba(24, 24, 27, 0.07);
+  --tt-lift:
+    0 1px 1px rgba(20, 20, 30, 0.03), 0 3px 6px -2px rgba(20, 20, 30, 0.05),
+    0 12px 24px -14px rgba(20, 20, 30, 0.12);
+  --tt-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+:root[data-theme="dark"] {
+  --tt-wire: #3a3a41;
+  --tt-hi: #3d3d45;
+  --tt-lo: #242428;
+  --tt-edge: rgba(255, 255, 255, 0.05);
+  --tt-tray: rgba(255, 255, 255, 0.025);
+  --tt-tray-line: rgba(255, 255, 255, 0.07);
+  --tt-lift:
+    0 1px 1px rgba(0, 0, 0, 0.3), 0 4px 8px -2px rgba(0, 0, 0, 0.3),
+    0 14px 28px -14px rgba(0, 0, 0, 0.55);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --tt-wire: #3a3a41;
+    --tt-hi: #3d3d45;
+    --tt-lo: #242428;
+    --tt-edge: rgba(255, 255, 255, 0.05);
+    --tt-tray: rgba(255, 255, 255, 0.025);
+    --tt-tray-line: rgba(255, 255, 255, 0.07);
+    --tt-lift:
+      0 1px 1px rgba(0, 0, 0, 0.3), 0 4px 8px -2px rgba(0, 0, 0, 0.3),
+      0 14px 28px -14px rgba(0, 0, 0, 0.55);
+  }
+}
+
+/* The switch between the steps and the tree, in the strip. */
+.tl-view {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 12px 8px;
+}
+.tl-seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--sunken);
+}
+.tl-seg button {
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--muted);
+  transition:
+    color 150ms,
+    background 150ms;
+}
+.tl-seg button:hover {
+  color: var(--fg);
+}
+.tl-seg button[aria-checked="true"] {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.tl-view .btn {
+  margin-left: auto;
+}
+/* A strip that holds the tree is too tall to stay stuck at the top of the conversation. */
+.tlb.arbre {
+  position: relative;
+}
+.tlb.arbre .tt {
+  border-top: 1px solid var(--line);
+  border-radius: 0 0 11px 11px;
+  min-height: 280px;
+  /* The strip, the tree and what is the user's to do fit in the window together. */
+  max-height: clamp(320px, calc(100vh - 460px), 680px);
+}
+@media (max-width: 860px) {
+  .tl-view {
+    display: none;
+  }
+}
+
+/* The tree over the whole centre, when the conversation is too narrow to hold it. */
+.tt-full {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  animation: ttIn 220ms var(--tt-out);
+}
+.tt-full-h {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.tt-full-h b {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tt-full-h span {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12.5px;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.tt-full .tt {
+  flex: 1;
+}
+@keyframes ttIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.tt {
+  position: relative;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg);
+}
+.tt-scroll {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line2) transparent;
+}
+.tt-tree {
+  position: relative;
+  isolation: isolate;
+  width: max-content;
+  min-width: 100%;
+  padding: 30px 24px 36px;
+}
+.tt-wires {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.tt-wires > path {
+  fill: none;
+  stroke: var(--tt-wire);
+  stroke-width: 1.5;
+  transition: stroke 600ms var(--tt-out);
+}
+.tt-wires > path.went {
+  stroke: color-mix(in srgb, var(--fg) 34%, var(--tt-wire));
+}
+.tt-row {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+.tt-cols {
+  display: flex;
+  justify-content: center;
+  gap: 40px;
+  margin-top: 42px;
+}
+.tt-col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tt-fuse {
+  margin-top: 46px;
+}
+.tt-ship {
+  margin-top: 30px;
+}
+
+.tt-card {
+  --g: 0;
+  --gc: var(--accent);
+  --bd: var(--tt-lo);
+  --bdt: var(--tt-hi);
+  position: relative;
+  width: 264px;
+  padding: 10px 12px 9px;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  cursor: pointer;
+  text-align: left;
+  /* A hairline that catches the light at the top and settles at the bottom. */
+  background:
+    linear-gradient(var(--surface), var(--surface)) padding-box,
+    linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--gc) calc(var(--g) * 100%), var(--bdt)),
+        color-mix(in srgb, var(--gc) calc(var(--g) * 100%), var(--bd))
+      )
+      border-box;
+  box-shadow:
+    inset 0 1px 0 var(--tt-edge),
+    var(--tt-lift),
+    0 14px 30px -14px color-mix(in srgb, var(--gc) calc(var(--g) * 65%), transparent);
+}
+.tt-card:hover {
+  --bd: color-mix(in srgb, var(--fg) 22%, var(--tt-lo));
+  --bdt: color-mix(in srgb, var(--fg) 12%, var(--tt-hi));
+}
+.tt-card:focus-visible {
+  border-radius: 14px;
+}
+/* The lead sits in a thin tray: a second, quieter edge around its card. */
+.tt-card.lead {
+  width: 288px;
+  border-radius: 15px;
+  --bdt: color-mix(in srgb, var(--accent) 38%, var(--tt-hi));
+}
+.tt-card.lead::before {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  z-index: -1;
+  border: 1px solid var(--tt-tray-line);
+  border-radius: 21px;
+  background: var(--tt-tray);
+  pointer-events: none;
+}
+.tt-card.sub {
+  width: 238px;
+  margin-left: 26px;
+}
+.tt-card.work {
+  --bd: color-mix(in srgb, var(--accent) 26%, var(--tt-lo));
+  --bdt: color-mix(in srgb, var(--accent) 48%, var(--tt-hi));
+  box-shadow:
+    inset 0 1px 0 var(--tt-edge),
+    var(--tt-lift),
+    0 12px 26px -16px color-mix(in srgb, var(--accent) 60%, transparent),
+    0 14px 30px -14px color-mix(in srgb, var(--gc) calc(var(--g) * 65%), transparent);
+}
+.tt-card.sel {
+  --bd: var(--accent);
+  --bdt: var(--accent);
+  box-shadow:
+    inset 0 1px 0 var(--tt-edge),
+    0 0 0 3px var(--accent-soft),
+    var(--tt-lift);
+}
+/* Not started: flat, with a plain hairline. */
+.tt-card.pending {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--surface) 45%, transparent);
+  box-shadow: none;
+}
+.tt-card.pending.sel {
+  border-color: var(--accent);
+}
+.tt-wash {
+  position: absolute;
+  inset: 0;
+  border-radius: 13px;
+  pointer-events: none;
+  opacity: var(--wo, 0);
+  background: radial-gradient(
+    circle at var(--ex, 50%) var(--ey, 0%),
+    color-mix(in srgb, var(--gc) 26%, transparent) 0,
+    color-mix(in srgb, var(--gc) 9%, transparent) calc(var(--wr, 0px) * 0.6),
+    transparent var(--wr, 0px)
+  );
+}
+.tt-card > :not(.tt-wash) {
+  position: relative;
+}
+.tt-top,
+.tt-p-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.tt-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.2;
+}
+.tt-name b {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tt-name span {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tt-chip {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 21px;
+  padding: 0 8px 0 6px;
+  border-radius: 999px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background 250ms var(--tt-out),
+    color 250ms var(--tt-out);
+}
+.tt-chip svg {
+  width: 12px;
+  height: 12px;
+}
+.tt-chip em {
+  display: inline-block;
+  font-style: normal;
+  animation: ttSwap 320ms var(--tt-out);
+}
+.tt-dot {
+  width: 5px;
+  height: 5px;
+  margin: 0 2px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.7;
+}
+.tt-chip[data-tone="work"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.tt-chip[data-tone="ok"] {
+  background: color-mix(in srgb, var(--ok) 11%, transparent);
+  color: var(--ok);
+}
+.tt-chip[data-tone="warn"] {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+.tt-chip[data-tone="err"] {
+  background: var(--del-bg);
+  color: var(--err);
+}
+.tt-act {
+  margin-top: 7px;
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: ttSwap 320ms var(--tt-out);
+}
+@keyframes ttSwap {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+    transform: translateY(3px);
+  }
+}
+.tt-ctx {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 7px;
+}
+.tt-ctx span {
+  font: 11px var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.tt-track {
+  flex: 1;
+  display: block;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+.tt-track i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition:
+    width 300ms var(--ease),
+    background 200ms;
+}
+.tt-track i.high {
+  background: var(--warn);
+}
+.tt-track i.full {
+  background: var(--err);
+}
+.tt-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--line);
+}
+.tt-tools {
+  flex: none;
+  display: flex;
+  gap: 3px;
+}
+.tt-tools svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+.tt-relay {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: ttReveal 520ms var(--tt-out);
+}
+.tt-relay svg {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 3px;
+  vertical-align: -1px;
+  color: var(--faint);
+}
+.tt-relay b {
+  color: var(--fg);
+  font-weight: 500;
+}
+.tt-relay[data-tone="warn"] b {
+  color: var(--warn);
+}
+@keyframes ttReveal {
+  from {
+    clip-path: inset(0 100% 0 0);
+  }
+  to {
+    clip-path: inset(0);
+  }
+}
+
+.tt-pr {
+  --g: 0;
+  --gc: var(--ok);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px dashed color-mix(in srgb, var(--gc) calc(var(--g) * 100%), var(--line2));
+  border-radius: 11px;
+  color: var(--faint);
+  font-size: 12.5px;
+  text-decoration: none;
+  box-shadow: 0 12px 26px -14px color-mix(in srgb, var(--gc) calc(var(--g) * 70%), transparent);
+}
+.tt-pr > span {
+  position: relative;
+}
+.tt-pr .tt-wash {
+  border-radius: 10px;
+}
+.tt-pr[data-tone="ok"],
+.tt-pr[data-tone="work"],
+.tt-pr[data-tone="warn"],
+.tt-pr[data-tone="err"] {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--gc) calc(var(--g) * 100%), var(--line));
+  background: var(--surface);
+  color: var(--fg);
+}
+.tt-pr[data-tone="warn"] {
+  color: var(--warn);
+}
+.tt-pr[data-tone="err"] {
+  color: var(--err);
+}
+a.tt-pr:hover {
+  background: var(--hover);
+}
+
+/* What there is to know about one agent, over the right of the tree. */
+.tt-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  width: min(340px, 100%);
+  border-left: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  transform: translateX(104%);
+  visibility: hidden;
+  transition:
+    transform 200ms cubic-bezier(0.4, 0, 1, 1),
+    visibility 0s 200ms;
+}
+.tt.open .tt-panel {
+  transform: none;
+  visibility: visible;
+  transition:
+    transform 380ms var(--tt-out),
+    visibility 0s;
+}
+.tt-p-head {
+  flex: none;
+  padding: 12px 10px 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.tt-p-head .tt-name b {
+  font-size: 14px;
+}
+.tt-p-head .ib {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+.tt-p-body {
+  flex: 1;
+  padding: 4px 16px 16px;
+  overflow: auto;
+}
+.tt-p-body section {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.tt-p-body section:last-child {
+  border-bottom: 0;
+}
+.tt-p-body h3 {
+  margin: 0 0 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.tt-p-body p {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.tt-mission {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+  line-clamp: 8;
+  overflow: hidden;
+  white-space: pre-line;
+}
+.tt-p-body .tt-track {
+  height: 5px;
+  margin-top: 2px;
+}
+.tt-meta,
+.tt-p-body p.tt-meta {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tt-rel {
+  display: flex;
+  gap: 6px;
+  padding: 2px 0;
+  color: var(--muted);
+}
+.tt-p-body p.tt-rel {
+  font-size: 12.5px;
+}
+.tt-rel b {
+  color: var(--fg);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.tt-hist {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.tt-hist li {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 12.5px;
+}
+.tt-hist time {
+  flex: none;
+  width: 36px;
+  font: 11px/19px var(--mono);
+  color: var(--faint);
+}
+.tt-hist span {
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tt-hist li:first-child span {
+  color: var(--fg);
+  font-weight: 500;
+}
+.tt-tl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tt-tl span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 6px;
+  border-radius: 7px;
+  background: var(--sunken);
+  color: var(--muted);
+  font-size: 12px;
+}
+.tt-tl svg {
+  width: 13px;
+  height: 13px;
+}
+.tt-tl b {
+  color: var(--fg);
+  font: 500 11px var(--mono);
+}
+.tt-p-acts {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+.tt-p-acts .tt-meta {
+  margin: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tt-full,
+  .tt-chip em,
+  .tt-act,
+  .tt-relay {
+    animation: none;
+  }
+  .tt-panel,
+  .tt.open .tt-panel {
+    transition: none;
+  }
+}

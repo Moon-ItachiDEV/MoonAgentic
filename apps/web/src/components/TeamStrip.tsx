@@ -1,5 +1,7 @@
 import type { AgentInfo, Team, TeamLanePhase, Thread } from "@moonagentic/protocol";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { TeamTree } from "./TeamTree.tsx";
 
 const LEAD_LANE = -1;
 const MERGE_LANE = -2;
@@ -21,6 +23,10 @@ const WORKING = new Set<TeamLanePhase>([
   "solving",
   "checking",
 ]);
+
+/** Under this width the tree has no room in the strip: it takes the whole centre instead. */
+const TREE_MIN_WIDTH = 640;
+const DESKTOP = "(min-width: 861px)";
 
 /** The colour family of a phase on the track. */
 const kind = (phase: TeamLanePhase) =>
@@ -204,6 +210,37 @@ export function TeamStrip({
   defaultOpen: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // The same team, seen as its steps over time or as the tree of its agents.
+  const [view, setView] = useState<"steps" | "tree">("steps");
+  const [enlarged, setEnlarged] = useState(false);
+  const box = useRef<HTMLElement>(null);
+  const [roomy, setRoomy] = useState(true);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(() => setRoomy(el.clientWidth >= TREE_MIN_WIDTH));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  // The tree is for a wide screen: a phone keeps the steps.
+  const [desktop, setDesktop] = useState(
+    () => typeof matchMedia !== "function" || matchMedia(DESKTOP).matches,
+  );
+  useEffect(() => {
+    if (typeof matchMedia !== "function") return;
+    const query = matchMedia(DESKTOP);
+    const change = () => setDesktop(query.matches);
+    query.addEventListener("change", change);
+    return () => query.removeEventListener("change", change);
+  }, []);
+  const tree = desktop && open && view === "tree";
+  const whole = tree && (enlarged || !roomy);
+  const centre = whole ? document.querySelector("main.center") : null;
+  const back = () => {
+    // With room in the strip the tree goes back there; without, back to the steps.
+    if (roomy) setEnlarged(false);
+    else setView("steps");
+  };
   const running = active(team);
   // The present moves on, once a second, only while the team works.
   const [now, setNow] = useState(() => Date.now());
@@ -254,7 +291,8 @@ export function TeamStrip({
 
   return (
     <section
-      className={`tlb${open ? " open" : ""}${running ? " live" : ""}`}
+      ref={box}
+      className={`tlb${open ? " open" : ""}${running ? " live" : ""}${tree && !whole ? " arbre" : ""}`}
       aria-label="Frise de l'équipe"
     >
       <button className="tl-h" aria-expanded={open} onClick={() => setOpen(!open)}>
@@ -296,6 +334,72 @@ export function TeamStrip({
         </svg>
       </button>
       {open && (
+        <div className="tl-view">
+          <span className="tl-seg" role="radiogroup" aria-label="Vue de l'équipe">
+            <button role="radio" aria-checked={view === "steps"} onClick={() => setView("steps")}>
+              Étapes
+            </button>
+            <button
+              role="radio"
+              aria-checked={view === "tree"}
+              onClick={() => {
+                setEnlarged(false);
+                setView("tree");
+              }}
+            >
+              Arbre
+            </button>
+          </span>
+          {tree && !whole && (
+            <button className="btn sm quiet" onClick={() => setEnlarged(true)}>
+              Agrandir
+            </button>
+          )}
+        </div>
+      )}
+      {tree && !whole && (
+        <TeamTree
+          lead={lead}
+          team={team}
+          threads={threads}
+          agents={agents}
+          onOpenThread={onOpenThread}
+        />
+      )}
+      {centre &&
+        createPortal(
+          <div className="tt-full" role="region" aria-label="Arbre de l'équipe">
+            <header className="tt-full-h">
+              <button className="btn sm" onClick={back}>
+                <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden>
+                  <path
+                    d="M9.5 3.5 5 8l4.5 4.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+                Retour au fil
+              </button>
+              <b>{lead.title}</b>
+              <span>{summary}</span>
+            </header>
+            <TeamTree
+              lead={lead}
+              team={team}
+              threads={threads}
+              agents={agents}
+              onOpenThread={(id) => {
+                back();
+                onOpenThread(id);
+              }}
+            />
+          </div>,
+          centre,
+        )}
+      {open && !(tree && !whole) && (
         <div className="tl-body">
           <div className="tl-grid">
             {lanes.map((l) => {

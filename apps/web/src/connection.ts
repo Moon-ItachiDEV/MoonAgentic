@@ -94,6 +94,8 @@ export class Connection {
   private readonly pending = new Map<string, Pending>();
   private socket: WebSocket | null = null;
   private openThreadIds = new Set<string>();
+  /** How many parts of the page show each thread: it is left once none does. */
+  private readonly shownBy = new Map<string, number>();
   private retry = 0;
   private token = readToken();
   /** A token being renewed: reconnecting waits for it, so it does not try the old one. */
@@ -269,8 +271,20 @@ export class Connection {
   }
 
   send(message: ClientMessage): boolean {
-    if (message.type === "thread.open") this.openThreadIds.add(message.threadId);
-    if (message.type === "thread.leave") this.openThreadIds.delete(message.threadId);
+    if (message.type === "thread.open") {
+      this.shownBy.set(message.threadId, (this.shownBy.get(message.threadId) ?? 0) + 1);
+      this.openThreadIds.add(message.threadId);
+    }
+    if (message.type === "thread.leave") {
+      // Still shown elsewhere (a conversation and its team's tree): the server keeps sending.
+      const left = (this.shownBy.get(message.threadId) ?? 1) - 1;
+      if (left > 0) {
+        this.shownBy.set(message.threadId, left);
+        return true;
+      }
+      this.shownBy.delete(message.threadId);
+      this.openThreadIds.delete(message.threadId);
+    }
     if (this.socket?.readyState !== WebSocket.OPEN) {
       // Which threads are shown is told again once connected; anything else is an action
       // of the user's that did not leave, and they are told so.
