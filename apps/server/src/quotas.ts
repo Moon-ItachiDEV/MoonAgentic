@@ -35,6 +35,9 @@ const MAX_STDERR_CHARS = 4_096;
 
 class TransientError extends Error {}
 
+/** Codex answered one request with an error: the other answers still count. */
+export class CodexRequestError extends Error {}
+
 const unreadable = (
   note: string,
   extra?: { link?: string; fixed?: boolean; transient?: boolean; retryAfterMs?: number },
@@ -345,7 +348,11 @@ export function findCodex(): { command: string; args: string[] } | undefined {
   return { command: found, args: [] };
 }
 
-/** Asks `codex app-server` a few JSON-RPC questions, one JSON object per line. */
+/**
+ * Asks `codex app-server` a few JSON-RPC questions, one JSON object per line. Every request
+ * carries `params` (`{}` when there is nothing to say): `account/read` is refused without it.
+ * A request Codex refuses gets a `CodexRequestError` as its answer, so the others still count.
+ */
 export function askCodex(
   codex: { command: string; args: string[] },
   methods: string[],
@@ -430,13 +437,19 @@ export function askCodex(
         const line = buffer.slice(0, end).trim();
         buffer = buffer.slice(end + 1);
         if (!line) continue;
-        let message: { id?: unknown; result?: unknown; error?: { message?: unknown } };
+        let message: {
+          id?: unknown;
+          method?: unknown;
+          result?: unknown;
+          error?: { message?: unknown };
+        };
         try {
           message = JSON.parse(line) as typeof message;
         } catch {
           continue;
         }
-        if (typeof message.id !== "number") continue;
+        // Notifications and Codex's own requests to us carry a method: not answers.
+        if (typeof message.id !== "number" || message.method !== undefined) continue;
         // Wait for the `initialize` response before sending `initialized` and requests.
         if (message.id === 0) {
           if (initialized) continue;
@@ -447,16 +460,17 @@ export function askCodex(
           initialized = true;
           write({ method: "initialized" });
           if (left === 0) return finish();
-          methods.forEach((method, i) => write({ method, id: i + 1 }));
+          methods.forEach((method, i) => write({ method, id: i + 1, params: {} }));
           continue;
         }
         const method = methods[message.id - 1];
         if (!method || method in answers) continue;
         if (message.error) {
           const why = typeof message.error.message === "string" ? message.error.message : "";
-          return finish(new Error(why || `Codex a refusé ${method}.`));
+          answers[method] = new CodexRequestError(why || `Codex a refusé ${method}.`);
+        } else {
+          answers[method] = message.result;
         }
-        answers[method] = message.result;
         if (--left === 0) return finish();
       }
     });
@@ -484,7 +498,17 @@ export async function readCodexQuota(
       undefined,
       signal,
     );
-    return parseCodexLimits(answers["account/rateLimits/read"], answers["account/read"]);
+    const account = answers["account/read"];
+    const limits = answers["account/rateLimits/read"];
+    if (limits instanceof CodexRequestError) {
+      const acc = account instanceof CodexRequestError ? undefined : account;
+      // Not signed in, or on an API key: Codex refuses the limits, and says why in account/read.
+      const known = parseCodexLimits(undefined, acc);
+      if (known.state === "none" || (acc as { account?: unknown } | undefined)?.account === null)
+        return known;
+      return unreadable(`Codex n'a pas donné ses limites : ${limits.message.split("\n")[0]}`);
+    }
+    return parseCodexLimits(limits, account instanceof CodexRequestError ? undefined : account);
   } catch (error) {
     const why = error instanceof Error ? error.message.split("\n")[0] : String(error);
     return unreadable(`Codex n'a pas donné ses limites : ${why}`, {

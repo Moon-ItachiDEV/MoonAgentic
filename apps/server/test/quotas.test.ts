@@ -239,6 +239,14 @@ rl.on("line", (line) => {
     return;
   }
   if (m.id === undefined) return;
+  // Like the real app-server: account/read is refused without params.
+  if (m.method === "account/read" && m.params === undefined) {
+    process.stdout.write(JSON.stringify({ id: m.id, error: { code: -32600, message: "Invalid request: missing field \`params\`" } }) + "\\n");
+    return;
+  }
+  // Like the real app-server: notifications and its own requests arrive between answers.
+  process.stdout.write(JSON.stringify({ method: "configWarning", params: {} }) + "\\n");
+  process.stdout.write(JSON.stringify({ id: 1, method: "item/tool/requestUserInput", params: {} }) + "\\n");
   const result = m.method === "account/read" ? { account: { type: "chatgpt", planType: "pro" } }
     : m.method === "account/rateLimits/read" ? ${JSON.stringify(limits)}
     : null;
@@ -251,6 +259,29 @@ rl.on("line", (line) => {
     const reading = await readCodexQuota(codex);
     expect(reading.state).toBe("ok");
     expect(reading.windows.map((w) => w.usedPercent)).toEqual([18, 86]);
+  });
+
+  it("says Codex is not signed in when it refuses the limits for that reason", async () => {
+    // What the real app-server answers with no sign-in (checked against codex-cli 0.171.0).
+    const script = path.join(tmp(), "codex-signed-out.mjs");
+    writeFileSync(
+      script,
+      `import readline from "node:readline";
+readline.createInterface({ input: process.stdin }).on("line", (line) => {
+  const m = JSON.parse(line);
+  if (m.id === undefined) return;
+  const answer = m.method === "initialize" ? { id: m.id, result: {} }
+    : m.method === "account/read" ? { id: m.id, result: { account: null, requiresOpenaiAuth: true } }
+    : { id: m.id, error: { code: -32600, message: "codex account authentication required to read rate limits" } };
+  process.stdout.write(JSON.stringify(answer) + "\\n");
+});`,
+    );
+    const reading = await readCodexQuota({ command: process.execPath, args: [script] });
+    expect(reading).toMatchObject({
+      state: "unreadable",
+      note: expect.stringMatching(/codex login/),
+    });
+    expect(reading.transient).toBeUndefined();
   });
 
   it("reports initialize errors immediately, captures stderr on crash, and marks timeouts transient", async () => {
