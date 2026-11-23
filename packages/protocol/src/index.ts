@@ -3,6 +3,24 @@ import { z } from "zod";
 export type { PairedDevice, RemoteAccess, RemoteAddress } from "./remote.ts";
 export { type Notice, noticesFor, settledTags, waitingTag } from "./notices.ts";
 export { defaultTeam, pickMember, TEAM_PRESETS, type TeamPreset } from "./team-presets.ts";
+export {
+  normalPath,
+  REVIEW_SEVERITIES,
+  REVIEW_SLOTS,
+  reviewAtWork,
+  severityOf,
+  slotReviewer,
+  synthesize,
+  type PrReview,
+  type PrReviewer,
+  type PrReviewPhase,
+  type ReviewFinding,
+  type ReviewNote,
+  type ReviewPoint,
+  type ReviewSeverity,
+  type ReviewSlot,
+} from "./pr-review.ts";
+import { reviewAtWork, type PrReview } from "./pr-review.ts";
 
 // Zod builds faster checks with `new Function` when it can, and tries it as soon as a
 // schema is made. The web app's content security policy forbids that, so it is turned off
@@ -488,6 +506,8 @@ export interface Thread {
   worksIn?: string;
   /** The team this thread leads. */
   team?: Team;
+  /** The review of a pull request by several agents this thread runs, set with « /revue ». */
+  prReview?: PrReview;
   /** Set when the last turn ended with an error. */
   error?: string;
   createdAt: number;
@@ -553,10 +573,16 @@ export function threadGroup(thread: Thread, members: readonly Thread[] = []): Th
   if (
     thread.status === "running" ||
     !!thread.held ||
-    (thread.team && TEAM_AT_WORK.includes(thread.team.phase))
+    (thread.team && TEAM_AT_WORK.includes(thread.team.phase)) ||
+    reviewAtWork(thread.prReview)
   )
     return "running";
-  if (thread.status === "error" || thread.team?.phase === "failed") return "waiting";
+  if (
+    thread.status === "error" ||
+    thread.team?.phase === "failed" ||
+    thread.prReview?.phase === "failed"
+  )
+    return "waiting";
   const pr = thread.pr;
   if (pr?.state === "open" && (pr.checks === "failed" || pr.conflicts || prReady(pr)))
     return "waiting";
@@ -891,6 +917,8 @@ export interface CoordinatorSettings {
   routes: Partial<Record<RouteKind, TeamMember>>;
   /** Kept from the last team the user started by hand. */
   team?: TeamSetup;
+  /** Kept from the last « /revue » the user started: its reviewers, in order. */
+  review?: TeamMember[];
   /** Threads a coordinator runs at once, the others waiting in line; 3 when left out. */
   parallel?: number;
   /** Turns the whole server runs at once, coordinators or not; 4 when left out. */
@@ -1436,6 +1464,29 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   /** Stops the team, its lead and every coder at work. */
   z.object({ type: z.literal("team.stop"), threadId: id }),
+  /**
+   * Has a pull request of the project's GitHub repository read by several agents at once,
+   * each on its own thread, and their findings put together. `pr` is its number or address.
+   */
+  z.object({
+    type: z.literal("review.start"),
+    requestId: id,
+    projectId: id,
+    pr: z.string().trim().min(1).max(300),
+    reviewers: z
+      .array(z.object({ agentId: id, model: id.optional() }))
+      .min(1)
+      .max(3),
+  }),
+  /** Stops every reviewer still reading. */
+  z.object({ type: z.literal("review.stop"), threadId: id }),
+  /** Starts a reviewer that failed or was stopped again, in its own thread. */
+  z.object({
+    type: z.literal("review.retry"),
+    requestId: id,
+    threadId: id,
+    index: z.number().int().min(0).max(2),
+  }),
   /**
    * Starts a piece that is blocked, failed or stopped again, its tries counted from zero;
    * without a piece, the merge that stopped.

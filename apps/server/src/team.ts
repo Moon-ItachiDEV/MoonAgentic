@@ -248,13 +248,16 @@ export function readVerdict(reply: string): "ok" | "fix" | undefined {
 }
 
 /** The changes as one unified diff, cut down to what a reviewer can read at once. */
-export function diffText(changes: { files: ReviewFile[]; omitted?: number }): string {
+export function diffText(
+  changes: { files: ReviewFile[]; omitted?: number },
+  limit = DIFF_LIMIT,
+): string {
   let text = "";
   for (const file of changes.files) {
     const name = file.from ? `${file.from} → ${file.path}` : file.path;
     const head = `--- ${name} (${file.status}, +${file.added ?? "?"} -${file.removed ?? "?"})\n`;
     const body = file.patch ? file.patch.replace(/\n?$/, "\n") : "";
-    if (file.truncated || text.length + head.length + body.length > DIFF_LIMIT) {
+    if (file.truncated || text.length + head.length + body.length > limit) {
       text += `${head}(diff coupé : ouvre le fichier)\n`;
       continue;
     }

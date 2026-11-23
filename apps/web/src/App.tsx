@@ -45,6 +45,7 @@ import { TabBar } from "./components/TabBar.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { TeamDialog } from "./components/TeamDialog.tsx";
+import { ReviewDialog } from "./components/ReviewDialog.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { DecisionCard } from "./components/DecisionCard.tsx";
 import { connection, newId } from "./connection.ts";
@@ -108,6 +109,8 @@ export function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const [teamTask, setTeamTask] = useState<string | null>(null);
+  // « /revue » : the pull request typed after it, while its dialog is open.
+  const [reviewPr, setReviewPr] = useState<string | null>(null);
   // The planning of a task for later: a new one with its text, or one being changed.
   const [scheduling, setScheduling] = useState<{ text: string; schedule?: Schedule } | null>(null);
 
@@ -450,6 +453,7 @@ export function App() {
           onArchive={() => t && setArchived(t.id, true)}
           onDelete={() => t && askDeleteThread(t)}
           onTeam={(task) => setTeamTask(task)}
+          onReview={(pr) => setReviewPr(pr)}
           onLock={lockOne}
           onSchedule={(text) => setScheduling({ text })}
           onSettings={() => go({ name: "settings", section: "general" })}
@@ -1000,6 +1004,22 @@ export function App() {
             onClose={() => setTeamTask(null)}
             onStarted={(id) => {
               setTeamTask(null);
+              navigate({ name: "thread", threadId: id });
+            }}
+          />
+        )}
+      </Presence>
+      <Presence show={reviewPr !== null && !!project}>
+        {reviewPr !== null && project && (
+          <ReviewDialog
+            project={project}
+            agents={state.agents}
+            favorites={state.favorites}
+            saved={state.coordinator.review}
+            pr={reviewPr}
+            onClose={() => setReviewPr(null)}
+            onStarted={(id) => {
+              setReviewPr(null);
               navigate({ name: "thread", threadId: id });
             }}
           />

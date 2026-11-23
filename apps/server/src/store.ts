@@ -66,6 +66,7 @@ type ThreadExtra = Pick<
   | "role"
   | "worksIn"
   | "team"
+  | "prReview"
 >;
 
 const extraOf = (thread: ThreadExtra): string | null => {
@@ -92,6 +93,7 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.role ? { role: thread.role } : {}),
     ...(thread.worksIn ? { worksIn: thread.worksIn } : {}),
     ...(thread.team ? { team: thread.team } : {}),
+    ...(thread.prReview ? { prReview: thread.prReview } : {}),
   };
   return Object.keys(extra).length ? JSON.stringify(extra) : null;
 };
@@ -616,6 +618,7 @@ export class Store {
         | "unread"
         | "archived"
         | "team"
+        | "prReview"
         | "summary"
       >
     > & {

@@ -1,0 +1,384 @@
+/* « /revue » : a pull request read by several agents, and what they found put together.
+   No 1 px grey outlines: tone of surface, space and a fine shadow separate things. */
+
+.prr {
+  --prr-ok: color-mix(in srgb, var(--ok) 13%, transparent);
+  --prr-err: color-mix(in srgb, var(--err) 12%, transparent);
+  --prr-warn: color-mix(in srgb, var(--warn) 14%, transparent);
+  --prr-acc: var(--accent-soft);
+  --prr-grey: color-mix(in srgb, var(--muted) 12%, transparent);
+  margin: 4px 0 18px;
+  padding: 16px;
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow:
+    0 0 0 0.5px color-mix(in srgb, var(--fg) 6%, transparent),
+    0 1px 2px color-mix(in srgb, var(--fg) 5%, transparent);
+  display: grid;
+  gap: 12px;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.prr-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.prr-num {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0;
+  height: 22px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 7px;
+  background: var(--sunken);
+  color: var(--fg2, var(--fg));
+  text-decoration: none;
+}
+a.prr-num:hover {
+  color: var(--accent);
+}
+
+/* State pills: full radius, filled, a 6 px dot or a live glyph ahead of the words. */
+.prr-phase,
+.prr-state,
+.prr-sev {
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--prr-grey);
+  color: var(--muted);
+}
+.prr-phase > i,
+.prr-state > i,
+.prr-sev > i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.prr-phase canvas,
+.prr-state canvas {
+  flex: none;
+}
+.prr-phase.preparing,
+.prr-phase.reviewing,
+.prr-state.work {
+  background: var(--prr-acc);
+  color: var(--accent);
+}
+.prr-phase.done,
+.prr-state.ok {
+  background: var(--prr-ok);
+  color: var(--ok);
+}
+.prr-phase.failed,
+.prr-state.err,
+.prr-sev.critical {
+  background: var(--prr-err);
+  color: var(--err);
+}
+.prr-state.warn,
+.prr-sev.major {
+  background: var(--prr-warn);
+  color: var(--warn);
+}
+.prr-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.prr-err {
+  margin: 0;
+  font-size: 13px;
+  color: var(--err);
+}
+
+/* The reviewers, one line each. */
+.prr-rev {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+}
+.prr-rev > li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 40px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: var(--surface);
+}
+.prr-rev-n {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+}
+.prr-rev-n b {
+  font-weight: 500;
+}
+.prr-rev-n span {
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prr-rev-err {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--err);
+  padding-left: 30px;
+}
+.prr .btn.prr-btn {
+  height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 8px;
+  font-size: 12px;
+  background: var(--sunken);
+  color: var(--fg);
+}
+.prr .btn.prr-btn.ghost {
+  background: none;
+  color: var(--muted);
+}
+.prr .btn.prr-btn.ghost:hover {
+  color: var(--fg);
+  background: var(--hover);
+}
+.prr .btn.prr-btn.stop {
+  background: var(--prr-err);
+  color: var(--err);
+}
+.prr .btn.prr-btn.acc {
+  background: var(--prr-acc);
+  color: var(--accent);
+  height: 34px;
+  font-size: 13px;
+  white-space: normal;
+  text-align: left;
+}
+
+/* The synthesis. */
+.prr-syn {
+  display: grid;
+  gap: 8px;
+}
+.prr-syn h4 {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.prr-syn h4 span {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0;
+}
+.prr-none {
+  margin: 0;
+  font-size: 14px;
+  color: var(--ok);
+}
+.prr-pts {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+.prr-pt {
+  border-radius: 10px;
+  background: var(--surface);
+}
+.prr-pt-h {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 10px;
+}
+.prr-pt-h:hover {
+  background: var(--hover);
+}
+.prr-pt-h:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.prr-pt-t {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.prr-pt-title {
+  font-size: 14px;
+  line-height: 1.45;
+}
+.prr-at {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.prr-by {
+  display: inline-flex;
+  gap: 3px;
+  flex: none;
+  padding-top: 1px;
+}
+.prr-div {
+  display: block;
+  padding: 0 10px 8px 10px;
+  font-size: 12px;
+  color: var(--warn);
+}
+.prr-notes {
+  list-style: none;
+  margin: 0;
+  padding: 0 10px 10px;
+  display: grid;
+  gap: 8px;
+}
+.prr-notes li {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--sunken);
+  font-size: 13px;
+  display: grid;
+  gap: 2px;
+}
+.prr-notes b {
+  font-weight: 500;
+}
+.prr-notes p {
+  margin: 0;
+  color: var(--fg2, var(--fg));
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.prr-act {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.prr-act:empty {
+  display: none;
+}
+
+/* The dialog: one menu of favorite models per maker. */
+.prr-dialog .prr-slots {
+  display: grid;
+  gap: 6px;
+}
+.prr-slot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 4px 6px 4px 12px;
+  border-radius: 12px;
+  background: var(--card);
+}
+.prr-maker {
+  width: 78px;
+  flex: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.prr-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: var(--surface);
+}
+.prr-pick select {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--fg);
+  outline: none;
+}
+.prr-pick:focus-within {
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.prr-pick .ag {
+  flex: none;
+}
+.prr-all {
+  justify-self: start;
+  border: 0;
+  background: none;
+  padding: 4px 2px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+.prr-all:hover {
+  color: var(--fg);
+}
+
+@media (max-width: 520px) {
+  .prr {
+    padding: 12px;
+  }
+  .prr-rev > li {
+    min-height: 44px;
+  }
+  .prr-rev-n {
+    flex-direction: column;
+    gap: 0;
+  }
+  .prr-rev-n b,
+  .prr-rev-n span {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .prr .btn.prr-btn {
+    height: 36px;
+  }
+  .prr-maker {
+    width: 64px;
+  }
+}

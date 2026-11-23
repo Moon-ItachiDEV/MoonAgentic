@@ -118,6 +118,8 @@ export function Composer(props: {
   onDelete: () => void;
   /** Opens the team launcher on the project, with the task typed so far. */
   onTeam: (task: string) => void;
+  /** « /revue » : the pull request typed after it, if any. */
+  onReview: (pr: string) => void;
   /** /lock: locks the project with the code. */
   onLock: (project: Project) => void;
   /** Opens the planning of a task for later, with what was typed so far. */
@@ -519,6 +521,14 @@ export function Composer(props: {
           return;
         }
         props.onTeam(rest);
+        putText("", 0);
+        return;
+      case "review":
+        if (!project) {
+          connection.notify("Choisis d'abord un projet.");
+          return;
+        }
+        props.onReview(rest);
         putText("", 0);
         return;
       case "schedule":

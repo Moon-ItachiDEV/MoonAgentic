@@ -1059,3 +1059,63 @@ export async function changedPaths(dir: string, base: string): Promise<string[]>
   ]);
   return [...new Set([...changed.split("\0"), ...added.split("\0")].filter(Boolean))];
 }
+
+/** A branch name GitHub gave, kept only when git could read it as nothing else. */
+const safeBranch = (name: string) =>
+  /^[A-Za-z0-9._/-]{1,200}$/.test(name) && !name.startsWith("-") && !name.includes("..")
+    ? name
+    : undefined;
+
+/**
+ * Brings a pull request's commits into the repository, under refs no branch list shows, and
+ * says where its changes start: the merge base of its last commit with its base branch.
+ * Commits already there (a branch of this repository) need no network.
+ */
+export async function fetchPullRequest(
+  dir: string,
+  number: number,
+  head: string,
+  base: string,
+): Promise<{ head: string; mergeBase: string }> {
+  if (!/^[0-9a-f]{40,64}$/i.test(head)) throw new Error("GitHub n'a pas donné le dernier commit.");
+  const branch = safeBranch(base);
+  const remotes = (await git(dir, ["remote"])).split("\n").filter(Boolean);
+  const remote = remotes.includes("origin") ? "origin" : remotes[0];
+  const ref = `refs/moonagentic/review/${number}`;
+  const has = async (what: string) =>
+    (await gitCode(dir, ["rev-parse", "-q", "--verify", `${what}^{commit}`])).code === 0;
+  // Commits already here, a branch of this repository, need no network.
+  if (remote && !(await has(head))) {
+    const auth = await githubGitAuth().catch(() => ({ args: [] as string[], env: {} }));
+    await git(
+      dir,
+      [
+        ...auth.args,
+        "fetch",
+        "-q",
+        "--no-tags",
+        remote,
+        `+refs/pull/${number}/head:${ref}/head`,
+        ...(branch ? [`+refs/heads/${branch}:${ref}/base`] : []),
+      ],
+      auth.env,
+      NETWORK_TIMEOUT_MS,
+    ).catch(() => undefined);
+  }
+  if (!(await has(head))) {
+    throw new Error(
+      `Je n'ai pas pu récupérer le code de la PR #${number} : vérifie l'accès au dépôt sur GitHub.`,
+    );
+  }
+  const candidates = [
+    `${ref}/base`,
+    ...(branch && remote ? [`refs/remotes/${remote}/${branch}`] : []),
+    ...(branch ? [`refs/heads/${branch}`] : []),
+  ];
+  for (const candidate of candidates) {
+    if (!(await has(candidate))) continue;
+    const found = await gitCode(dir, ["merge-base", candidate, head]);
+    if (found.code === 0 && found.stdout.trim()) return { head, mergeBase: found.stdout.trim() };
+  }
+  throw new Error(`Je ne trouve pas la branche ${branch ?? "de base"} de la PR #${number}.`);
+}
