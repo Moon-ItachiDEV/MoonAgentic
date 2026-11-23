@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -45,7 +45,7 @@ async function serve() {
     rmSync(webDir, { recursive: true, force: true });
   });
   const origin = `127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { origin, connections: () => connected, renewed, asked };
+  return { origin, webDir, connections: () => connected, renewed, asked };
 }
 
 /** Opens a socket and tells whether the server let it in. */
@@ -68,6 +68,36 @@ describe("the HTTP server", () => {
     const page = await fetch(`http://${origin}/t/un-fil`);
     expect(page.status).toBe(200);
     expect(await page.text()).toContain("MoonAgentic");
+  });
+
+  it("answers a missing built file with 404, not the app's page", async () => {
+    const { origin, webDir } = await serve();
+    mkdirSync(path.join(webDir, "assets"));
+    writeFileSync(path.join(webDir, "assets", "index-nouveau.js"), "export {}");
+    const old = await fetch(`http://${origin}/assets/Planner-ancien.js`);
+    expect(old.status).toBe(404);
+    expect(old.headers.get("cache-control")).toBe("no-store");
+    const kept = await fetch(`http://${origin}/assets/index-nouveau.js`);
+    expect(kept.status).toBe(200);
+    expect(kept.headers.get("content-type")).toBe("text/javascript");
+    // Only the built files are strict: an app route still gets the page.
+    expect((await fetch(`http://${origin}/assets-du-projet`)).status).toBe(200);
+  });
+
+  it("tells which build it serves, and notices a new one", async () => {
+    const { origin, webDir } = await serve();
+    const page = (id: string) =>
+      `<head><meta name="moonagentic-build" content="${id}"><title>MoonAgentic</title></head>`;
+    const ask = async () =>
+      ((await (await fetch(`http://${origin}/api/build`)).json()) as { id: unknown }).id;
+    expect(await ask()).toBeNull();
+    const index = path.join(webDir, "index.html");
+    writeFileSync(index, page("build-1"));
+    utimesSync(index, new Date(), new Date(Date.now() + 2_000));
+    expect(await ask()).toBe("build-1");
+    writeFileSync(index, page("build-22"));
+    utimesSync(index, new Date(), new Date(Date.now() + 4_000));
+    expect(await ask()).toBe("build-22");
   });
 
   it("serves nothing from outside the web app's folder", async () => {

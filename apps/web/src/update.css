@@ -1,0 +1,38 @@
+/* The offer to reload a tab left open across an update. */
+.update-banner {
+  position: fixed;
+  left: 50%;
+  top: calc(12px + env(safe-area-inset-top));
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  padding: 10px 10px 10px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow);
+  font-size: 13.5px;
+  animation: update-in 0.3s var(--ease);
+}
+.update-banner span {
+  min-width: 0;
+}
+.update-banner .btn {
+  flex: none;
+}
+@keyframes update-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .update-banner {
+    animation: none;
+  }
+}
