@@ -46,6 +46,13 @@ export interface State {
   /** The last review fetched for each thread with its own branch. */
   reviews: Record<string, Review>;
   notice: string | null;
+  /** How the last sign-in to GitHub started from MoonAgentic ended, numbered so each is seen. */
+  githubLogin: {
+    seq: number;
+    state: "done" | "failed" | "cancelled";
+    login?: string;
+    error?: string;
+  } | null;
 }
 
 /** Applies one server message to the state; pure, so it is easy to test. */
@@ -135,6 +142,10 @@ export function reduce(state: State, message: ServerMessage): State {
       );
       return { ...state, items: { ...state.items, [message.threadId]: next } };
     }
+    case "githubLogin": {
+      const { type: _type, ...result } = message;
+      return { ...state, githubLogin: { seq: (state.githubLogin?.seq ?? 0) + 1, ...result } };
+    }
     case "error":
       return message.requestId ? state : { ...state, notice: message.message };
     case "created":
@@ -145,6 +156,8 @@ export function reduce(state: State, message: ServerMessage): State {
     case "searched":
     case "github":
     case "githubRepos":
+    case "githubDevice":
+    case "localClones":
     case "pullRequest":
     case "pong":
       return state;
@@ -175,4 +188,5 @@ export const initialState: State = {
   items: {},
   reviews: {},
   notice: null,
+  githubLogin: null,
 };

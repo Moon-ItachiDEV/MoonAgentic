@@ -1,7 +1,14 @@
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import path from "node:path";
 
-const PRIVATE_FILES = ["token", "state.sqlite", "state.sqlite-wal", "state.sqlite-shm"];
+const PRIVATE_FILES = [
+  "token",
+  "github-token",
+  "github-token.dpapi",
+  "state.sqlite",
+  "state.sqlite-wal",
+  "state.sqlite-shm",
+];
 
 /**
  * The data folder holds the access token and MCP secrets, so only its owner may read it,

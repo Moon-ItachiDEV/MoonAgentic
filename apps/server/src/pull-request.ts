@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import type { PullRequestCheck, PullRequestInfo } from "@moonagentic/protocol";
+import { githubAccount } from "./github-account.ts";
 import { findGh } from "./github.ts";
 
 const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GH_PROMPT_DISABLED: "1" };
@@ -171,7 +172,7 @@ export function ghPullRequests(run: GhRun): PullRequests {
   };
 }
 
-/** The user's `gh`, when it is installed: MoonAgentic keeps no GitHub token of its own. */
+/** The user's `gh`, when it is installed, as MoonAgentic's own GitHub account when signed in. */
 export function localPullRequests(): PullRequests | undefined {
   const gh = findGh();
   if (!gh) return undefined;
@@ -182,7 +183,7 @@ export function localPullRequests(): PullRequests | undefined {
           gh,
           args,
           {
-            env: { ...process.env, ...NO_PROMPT },
+            env: { ...process.env, ...NO_PROMPT, ...githubAccount()?.ghEnv() },
             timeout,
             maxBuffer: 16 * 1024 * 1024,
             windowsHide: true,

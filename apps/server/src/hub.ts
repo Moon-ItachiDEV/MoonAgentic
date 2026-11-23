@@ -27,7 +27,9 @@ import type {
   Workspace,
 } from "@moonagentic/protocol";
 import type { Agents } from "./agents.ts";
-import { cloneGithubRepo, githubRepos, githubStatus } from "./github.ts";
+import { cloneGithubRepo, githubRepos, githubStatus, parseGithubRepo } from "./github.ts";
+import { githubAccount, type LoginResult } from "./github-account.ts";
+import { defaultParent, findClones, usualRoots } from "./local-clones.ts";
 import {
   branchExists,
   commitAll,
@@ -412,6 +414,17 @@ export class Hub {
         return;
       }
       case "project.clone": {
+        // A project already cloned from this repository opens instead of a second copy.
+        const wanted = parseGithubRepo(message.repo);
+        const twin =
+          wanted &&
+          (await findClones([], this.store.listProjects())).find(
+            (c) => c.repo?.toLowerCase() === `${wanted.owner}/${wanted.name}`.toLowerCase(),
+          );
+        if (twin?.projectId) {
+          client.send({ type: "created", requestId: message.requestId, id: twin.projectId });
+          return;
+        }
         const { dest, name, existing } = await cloneGithubRepo(message);
         const known = existing
           ? this.store.listProjects().find((p) => {
@@ -431,6 +444,28 @@ export class Hub {
         return;
       case "github.status":
         client.send({ type: "github", requestId: message.requestId, status: await githubStatus() });
+        return;
+      case "github.login": {
+        const account = githubAccount();
+        if (!account) throw new Error("La connexion GitHub n'est pas disponible ici.");
+        const device = await account.startLogin();
+        client.send({ type: "githubDevice", requestId: message.requestId, device });
+        return;
+      }
+      case "github.loginCancel":
+        githubAccount()?.cancelLogin();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "github.logout":
+        await githubAccount()?.logout();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "local.clones":
+        client.send({
+          type: "localClones",
+          requestId: message.requestId,
+          ...(await this.localClones()),
+        });
         return;
       case "workspace.pr":
       case "workspace.mergePr":
@@ -758,6 +793,15 @@ export class Hub {
 
   createProject(name: string, rawPath: string): string {
     const resolved = path.resolve(rawPath.replace(/^~(?=$|[\\/])/, os.homedir()));
+    // A folder already in MoonAgentic opens as it is, so no project is ever there twice.
+    const known = this.store.listProjects().find((p) => {
+      try {
+        return samePath(p.path, resolved);
+      } catch {
+        return false; // a project whose folder is gone
+      }
+    });
+    if (known) return known.id;
     let isDirectory = false;
     try {
       isDirectory = statSync(resolved).isDirectory();
@@ -2278,6 +2322,26 @@ export class Hub {
   private sendToViewers(threadId: string, message: ServerMessage): void {
     for (const client of this.clients)
       if (client.openThreadIds?.has(threadId)) client.send(message);
+  }
+
+  /** Tells every client how a sign-in to GitHub started from MoonAgentic ended. */
+  githubLoginEnded(result: LoginResult): void {
+    this.broadcast({ type: "githubLogin", ...result });
+  }
+
+  /**
+   * Where new projects go, and the git folders already on this machine: the projects', those
+   * around them, and those in the home folder two levels down.
+   */
+  private async localClones() {
+    const projects = this.store.listProjects();
+    const parent = defaultParent(projects, this.homeDir);
+    const roots = [
+      { dir: parent, depth: 1 },
+      ...projects.map((p) => ({ dir: path.dirname(p.path), depth: 1 })),
+      ...usualRoots(this.homeDir),
+    ];
+    return { parent, clones: await findClones(roots, projects) };
   }
 
   private broadcast(message: ServerMessage): void {

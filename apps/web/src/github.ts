@@ -1,5 +1,21 @@
 // How GitHub is described to the user: pure, so it is easy to test.
-import type { GithubRepo, GithubStatus } from "@moonagentic/protocol";
+import type { GithubRepo, GithubStatus, GithubVault, LocalClone } from "@moonagentic/protocol";
+
+/** Where MoonAgentic keeps its own sign-in, in the user's words. */
+export function vaultText(vault: GithubVault | undefined): string {
+  switch (vault) {
+    case "windows":
+      return "La connexion est chiffrée avec ton compte Windows, sur cette machine seulement.";
+    case "macos":
+      return "La connexion est gardée dans le trousseau macOS de cette machine.";
+    case "linux":
+      return "La connexion est gardée dans le trousseau du système de cette machine.";
+    case "file":
+      return "La connexion est gardée dans un fichier que seul ton compte peut lire, sur cette machine.";
+    default:
+      return "";
+  }
+}
 
 /** What Connexions says about GitHub, and what to do next when it is not ready. */
 export function githubStatusText(status: GithubStatus): {
@@ -10,11 +26,27 @@ export function githubStatusText(status: GithubStatus): {
   if (!status.git) {
     return { tone: "err", label: "git introuvable", detail: "Installe git : https://git-scm.com" };
   }
-  if (status.login) {
+  if (status.login && status.account === "moonagentic") {
     return {
       tone: "ok",
       label: `Connecté : @${status.login}`,
+      detail:
+        `MoonAgentic clone, pousse et ouvre les pull requests avec ce compte. ${vaultText(status.vault)}`.trim(),
+    };
+  }
+  if (status.login) {
+    return {
+      tone: "ok",
+      label: `Connecté avec gh : @${status.login}`,
       detail: "git pousse et gh ouvre les pull requests avec ce compte.",
+    };
+  }
+  if (status.canSignIn) {
+    return {
+      tone: "warn",
+      label: "Pas connecté",
+      detail:
+        "Connecte-toi à GitHub pour choisir tes dépôts dans une liste et pousser tes branches.",
     };
   }
   if (status.gitAuth === "helper") {
@@ -33,6 +65,30 @@ export function githubStatusText(status: GithubStatus): {
       ? "Lance gh auth login dans un terminal sur cette machine, puis Vérifier."
       : "Installe GitHub CLI (https://cli.github.com), lance gh auth login, puis Vérifier.",
   };
+}
+
+/**
+ * What is already on the machine for a repository: the project using it first, or else a
+ * clone of it, so it is never cloned a second time.
+ */
+export function localFor(fullName: string, clones: LocalClone[]): LocalClone | undefined {
+  const name = fullName.toLowerCase();
+  const same = clones.filter((c) => c.repo?.toLowerCase() === name);
+  return same.find((c) => c.projectId) ?? same[0];
+}
+
+/** The repository typed or picked, as `owner/name`, when it is one. */
+export function repoFullName(input: string): string | undefined {
+  if (githubOwner(input)) return undefined;
+  const match = GITHUB_REPO.exec(input.trim());
+  if (!match || match[2] === "." || match[2] === "..") return undefined;
+  return `${match[1]}/${match[2]}`;
+}
+
+/** `parent` and `name` joined with the separator `parent` already uses. */
+export function joinPath(parent: string, name: string): string {
+  const sep = parent.includes("\\") && !parent.includes("/") ? "\\" : "/";
+  return parent.replace(/[\\/]+$/, "") + sep + name;
 }
 
 /**
@@ -91,14 +147,4 @@ export function canClone(repo: string, parent: string, name: string): boolean {
   const folder = name.trim();
   if (folder && (/[\\/]/.test(folder) || folder === "." || folder === "..")) return false;
   return true;
-}
-
-/** The folder holding a project's folder, written with the project's own separators. */
-export function parentFolder(projectPath: string): string {
-  const trimmed = projectPath.replace(/[\\/]+$/, "");
-  const cut = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
-  if (cut <= 0) return "";
-  const parent = trimmed.slice(0, cut);
-  // `C:` alone means the drive's current folder, not its root.
-  return /^[A-Za-z]:$/.test(parent) ? `${parent}\\` : parent;
 }

@@ -5,7 +5,9 @@ import {
   filterRepos,
   githubOwner,
   githubStatusText,
-  parentFolder,
+  joinPath,
+  localFor,
+  repoFullName,
   repoFolderName,
 } from "./github.ts";
 
@@ -13,13 +15,22 @@ const status = (extra: Partial<GithubStatus>): GithubStatus => ({
   git: true,
   gh: true,
   gitAuth: "none",
+  canSignIn: false,
   ...extra,
 });
 
 describe("githubStatusText", () => {
   it("says who is signed in", () => {
-    const text = githubStatusText(status({ login: "moon", gitAuth: "gh" }));
-    expect(text).toMatchObject({ tone: "ok", label: "Connecté : @moon" });
+    const text = githubStatusText(status({ login: "moon", gitAuth: "gh", account: "gh" }));
+    expect(text).toMatchObject({ tone: "ok", label: "Connecté avec gh : @moon" });
+    const own = githubStatusText(
+      status({ login: "moon", gitAuth: "token", account: "moonagentic", vault: "windows" }),
+    );
+    expect(own).toMatchObject({ tone: "ok", label: "Connecté : @moon" });
+    expect(own.detail).toMatch(/chiffrée avec ton compte Windows/);
+  });
+  it("offers MoonAgentic's own sign-in when it can", () => {
+    expect(githubStatusText(status({ canSignIn: true })).label).toBe("Pas connecté");
   });
   it("tells what to do next", () => {
     expect(githubStatusText(status({ git: false })).tone).toBe("err");
@@ -54,12 +65,32 @@ describe("repoFolderName", () => {
   });
 });
 
-describe("parentFolder", () => {
-  it("keeps the project's separators", () => {
-    expect(parentFolder("/home/me/code/app")).toBe("/home/me/code");
-    expect(parentFolder("C:\\Users\\me\\code\\app")).toBe("C:\\Users\\me\\code");
-    expect(parentFolder("C:\\app")).toBe("C:\\");
-    expect(parentFolder("/app")).toBe("");
+describe("localFor", () => {
+  it("prefers the project using the repository, whatever the case", () => {
+    const clones = [
+      { path: "/a/app", name: "app", repo: "Moon/App" },
+      { path: "/b/app", name: "app", repo: "moon/app", projectId: "p1" },
+      { path: "/c/site", name: "site", repo: "moon/site" },
+    ];
+    expect(localFor("moon/app", clones)?.projectId).toBe("p1");
+    expect(localFor("MOON/SITE", clones)?.path).toBe("/c/site");
+    expect(localFor("moon/other", clones)).toBeUndefined();
+  });
+});
+
+describe("repoFullName", () => {
+  it("reads a repository, never a profile", () => {
+    expect(repoFullName("https://github.com/moon/app.git")).toBe("moon/app");
+    expect(repoFullName("moon/app")).toBe("moon/app");
+    expect(repoFullName("https://github.com/moon")).toBeUndefined();
+    expect(repoFullName("app")).toBeUndefined();
+  });
+});
+
+describe("joinPath", () => {
+  it("keeps the folder's separators", () => {
+    expect(joinPath("/home/me/Projets/", "app")).toBe("/home/me/Projets/app");
+    expect(joinPath("C:\\Users\\me\\Projets", "app")).toBe("C:\\Users\\me\\Projets\\app");
   });
 });
 

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { GithubRepo, GithubStatus } from "@moonagentic/protocol";
 import { findOnPath } from "./agents.ts";
+import { githubAccount } from "./github-account.ts";
 
 /** No one can answer a password prompt from here, so git and gh fail instead of waiting. */
 const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GH_PROMPT_DISABLED: "1" };
@@ -13,7 +14,7 @@ const CLONE_TIMEOUT_MS = 15 * 60_000;
 function run(
   command: string,
   args: string[],
-  options: { cwd?: string; timeout: number },
+  options: { cwd?: string; timeout: number; env?: Record<string, string> },
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -21,7 +22,8 @@ function run(
       args,
       {
         cwd: options.cwd,
-        env: { ...process.env, ...NO_PROMPT },
+        env: { ...process.env, ...NO_PROMPT, ...options.env },
+        windowsHide: true,
         timeout: options.timeout,
         maxBuffer: 32 * 1024 * 1024,
       },
@@ -72,16 +74,47 @@ async function ghLogin(gh: string): Promise<{ login?: string; error?: string }> 
 export async function githubStatus(): Promise<GithubStatus> {
   const git = !!findOnPath("git");
   const gh = findGh();
-  const [account, helper] = await Promise.all([
+  const own = githubAccount();
+  const base = {
+    git,
+    gh: !!gh,
+    canSignIn: !!own?.canSignIn,
+    ...(own ? { vault: own.vaultKind } : {}),
+  };
+  // MoonAgentic's own sign-in comes first: it is what the user chose here.
+  let ownError: string | undefined;
+  if (own) {
+    try {
+      const account = await own.account();
+      if (account)
+        return { ...base, login: account.login, account: "moonagentic", gitAuth: "token" };
+    } catch (error) {
+      ownError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const [found, helper] = await Promise.all([
     gh ? ghLogin(gh) : Promise.resolve({} as { login?: string; error?: string }),
     git ? gitHasHelper() : Promise.resolve(false),
   ]);
+  const error = ownError ?? found.error;
   return {
-    git,
-    gh: !!gh,
-    ...account,
-    gitAuth: account.login ? "gh" : helper ? "helper" : "none",
+    ...base,
+    ...(found.login ? { login: found.login, account: "gh" as const } : {}),
+    ...(error && !found.login ? { error } : {}),
+    gitAuth: found.login ? "gh" : helper ? "helper" : "none",
   };
+}
+
+/**
+ * What one git command needs to sign in to github.com: MoonAgentic's own account when it is
+ * signed in, through the environment, or else the user's `gh` lent after git's own helpers.
+ */
+export async function githubGitAuth(): Promise<{ args: string[]; env: Record<string, string> }> {
+  const own = githubAccount();
+  await own?.currentToken();
+  const env = own?.gitEnv() ?? {};
+  if (Object.keys(env).length > 0) return { args: [], env };
+  return { args: ghCredentialArgs(), env: {} };
 }
 
 /**
@@ -123,7 +156,12 @@ export function expandHome(raw: string, home = os.homedir()): string {
  * Clones `source` into `dest`, a folder that must not exist yet or be empty, creating the
  * folders above it. `gitArgs` go before `clone`, such as the ones that lend `gh`'s sign-in.
  */
-export async function cloneInto(source: string, dest: string, gitArgs: string[] = []) {
+export async function cloneInto(
+  source: string,
+  dest: string,
+  gitArgs: string[] = [],
+  env: Record<string, string> = {},
+) {
   if (existsSync(dest)) {
     if (!statSync(dest).isDirectory() || readdirSync(dest).length > 0) {
       throw new Error(`Le dossier ${dest} existe déjà et n'est pas vide. Choisis un autre nom.`);
@@ -133,13 +171,14 @@ export async function cloneInto(source: string, dest: string, gitArgs: string[] 
   try {
     await run("git", [...gitArgs, "clone", "--quiet", "--", source, dest], {
       timeout: CLONE_TIMEOUT_MS,
+      env,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const hint = /could not read Username|Authentication failed|Repository not found|403/i.test(
       message,
     )
-      ? " Si le dépôt est privé, connecte gh (`gh auth login`) puis réessaie."
+      ? " Si le dépôt est privé, connecte-toi à GitHub depuis « Nouveau projet » puis réessaie."
       : "";
     throw new Error(`Le clonage a échoué : ${message.split("\n").at(-1)}${hint}`, {
       cause: error,
@@ -182,12 +221,15 @@ export async function cloneGithubRepo(input: {
   const dest = path.join(expandHome(input.parent), name);
   // Already cloned there: it simply becomes the project.
   if (await isCloneOf(dest, repo)) return { dest, name, existing: true };
-  await cloneInto(`https://github.com/${repo.owner}/${repo.name}.git`, dest, ghCredentialArgs());
+  const auth = await githubGitAuth();
+  await cloneInto(`https://github.com/${repo.owner}/${repo.name}.git`, dest, auth.args, auth.env);
   return { dest, name };
 }
 
-/** The repositories the signed-in `gh` account can reach, last pushed first. */
+/** The repositories the signed-in account can reach, last pushed first. */
 export async function githubRepos(): Promise<GithubRepo[]> {
+  const own = githubAccount();
+  if (own && (await own.currentToken())) return own.repos();
   const gh = findGh();
   if (!gh) throw new Error("GitHub CLI (gh) n'est pas installé sur cette machine.");
   const out = await run(

@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Item, ServerMessage, Thread } from "@moonagentic/protocol";
@@ -687,6 +688,24 @@ describe("Hub with the demo agent", () => {
   it("rejects a project folder that does not exist", () => {
     const { hub, dir } = setup();
     expect(() => hub.createProject("x", path.join(dir, "missing"))).toThrow("n'existe pas");
+  });
+
+  it("never adds the same folder twice, nor clones a repository a project already has", async () => {
+    const { hub, dir, client } = setup();
+    const first = hub.createProject("a", dir);
+    expect(hub.createProject("b", path.join(dir, "."))).toBe(first);
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/Moon/App.git"], {
+      cwd: dir,
+    });
+    await hub.handle(client, {
+      type: "project.clone",
+      requestId: "r1",
+      repo: "moon/app",
+      parent: path.join(dir, "elsewhere"),
+    });
+    expect(client.messages.at(-1)).toEqual({ type: "created", requestId: "r1", id: first });
+    expect(existsSync(path.join(dir, "elsewhere"))).toBe(false);
   });
 });
 
