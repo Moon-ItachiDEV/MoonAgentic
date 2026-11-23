@@ -45,6 +45,12 @@ export const askTimeoutFor = (type: string, usual: number = ASK_TIMEOUT_MS): num
 export const PING_MS = 20_000;
 /** A ping with no answer after this long means a dead connection: it is opened again. */
 export const PONG_TIMEOUT_MS = 8_000;
+/**
+ * Coming back to the app, the connection gets this long to answer before a new one is
+ * opened at once: iOS drops it when the screen locks, without a word, and the page must not
+ * wait the usual time to find out.
+ */
+export const WAKE_PONG_MS = 1_500;
 /** Said when something the user did could not leave. */
 export const NOT_SENT =
   "Pas de connexion : ton action n'est pas partie. Réessaie une fois reconnecté.";
@@ -189,6 +195,8 @@ export class Connection {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
   private pongTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The next try goes at once: the connection was found dead as the user came back. */
+  private hurry = false;
   /** Incremented on each open attempt so superseded async ticket fetches never open a second socket. */
   private attempt = 0;
 
@@ -272,7 +280,10 @@ export class Connection {
   wake(): void {
     if (this.state.status === "unauthorized") return;
     if (this.socket?.readyState === WebSocket.OPEN) {
-      this.ping();
+      // A ping already on its way gets the shorter wait too.
+      clearTimeout(this.pongTimer);
+      this.pongTimer = undefined;
+      this.ping(WAKE_PONG_MS, true);
     } else if (this.retryTimer !== undefined) {
       clearTimeout(this.retryTimer);
       this.retryTimer = undefined;
@@ -282,12 +293,14 @@ export class Connection {
   }
 
   /** Asks the server for a sign of life; without one in time, the connection is replaced. */
-  private ping(): void {
+  private ping(timeoutMs = PONG_TIMEOUT_MS, reopenAtOnce = false): void {
     const socket = this.socket;
     if (socket?.readyState !== WebSocket.OPEN || this.pongTimer !== undefined) return;
     socket.send(JSON.stringify({ type: "ping" }));
     this.pongTimer = setTimeout(() => {
       this.pongTimer = undefined;
+      // Back on the app: the user is looking, so the new connection does not wait either.
+      if (reopenAtOnce) this.hurry = true;
       // The browser may take minutes to notice: its close is not waited for.
       if (this.socket === socket) this.lost(socket, true);
       try {
@@ -295,7 +308,7 @@ export class Connection {
       } catch {
         // already gone
       }
-    }, PONG_TIMEOUT_MS);
+    }, timeoutMs);
   }
 
   private stopHeartbeat(): void {
@@ -566,7 +579,8 @@ export class Connection {
 
   private scheduleRetry(): void {
     clearTimeout(this.retryTimer);
-    const wait = Math.min(1000 * 2 ** this.retry, 10_000);
+    const wait = this.hurry ? 0 : Math.min(1000 * 2 ** this.retry, 10_000);
+    this.hurry = false;
     this.retry += 1;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = undefined;
