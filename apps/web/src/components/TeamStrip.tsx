@@ -236,6 +236,14 @@ export function TeamStrip({
   const tree = desktop && open && view === "tree";
   const whole = tree && (enlarged || !roomy);
   const centre = whole ? document.querySelector("main.center") : null;
+  // A member's thread opened from the tree is what the user wants to read: the strip, which
+  // stays above it, goes back to its steps instead of keeping the tree over the messages.
+  const openFromTree = (id: string) => {
+    setEnlarged(false);
+    if (id !== lead.id) setView("steps");
+    else if (!roomy) setView("steps");
+    onOpenThread(id);
+  };
   const back = () => {
     // With room in the strip the tree goes back there; without, back to the steps.
     if (roomy) setEnlarged(false);
@@ -363,7 +371,7 @@ export function TeamStrip({
           team={team}
           threads={threads}
           agents={agents}
-          onOpenThread={onOpenThread}
+          onOpenThread={openFromTree}
         />
       )}
       {centre &&
@@ -391,10 +399,7 @@ export function TeamStrip({
               team={team}
               threads={threads}
               agents={agents}
-              onOpenThread={(id) => {
-                back();
-                onOpenThread(id);
-              }}
+              onOpenThread={openFromTree}
             />
           </div>,
           centre,

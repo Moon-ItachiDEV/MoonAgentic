@@ -68,6 +68,10 @@ const RelayIcon = () => (
   </svg>
 );
 
+/** How full a context is, from 0 to 1: an agent that gives no size has an empty bar. */
+const shareOf = (usage: { used: number; size: number }) =>
+  usage.size > 0 ? Math.min(1, Math.max(0, usage.used / usage.size)) : 0;
+
 function Chip({ node }: { node: Pick<TreeNode, "tone" | "label" | "glyph"> }) {
   return (
     <span className="tt-chip" data-tone={node.tone}>
@@ -104,7 +108,7 @@ function Chip({ node }: { node: Pick<TreeNode, "tone" | "label" | "glyph"> }) {
 }
 
 const Bar = ({ usage }: { usage: NonNullable<TreeNode["usage"]> }) => {
-  const share = Math.min(1, usage.used / usage.size);
+  const share = shareOf(usage);
   return (
     <span className="tt-track">
       <i
@@ -606,7 +610,7 @@ export function TeamTree({
       onSelect={select}
     />
   );
-  const share = chosen?.usage ? Math.min(1, chosen.usage.used / chosen.usage.size) : 0;
+  const share = chosen?.usage ? shareOf(chosen.usage) : 0;
 
   return (
     <div className={`tt${chosen ? " open" : ""}`}>
