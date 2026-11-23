@@ -29,6 +29,7 @@ import type {
   PermissionMode,
   Project,
   PullRequestInfo,
+  PullRequestRemark,
   QueuedMessage,
   ReviewFile,
   ServerMessage,
@@ -46,7 +47,7 @@ import type { Agents } from "./agents.ts";
 import { cloneGithubRepo, githubRepos, githubStatus, parseGithubRepo } from "./github.ts";
 import { githubAccount, type LoginResult } from "./github-account.ts";
 import { goalContext, goalMessage, goalVerdict } from "./goal.ts";
-import { nextFix } from "./pr-watch.ts";
+import { nextFix, remarksMessage } from "./pr-watch.ts";
 import { mergePlan, noteTool } from "./plan-steps.ts";
 import { defaultParent, findClones, usualRoots } from "./local-clones.ts";
 import {
@@ -67,6 +68,7 @@ import {
   branchName,
   dropCheckpoints,
   gitCommonDir,
+  gitRootCommonDir,
   isGitRepo,
   isSameOrInside,
   pathsOverlap,
@@ -168,17 +170,8 @@ const FORCE_STOP_MS = 10_000;
 const START_TIMEOUT_MS = 120_000;
 
 const ONLY_ON_COMPUTER = "Seul l'ordinateur où tourne MoonAgentic peut faire ça.";
-/** Operations reserved to the computer running MoonAgentic, refused to paired devices. */
-const COMPUTER_ONLY_MESSAGES = new Set<ClientMessage["type"]>([
-  "lock.setPin",
-  "lock.reset",
-  "agent.addCustom",
-  "agent.removeCustom",
-  "mcp.add",
-  "mcp.setEnabled",
-  "mcp.setScope",
-  "mcp.remove",
-]);
+/** Lock code creation, change, and reset are reserved to the computer running MoonAgentic. */
+const COMPUTER_ONLY_MESSAGES = new Set<ClientMessage["type"]>(["lock.setPin", "lock.reset"]);
 
 export interface HubOptions {
   /** MoonAgentic's own private data folder (`~/.moonagentic`), refused as a project path. */
@@ -563,11 +556,11 @@ export class Hub {
     };
     this.clients.add(client);
     this.quotas.onClientConnect();
-    client.send({ type: "snapshot", snapshot: this.snapshot() });
+    client.send({ type: "snapshot", snapshot: this.snapshot(!!client.deviceId) });
     return () => this.clients.delete(client);
   }
 
-  snapshot(): Snapshot {
+  snapshot(pairedDevice = false): Snapshot {
     const mcpSecretsError = this.catalog.mcpSecretsError();
     return {
       coordinator: this.coordinators.coordinatorSettings(),
@@ -583,6 +576,7 @@ export class Hub {
       plan: this.planner.list(),
       schedules: this.scheduler.list(),
       ...(this.locks.hasPin() ? { lockPin: true } : {}),
+      ...(pairedDevice ? { pairedDevice: true } : {}),
     };
   }
 
@@ -664,31 +658,22 @@ export class Hub {
       throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
     };
     if (message.type === "mcp.add") {
-      const target = message.server.projectIds;
-      if (!target || target.some((p) => this.locks.isLocked(p))) lockedError();
+      if (message.server.projectIds?.some((p) => this.locks.isLocked(p))) lockedError();
       return false;
     }
     if (message.type === "mcp.setScope") {
       const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
       if (
-        current &&
-        (!current.projectIds || current.projectIds.some((p) => this.locks.isLocked(p)))
+        current?.projectIds?.some((p) => this.locks.isLocked(p)) ||
+        message.projectIds?.some((p) => this.locks.isLocked(p))
       ) {
-        lockedError();
-      }
-      if (!message.projectIds || message.projectIds.some((p) => this.locks.isLocked(p))) {
         lockedError();
       }
       return false;
     }
     if (message.type === "mcp.setEnabled" || message.type === "mcp.remove") {
       const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
-      if (
-        current &&
-        (!current.projectIds || current.projectIds.some((p) => this.locks.isLocked(p)))
-      ) {
-        lockedError();
-      }
+      if (current?.projectIds?.some((p) => this.locks.isLocked(p))) lockedError();
       return false;
     }
     const projects: (string | undefined)[] = [];
@@ -711,8 +696,12 @@ export class Hub {
 
   /** Every window gets the whole state again, as /lock now lets it out. */
   private sendSnapshots(): void {
-    const snapshot = this.snapshot();
-    for (const client of this.clients) client.send({ type: "snapshot", snapshot });
+    const owner = this.snapshot(false);
+    let paired: Snapshot | undefined;
+    for (const client of this.clients) {
+      const snapshot = client.deviceId ? (paired ??= { ...owner, pairedDevice: true }) : owner;
+      client.send({ type: "snapshot", snapshot });
+    }
   }
 
   async handle(client: Client, message: ClientMessage): Promise<void> {
@@ -822,6 +811,28 @@ export class Hub {
         );
         return;
       }
+      case "workspace.prRemarks": {
+        const reply = await this.pullRequestRemarks(message.threadId).then(
+          (found) => ({
+            type: "prRemarks" as const,
+            requestId: message.requestId,
+            remarks: found?.remarks ?? [],
+            ...(found ? { number: found.pr.number } : {}),
+          }),
+          (error: unknown) => ({
+            type: "prRemarks" as const,
+            requestId: message.requestId,
+            remarks: [],
+            error: describe(error),
+          }),
+        );
+        client.send(reply);
+        return;
+      }
+      case "workspace.sendRemarks":
+        await this.sendRemarks(message.threadId, message.ids);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "github.repos":
         client.send({
           type: "githubRepos",
@@ -1384,16 +1395,16 @@ export class Hub {
           "Ce dossier chevauche un projet verrouillé : saisis le code pour l'ouvrir.",
         );
       }
+      // Only compare git repositories when the locked project is the root of its own repo,
+      // not when it merely sits inside a git-tracked parent (such as a versioned home folder).
+      // The target's repository is asked once, and a folder outside git skips the rest.
       if (targetCommonDir === null) {
         targetCommonDir = existsSync(resolved) ? gitCommonDir(resolved) : undefined;
       }
-      if (targetCommonDir && existsSync(p.path)) {
-        const lockedCommonDir = gitCommonDir(p.path);
-        if (lockedCommonDir && lockedCommonDir === targetCommonDir) {
-          throw new Error(
-            "Ce dossier partage son dépôt git avec un projet verrouillé : saisis le code pour l'ouvrir.",
-          );
-        }
+      if (targetCommonDir && existsSync(p.path) && gitRootCommonDir(p.path) === targetCommonDir) {
+        throw new Error(
+          "Ce dossier partage son dépôt git avec un projet verrouillé : saisis le code pour l'ouvrir.",
+        );
       }
     }
   }
@@ -2091,7 +2102,7 @@ export class Hub {
     text: string,
     context?: string,
     byTeam?: boolean,
-    from?: "coordinator" | "goal" | "pr",
+    from?: "coordinator" | "goal" | "pr" | "remarks",
     auto?: boolean,
     /** The images joined to the message, already sent to the server. */
     attachments?: readonly string[],
@@ -2492,6 +2503,49 @@ export class Hub {
     // GitHub may answer after the hub has closed, and its store with it.
     if (on && !this.closed) await this.notePullRequest(threadId, pr);
     return pr;
+  }
+
+  /**
+   * The open review remarks of the pull request of the thread's branch. None to read: no
+   * pull request, one already merged or closed, or nothing here that can ask GitHub.
+   */
+  async pullRequestRemarks(
+    threadId: string,
+  ): Promise<{ pr: PullRequestInfo; remarks: PullRequestRemark[] } | undefined> {
+    const on = await this.branchOnGithub(threadId);
+    if (!on?.github.remarks) return undefined;
+    const pr = await on.github.find(on.repo, on.branch);
+    if (!pr || (pr.state !== "open" && pr.state !== "draft")) return undefined;
+    return { pr, remarks: await on.github.remarks(on.repo, pr.number) };
+  }
+
+  /**
+   * Sends the agent the remarks picked, read again from GitHub: their words never come from
+   * the client, and one resolved since is left out.
+   */
+  async sendRemarks(threadId: string, ids: readonly string[]): Promise<void> {
+    const thread = this.requireLiveThread(threadId);
+    if (!thread.workspace?.base) {
+      throw new Error("Seul un fil qui travaille sur sa propre branche a une pull request.");
+    }
+    if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
+    const found = await this.pullRequestRemarks(threadId);
+    if (!found) throw new Error("Cette branche n'a plus de pull request ouverte sur GitHub.");
+    const wanted = new Set(ids);
+    const picked = found.remarks.filter((r) => wanted.has(r.id));
+    if (!picked.length) {
+      throw new Error("Ces remarques ne sont plus ouvertes sur GitHub : actualise la liste.");
+    }
+    // GitHub took its time: the thread may have been locked, archived, removed or set to
+    // work since, and is looked at again before anything is sent.
+    if (this.closed) throw new Error("MoonAgentic s'arrête.");
+    if (this.lockedThread(threadId)) {
+      throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    }
+    this.requireLiveThread(threadId);
+    if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
+    const { text, context } = remarksMessage(found.pr, picked);
+    this.send(threadId, text, context, undefined, "remarks");
   }
 
   /**

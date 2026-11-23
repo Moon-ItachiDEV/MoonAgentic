@@ -17,6 +17,7 @@ import "./pairing.css";
 import "./pull-request.css";
 import "./pr-watch.css";
 import "./pr-review.css";
+import "./pr-remarks.css";
 import "./composer.css";
 import "./mascot.css";
 import "./decision.css";

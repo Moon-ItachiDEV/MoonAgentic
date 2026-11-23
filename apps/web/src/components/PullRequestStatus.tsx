@@ -10,6 +10,7 @@ import { prStates } from "../pr-states.ts";
 import { canMerge } from "../pr-board.ts";
 import { checksSummary, mergeWarning, STATE_LABEL, watchLabel } from "../pull-request.ts";
 import { IconMerge } from "./icons.tsx";
+import { PrRemarks } from "./PrRemarks.tsx";
 import { PrTimeline } from "./PrTimeline.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 
@@ -162,6 +163,8 @@ export function PullRequestStatus(props: {
   watch?: PrWatch | undefined;
   /** Turns it on or off; left out where the thread cannot (a team's, one in the project folder). */
   onWatch?: ((on: boolean) => Promise<void>) | undefined;
+  /** The thread whose agent gets the review remarks picked; left out where none can be sent. */
+  remarks?: { threadId: string; busy: boolean } | undefined;
 }) {
   const { pr } = props;
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
@@ -186,6 +189,13 @@ export function PullRequestStatus(props: {
       )}
       <PrTimeline pr={pr} />
       {live && props.onWatch && <WatchRow watch={props.watch} onWatch={props.onWatch} />}
+      {live && props.remarks && (
+        <PrRemarks
+          key={props.remarks.threadId}
+          threadId={props.remarks.threadId}
+          busy={props.remarks.busy}
+        />
+      )}
       {/* Only what can be done from here: a merge GitHub would refuse is not offered. */}
       {canMerge(pr) && (
         <button

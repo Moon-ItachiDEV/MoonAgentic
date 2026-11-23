@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import type { PullRequestCheck, PullRequestInfo } from "@moonagentic/protocol";
+import type { PullRequestCheck, PullRequestInfo, PullRequestRemark } from "@moonagentic/protocol";
 import { githubAccount } from "./github-account.ts";
 import { findGh } from "./github.ts";
 
@@ -19,6 +19,8 @@ export interface PullRequests {
   find(repo: string, ref: string): Promise<PullRequestInfo | undefined>;
   /** Merges it if its last commit is still `head`, the way the repository allows. */
   merge(repo: string, number: number, head: string): Promise<void>;
+  /** Its open review remarks: conversations not resolved, and reviews with words of their own. */
+  remarks?(repo: string, number: number): Promise<PullRequestRemark[]>;
 }
 
 /** Runs `gh` with these arguments and resolves with what it printed. */
@@ -108,6 +110,87 @@ export function parsePullRequest(json: string, repo: string): PullRequestInfo | 
   };
 }
 
+/** At most this much of one remark: a pasted log says what it needs in far less. */
+export const REMARK_MAX = 4000;
+const MAX_REPLIES = 20;
+
+/** Review conversations and reviews of one pull request, in one GraphQL request. */
+const REMARKS_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes { id isResolved path line comments(first: ${MAX_REPLIES}) { nodes { author { login } body url } } }
+      }
+      reviews(last: 50) { nodes { id state body url author { login } } }
+    }
+  }
+}`;
+
+/** A link kept only when it leads to github.com: the page shows it, the agent may read it. */
+const githubLink = (url: string) => (/^https:\/\/github\.com\/[^\s]*$/.test(url) ? url : "");
+
+const cut = (body: string) =>
+  body.length > REMARK_MAX ? `${body.slice(0, REMARK_MAX - 1)}…` : body;
+const login = (author: unknown) => (isRecord(author) ? text(author.login) : "") || "inconnu";
+const nodes = (value: unknown): unknown[] =>
+  isRecord(value) && Array.isArray(value.nodes) ? value.nodes : [];
+
+/**
+ * Reads what `gh api graphql` printed for {@link REMARKS_QUERY}: the conversations still open,
+ * oldest first, then the reviews that ask for changes or comment with words of their own.
+ */
+export function parseRemarks(json: string): PullRequestRemark[] {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  const pull =
+    isRecord(raw) && isRecord(raw.data) && isRecord(raw.data.repository)
+      ? raw.data.repository.pullRequest
+      : undefined;
+  if (!isRecord(pull)) return [];
+  const remarks: PullRequestRemark[] = [];
+  for (const thread of nodes(pull.reviewThreads)) {
+    if (!isRecord(thread) || thread.isResolved === true || !text(thread.id)) continue;
+    const comments = nodes(thread.comments).filter(isRecord);
+    const first = comments[0];
+    if (!first || !text(first.body).trim()) continue;
+    const replies = comments
+      .slice(1)
+      .filter((c) => text(c.body).trim())
+      .map((c) => `@${login(c.author)} : ${text(c.body).trim()}`);
+    const path = text(thread.path);
+    const line = typeof thread.line === "number" ? thread.line : undefined;
+    const url = githubLink(text(first.url));
+    remarks.push({
+      id: text(thread.id),
+      kind: "thread",
+      author: login(first.author),
+      ...(path ? { path } : {}),
+      ...(line ? { line } : {}),
+      body: cut([text(first.body).trim(), ...replies].join("\n\n")),
+      ...(url ? { url } : {}),
+    });
+  }
+  for (const review of nodes(pull.reviews)) {
+    if (!isRecord(review) || !text(review.id) || !text(review.body).trim()) continue;
+    const state = text(review.state);
+    if (state !== "CHANGES_REQUESTED" && state !== "COMMENTED") continue;
+    const url = githubLink(text(review.url));
+    remarks.push({
+      id: text(review.id),
+      kind: "review",
+      author: login(review.author),
+      ...(state === "CHANGES_REQUESTED" ? { changes: true as const } : {}),
+      body: cut(text(review.body).trim()),
+      ...(url ? { url } : {}),
+    });
+  }
+  return remarks;
+}
+
 /** `owner/name` and number of a pull request's address on github.com, and nothing else. */
 export function parsePullRequestUrl(url: string): { repo: string; number: number } | undefined {
   const match =
@@ -133,6 +216,30 @@ export function ghPullRequests(run: GhRun): PullRequests {
         throw new Error(ghError(error), { cause: error });
       }
       return parsePullRequest(out, repo);
+    },
+    async remarks(repo, number) {
+      const [owner, name] = repo.split("/");
+      let out: string;
+      try {
+        out = await run(
+          [
+            "api",
+            "graphql",
+            "-f",
+            `query=${REMARKS_QUERY}`,
+            "-f",
+            `owner=${owner}`,
+            "-f",
+            `name=${name}`,
+            "-F",
+            `number=${number}`,
+          ],
+          ASK_TIMEOUT_MS,
+        );
+      } catch (error) {
+        throw new Error(ghError(error), { cause: error });
+      }
+      return parseRemarks(out);
     },
     async merge(repo, number, head) {
       let allowed: Record<string, unknown> = {};

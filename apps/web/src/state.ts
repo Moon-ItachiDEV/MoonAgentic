@@ -57,6 +57,8 @@ export interface State {
   quotas: AgentQuota[];
   /** Whether a code for /lock is set on the computer. */
   lockPin: boolean;
+  /** True when connected as a paired device rather than the computer itself. */
+  pairedDevice: boolean;
   items: Record<string, Item[]>;
   /** What part of each of those timelines is held. */
   held: Record<string, Held>;
@@ -85,6 +87,7 @@ export function reduce(state: State, message: ServerMessage): State {
         ready: true,
         ...message.snapshot,
         lockPin: message.snapshot.lockPin ?? false,
+        pairedDevice: message.snapshot.pairedDevice ?? false,
         mcpSecretsError: message.snapshot.mcpSecretsError ?? null,
         items: keep(state.items),
         held: keep(state.held),
@@ -230,6 +233,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "githubDevice":
     case "localClones":
     case "pullRequest":
+    case "prRemarks":
     case "forecast":
     case "worktreeFiles":
     case "worktreeFile":
@@ -293,6 +297,7 @@ export const initialState: State = {
   schedules: [],
   quotas: [],
   lockPin: false,
+  pairedDevice: false,
   items: {},
   held: {},
   reviews: {},

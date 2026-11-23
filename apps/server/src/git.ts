@@ -186,6 +186,35 @@ export function gitCommonDir(dir: string): string | undefined {
   }
 }
 
+/**
+ * Canonical `.git` common dir of `dir` only when `dir` itself is the root of its own git
+ * work tree (`--show-toplevel` equals `dir`). Folders that merely sit inside a git-tracked
+ * parent (such as a versioned home directory) return `undefined`.
+ */
+export function gitRootCommonDir(dir: string): string | undefined {
+  try {
+    const lines = execFileSync(
+      "git",
+      [...GIT_QUIET, "rev-parse", "--show-toplevel", "--git-common-dir"],
+      {
+        cwd: dir,
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5_000,
+        windowsHide: true,
+      },
+    )
+      .toString()
+      .trim()
+      .split(/\r?\n/);
+    const [top, common] = lines;
+    if (!top || !common) return undefined;
+    if (canonicalPath(top) !== canonicalPath(dir)) return undefined;
+    return canonicalPath(path.resolve(dir, common));
+  } catch {
+    return undefined;
+  }
+}
+
 /** The worktree change running on each repository, so the next one waits for it. */
 const worktreeQueues = new Map<string, Promise<unknown>>();
 
