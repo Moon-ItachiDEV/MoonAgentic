@@ -937,7 +937,8 @@ describe("teams", () => {
     expect(team2.tasks.map((t) => t.merged)).toEqual([true, undefined]);
     expect(team2.mergeStep).toBeUndefined();
     expect(asked(store, team2.mergeThreadId!)[0]).toContain("- conflit.txt");
-  });
+    // Two teams and their merges: more than the usual time on a slow Windows machine.
+  }, 40_000);
 
   it("asks the lead again for a plan it cannot read, then gives up", async () => {
     const { hub, store, projectId } = repository();

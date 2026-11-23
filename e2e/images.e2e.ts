@@ -228,7 +228,9 @@ describe("images jointes", () => {
       .toBe(true);
     expect(await drafts(page).count()).toBe(0);
     expect(waiting()).toBe(0);
-    // The agent got both, as images.
+    // The agent got both, as images. Its turn is over first: until its last word, what it
+    // did is folded in two details, and the one opened too early would be merged away.
+    await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
     await page.locator(".team-detail-h").last().click();
     await page
       .getByText(

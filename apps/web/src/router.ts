@@ -20,9 +20,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   "remote",
 ];
 
+/** The planner's views other than its board, each at its own address. */
+export const PLANNER_VIEWS = ["timeline", "planifiees"] as const;
+export type PlannerView = (typeof PLANNER_VIEWS)[number];
+
 export type Route =
   | { name: "home" }
-  | { name: "planner" }
+  /** The planner: its board, or the view given (`/planner/planifiees`: the planned tasks). */
+  | { name: "planner"; view?: PlannerView }
   /** A project's page, with one of its threads open beside its coordinator when given. */
   | { name: "project"; projectId: string; threadId?: string }
   | { name: "thread"; threadId: string }
@@ -52,7 +57,11 @@ const parse = (pathname: string): Route => {
   } catch {
     // an address no project can have
   }
-  if (pathname === "/planner") return { name: "planner" };
+  const planner = /^\/planner(?:\/([a-z]+))?$/.exec(pathname);
+  if (planner) {
+    const view = PLANNER_VIEWS.find((v) => v === planner[1]);
+    return view ? { name: "planner", view } : { name: "planner" };
+  }
   return { name: "home" };
 };
 
@@ -63,19 +72,22 @@ window.addEventListener("popstate", () => {
   for (const l of listeners) l();
 });
 
+/** The address of a route. */
+const pathOf = (route: Route): string =>
+  route.name === "thread"
+    ? `/t/${encodeURIComponent(route.threadId)}`
+    : route.name === "project"
+      ? `/p/${encodeURIComponent(route.projectId)}${
+          route.threadId ? `/f/${encodeURIComponent(route.threadId)}` : ""
+        }`
+      : route.name === "planner"
+        ? `/planner${route.view ? `/${route.view}` : ""}`
+        : route.name === "settings"
+          ? `/reglages/${route.section}`
+          : "/";
+
 export function navigate(route: Route, options: { replace?: boolean } = {}): void {
-  const path =
-    route.name === "thread"
-      ? `/t/${encodeURIComponent(route.threadId)}`
-      : route.name === "project"
-        ? `/p/${encodeURIComponent(route.projectId)}${
-            route.threadId ? `/f/${encodeURIComponent(route.threadId)}` : ""
-          }`
-        : route.name === "planner"
-          ? "/planner"
-          : route.name === "settings"
-            ? `/reglages/${route.section}`
-            : "/";
+  const path = pathOf(route);
   if (path !== location.pathname) {
     if (options.replace) history.replaceState(null, "", path);
     else history.pushState(null, "", path);
