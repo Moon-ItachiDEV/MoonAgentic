@@ -73,6 +73,8 @@ export function ThreadView({
   const view = useRef<HTMLDivElement>(null);
   const feed = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  /** Where the view was scrolled to when last looked at: going up from there is the reader's doing. */
+  const scrolledTo = useRef(0);
   // The same function from one pass to the next, so a message already drawn is left alone
   // while another one is being written.
   const opener = useRef(openThread);
@@ -99,6 +101,7 @@ export function ThreadView({
   // Set before the effects below, so the timeline sent back on opening keeps that message.
   useLayoutEffect(() => {
     pinned.current = !hasFocus(thread.id);
+    scrolledTo.current = 0;
   }, [thread.id]);
 
   // A message picked in the quick search is shown once the timeline is here.
@@ -207,7 +210,11 @@ export function ThreadView({
       ref={view}
       onScroll={(e) => {
         const el = e.currentTarget;
-        pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        // Back near the end, the reader follows again. Only going up leaves it: an answer
+        // that grew a lot since the last look makes the page longer, not the reader gone.
+        if (el.scrollHeight - el.scrollTop - el.clientHeight < 80) pinned.current = true;
+        else if (el.scrollTop < scrolledTo.current) pinned.current = false;
+        scrolledTo.current = el.scrollTop;
       }}
     >
       <div className="feed" ref={feed}>
