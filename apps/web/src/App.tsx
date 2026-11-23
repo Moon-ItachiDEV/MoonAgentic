@@ -7,6 +7,7 @@ import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Home } from "./components/Home.tsx";
 import {
   IconCode,
+  IconClock,
   IconCheck,
   IconExpand,
   IconShield,
@@ -535,6 +536,9 @@ export function App() {
                     go({ name: "planner" });
                   }}
                   onRemoveProject={() => askRemoveProject(routeProject.id)}
+                  coordinator={coordinator}
+                  settings={state.coordinator}
+                  onOpenSettings={() => go({ name: "settings", section: "coordinator" })}
                   onStartCoordinator={
                     coordinator
                       ? undefined
@@ -550,8 +554,45 @@ export function App() {
                 />
               );
               if (!coordinator) return page(false);
+              // The thread last at work in the project, to pick up where things were left.
+              const recent = listed.threads
+                .filter((t) => t.projectId === routeProject.id && !t.archived && !t.parentId)
+                .sort((a, b) => b.updatedAt - a.updatedAt)[0];
               const chat = (
                 <ThreadView
+                  intro={
+                    <div className="pp-hello">
+                      <p>
+                        Prêt à travailler sur le projet « {routeProject.name} ». Quelques façons de
+                        démarrer :
+                      </p>
+                      <div className="pp-starts">
+                        {recent && (
+                          <button onClick={() => openThread(recent.id)}>
+                            <IconClock size={13} />
+                            Reprendre le travail récent
+                          </button>
+                        )}
+                        <button
+                          onClick={() => {
+                            pickProject(routeProject.id);
+                            go({ name: "planner" });
+                          }}
+                        >
+                          <IconBoard size={13} />
+                          Établir un plan
+                        </button>
+                        <button onClick={() => setScheduling({ text: "" })}>
+                          <IconClock size={13} />
+                          Planifier une tâche
+                        </button>
+                        <button onClick={() => setConnectionsOpen(true)}>
+                          <IconPlug size={13} />
+                          Utiliser mes outils
+                        </button>
+                      </div>
+                    </div>
+                  }
                   key={coordinator.id}
                   thread={coordinator}
                   items={state.items[coordinator.id]}

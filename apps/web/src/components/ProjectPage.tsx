@@ -1,4 +1,12 @@
-import type { AgentInfo, Project, Thread, ThreadGroup } from "@moonagentic/protocol";
+import {
+  DEFAULT_PARALLEL,
+  WORK_KINDS,
+  type AgentInfo,
+  type CoordinatorSettings,
+  type Project,
+  type Thread,
+  type ThreadGroup,
+} from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
 import { connection } from "../connection.ts";
 import { notificationsOn, projectMuted, setProjectMuted } from "../notifications.ts";
@@ -8,6 +16,7 @@ import {
   FOLDED_BY_DEFAULT,
   GROUP_LABEL,
   groupThreads,
+  KIND_LABEL,
   membersByLead,
   shortAgo,
   threadLine,
@@ -45,6 +54,10 @@ export function ProjectPage(props: {
   onRemoveProject: () => void;
   /** Beside the coordinator's conversation: the list alone, without the project's heading. */
   panel?: boolean;
+  /** The project's coordinator and what it is set to, shown under « Contexte ». */
+  coordinator?: Thread | undefined;
+  settings?: CoordinatorSettings | undefined;
+  onOpenSettings?: (() => void) | undefined;
   /** Given while the project has no coordinator yet: starts one with this agent. */
   onStartCoordinator?: ((agentId: string) => Promise<void>) | undefined;
 }) {
@@ -63,6 +76,10 @@ export function ProjectPage(props: {
     setRenaming(null);
   };
   const [folds, setFolds] = useState(readFolds);
+  /** Beside the coordinator: the threads, or what the coordinator works with. */
+  const [tab, setTab] = useState<"threads" | "context">("threads");
+  const context = !!props.panel && tab === "context" && !!props.coordinator;
+  const agentName = (id: string) => props.agents.find((a) => a.id === id)?.name ?? "Agent retiré";
   // The times on the lines move on by themselves.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -79,7 +96,26 @@ export function ProjectPage(props: {
         <div className="pp-head">
           <div>
             {renaming === null ? (
-              <h1 className="pp-title">{props.project.name}</h1>
+              props.panel && props.coordinator ? (
+                <div className="pp-ptabs" role="tablist" aria-label="Panneau du projet">
+                  <button
+                    role="tab"
+                    aria-selected={tab === "threads"}
+                    onClick={() => setTab("threads")}
+                  >
+                    Fils de discussion
+                  </button>
+                  <button
+                    role="tab"
+                    aria-selected={tab === "context"}
+                    onClick={() => setTab("context")}
+                  >
+                    Contexte
+                  </button>
+                </div>
+              ) : (
+                <h1 className="pp-title">{props.project.name}</h1>
+              )
             ) : (
               <input
                 className="pp-title pp-rename"
@@ -200,13 +236,73 @@ export function ProjectPage(props: {
             )}
           </div>
         )}
-        {props.ready && total === 0 && (
+        {context && props.coordinator && (
+          <dl className="pp-ctx">
+            <dt>Dossier</dt>
+            <dd className="mono">{props.project.path}</dd>
+            <dt>Dépôt git</dt>
+            <dd>
+              {props.project.git
+                ? "Oui : chaque fil travaille sur sa propre branche."
+                : "Non : les fils travaillent dans le dossier lui-même."}
+            </dd>
+            <dt>Coordinateur</dt>
+            <dd>
+              {agentName(props.coordinator.agentId)}
+              {props.coordinator.model ? ` · ${props.coordinator.model}` : ""}
+            </dd>
+            <dt>Accès des fils qu'il ouvre</dt>
+            <dd>
+              {props.coordinator.permissionMode === "full"
+                ? "Accès complet : ils agissent sans demander."
+                : "Supervisé : ils demandent avant de modifier ou de lancer quoi que ce soit."}
+            </dd>
+            <dt>Fils en même temps</dt>
+            <dd>{props.settings?.parallel ?? DEFAULT_PARALLEL}</dd>
+            <dt>Qui fait quoi</dt>
+            <dd>
+              {WORK_KINDS.some((k) => props.settings?.routes[k]) ? (
+                <ul className="pp-routes">
+                  {WORK_KINDS.map((kind) => {
+                    const route = props.settings?.routes[kind];
+                    return (
+                      <li key={kind}>
+                        <span>{KIND_LABEL[kind]}</span>
+                        {route
+                          ? `${agentName(route.agentId)}${route.model ? ` · ${route.model}` : ""}`
+                          : "L'agent du coordinateur"}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                "Tout va à l'agent du coordinateur."
+              )}
+            </dd>
+            <dt>Équipe</dt>
+            <dd>
+              {props.settings?.team
+                ? "Celle que tu as lancée en dernier sert de modèle."
+                : "Aucune pour l'instant : lance-en une avec /equipe, elle servira de modèle."}
+            </dd>
+            {props.onOpenSettings && (
+              <dd className="pp-ctx-go">
+                <button className="btn sm" onClick={props.onOpenSettings}>
+                  Régler le coordinateur
+                </button>
+              </dd>
+            )}
+          </dl>
+        )}
+        {!context && props.ready && total === 0 && (
           <p className="pp-empty">
-            Aucune discussion dans ce projet. Écris ci-dessous pour ouvrir la première.
+            {props.panel
+              ? "Aucun fil de discussion pour le moment. Demande une tâche et elle s'affichera ici."
+              : "Aucune discussion dans ce projet. Écris ci-dessous pour ouvrir la première."}
           </p>
         )}
         {groups.map(({ group, threads }) => {
-          if (!threads.length) return null;
+          if (context || !threads.length) return null;
           const open = folds[group] ?? !FOLDED_BY_DEFAULT.has(group);
           return (
             <section key={group} className="pp-group" data-group={group}>

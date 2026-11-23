@@ -26,7 +26,10 @@ export function ThreadView({
   agents,
   threads,
   onOpenThread,
+  intro,
 }: {
+  /** Shown above the conversation, such as a coordinator's ways to start. */
+  intro?: ReactNode;
   thread: Thread;
   items: Item[] | undefined;
   agents: AgentInfo[];
@@ -149,6 +152,7 @@ export function ThreadView({
       }}
     >
       <div className="feed">
+        {intro}
         {/* A team started before the timeline was recorded has nothing to draw. */}
         {!!strip?.team.timeline?.length && (
           <TeamStrip

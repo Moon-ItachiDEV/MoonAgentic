@@ -575,6 +575,17 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Activer le coordinateur" }).click();
     // Its conversation takes the page, the threads beside it.
     await page.locator(".pp-panel").waitFor();
+    // Before anything is asked: ways to start, and a panel that says what will come there.
+    await page.locator(".pp-hello").getByRole("button", { name: "Établir un plan" }).waitFor();
+    // What the coordinator works with, as the server has it.
+    await page.getByRole("tab", { name: "Contexte" }).click();
+    const context = page.locator(".pp-ctx");
+    await context.getByText("Tout va à l'agent du coordinateur.").waitFor();
+    expect(await context.getByText("Agent de démo").count()).toBe(1);
+    expect(await page.locator(".pp-panel .pp-row").count()).toBe(0);
+    if (shots) await page.waitForTimeout(300);
+    await shot(page, "p13-contexte");
+    await page.getByRole("tab", { name: "Fils de discussion" }).click();
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
     await composer(page).fill("/ouvre Export Safari");
     await composer(page).press("Enter");

@@ -543,3 +543,77 @@ button.opened-line:hover {
 .pp-row.unread .pp-t {
   font-weight: 600;
 }
+
+/* Above the coordinator's conversation: ways to start, each one a real action. */
+.pp-hello {
+  margin: 18px 0 22px;
+}
+.pp-hello p {
+  margin: 0 0 10px;
+}
+.pp-starts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pp-starts button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  background: var(--card);
+  font-size: 12.5px;
+}
+.pp-starts button:hover {
+  background: var(--line);
+}
+/* The panel's two views. */
+.pp-ptabs {
+  display: flex;
+  gap: 2px;
+}
+.pp-ptabs button {
+  padding: 5px 9px;
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.pp-ptabs button[aria-selected="true"] {
+  background: var(--card);
+  color: var(--fg);
+  font-weight: 500;
+}
+.pp-ctx {
+  margin: 4px 0 20px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.pp-ctx dt {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.pp-ctx dd {
+  margin: 2px 0 0;
+  overflow-wrap: anywhere;
+}
+.pp-ctx .mono {
+  font: 12px/1.5 var(--mono);
+}
+.pp-routes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pp-routes li {
+  display: flex;
+  gap: 8px;
+}
+.pp-routes span {
+  min-width: 104px;
+  color: var(--muted);
+}
+.pp-ctx-go {
+  margin-top: 16px;
+}
