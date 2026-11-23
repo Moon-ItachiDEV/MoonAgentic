@@ -1,6 +1,12 @@
 import type { PullRequestCheck, PullRequestInfo } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
-import { checksSummary, mergeBlocker, mergeWarning, pullRequestUrl } from "./pull-request.ts";
+import {
+  checksSummary,
+  mergeBlocker,
+  mergeWarning,
+  pullRequestUrl,
+  watchLabel,
+} from "./pull-request.ts";
 
 const check = (name: string, state: PullRequestCheck["state"]): PullRequestCheck => ({
   name,
@@ -67,5 +73,19 @@ describe("a pull request, as told to the user", () => {
     expect(mergeWarning(pr({ checks: [check("Tests", "failed")] }))).toContain("CI est rouge");
     expect(mergeWarning(pr({ checks: [check("Tests", "pending")] }))).toContain("tourne encore");
     expect(mergeWarning(pr({ blocked: true }))).toContain("règles du dépôt");
+  });
+});
+
+describe("« Corriger tout seul »", () => {
+  it("says what it does while off, then where it stands", () => {
+    expect(watchLabel(undefined, 3)).toContain("3 fois au plus");
+    expect(watchLabel({ tries: 0, max: 3 }, 3)).toMatch(/^Surveillée/);
+    expect(watchLabel({ tries: 1, max: 3, last: "ci" }, 3)).toBe(
+      "1 correction sur 3 (dernière : CI).",
+    );
+    expect(watchLabel({ tries: 2, max: 3, last: "conflict" }, 3)).toBe(
+      "2 corrections sur 3 (dernière : conflits).",
+    );
+    expect(watchLabel({ tries: 3, max: 3, exhausted: true }, 3)).toContain("la suite est à toi");
   });
 });

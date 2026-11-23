@@ -33,6 +33,8 @@ export interface AgentInfo {
   modelsError?: string;
   /** Other settings the agent offers, such as its mode (plan, agent…) or reasoning effort. */
   settings?: AgentSetting[];
+  /** Settings observed for specific models, when choices (such as reasoning effort) vary by model. */
+  modelSettings?: Record<string, AgentSetting[]>;
   /** The `/` commands the agent listed the last time one of its sessions started. */
   commands?: AgentCommand[];
   /** The program that starts it, once found on this machine. */
@@ -133,6 +135,18 @@ export interface AgentSetting {
   choices: ModelChoice[];
   /** What the agent picks on its own for a new session. */
   current: string;
+}
+
+/** Settings the agent offers for `model`, falling back to its general settings when unobserved. */
+export function agentSettingsFor(
+  agent: Pick<AgentInfo, "settings" | "modelSettings"> | undefined,
+  model: string | undefined,
+): AgentSetting[] {
+  if (!agent) return [];
+  if (model && agent.modelSettings && Object.hasOwn(agent.modelSettings, model)) {
+    return agent.modelSettings[model]!;
+  }
+  return agent.settings ?? [];
 }
 
 /** How much of the agent's context window the conversation fills, as the agent reports it. */
@@ -345,6 +359,28 @@ export type GoalState = "active" | "paused" | "reached" | "blocked" | "exhausted
  * What the user asked a thread's agent to reach, over as many turns as it takes, up to a
  * number the server keeps. The agent says when it is reached, or blocked.
  */
+/** How many times MoonAgentic sends the agent to fix its pull request by itself, at most. */
+export const PR_WATCH_TRIES = 3;
+
+/**
+ * « Corriger tout seul », on a thread whose branch has a pull request: when its checks fail
+ * or it conflicts with its base, the agent is told, fixes it, and MoonAgentic pushes the fix.
+ * At most `max` times, then it is the user's again. Present while it is on.
+ */
+export interface PrWatch {
+  /** Fixes asked for so far. */
+  tries: number;
+  max: number;
+  /** What was last acted on, such as `ci:<commit>`: never twice for the same. */
+  handled?: string;
+  /** What the last fix was for. */
+  last?: "ci" | "conflict";
+  /** True once `max` fixes did not make it pass: nothing more is tried. */
+  exhausted?: true;
+  /** Why the last fix could not be pushed, when it could not. */
+  error?: string;
+}
+
 export interface ThreadGoal {
   text: string;
   state: GoalState;
@@ -442,6 +478,8 @@ export interface Thread {
   queue?: QueuedMessage[];
   /** What the agent works toward turn after turn, set with « /goal ». */
   goal?: ThreadGoal;
+  /** Watches its pull request and has the agent fix it; see `PrWatch`. */
+  prWatch?: PrWatch;
   /** The team lead's thread, for a coder's thread. */
   parentId?: string;
   /** The thread's part in a team. */
@@ -645,9 +683,9 @@ export type Item =
       byTeam?: true;
       /**
        * Not typed by the user: written by the project's coordinator, an agent, or sent by
-       * the server to take the thread's goal one turn further.
+       * the server to take the thread's goal one turn further, or to fix its pull request.
        */
-      from?: "coordinator" | "goal";
+      from?: "coordinator" | "goal" | "pr";
       /** The thread's files just before this message, for threads with their own branch. */
       checkpoint?: string;
       at: number;
@@ -1351,6 +1389,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
     threadId: id,
     text: messageText.refine((t) => t.trim().length > 0),
     maxTurns: z.number().int().min(1).max(MAX_GOAL_TURNS).optional(),
+  }),
+  /** Turns « Corriger tout seul » on or off for the thread's pull request; see `PrWatch`. */
+  z.object({
+    type: z.literal("thread.watchPr"),
+    requestId: id,
+    threadId: id,
+    on: z.boolean(),
   }),
   /** Pauses the goal, takes it up again, or drops it. */
   z.object({

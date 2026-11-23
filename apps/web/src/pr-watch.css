@@ -1,0 +1,29 @@
+/* « Corriger tout seul » in the pull request box: what it does, and its switch. */
+.rv-prs-w {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid transparent;
+}
+.rv-prs-wt {
+  display: grid;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.rv-prs-wt b {
+  font-weight: 500;
+}
+.rv-prs-wt span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.rv-prs-wt .err {
+  color: var(--err);
+}
+.rv-prs-w .set-sw {
+  flex: none;
+}

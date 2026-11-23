@@ -12,6 +12,7 @@ import {
   GOAL_MORE_TURNS,
   GOAL_TURNS,
   MAX_QUEUED_MESSAGES,
+  PR_WATCH_TRIES,
   threadPullRequest,
 } from "@moonagentic/protocol";
 import type {
@@ -45,6 +46,7 @@ import type { Agents } from "./agents.ts";
 import { cloneGithubRepo, githubRepos, githubStatus, parseGithubRepo } from "./github.ts";
 import { githubAccount, type LoginResult } from "./github-account.ts";
 import { goalContext, goalMessage, goalVerdict } from "./goal.ts";
+import { nextFix } from "./pr-watch.ts";
 import { mergePlan, noteTool } from "./plan-steps.ts";
 import { defaultParent, findClones, usualRoots } from "./local-clones.ts";
 import {
@@ -293,6 +295,8 @@ export class Hub {
    */
   /** What the user said with a refusal, by thread: their next message, once the turn is over. */
   private readonly followUps = new Map<string, string>();
+  /** Threads whose turn fixes their pull request: their branch is pushed once it ends. */
+  private readonly prFixing = new Set<string>();
   private readonly pendingForms = new Map<
     string,
     { form: FormQuestions; answer: (r: acp.CreateElicitationResponse) => void }
@@ -816,6 +820,10 @@ export class Hub {
         return;
       case "thread.goal":
         this.setGoal(message.threadId, message.text, message.maxTurns);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "thread.watchPr":
+        this.watchPr(message.threadId, message.on);
         client.send({ type: "done", requestId: message.requestId });
         return;
       case "thread.goalControl":
@@ -1542,6 +1550,80 @@ export class Hub {
   }
 
   /**
+   * « Corriger tout seul »: from now on, a pull request of the thread's branch that fails its
+   * checks or conflicts with its base sends the agent to fix it, a few times at most.
+   */
+  watchPr(threadId: string, on: boolean): void {
+    const thread = this.requireLiveThread(threadId);
+    if (!on) {
+      // A fix under way is no longer pushed when its turn ends.
+      this.prFixing.delete(threadId);
+      this.updateThread(threadId, { prWatch: null });
+      return;
+    }
+    if (!thread.workspace?.base || thread.team || thread.role || thread.parentId) {
+      throw new Error("Seul un fil qui travaille sur sa propre branche peut corriger sa PR.");
+    }
+    // Turned on again, it counts afresh, and may take up what it had given up on.
+    this.updateThread(threadId, { prWatch: { tries: 0, max: PR_WATCH_TRIES } });
+    if (this.closed) return;
+    const asked = this.pullRequest(threadId).catch(() => undefined);
+    this.steps.add(asked);
+    void asked.finally(() => this.steps.delete(asked));
+  }
+
+  /** Sends the agent to fix the pull request, when the watch calls for it and it is free. */
+  private watchTick(threadId: string, info: PullRequestInfo): void {
+    const thread = this.store.getThread(threadId);
+    const watch = thread?.prWatch;
+    if (!thread || !watch || thread.archived || this.closed) return;
+    if (this.turns.has(threadId) || this.busy.has(threadId)) return;
+    const next = nextFix(watch, info);
+    if (!next) return;
+    if ("exhausted" in next) {
+      this.updateThread(threadId, {
+        prWatch: { ...watch, handled: next.exhausted.key, exhausted: true },
+      });
+      return;
+    }
+    const fix = next.send;
+    this.prFixing.add(threadId);
+    try {
+      this.send(threadId, fix.text, fix.context, undefined, "pr");
+    } catch (error) {
+      // Busy for a moment: the next look at the pull request tries again.
+      this.prFixing.delete(threadId);
+      console.error("Correction de la PR :", error);
+      return;
+    }
+    const { error: _error, ...kept } = watch;
+    this.updateThread(threadId, {
+      prWatch: { ...kept, tries: watch.tries + 1, handled: fix.key, last: fix.kind },
+    });
+  }
+
+  /** Pushes what the agent did to fix its pull request, then lets the thread go on. */
+  private async pushFix(threadId: string): Promise<void> {
+    const watch = this.store.getThread(threadId)?.prWatch;
+    // Turned off while the agent worked: what it did stays on the thread's branch, unpushed.
+    if (watch) {
+      try {
+        await this.ship(
+          threadId,
+          watch.last === "conflict"
+            ? "Fusion de la branche de base et résolution des conflits"
+            : "Correction de la CI",
+          false,
+        );
+      } catch (error) {
+        const now = this.store.getThread(threadId)?.prWatch;
+        if (now) this.updateThread(threadId, { prWatch: { ...now, error: describe(error) } });
+      }
+    }
+    this.goOn(threadId, false, false, false);
+  }
+
+  /**
    * Gives the thread a goal, in place of the one it had: its agent works toward it turn after
    * turn. It starts at once on a free thread, else when the turn under way ends.
    */
@@ -1705,7 +1787,7 @@ export class Hub {
     text: string,
     context?: string,
     byTeam?: boolean,
-    from?: "coordinator" | "goal",
+    from?: "coordinator" | "goal" | "pr",
     auto?: boolean,
     /** The images joined to the message, already sent to the server. */
     attachments?: readonly string[],
@@ -1786,21 +1868,37 @@ export class Hub {
       // Unless they stopped it for a message that waits to go now.
       const failed = this.store.getThread(threadId)?.status === "error";
       const atOnce = this.sendAfterStop.delete(threadId);
-      // The goal learns what this turn said; it goes on after the messages that wait.
-      if (!this.closed) this.settleGoal(threadId, cancelled && !atOnce, failed);
-      if (
-        !this.closed &&
-        (atOnce || !cancelled) &&
-        this.sendNextQueued(threadId, failed && !atOnce)
-      )
+      // A fix of the pull request whose words after a refusal go on in a new turn is pushed
+      // when that one ends.
+      if (this.prFixing.has(threadId) && this.turns.has(threadId)) return;
+      const fixing = this.prFixing.delete(threadId);
+      // The goal learns what this turn said, unless the turn was the pull request's fix;
+      // it goes on after the messages that wait.
+      if (!this.closed && !fixing) this.settleGoal(threadId, cancelled && !atOnce, failed);
+      // A fix of the pull request is pushed before anything else goes on.
+      if (fixing && !this.closed && !cancelled && !failed) {
+        const pushed = this.pushFix(threadId);
+        this.steps.add(pushed);
+        void pushed.finally(() => this.steps.delete(pushed));
         return;
-      if (!this.closed && this.continueGoal(threadId)) return;
-      // A place is free: the next thread in line behind the same coordinator starts.
-      const openedBy = this.closed ? undefined : this.store.getThread(threadId)?.openedBy;
-      if (openedBy) this.coordinators.drainLine(openedBy);
-      if (openedBy && !cancelled) void this.reportResult(threadId);
+      }
+      this.goOn(threadId, cancelled, failed, atOnce);
     });
     this.turns.set(threadId, turn);
+  }
+
+  /**
+   * What follows a turn: the messages that wait, else the goal's next turn, else the next
+   * thread in line behind the same coordinator, which also hears what this one did.
+   */
+  private goOn(threadId: string, cancelled: boolean, failed: boolean, atOnce: boolean): void {
+    if (this.closed || this.turns.has(threadId)) return;
+    if ((atOnce || !cancelled) && this.sendNextQueued(threadId, failed && !atOnce)) return;
+    if (this.continueGoal(threadId)) return;
+    // A place is free: the next thread in line behind the same coordinator starts.
+    const openedBy = this.store.getThread(threadId)?.openedBy;
+    if (openedBy) this.coordinators.drainLine(openedBy);
+    if (openedBy && !cancelled) void this.reportResult(threadId);
   }
 
   /**
@@ -1950,7 +2048,7 @@ export class Hub {
       throw new Error("Attends la fin de la réponse pour changer ce réglage.");
     await this.exclusive(threadId, "Attends la fin du changement de réglage.", async () => {
       let session = await this.pool.get(threadId)?.catch(() => undefined);
-      const offered = session?.settings ?? this.store.getAgentModels(thread.agentId)?.settings;
+      const offered = session?.settings ?? this.catalog.settingsFor(thread.agentId, thread.model);
       const setting = offered?.find((s) => s.id === settingId);
       if (!setting?.choices.some((c) => c.id === value)) throw new Error("Réglage inconnu.");
       if (session) {
@@ -2080,7 +2178,8 @@ export class Hub {
   async pullRequest(threadId: string): Promise<PullRequestInfo | undefined> {
     const on = await this.branchOnGithub(threadId);
     const pr = await on?.github.find(on.repo, on.branch);
-    if (on) await this.notePullRequest(threadId, pr);
+    // GitHub may answer after the hub has closed, and its store with it.
+    if (on && !this.closed) await this.notePullRequest(threadId, pr);
     return pr;
   }
 
@@ -2091,6 +2190,7 @@ export class Hub {
   private async notePullRequest(threadId: string, info: PullRequestInfo | undefined) {
     const thread = this.store.getThread(threadId);
     if (!thread) return;
+    if (info) this.watchTick(threadId, info);
     const pr = info && threadPullRequest(info);
     // A team's pull request is its merge thread's, or its only coder's: the lead shows it,
     // and is the one resolved, which puts the whole team away.
@@ -2980,6 +3080,7 @@ export class Hub {
           (session.fresh ? this.catalog.defaultModel(thread.agentId) : undefined);
         if (wanted && wanted !== model.current && model.choices.some((c) => c.id === wanted)) {
           await session.setModel(wanted);
+          this.catalog.learn(thread.agentId, session.model, session.settings, false);
         }
         this.updateThread(thread.id, { model: session.model?.current ?? model.current });
       }

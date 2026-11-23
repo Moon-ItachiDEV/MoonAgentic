@@ -521,6 +521,39 @@ export function prTitle(text: string, max = 100): string {
  * Commits what changed (only `files` when given, as the review names them), pushes the
  * branch, and opens a pull request when asked.
  */
+/**
+ * Why the work tree cannot be committed as it is: a merge, rebase, cherry-pick or revert left
+ * half done, or files still in conflict. `git add -A` would mark them resolved, conflict
+ * markers and all.
+ */
+export async function unfinishedWork(dir: string): Promise<string | undefined> {
+  const conflicted = (await git(dir, ["ls-files", "-u", "-z"]))
+    .split("\0")
+    .filter(Boolean)
+    .map((line) => line.slice(line.indexOf("\t") + 1));
+  if (conflicted.length) {
+    const names = [...new Set(conflicted)];
+    return (
+      `Des fichiers sont encore en conflit (${names.slice(0, 3).join(", ")}` +
+      `${names.length > 3 ? "…" : ""}) : résous-les et termine la fusion avant d'envoyer.`
+    );
+  }
+  for (const [ref, what] of [
+    ["MERGE_HEAD", "Une fusion n'est pas terminée"],
+    ["REBASE_HEAD", "Un rebase n'est pas terminé"],
+    ["rebase-merge", "Un rebase n'est pas terminé"],
+    ["rebase-apply", "Un rebase n'est pas terminé"],
+    ["CHERRY_PICK_HEAD", "Un cherry-pick n'est pas terminé"],
+    ["REVERT_HEAD", "Un revert n'est pas terminé"],
+  ] as const) {
+    const at = (await git(dir, ["rev-parse", "--git-path", ref])).trim();
+    if (existsSync(path.resolve(dir, at))) {
+      return `${what} dans la copie de travail : mène l'opération à son terme ou annule-la avant d'envoyer.`;
+    }
+  }
+  return undefined;
+}
+
 export async function ship(
   dir: string,
   options: {
@@ -542,6 +575,8 @@ export async function ship(
         " Reviens sur la branche du fil avant d'envoyer.",
     );
   }
+  const unfinished = await unfinishedWork(dir);
+  if (unfinished) throw new Error(unfinished);
   let commit: string | undefined;
   if (options.files) {
     commit = await commitOnly(dir, options.files, options.message);
