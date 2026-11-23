@@ -121,6 +121,25 @@ describe("artifacts", { timeout: 40_000 }, () => {
     expect((await findArtifacts(store.listThreads())).artifacts).toEqual([]);
   });
 
+  it("serves nothing of a locked project, even from an address given before", async () => {
+    const { hub, dir, threadId, projectId } = await threadFolder();
+    makeFiles(dir);
+    const { ticket } = hub.artifactLinks.issue(threadId);
+    expect(await hub.artifactLinks.resolve(ticket, "docs/maquette.html")).toBeDefined();
+    hub.locks.setPin("123456");
+    hub.locks.lock(projectId);
+    expect(await hub.artifactLinks.resolve(ticket, "docs/maquette.html")).toBeUndefined();
+    // Not even looked for: they never take room from an open project's under the cap.
+    const replies: ServerMessage[] = [];
+    const raw = { send: (m: ServerMessage) => void replies.push(m) };
+    await hub.handle(raw, { type: "artifacts.list", requestId: "a1" });
+    expect(replies.at(-1)).toMatchObject({ type: "artifacts", artifacts: [] });
+    hub.locks.unlock(projectId, "123456");
+    expect(await hub.artifactLinks.resolve(ticket, "docs/maquette.html")).toBeDefined();
+    await hub.handle(raw, { type: "artifacts.list", requestId: "a2" });
+    expect((replies.at(-1) as { artifacts: unknown[] }).artifacts.length).toBeGreaterThan(0);
+  });
+
   it.skipIf(process.platform === "win32")(
     "leaves out a folder whose name looks like a page, and serves nothing from it",
     async () => {

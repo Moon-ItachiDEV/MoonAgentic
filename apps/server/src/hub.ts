@@ -1,5 +1,6 @@
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
+import { ProjectLocks } from "./locks.ts";
 import { Push, type PushSend } from "./push.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
@@ -303,10 +304,17 @@ export class Hub {
   readonly attachments: Attachments;
   /** The notifications sent to phones while MoonAgentic is closed. */
   readonly push: Push;
+  /** The projects locked with /lock, and the code that opens them. */
+  readonly locks: ProjectLocks;
+  /** The project of each thread looked at while some are locked: a thread never moves. */
+  private readonly threadProjects = new Map<string, string>();
   /** The addresses artifacts are shown from, each for one thread's folder. */
   readonly artifactLinks = new ArtifactLinks((id) => {
     const thread = this.store.getThread(id);
-    return thread && !thread.archived ? thread.workspace : undefined;
+    // A locked project's files are not shown either, even from an address given before.
+    return thread && !thread.archived && !this.locks.isLocked(thread.projectId)
+      ? thread.workspace
+      : undefined;
   });
   /**
    * Threads busy with their branch or their agent (a push, a step back, a hand-off), with
@@ -349,6 +357,7 @@ export class Hub {
 
   constructor(store: Store, agents: Agents, options: HubOptions) {
     this.store = store;
+    this.locks = new ProjectLocks(store);
     this.agents = agents;
     this.worktreesDir = options.worktreesDir;
     this.attachments = new Attachments(
@@ -377,6 +386,8 @@ export class Hub {
     this.push = new Push(store, {
       ...(options.pushSend ? { send: options.pushSend } : {}),
       onError: (error) => console.error("Notifications push :", error),
+      // A locked project's thread titles stay on this computer.
+      quiet: (projectId) => this.locks.isLocked(projectId),
     });
     this.push.know(store.listThreads());
     this.planner = new Planner(store, (m) => this.broadcast(m));
@@ -503,6 +514,12 @@ export class Hub {
   readonly recovered: Promise<void>;
 
   connect(client: Client): () => void {
+    // Everything sent to it goes through what /lock lets out, replies as much as news.
+    const send = client.send.bind(client);
+    client.send = (message) => {
+      const shown = this.shown(message);
+      if (shown) send(shown);
+    };
     this.clients.add(client);
     this.quotas.onClientConnect();
     client.send({ type: "snapshot", snapshot: this.snapshot() });
@@ -524,10 +541,112 @@ export class Hub {
       quotas: this.quotas.list(),
       plan: this.planner.list(),
       schedules: this.scheduler.list(),
+      ...(this.locks.hasPin() ? { lockPin: true } : {}),
     };
   }
 
+  private projectOfThread(threadId: string): string | undefined {
+    let projectId = this.threadProjects.get(threadId);
+    if (projectId === undefined) {
+      projectId = this.store.getThread(threadId)?.projectId;
+      if (projectId) this.threadProjects.set(threadId, projectId);
+    }
+    return projectId;
+  }
+
+  /** Whether the thread is of a locked project: its images are not sent either. */
+  lockedThread(threadId: string): boolean {
+    return this.locks.isLocked(this.projectOfThread(threadId));
+  }
+
+  /**
+   * What a window may see of a message while projects are locked: nothing of a locked
+   * project's threads, timelines, requests, cards, plans, files or search hits. Null when
+   * nothing of it is left.
+   */
+  private shown(message: ServerMessage): ServerMessage | null {
+    if (!this.locks.any()) return message;
+    const locked = (projectId: string) => this.locks.isLocked(projectId);
+    const free = (threadId: string) => !this.lockedThread(threadId);
+    switch (message.type) {
+      case "snapshot": {
+        const s = message.snapshot;
+        return {
+          ...message,
+          snapshot: {
+            ...s,
+            threads: s.threads.filter((t) => !locked(t.projectId)),
+            requests: s.requests.filter((r) => free(r.threadId)),
+            questions: s.questions.filter((q) => free(q.threadId)),
+            plan: s.plan.filter((c) => !locked(c.projectId)),
+            schedules: s.schedules.filter((p) => !locked(p.projectId)),
+          },
+        };
+      }
+      case "thread":
+        return locked(message.thread.projectId) ? null : message;
+      case "requests":
+        return { ...message, requests: message.requests.filter((r) => free(r.threadId)) };
+      case "questions":
+        return { ...message, questions: message.questions.filter((q) => free(q.threadId)) };
+      case "planTask":
+        return locked(message.task.projectId) ? null : message;
+      case "schedule":
+        return locked(message.schedule.projectId) ? null : message;
+      case "artifacts":
+        return { ...message, artifacts: message.artifacts.filter((a) => !locked(a.projectId)) };
+      case "searched":
+        return { ...message, hits: message.hits.filter((h) => free(h.threadId)) };
+      case "projectBranches":
+      case "branchesDeleted":
+        return locked(message.projectId) ? null : message;
+      default:
+        // Whatever names a thread: its timeline, its review, its files, its pull request.
+        return "threadId" in message && typeof message.threadId === "string"
+          ? free(message.threadId)
+            ? message
+            : null
+          : message;
+    }
+  }
+
+  /**
+   * Refuses whatever touches a locked project, but the code that opens it. True when the
+   * message is to be left without a word: a window opening again, after a reconnection, a
+   * thread it showed before the lock.
+   */
+  private refuseLocked(message: ClientMessage): boolean {
+    if (!this.locks.any() || message.type.startsWith("lock.")) return false;
+    if (message.type === "ping" || message.type === "thread.leave") return false;
+    if (message.type === "thread.open") return this.lockedThread(message.threadId);
+    const projects: (string | undefined)[] = [];
+    if ("projectId" in message && typeof message.projectId === "string") {
+      projects.push(message.projectId);
+    }
+    if ("threadId" in message && typeof message.threadId === "string") {
+      projects.push(this.projectOfThread(message.threadId));
+    }
+    if ("id" in message && typeof message.id === "string") {
+      if (message.type.startsWith("plan.")) {
+        projects.push(this.store.getPlanTask(message.id)?.projectId);
+      } else if (message.type.startsWith("schedule.")) {
+        projects.push(this.store.getSchedule(message.id)?.projectId);
+      }
+    }
+    if (projects.some((p) => this.locks.isLocked(p))) {
+      throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    }
+    return false;
+  }
+
+  /** Every window gets the whole state again, as /lock now lets it out. */
+  private sendSnapshots(): void {
+    const snapshot = this.snapshot();
+    for (const client of this.clients) client.send({ type: "snapshot", snapshot });
+  }
+
   async handle(client: Client, message: ClientMessage): Promise<void> {
+    if (this.refuseLocked(message)) return;
     switch (message.type) {
       case "ping":
         client.send({ type: "pong" });
@@ -768,6 +887,22 @@ export class Hub {
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
+      case "lock.setPin":
+        this.locks.setPin(message.pin, message.current);
+        this.sendSnapshots();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "lock.project":
+        if (!this.store.getProject(message.projectId)) throw new Error("Projet introuvable.");
+        this.locks.lock(message.projectId);
+        this.sendSnapshots();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "lock.unlock":
+        this.locks.unlock(message.projectId, message.pin);
+        this.sendSnapshots();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "push.state":
         client.send({
           type: "pushState",
@@ -788,7 +923,10 @@ export class Hub {
         client.send({
           type: "artifacts",
           requestId: message.requestId,
-          ...(await findArtifacts(this.store.listThreads())),
+          // A locked project's folders are not even looked at, nor counted in the cap.
+          ...(await findArtifacts(
+            this.store.listThreads().filter((t) => !this.locks.isLocked(t.projectId)),
+          )),
         });
         return;
       case "artifacts.open": {
@@ -973,8 +1111,9 @@ export class Hub {
         client.send({
           type: "activity",
           requestId: message.requestId,
-          days: this.store.activityDays(since, offsetMs),
-          firstAt: this.store.firstThreadAt(),
+          // Not even how much a locked project's threads were written in.
+          days: this.store.activityDays(since, offsetMs, this.locks.lockedProjects()),
+          firstAt: this.store.firstThreadAt(this.locks.lockedProjects()),
         });
         return;
       }
@@ -2261,6 +2400,7 @@ export class Hub {
       this.store.deleteProject(projectId);
       this.catalog.projectRemoved(projectId);
       this.gitProjects.delete(projectId);
+      this.locks.forget(projectId);
       this.broadcast({ type: "projectRemoved", projectId });
     })();
     this.steps.add(step);
@@ -2767,8 +2907,14 @@ export class Hub {
       this.gitProjects.set(project.id, git);
     }
     const pinned = this.store.getSetting<string[]>(PINNED_PROJECTS, []).includes(project.id);
-    return git || pinned
-      ? { ...project, ...(git ? { git } : {}), ...(pinned ? { pinned } : {}) }
+    const locked = this.locks.isLocked(project.id);
+    return git || pinned || locked
+      ? {
+          ...project,
+          ...(git ? { git } : {}),
+          ...(pinned ? { pinned } : {}),
+          ...(locked ? { locked } : {}),
+        }
       : project;
   }
 

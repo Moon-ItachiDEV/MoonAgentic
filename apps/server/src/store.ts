@@ -834,23 +834,33 @@ export class Store {
    * are left out, as in search.
    */
   /** Messages per day since `since`, read from `items_activity_at` (its conditions, word for word). */
-  activityDays(since: number, offsetMs: number): ActivityDay[] {
+  /** The threads of the projects in `hidden` (locked ones) are left out. */
+  activityDays(since: number, offsetMs: number, hidden: string[] = []): ActivityDay[] {
     const rows = this.sql(
       `SELECT CAST((json_extract(data, '$.at') - ?) / 86400000 AS INTEGER) AS day, COUNT(*) AS count
          FROM items
          WHERE json_extract(data, '$.kind') IN ('user', 'agent')
            AND json_extract(data, '$.byTeam') IS NOT 1
-           AND json_extract(data, '$.at') >= ?
+           AND json_extract(data, '$.at') >= ?${
+             hidden.length
+               ? ` AND thread_id NOT IN (SELECT id FROM threads WHERE project_id IN (${hidden
+                   .map(() => "?")
+                   .join(", ")}))`
+               : ""
+           }
          GROUP BY day
          ORDER BY day`,
-    ).all(offsetMs, since) as { day: number; count: number }[];
+    ).all(offsetMs, since, ...hidden) as { day: number; count: number }[];
     return rows.map((row) => ({ day: Number(row.day), count: Number(row.count) }));
   }
 
   /** When the first thread still kept was started, if any. */
-  firstThreadAt(): number | undefined {
-    const row = this.sql(`SELECT MIN(created_at) AS first FROM threads`).get() as
-      { first: number | null } | undefined;
+  firstThreadAt(hidden: string[] = []): number | undefined {
+    const row = this.sql(
+      `SELECT MIN(created_at) AS first FROM threads${
+        hidden.length ? ` WHERE project_id NOT IN (${hidden.map(() => "?").join(", ")})` : ""
+      }`,
+    ).get(...hidden) as { first: number | null } | undefined;
     return row?.first ?? undefined;
   }
 

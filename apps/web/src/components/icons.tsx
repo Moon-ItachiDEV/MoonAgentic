@@ -406,3 +406,10 @@ export const IconFolderFine = ({ size = 14 }: P) => (
     <path d="M2 4.2c0-.6.5-1.1 1.1-1.1h3l1.5 1.6h5.3c.6 0 1.1.5 1.1 1.1v6.3c0 .6-.5 1.1-1.1 1.1H3.1c-.6 0-1.1-.5-1.1-1.1z" />
   </svg>
 );
+/** A padlock, as the mockup draws it: a project locked with /lock. */
+export const IconLock = ({ size = 13 }: P) => (
+  <svg {...fine(size)}>
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.7" />
+    <path d="M5.6 7V5.3a2.4 2.4 0 0 1 4.8 0V7" />
+  </svg>
+);

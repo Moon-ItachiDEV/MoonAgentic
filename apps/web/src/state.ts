@@ -55,6 +55,8 @@ export interface State {
   schedules: Schedule[];
   /** What each agent's subscription has left, as last read. */
   quotas: AgentQuota[];
+  /** Whether a code for /lock is set on the computer. */
+  lockPin: boolean;
   items: Record<string, Item[]>;
   /** What part of each of those timelines is held. */
   held: Record<string, Held>;
@@ -73,13 +75,22 @@ export interface State {
 /** Applies one server message to the state; pure, so it is easy to test. */
 export function reduce(state: State, message: ServerMessage): State {
   switch (message.type) {
-    case "snapshot":
+    case "snapshot": {
+      // A thread left out (removed, or of a project just locked) leaves nothing behind here.
+      const kept = new Set(message.snapshot.threads.map((t) => t.id));
+      const keep = <T>(byThread: Record<string, T>) =>
+        Object.fromEntries(Object.entries(byThread).filter(([id]) => kept.has(id)));
       return {
         ...state,
         ready: true,
         ...message.snapshot,
+        lockPin: message.snapshot.lockPin ?? false,
         mcpSecretsError: message.snapshot.mcpSecretsError ?? null,
+        items: keep(state.items),
+        held: keep(state.held),
+        reviews: keep(state.reviews),
       };
+    }
     case "agents":
       return { ...state, agents: message.agents };
     case "favorites":
@@ -281,6 +292,7 @@ export const initialState: State = {
   plan: [],
   schedules: [],
   quotas: [],
+  lockPin: false,
   items: {},
   held: {},
   reviews: {},

@@ -104,6 +104,37 @@ describe("client state", () => {
     expect(state.held).toEqual({});
   });
 
+  it("leaves nothing of the threads a new snapshot leaves out, as when a project is locked", () => {
+    const snapshot = (threads: Thread[], lockPin?: boolean) =>
+      ({
+        type: "snapshot",
+        snapshot: {
+          coordinator: { routes: {} },
+          favorites: {},
+          requests: [],
+          questions: [],
+          mcpServers: [],
+          agents: [],
+          projects: [],
+          threads,
+          plan: [],
+          schedules: [],
+          quotas: [],
+          ...(lockPin ? { lockPin } : {}),
+        },
+      }) satisfies ServerMessage;
+    let state = reduce(initialState, snapshot([thread("a"), thread("b")]));
+    expect(state.lockPin).toBe(false);
+    state = reduce(state, opened("a", [user("u1", "Secret")]));
+    state = reduce(state, opened("b", [user("u2", "Public")]));
+    state = reduce(state, { type: "review", threadId: "a", files: [] });
+    state = reduce(state, snapshot([thread("b")], true));
+    expect(state.lockPin).toBe(true);
+    expect(Object.keys(state.items)).toEqual(["b"]);
+    expect(Object.keys(state.held)).toEqual(["b"]);
+    expect(state.reviews).toEqual({});
+  });
+
   it("keeps the planner's cards in the order they were made", () => {
     let state = reduce(initialState, { type: "planTask", task: card("c1", "p") });
     state = reduce(state, { type: "planTask", task: card("c2", "p") });

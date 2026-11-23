@@ -26,6 +26,7 @@ import {
   IconGear,
   IconMore,
   IconInbox,
+  IconLock,
   IconPin,
   IconPlug,
   IconPlus,
@@ -81,6 +82,8 @@ export function Sidebar(props: {
   /** Asks before deleting the thread. */
   onDeleteThread: (thread: Thread) => void;
   onRemoveProject: (id: string) => void;
+  /** Locks the project with the code, or asks for the code when it is locked. */
+  onToggleLock: (id: string) => void;
   onOpenSettings: () => void;
   /** Réglages > Abonnements, where every quota is shown in full. */
   onOpenSubscriptions: () => void;
@@ -291,7 +294,7 @@ export function Sidebar(props: {
     const resolved = archived.filter((t) => t.projectId === p.id);
     const resolvedOpen = unfolded.has(`resolved:${p.id}`);
     return [
-      <div key={p.id} className={`thr-row proj${open ? " open" : ""}`}>
+      <div key={p.id} className={`thr-row proj${open ? " open" : ""}${p.locked ? " locked" : ""}`}>
         <button
           className="fold-proj"
           aria-expanded={open}
@@ -327,6 +330,15 @@ export function Sidebar(props: {
           </span>
         </button>
         <button
+          className="pin lock"
+          aria-label={`${p.locked ? "Déverrouiller" : "Verrouiller"} le projet ${p.name}`}
+          aria-pressed={!!p.locked}
+          title={p.locked ? "Déverrouiller" : "Verrouiller (Ctrl Maj L)"}
+          onClick={() => props.onToggleLock(p.id)}
+        >
+          <IconLock />
+        </button>
+        <button
           className="pin new"
           aria-label={`Nouvelle discussion dans ${p.name}`}
           title="Nouvelle discussion"
@@ -343,7 +355,15 @@ export function Sidebar(props: {
           <IconClose />
         </button>
       </div>,
-      open && (
+      open && p.locked && (
+        <div key={`${p.id}:items`} className="proj-items">
+          <div className="empty-note lk-note">
+            <IconLock size={12} />
+            Discussions verrouillées
+          </div>
+        </div>
+      ),
+      open && !p.locked && (
         <div key={`${p.id}:items`} className="proj-items">
           {[
             ...(all.length === 0 && resolved.length === 0

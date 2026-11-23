@@ -17,7 +17,8 @@ export type AppAction =
   | "delete"
   | "team"
   | "schedule"
-  | "goal";
+  | "goal"
+  | "lock";
 
 /**
  * Where a command comes from, in priority order when two share a name: MoonAgentic's own
@@ -109,6 +110,7 @@ export function composerCommands(options: {
     add("resoudre", "Marquer cette discussion résolue et ranger sa copie de travail", "archive");
     add("supprimer", "Supprimer cette discussion (sa branche reste)", "delete");
   }
+  add("lock", "Verrouiller ce projet par code (Ctrl Maj L)", "lock");
   add("chercher", "Chercher dans les fils et les messages (Ctrl K)", "search");
   add("demandes", "Voir ce que les agents attendent de toi", "requests");
   add("connexions", "Voir l'état des agents et les serveurs MCP", "connections");
