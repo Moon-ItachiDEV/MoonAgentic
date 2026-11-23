@@ -1,4 +1,5 @@
 import type { Item } from "@moonagentic/protocol";
+import type { GlyphKind } from "./glyphs.ts";
 import type { FeedBlock } from "./team-feed.ts";
 
 /**
@@ -86,6 +87,41 @@ export function activityLabel(item: Item | undefined): string {
     }
     default:
       return "Travaille…";
+  }
+}
+
+/** The picture of what the agent is doing, from the same item as its label. */
+export function activityGlyph(item: Item | undefined): GlyphKind {
+  if (!item || item.kind === "user") return "demarre";
+  switch (item.kind) {
+    case "thought":
+      return "pense";
+    case "agent":
+      return "ecrit";
+    case "permission":
+      return item.outcome === null ? "attend" : "travaille";
+    case "tool":
+      if (item.questions) return "attend";
+      switch (item.toolKind) {
+        case "read":
+          return "lit";
+        case "edit":
+        case "delete":
+        case "move":
+          return "modifie";
+        case "search":
+          return "cherche";
+        case "execute":
+          return /\btest/i.test(item.title) ? "tests" : "commande";
+        case "fetch":
+          return "web";
+        case "think":
+          return "pense";
+        default:
+          return "travaille";
+      }
+    default:
+      return "travaille";
   }
 }
 
