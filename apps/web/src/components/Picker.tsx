@@ -495,13 +495,15 @@ function EffortTrack(props: {
     choices.findIndex((c) => c.id === props.value),
   );
   const track = useRef<HTMLDivElement>(null);
-  const [drag, setDrag] = useState(false);
-  const at = (x: number) => {
+  /** Where the finger is while it drags, from 0 to 1: the thumb follows it, then settles. */
+  const [drag, setDrag] = useState<number | null>(null);
+  const pressed = useRef(false);
+  const raw = (x: number) => {
     const box = track.current?.getBoundingClientRect();
-    if (!box || box.width <= 30 || n < 2) return index;
-    const f = Math.max(0, Math.min(1, (x - box.left - 15) / (box.width - 30)));
-    return Math.round(f * (n - 1));
+    if (!box || box.width <= 30) return 0;
+    return Math.max(0, Math.min(1, (x - box.left - 15) / (box.width - 30)));
   };
+  const at = (x: number) => (n < 2 ? index : Math.round(raw(x) * (n - 1)));
   const pick = (i: number) => {
     const choice = choices[i];
     if (choice && i !== index) props.onPick(choice.id);
@@ -550,7 +552,7 @@ function EffortTrack(props: {
       </div>
       <div
         ref={track}
-        className={`trk${galaxy ? " gx" : ""}${intro ? " gx-in" : ""}${drag ? " drag" : ""}`}
+        className={`trk${galaxy ? " gx" : ""}${intro ? " gx-in" : ""}${drag !== null ? " drag" : ""}`}
         role="slider"
         tabIndex={0}
         aria-label={`Effort${props.model ? ` de ${props.model}` : ""}`}
@@ -558,15 +560,26 @@ function EffortTrack(props: {
         aria-valuemax={n - 1}
         aria-valuenow={index}
         aria-valuetext={name(index)}
-        style={{ "--p": x(index) } as React.CSSProperties}
+        style={{ "--p": drag ?? x(index) } as React.CSSProperties}
         onPointerDown={(e) => {
           e.currentTarget.setPointerCapture(e.pointerId);
-          setDrag(true);
+          pressed.current = true;
+          // A click without moving jumps to the nearest stop.
           pick(at(e.clientX));
         }}
-        onPointerMove={(e) => drag && pick(at(e.clientX))}
-        onPointerUp={() => setDrag(false)}
-        onPointerCancel={() => setDrag(false)}
+        onPointerMove={(e) => {
+          if (!pressed.current) return;
+          setDrag(raw(e.clientX));
+          pick(at(e.clientX));
+        }}
+        onPointerUp={() => {
+          pressed.current = false;
+          setDrag(null);
+        }}
+        onPointerCancel={() => {
+          pressed.current = false;
+          setDrag(null);
+        }}
         onKeyDown={(e) => {
           const step = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[e.key];
           if (step) {
