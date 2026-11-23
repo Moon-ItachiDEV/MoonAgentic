@@ -45,7 +45,8 @@ import { quotaWarning, roomiest, tightest } from "../quotas.ts";
 import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { ComposerImages } from "./ComposerImages.tsx";
-import { AccessChip, Queue, Tray, type TrayQuota } from "./ComposerTray.tsx";
+import { AccessChip, Tray, type TrayQuota } from "./ComposerTray.tsx";
+import { MessageQueue } from "./MessageQueue.tsx";
 import {
   IconArrowUp,
   IconBolt,
@@ -120,7 +121,6 @@ export function Composer(props: {
   const [accessOpen, setAccessOpen] = useState(false);
   const [trayMenu, setTrayMenu] = useState<"project" | "branch" | "mcp" | null>(null);
   /** Messages typed while the agent works: sent one by one once it is done. */
-  const [queue, setQueue] = useState<{ id: string; text: string }[]>([]);
   // A favorite of another agent picked in a thread: its model, once that agent has the thread.
   const [handoffModel, setHandoffModel] = useState<{
     threadId: string;
@@ -231,29 +231,20 @@ export function Composer(props: {
       connection.send({ type: "thread.setModel", threadId: thread.id, model: handoffModel.model });
   }, [handoffModel, thread?.id, thread?.agentId, running]);
 
-  // What was put in line leaves once the agent is done, one message per turn. A message just
-  // sent waits for its turn to start before the next one goes, or a few seconds if it failed.
-  const queuedAt = useRef(0);
-  const [, recheck] = useState(0);
-  useEffect(() => {
-    if (running) queuedAt.current = 0;
-    if (!thread || running || !queue.length) return;
-    const wait = queuedAt.current + 4000 - Date.now();
-    if (wait > 0) {
-      const timer = setTimeout(() => recheck((n) => n + 1), wait);
-      return () => clearTimeout(timer);
-    }
-    const [first, ...rest] = queue;
-    if (connection.send({ type: "thread.send", threadId: thread.id, text: first!.text })) {
-      queuedAt.current = Date.now();
-      setQueue(rest);
-    }
-  });
-  const enqueue = () => {
-    const typed = text.trim();
-    if (!typed) return;
-    setQueue((q) => [...q, { id: newId(), text: typed }]);
+  // What is written while the agent works waits on the server, which sends it when the turn
+  // ends: every window sees the same messages, and they outlive this page.
+  const enqueue = (written = text) => {
+    const queued = written.trim();
+    if (!thread || !queued) return;
+    // Taken at once, so the next one can be written straight away: it comes back if the
+    // server refuses it and nothing was typed meanwhile.
     putText("", 0);
+    connection
+      .request({ type: "thread.queue", requestId: newId(), threadId: thread.id, text: queued })
+      .catch((e: unknown) => {
+        connection.notify(e instanceof Error ? e.message : String(e));
+        setText((now) => now || queued);
+      });
   };
 
   // Close the picker on Escape or on any press outside the composer.
@@ -573,9 +564,13 @@ export function Composer(props: {
       runAction(submission.action, submission.rest);
       return;
     }
-    // While the agent works, what is typed waits in line rather than being refused.
-    if (running && typed && !images.drafts.length) {
-      enqueue();
+    // While the agent works, what is written waits for the end of its turn.
+    if (thread && running) {
+      if (images.drafts.length) {
+        connection.notify("Une image part avec un message envoyé entre deux réponses.");
+        return;
+      }
+      enqueue(submission.text);
       return;
     }
     const sendTo = to ?? agentId;
@@ -796,8 +791,8 @@ export function Composer(props: {
           <button
             className="send"
             aria-label="Mettre en file"
-            title="Mettre en file : part dès que l'agent a fini"
-            onClick={enqueue}
+            title="Mettre en file : part dès que l'agent a fini (Entrée)"
+            onClick={() => enqueue()}
           >
             <IconQueue />
           </button>
@@ -852,15 +847,7 @@ export function Composer(props: {
         setFocused(false);
       }}
     >
-      <Queue
-        items={queue}
-        onRemove={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
-        onNow={(id) => {
-          // Stops the turn; the message leaves first as soon as the agent has stopped.
-          setQueue((q) => [...q.filter((m) => m.id === id), ...q.filter((m) => m.id !== id)]);
-          if (thread) connection.send({ type: "thread.cancel", threadId: thread.id });
-        }}
-      />
+      {thread && <MessageQueue thread={thread} />}
       <div
         className={`composer${focused ? " focus" : ""}${full ? " full" : ""}${voice ? " vx-on" : ""}${dropping ? " drop" : ""}`}
       >

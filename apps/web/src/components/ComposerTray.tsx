@@ -4,7 +4,6 @@
 import type { McpServerInfo, PermissionMode, Project } from "@moonagentic/protocol";
 import { type ReactNode, type RefObject, useEffect, useRef } from "react";
 import {
-  IconArrowUp,
   IconBolt,
   IconBranch,
   IconCaret,
@@ -398,32 +397,4 @@ function mcpColor(name: string): string {
   let h = 0;
   for (const c of name) h = (h * 31 + c.charCodeAt(0)) >>> 0;
   return colors[h % colors.length]!;
-}
-
-/** Messages typed while the agent works: each leaves on its own once the agent is done. */
-export function Queue(props: {
-  items: { id: string; text: string }[];
-  onNow: (id: string) => void;
-  onRemove: (id: string) => void;
-}) {
-  if (!props.items.length) return null;
-  return (
-    <div className="cqueue" aria-label="Messages en file">
-      {props.items.map((m, i) => (
-        <div key={m.id} className="qm">
-          <span className="l">En file</span>
-          <span className="t">{m.text}</span>
-          {i === 0 && (
-            <button onClick={() => props.onNow(m.id)} title="Arrête l'agent et envoie ce message">
-              <IconArrowUp size={13} />
-              Envoyer maintenant
-            </button>
-          )}
-          <button aria-label="Retirer de la file" onClick={() => props.onRemove(m.id)}>
-            <IconClose />
-          </button>
-        </div>
-      ))}
-    </div>
-  );
 }

@@ -1889,6 +1889,205 @@ describe("security boundaries", () => {
   }, 60_000);
 });
 
+describe("messages written while the agent works", () => {
+  const texts = (items: Item[]) => items.flatMap((i) => (i.kind === "user" ? [i.text] : []));
+  /** Until the thread's agent asks the user something: its turn is then still under way. */
+  const asking = (store: Store, threadId: string) =>
+    expect.poll(() => store.getThread(threadId)?.status, { timeout: 15_000 }).toBe("waiting");
+  const waiting = (store: Store, threadId: string) =>
+    (store.getThread(threadId)?.queue ?? []).map((m) => m.text);
+
+  it("wait in order, can be changed or taken out, and go one turn at a time", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Premier",
+    });
+    for (const [n, text] of ["Deuxième", "À retirer", "Troisième"].entries()) {
+      await hub.handle(client, { type: "thread.queue", requestId: `q${n}`, threadId, text });
+    }
+    expect(waiting(store, threadId)).toEqual(["Deuxième", "À retirer", "Troisième"]);
+    // Nothing is said to the agent yet: only the first message is in the conversation.
+    expect(texts(store.listItems(threadId))).toEqual(["Premier"]);
+    const [second, removed] = store.getThread(threadId)!.queue!;
+    await hub.handle(client, {
+      type: "thread.queueEdit",
+      requestId: "e1",
+      threadId,
+      id: second!.id,
+      text: "  Deuxième, corrigé ",
+    });
+    await hub.handle(client, {
+      type: "thread.queueEdit",
+      requestId: "e2",
+      threadId,
+      id: removed!.id,
+      text: " ",
+    });
+    expect(waiting(store, threadId)).toEqual(["Deuxième, corrigé", "Troisième"]);
+
+    // Each goes when the turn before it ends, as a turn of its own.
+    await expect
+      .poll(() => texts(store.listItems(threadId)), { timeout: 20_000 })
+      .toEqual(["Premier", "Deuxième, corrigé", "Troisième"]);
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)).not.toHaveProperty("queue");
+    expect(store.listItems(threadId).filter((i) => i.kind === "agent").length).toBeGreaterThan(2);
+    await expect(
+      hub.handle(client, {
+        type: "thread.queueEdit",
+        requestId: "e3",
+        threadId,
+        id: second!.id,
+        text: "Trop tard",
+      }),
+    ).rejects.toThrow("déjà parti");
+
+    // Written just as the turn ended, with nothing before it: it is sent at once.
+    await hub.handle(client, { type: "thread.queue", requestId: "q9", threadId, text: "Dernier" });
+    expect(waiting(store, threadId)).toEqual([]);
+    expect(texts(store.listItems(threadId)).at(-1)).toBe("Dernier");
+    await hub.whenIdle(threadId);
+  }, 30_000);
+
+  it("go now when the user says so: the turn is stopped and the chosen one leaves first", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+    });
+    // The agent asks before it acts: its turn would not end by itself.
+    await asking(store, threadId);
+    await hub.handle(client, { type: "thread.queue", requestId: "q1", threadId, text: "Ensuite" });
+    await hub.handle(client, { type: "thread.queue", requestId: "q2", threadId, text: "Urgent" });
+    const urgent = store.getThread(threadId)!.queue![1]!;
+    await hub.handle(client, {
+      type: "thread.setPermissionMode",
+      threadId,
+      permissionMode: "full",
+    });
+    await hub.handle(client, { type: "thread.queueSend", requestId: "s", threadId, id: urgent.id });
+    // The turn under way is stopped, the chosen message goes, and the other follows it.
+    await expect
+      .poll(() => texts(store.listItems(threadId)), { timeout: 20_000 })
+      .toEqual(["Corrige la réponse", "Urgent", "Ensuite"]);
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)).not.toHaveProperty("queue");
+    await expect(
+      hub.handle(client, { type: "thread.queueSend", requestId: "s2", threadId, id: urgent.id }),
+    ).rejects.toThrow("déjà parti");
+  }, 30_000);
+
+  it("stay where they are after a stop, until the user sends them, and across a restart", async () => {
+    const { dir, hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+    });
+    // The agent asks before it acts: the turn is still under way.
+    await asking(store, threadId);
+    await hub.handle(client, { type: "thread.queue", requestId: "q1", threadId, text: "Ensuite" });
+    await hub.handle(client, { type: "thread.queue", requestId: "q2", threadId, text: "Enfin" });
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+    // Stopped by the user: nothing starts by itself.
+    expect(waiting(store, threadId)).toEqual(["Ensuite", "Enfin"]);
+    expect(texts(store.listItems(threadId))).toEqual(["Corrige la réponse"]);
+    // Written now, a message waits behind the others rather than jump the line.
+    await hub.handle(client, { type: "thread.queue", requestId: "q3", threadId, text: "Après" });
+    expect(waiting(store, threadId)).toEqual(["Ensuite", "Enfin", "Après"]);
+
+    // Another server on the same data still has them.
+    await hub.close();
+    const again = new Store(path.join(dir, "state.sqlite"));
+    const restarted = new Hub(again, new Agents({ demo: true }), {
+      worktreesDir: path.join(dir, ".worktrees"),
+      homeDir: path.join(dir, ".home"),
+    });
+    // Closed before the first server's folder is removed: Windows keeps an open database.
+    cleanups.unshift(async () => {
+      await restarted.close();
+      again.close();
+    });
+    const other = new TestClient();
+    restarted.connect(other);
+    expect(waiting(again, threadId)).toEqual(["Ensuite", "Enfin", "Après"]);
+    expect(texts(again.listItems(threadId))).toEqual(["Corrige la réponse"]);
+
+    // « Envoyer » sends the first, and the rest follow once its turn ends by itself.
+    await restarted.handle(other, {
+      type: "thread.setPermissionMode",
+      threadId,
+      permissionMode: "full",
+    });
+    await restarted.handle(other, { type: "thread.queueSend", requestId: "s", threadId });
+    expect(waiting(again, threadId)).toEqual(["Enfin", "Après"]);
+    await expect
+      .poll(() => texts(again.listItems(threadId)), { timeout: 20_000 })
+      .toEqual(["Corrige la réponse", "Ensuite", "Enfin", "Après"]);
+    await restarted.whenIdle(threadId);
+    expect(waiting(again, threadId)).toEqual([]);
+  }, 40_000);
+
+  it("share the line with what a coordinator leaves, which goes as one message of its own", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Premier",
+    });
+    hub.queueMessage(threadId, "Du coordinateur, un", "coordinator");
+    hub.queueMessage(threadId, "Du coordinateur, deux", "coordinator");
+    hub.queueMessage(threadId, "De l'utilisateur");
+    expect(store.getThread(threadId)!.queue!.map((m) => m.from ?? "user")).toEqual([
+      "coordinator",
+      "coordinator",
+      "user",
+    ]);
+    await expect
+      .poll(() => store.listItems(threadId).filter((i) => i.kind === "user").length, {
+        timeout: 20_000,
+      })
+      .toBe(3);
+    await hub.whenIdle(threadId);
+    expect(
+      store
+        .listItems(threadId)
+        .flatMap((i) => (i.kind === "user" ? [[i.from ?? "user", i.text]] : [])),
+    ).toEqual([
+      ["user", "Premier"],
+      ["coordinator", "Du coordinateur, un\n\nDu coordinateur, deux"],
+      ["user", "De l'utilisateur"],
+    ]);
+    expect(store.getThread(threadId)).not.toHaveProperty("queue");
+  }, 30_000);
+
+  it("are refused past the limit, and on a resolved thread", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+    });
+    await asking(store, threadId);
+    for (let n = 0; n < 20; n++) hub.queueMessage(threadId, `Message ${n}`);
+    expect(() => hub.queueMessage(threadId, "De trop")).toThrow("attendent déjà");
+    expect(waiting(store, threadId)).toHaveLength(20);
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+    await hub.setArchived(threadId, true);
+    expect(() => hub.queueMessage(threadId, "Encore")).toThrow("résolu");
+  }, 30_000);
+});
+
 describe("a planner card started from the board", () => {
   it("gets a thread with its text, then follows what that thread really does", async () => {
     const { hub, store, client, projectId } = setup();
