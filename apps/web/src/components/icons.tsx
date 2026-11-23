@@ -278,3 +278,21 @@ export const IconExpand = ({ size = 15 }: P) => (
     <path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" />
   </svg>
 );
+
+/** A dial: how much of a subscription is used. */
+export const IconGauge = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <path d="M4 17a8 8 0 1 1 16 0" />
+    <path d="m12 17 4-5" />
+  </svg>
+);
+
+/** Two arrows turning: read again. */
+export const IconRefresh = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <path d="M20 11a8 8 0 0 0-14.5-4.5L4 8" />
+    <path d="M4 4v4h4" />
+    <path d="M4 13a8 8 0 0 0 14.5 4.5L20 16" />
+    <path d="M20 20v-4h-4" />
+  </svg>
+);

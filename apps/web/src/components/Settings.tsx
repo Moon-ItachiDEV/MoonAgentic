@@ -31,6 +31,7 @@ import {
   IconArrowLeft,
   IconBranch,
   IconFolder,
+  IconGauge,
   IconGear,
   IconMoon,
   IconSearch,
@@ -42,12 +43,14 @@ import {
   IconX,
 } from "./icons.tsx";
 import { RemoteAccess } from "./RemoteAccess.tsx";
+import { Subscriptions } from "./Subscriptions.tsx";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
   { id: "general", label: "Général", icon: <IconGear size={15} /> },
   { id: "appearance", label: "Apparence", icon: <span className="set-half" aria-hidden /> },
   { id: "agents", label: "Agents", icon: <IconShield size={15} /> },
   { id: "models", label: "Modèles", icon: <IconStar size={15} /> },
+  { id: "subscriptions", label: "Abonnements", icon: <IconGauge size={15} /> },
   { id: "coordinator", label: "Coordinateur", icon: <IconBranch size={15} /> },
   { id: "mcp", label: "Serveurs MCP", icon: <IconPlug size={15} /> },
   { id: "remote", label: "Accès distant", icon: <IconWifi size={15} /> },
@@ -600,6 +603,9 @@ export function SettingsPage(props: {
       break;
     case "remote":
       body = <RemoteAccess />;
+      break;
+    case "subscriptions":
+      body = <Subscriptions agents={props.agents} />;
       break;
   }
 

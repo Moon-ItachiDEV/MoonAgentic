@@ -143,19 +143,22 @@ describe("McpSecretStore", () => {
     expect(store.get("s1")).toEqual({});
   });
 
-  it.runIf(process.platform === "win32")("seals MCP secrets with Windows DPAPI asynchronously", async () => {
-    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-mcp-dpapi-"));
-    dirs.push(dir);
-    const dbFile = path.join(dir, "state.sqlite");
-    const store = defaultMcpSecretStore(dbFile, "win32");
-    await store.set("s1", { TOKEN: "clé-windows-€-123" });
-    const sealed = readFileSync(path.join(dir, "mcp-secrets.dpapi"), "utf8");
-    expect(sealed).not.toContain("clé-windows");
-    const reopened = defaultMcpSecretStore(dbFile, "win32");
-    await reopened.load();
-    expect(reopened.error()).toBeUndefined();
-    expect(reopened.get("s1")).toEqual({ TOKEN: "clé-windows-€-123" });
-    await reopened.delete("s1");
-    expect(existsSync(path.join(dir, "mcp-secrets.dpapi"))).toBe(false);
-  });
+  it.runIf(process.platform === "win32")(
+    "seals MCP secrets with Windows DPAPI asynchronously",
+    async () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-mcp-dpapi-"));
+      dirs.push(dir);
+      const dbFile = path.join(dir, "state.sqlite");
+      const store = defaultMcpSecretStore(dbFile, "win32");
+      await store.set("s1", { TOKEN: "clé-windows-€-123" });
+      const sealed = readFileSync(path.join(dir, "mcp-secrets.dpapi"), "utf8");
+      expect(sealed).not.toContain("clé-windows");
+      const reopened = defaultMcpSecretStore(dbFile, "win32");
+      await reopened.load();
+      expect(reopened.error()).toBeUndefined();
+      expect(reopened.get("s1")).toEqual({ TOKEN: "clé-windows-€-123" });
+      await reopened.delete("s1");
+      expect(existsSync(path.join(dir, "mcp-secrets.dpapi"))).toBe(false);
+    },
+  );
 });

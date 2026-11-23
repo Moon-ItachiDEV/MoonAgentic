@@ -284,7 +284,8 @@ export function defaultMcpSecretStore(
 
 /** Extracts non-empty secret values from one MCP server record. */
 export function extractMcpSecrets(server: McpServerRecord): McpServerSecrets {
-  const entries = server.transport.type === "stdio" ? server.transport.env : server.transport.headers;
+  const entries =
+    server.transport.type === "stdio" ? server.transport.env : server.transport.headers;
   const secrets: McpServerSecrets = {};
   for (const entry of entries) {
     if (entry.value) secrets[entry.name] = entry.value;

@@ -71,6 +71,7 @@ import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pul
 import { Scheduler } from "./scheduler.ts";
 import { shipTarget, Teams, teamStatus } from "./team.ts";
 import { RESERVED_MCP_NAME } from "./mcp.ts";
+import { type QuotaReader, Quotas } from "./quotas.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
@@ -129,6 +130,10 @@ export interface HubOptions {
   prWatchMs?: number;
   /** How long an agent may take to stop after « Arrêter » before it is killed. */
   forceStopMs?: number;
+  /** How each agent's subscription quotas are read; none are read when left out. */
+  quotaReaders?: Record<string, QuotaReader>;
+  /** How often every quota is read again; 0 for only when asked or after a turn. */
+  quotaEveryMs?: number;
 }
 
 /** The setting that lists the projects kept at the top. */
@@ -278,6 +283,17 @@ export class Hub {
     }
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
     this.planner = new Planner(store, (m) => this.broadcast(m));
+    this.quotas = new Quotas({
+      readers: options.quotaReaders ?? {},
+      available: () =>
+        this.catalog
+          .list()
+          .filter((a) => a.available)
+          .map((a) => a.id),
+      broadcast: (m) => this.broadcast(m),
+      active: () => this.clients.size > 0,
+    });
+    this.quotas.start(options.quotaEveryMs);
     this.scheduler = new Scheduler(store, (m) => this.broadcast(m), {
       start: (s) =>
         this.createThread({
@@ -369,6 +385,8 @@ export class Hub {
   readonly catalog: AgentCatalog;
   /** Each project's planner. */
   readonly planner: Planner;
+  /** What each agent's subscription has left. */
+  readonly quotas: Quotas;
   /** The tasks planned for later. */
   readonly scheduler: Scheduler;
   /** Teams of agents, each run from its lead's thread. */
@@ -379,6 +397,7 @@ export class Hub {
 
   connect(client: Client): () => void {
     this.clients.add(client);
+    this.quotas.onClientConnect();
     client.send({ type: "snapshot", snapshot: this.snapshot() });
     return () => this.clients.delete(client);
   }
@@ -394,6 +413,7 @@ export class Hub {
       agents: this.catalog.list(),
       projects: this.store.listProjects().map((p) => this.withGit(p)),
       threads: this.store.listThreads(),
+      quotas: this.quotas.list(),
       plan: this.planner.list(),
       schedules: this.scheduler.list(),
     };
@@ -435,6 +455,10 @@ export class Hub {
         client.send({ type: "created", requestId: message.requestId, id });
         return;
       }
+      case "quotas.refresh":
+        await this.quotas.asked(message.agentId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "github.status":
         client.send({ type: "github", requestId: message.requestId, status: await githubStatus() });
         return;
@@ -1026,6 +1050,9 @@ export class Hub {
       }
       this.pool.leftIdle(threadId);
       if (!this.closed) {
+        // What the turn used shows in the agent's figures soon after.
+        const agentId = this.store.getThread(threadId)?.agentId;
+        if (agentId) this.quotas.afterTurn(agentId);
         const summary = summaryOf(this.lastReply(threadId));
         const now = this.store.getThread(threadId);
         if (summary && now && now.summary !== summary) this.updateThread(threadId, { summary });
@@ -1762,6 +1789,7 @@ export class Hub {
   async close(): Promise<void> {
     this.closed = true;
     clearInterval(this.prTimer);
+    this.quotas.close();
     this.scheduler.close();
     this.teams.close();
     // A review starting reads the changes first; it must not reach the store once closed.

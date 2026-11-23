@@ -70,10 +70,9 @@ describe("supervisor", () => {
     expect(shouldRedactOutput({ NSSM_SERVICE_NAME: "MoonAgentic" }, piped)).toBe(true);
     expect(shouldRedactOutput({ MOONAGENTIC_REDACT_STDOUT: "1" }, piped)).toBe(true);
     expect(
-      shouldRedactOutput(
-        { JOURNAL_STREAM: "8:12345", MOONAGENTIC_REDACT_STDOUT: "0" },
-        () => ["8:12345"],
-      ),
+      shouldRedactOutput({ JOURNAL_STREAM: "8:12345", MOONAGENTIC_REDACT_STDOUT: "0" }, () => [
+        "8:12345",
+      ]),
     ).toBe(false);
   });
 

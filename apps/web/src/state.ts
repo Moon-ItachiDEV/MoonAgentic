@@ -1,4 +1,5 @@
 import type {
+  AgentQuota,
   CoordinatorSettings,
   AgentInfo,
   Favorites,
@@ -40,6 +41,8 @@ export interface State {
   plan: PlanTask[];
   /** The tasks planned for later, of every project. */
   schedules: Schedule[];
+  /** What each agent's subscription has left, as last read. */
+  quotas: AgentQuota[];
   items: Record<string, Item[]>;
   /** The last review fetched for each thread with its own branch. */
   reviews: Record<string, Review>;
@@ -77,6 +80,8 @@ export function reduce(state: State, message: ServerMessage): State {
         mcpServers: message.servers,
         mcpSecretsError: message.error ?? null,
       };
+    case "quotas":
+      return { ...state, quotas: message.quotas };
     case "review":
       return {
         ...state,
@@ -190,6 +195,7 @@ export const initialState: State = {
   threads: [],
   plan: [],
   schedules: [],
+  quotas: [],
   items: {},
   reviews: {},
   notice: null,

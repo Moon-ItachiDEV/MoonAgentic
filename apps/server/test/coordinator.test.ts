@@ -439,7 +439,9 @@ describe("a project's coordinator", () => {
     const askRefuse = () =>
       store
         .listItems(coordinatorId)
-        .find((i) => i.kind === "permission" && i.title.includes("accès complet") && i.outcome === null);
+        .find(
+          (i) => i.kind === "permission" && i.title.includes("accès complet") && i.outcome === null,
+        );
     await soon(askRefuse).toBeTruthy();
     hub.respondToPermission(coordinatorId, askRefuse()!.id, "reject");
     expect((await refusedReq).status).toBe(400);

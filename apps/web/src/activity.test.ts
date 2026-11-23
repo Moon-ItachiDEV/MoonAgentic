@@ -1,6 +1,12 @@
 import type { Item } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
-import { activityFeed, activityLabel, activitySteps, isPlanModeSwitch } from "./activity.ts";
+import {
+  activityFeed,
+  activityGlyph,
+  activityLabel,
+  activitySteps,
+  isPlanModeSwitch,
+} from "./activity.ts";
 
 const user = (id: string): Item => ({ id, kind: "user", text: id, at: 0 });
 const agent = (id: string): Item => ({ id, kind: "agent", text: id, at: 0 });
@@ -109,5 +115,38 @@ describe("activityLabel", () => {
   it("counts the steps of a stretch and those that failed", () => {
     const items = [tool("a"), thought("t"), tool("b", { status: "failed" })];
     expect(activitySteps(items, [0, 1, 2])).toEqual({ steps: 2, failed: 1 });
+  });
+});
+
+describe("activityGlyph", () => {
+  it("draws what the agent really does", () => {
+    expect(activityGlyph(undefined)).toBe("demarre");
+    expect(activityGlyph(user("u"))).toBe("demarre");
+    expect(activityGlyph(thought("t"))).toBe("pense");
+    expect(activityGlyph(agent("a"))).toBe("ecrit");
+    expect(activityGlyph(tool("r", { toolKind: "read" }))).toBe("lit");
+    expect(activityGlyph(tool("e", { toolKind: "edit" }))).toBe("modifie");
+    expect(activityGlyph(tool("m", { toolKind: "move" }))).toBe("modifie");
+    expect(activityGlyph(tool("s", { toolKind: "search" }))).toBe("cherche");
+    expect(activityGlyph(tool("x", { toolKind: "execute", title: "pnpm lint" }))).toBe("commande");
+    expect(activityGlyph(tool("x", { toolKind: "execute", title: "pnpm test" }))).toBe("tests");
+    expect(activityGlyph(tool("f", { toolKind: "fetch" }))).toBe("web");
+    expect(activityGlyph(tool("o", { toolKind: "other" }))).toBe("travaille");
+  });
+
+  it("shows a wait for the person apart from work", () => {
+    expect(activityGlyph(permission("p", null))).toBe("attend");
+    expect(activityGlyph(permission("p", "allow_once"))).toBe("travaille");
+    expect(activityGlyph(tool("q", {}, true))).toBe("attend");
+  });
+});
+
+describe("tests commands", () => {
+  it("knows the usual test runners", () => {
+    for (const title of ["pnpm test", "npx vitest run", "pytest -q", "jest --ci", "cargo test"]) {
+      expect(activityGlyph(tool("x", { toolKind: "execute", title }))).toBe("tests");
+      expect(activityLabel(tool("x", { toolKind: "execute", title }))).toBe("Lance les tests…");
+    }
+    expect(activityGlyph(tool("x", { toolKind: "execute", title: "pnpm build" }))).toBe("commande");
   });
 });

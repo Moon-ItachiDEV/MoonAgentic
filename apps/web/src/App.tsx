@@ -314,6 +314,7 @@ export function App() {
         onTeam={(task) => setTeamTask(task)}
         onSchedule={(text) => setScheduling({ text })}
         onSettings={() => go({ name: "settings", section: "general" })}
+        onSubscriptions={() => go({ name: "settings", section: "subscriptions" })}
       />
     );
 

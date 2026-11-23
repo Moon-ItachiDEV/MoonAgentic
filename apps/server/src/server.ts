@@ -9,6 +9,7 @@ import { createHttpServer, newToken } from "./http.ts";
 import { GithubAccount, setGithubAccount } from "./github-account.ts";
 import { systemVault } from "./github-vault.ts";
 import { Hub } from "./hub.ts";
+import { defaultReaders } from "./quotas.ts";
 import { Store } from "./store.ts";
 
 // The server itself; `bin.ts` runs it under a supervisor that restarts it after a crash.
@@ -34,8 +35,10 @@ const github = new GithubAccount({
 });
 setGithubAccount(github);
 void github.currentToken();
-const hub = new Hub(store, new Agents({ demo: values.dev || values.demo }), {
+const demo = !!(values.dev || values.demo);
+const hub = new Hub(store, new Agents({ demo }), {
   worktreesDir: path.join(dataDir, "worktrees"),
+  quotaReaders: defaultReaders({ demo }),
 });
 const server = createHttpServer({
   hub,
