@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { Item, ServerMessage } from "@moonagentic/protocol";
+import type { Item, ServerMessage, Thread } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { historyBefore } from "../src/history.ts";
@@ -713,6 +713,46 @@ describe("modelOption", () => {
         { id: "b", name: "B", description: "Bee" },
       ],
     });
+  });
+});
+
+describe("Hub after a restart", () => {
+  it("starts the threads left in a coordinator's line", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-test-"));
+    mkdirSync(path.join(dir, ".home"));
+    const store = new Store(path.join(dir, "state.sqlite"));
+    store.addProject({ id: "p", name: "p", path: dir, createdAt: 1 });
+    const thread = (id: string, extra: Partial<Thread>): Thread => ({
+      id,
+      projectId: "p",
+      title: id,
+      agentId: "demo",
+      status: "idle",
+      permissionMode: "full",
+      createdAt: 1,
+      updatedAt: 1,
+      ...extra,
+    });
+    store.addThread(thread("coord", { kind: "coordinator" }));
+    store.addThread(thread("waits", { openedBy: "coord", held: "/compact" }));
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(dir, ".worktrees"),
+      homeDir: path.join(dir, ".home"),
+    });
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    await expect.poll(() => store.getThread("waits")?.held, { timeout: 10_000 }).toBeUndefined();
+    await hub.whenIdle("waits");
+    const items = store.listItems("waits");
+    expect(items.find((i) => i.kind === "user")).toMatchObject({
+      text: "/compact",
+      from: "coordinator",
+    });
+    expect(lastTurnSaid(items)).not.toBe("");
   });
 });
 

@@ -254,6 +254,11 @@ export class Store {
     migrate(this.db, file);
   }
 
+  /** Writes a consistent copy of the whole database to `file`, which must not exist yet. */
+  backup(file: string): void {
+    this.db.exec(`VACUUM INTO '${file.replaceAll("'", "''")}'`);
+  }
+
   private readonly statements = new Map<string, StatementSync>();
 
   /** Each query is prepared once, then reused: a streamed reply writes many times a second. */
