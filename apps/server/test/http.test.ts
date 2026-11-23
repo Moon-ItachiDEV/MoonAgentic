@@ -5,8 +5,15 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import type { RemoteAccess } from "@moonagentic/protocol";
-import { createHttpServer, TOKEN_RENEWED } from "../src/http.ts";
-import type { Hub } from "../src/hub.ts";
+import { COORDINATOR_PATH } from "../src/coordinator-tools.ts";
+import {
+  allowedWsOrigin,
+  bearerToken,
+  createHttpServer,
+  type RateLimitOptions,
+  TOKEN_RENEWED,
+} from "../src/http.ts";
+import { CoordinatorRefused, type Hub } from "../src/hub.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -15,7 +22,14 @@ afterEach(async () => {
 
 const TOKEN = "jeton-de-test";
 
-async function serve(options: { heartbeatMs?: number } = {}) {
+async function serve(
+  options: {
+    heartbeatMs?: number;
+    maxClients?: number;
+    wsTicketTtlMs?: number;
+    rateLimit?: RateLimitOptions;
+  } = {},
+) {
   const webDir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-web-"));
   writeFileSync(path.join(webDir, "index.html"), "<title>MoonAgentic</title>");
   let connected = 0;
@@ -25,6 +39,12 @@ async function serve(options: { heartbeatMs?: number } = {}) {
       return () => undefined;
     },
     handle: async () => undefined,
+    coordinatorExchange: () => {
+      throw new CoordinatorRefused();
+    },
+    coordinatorCall: async () => {
+      throw new CoordinatorRefused();
+    },
   } as unknown as Hub;
   const renewed: string[] = [];
   const asked: { host: string; port: number }[] = [];
@@ -46,21 +66,55 @@ async function serve(options: { heartbeatMs?: number } = {}) {
     rmSync(webDir, { recursive: true, force: true });
   });
   const origin = `127.0.0.1:${(server.address() as AddressInfo).port}`;
-  return { origin, webDir, connections: () => connected, renewed, asked };
+  const ticket = async (authToken = TOKEN) => {
+    const res = await fetch(`http://${origin}/api/ws-ticket`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${authToken}` },
+    });
+    expect(res.status).toBe(200);
+    return ((await res.json()) as { ticket: string }).ticket;
+  };
+  return { origin, webDir, connections: () => connected, renewed, asked, ticket };
 }
 
-/** Opens a socket and tells whether the server let it in. */
-const socketOpens = (url: string) =>
-  new Promise<boolean>((resolve) => {
-    const socket = new WebSocket(url);
+/** Opens a socket and returns the HTTP status on rejection, or `"open"` on success. */
+const socketStatus = (url: string, headers?: Record<string, string>) =>
+  new Promise<"open" | number | "error">((resolve) => {
+    const socket = new WebSocket(url, headers ? { headers } : undefined);
     socket.once("open", () => {
       socket.close();
-      resolve(true);
+      resolve("open");
     });
-    socket.once("error", () => resolve(false));
+    socket.once("unexpected-response", (_req, res) => resolve(res.statusCode ?? 0));
+    socket.once("error", () => resolve("error"));
   });
 
+const socketOpens = async (url: string, headers?: Record<string, string>) =>
+  (await socketStatus(url, headers)) === "open";
+
 describe("the HTTP server", () => {
+  it("parses Authorization headers strictly with the Bearer prefix", () => {
+    expect(bearerToken("Bearer abc-123")).toBe("abc-123");
+    expect(bearerToken("abc-123")).toBeNull();
+    expect(bearerToken("Basic abc-123")).toBeNull();
+    expect(bearerToken("Bearer ")).toBeNull();
+    expect(bearerToken("Bearer a b")).toBeNull();
+    expect(bearerToken(undefined)).toBeNull();
+  });
+
+  it("validates WebSocket Origin headers against Host", () => {
+    expect(allowedWsOrigin(undefined, "127.0.0.1:4747")).toBe(true);
+    expect(allowedWsOrigin("http://127.0.0.1:4747", "127.0.0.1:4747")).toBe(true);
+    expect(allowedWsOrigin("https://mini.tail1234.ts.net", "mini.tail1234.ts.net")).toBe(true);
+    expect(allowedWsOrigin("https://mini.tail1234.ts.net", "mini.tail1234.ts.net:443")).toBe(true);
+    expect(allowedWsOrigin("http://localhost:5173", "localhost:5173")).toBe(true);
+    expect(allowedWsOrigin("https://evil.example", "127.0.0.1:4747")).toBe(false);
+    expect(allowedWsOrigin("http://127.0.0.1:9999", "127.0.0.1:4747")).toBe(false);
+    expect(allowedWsOrigin("null", "127.0.0.1:4747")).toBe(false);
+    expect(allowedWsOrigin("javascript:alert(1)", "127.0.0.1:4747")).toBe(false);
+    expect(allowedWsOrigin("http://127.0.0.1:4747", undefined)).toBe(false);
+  });
+
   it("answers addresses it cannot read with an error, and keeps running", async () => {
     const { origin } = await serve();
     for (const bad of ["/%E0%A4%A", "/%", "/a%00b"]) {
@@ -118,19 +172,131 @@ describe("the HTTP server", () => {
     expect(headers.get("referrer-policy")).toBe("no-referrer");
   });
 
-  it("lets in only who holds the token", async () => {
-    const { origin, connections } = await serve();
-    const auth = (token: string) =>
-      fetch(`http://${origin}/api/auth`, { headers: { authorization: `Bearer ${token}` } });
-    expect((await auth("autre")).status).toBe(401);
-    expect((await auth(TOKEN)).status).toBe(204);
+  it("lets in only who holds the Bearer token or a single-use WS ticket, and rejects ?token=", async () => {
+    const { origin, connections, ticket } = await serve({ wsTicketTtlMs: 80 });
+    const auth = (header: string) =>
+      fetch(`http://${origin}/api/auth`, { headers: { authorization: header } });
+    expect((await auth("Bearer autre")).status).toBe(401);
+    // Missing Bearer prefix is refused.
+    expect((await auth(TOKEN)).status).toBe(401);
+    expect((await auth(`Bearer ${TOKEN}`)).status).toBe(204);
 
-    expect(await socketOpens(`ws://${origin}/ws?token=autre`)).toBe(false);
-    expect(await socketOpens(`ws://${origin}/ws`)).toBe(false);
-    expect(await socketOpens(`ws://${origin}/autre?token=${TOKEN}`)).toBe(false);
+    // /api/ws-ticket requires POST and valid Bearer auth.
+    expect(
+      (
+        await fetch(`http://${origin}/api/ws-ticket`, {
+          method: "GET",
+          headers: { authorization: `Bearer ${TOKEN}` },
+        })
+      ).status,
+    ).toBe(405);
+    expect(
+      (
+        await fetch(`http://${origin}/api/ws-ticket`, {
+          method: "POST",
+          headers: { authorization: TOKEN },
+        })
+      ).status,
+    ).toBe(401);
+
+    // Master token in /ws query string is no longer accepted.
+    expect(await socketStatus(`ws://${origin}/ws?token=${TOKEN}`)).toBe(401);
+    expect(await socketStatus(`ws://${origin}/ws?ticket=autre`)).toBe(401);
+    expect(await socketStatus(`ws://${origin}/ws`)).toBe(401);
+    expect(await socketStatus(`ws://${origin}/autre?ticket=${await ticket()}`)).toBe(401);
     expect(connections()).toBe(0);
-    expect(await socketOpens(`ws://${origin}/ws?token=${TOKEN}`)).toBe(true);
+
+    // Single-use ticket opens once, then cannot be replayed.
+    const t1 = await ticket();
+    expect(await socketOpens(`ws://${origin}/ws?ticket=${t1}`)).toBe(true);
+    expect(await socketStatus(`ws://${origin}/ws?ticket=${t1}`)).toBe(401);
     expect(connections()).toBe(1);
+
+    // Expired ticket is refused.
+    const expiring = await ticket();
+    await new Promise((r) => setTimeout(r, 120));
+    expect(await socketStatus(`ws://${origin}/ws?ticket=${expiring}`)).toBe(401);
+
+    // Non-browser WS clients may also authenticate with an Authorization: Bearer header.
+    expect(await socketOpens(`ws://${origin}/ws`, { authorization: `Bearer ${TOKEN}` })).toBe(true);
+    expect(await socketStatus(`ws://${origin}/ws`, { authorization: TOKEN })).toBe(401);
+    expect(connections()).toBe(2);
+  });
+
+  it("rejects cross-origin WebSocket upgrades with 403", async () => {
+    const { origin, ticket } = await serve();
+    expect(
+      await socketStatus(`ws://${origin}/ws?ticket=${await ticket()}`, {
+        origin: "https://evil.example",
+      }),
+    ).toBe(403);
+    expect(
+      await socketStatus(`ws://${origin}/ws?ticket=${await ticket()}`, { origin: "null" }),
+    ).toBe(403);
+    expect(
+      await socketOpens(`ws://${origin}/ws?ticket=${await ticket()}`, {
+        origin: `http://${origin}`,
+      }),
+    ).toBe(true);
+  });
+
+  it("caps simultaneous WebSocket connections with 503", async () => {
+    const { origin, ticket } = await serve({ maxClients: 2 });
+    const [t1, t2] = await Promise.all([ticket(), ticket()]);
+    const s1 = new WebSocket(`ws://${origin}/ws?ticket=${t1}`);
+    const s2 = new WebSocket(`ws://${origin}/ws?ticket=${t2}`);
+    cleanups.push(() => {
+      s1.terminate();
+      s2.terminate();
+    });
+    await Promise.all([s1, s2].map((s) => new Promise((resolve) => s.once("open", resolve))));
+    expect(await socketStatus(`ws://${origin}/ws?ticket=${await ticket()}`)).toBe(503);
+    const closed = new Promise((resolve) => s1.once("close", resolve));
+    s1.close();
+    await closed;
+    // Wait a tick for the server-side close handler to remove s1 from wss.clients.
+    await expect
+      .poll(() => ticket().then((t) => socketOpens(`ws://${origin}/ws?ticket=${t}`)))
+      .toBe(true);
+    s2.close();
+  });
+
+  it("rate-limits auth failures, API floods, coordinator calls and WS upgrades with 429", async () => {
+    const { origin } = await serve({
+      rateLimit: {
+        windowMs: 60_000,
+        maxAuthFailures: 2,
+        maxApiRequests: 10,
+        maxCoordinatorRequests: 2,
+        maxWsUpgrades: 10,
+      },
+    });
+    expect(
+      (await fetch(`http://${origin}/api/auth`, { headers: { authorization: "Bearer nope" } }))
+        .status,
+    ).toBe(401);
+    expect(
+      (await fetch(`http://${origin}/api/auth`, { headers: { authorization: "Bearer nope" } }))
+        .status,
+    ).toBe(401);
+    const blocked = await fetch(`http://${origin}/api/auth`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(blocked.status).toBe(429);
+    expect(Number(blocked.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+    // Shared auth-failure limiter also blocks /ws upgrades from the same IP.
+    expect(await socketStatus(`ws://${origin}/ws`, { authorization: `Bearer ${TOKEN}` })).toBe(429);
+
+    // Coordinator endpoint enforces its own per-IP cap.
+    const coord = () =>
+      fetch(`http://${origin}${COORDINATOR_PATH}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer bad" },
+        body: JSON.stringify({ tool: "list_threads" }),
+      });
+    expect((await coord()).status).toBe(401);
+    expect((await coord()).status).toBe(401);
+    expect((await coord()).status).toBe(429);
   });
 
   it("tells how to reach it only to who holds the token", async () => {
@@ -155,8 +321,8 @@ describe("the HTTP server", () => {
     expect(asked).toEqual([{ host: "127.0.0.1", port }]);
   });
 
-  it("renews the token: the old one stops working and its connections are closed", async () => {
-    const { origin, renewed } = await serve();
+  it("renews the token: the old one and its pending tickets stop working and connections close", async () => {
+    const { origin, renewed, ticket } = await serve();
     const renew = (token: string, method = "POST") =>
       fetch(`http://${origin}/api/remote/token`, {
         method,
@@ -166,7 +332,8 @@ describe("the HTTP server", () => {
     expect((await renew(TOKEN, "GET")).status).toBe(405);
     expect(renewed).toEqual([]);
 
-    const socket = new WebSocket(`ws://${origin}/ws?token=${TOKEN}`);
+    const pendingTicket = await ticket(TOKEN);
+    const socket = new WebSocket(`ws://${origin}/ws?ticket=${await ticket(TOKEN)}`);
     await new Promise((resolve) => socket.once("open", resolve));
     const closed = new Promise<number>((resolve) => socket.once("close", resolve));
 
@@ -178,17 +345,22 @@ describe("the HTTP server", () => {
     expect(renewed).toEqual([token]);
     expect(await closed).toBe(TOKEN_RENEWED);
 
-    expect(await socketOpens(`ws://${origin}/ws?token=${TOKEN}`)).toBe(false);
-    expect(await socketOpens(`ws://${origin}/ws?token=${token}`)).toBe(true);
+    // Tickets minted before renewal are invalidated.
+    expect(await socketStatus(`ws://${origin}/ws?ticket=${pendingTicket}`)).toBe(401);
+    expect(await socketOpens(`ws://${origin}/ws?ticket=${await ticket(token)}`)).toBe(true);
     expect((await renew(TOKEN)).status).toBe(401);
   });
 
   it("closes a connection that stops answering pings, and keeps one that answers", async () => {
-    const { origin } = await serve({ heartbeatMs: 60 });
-    const url = `ws://${origin}/ws?token=${TOKEN}`;
+    const { origin, ticket } = await serve({ heartbeatMs: 60 });
+    const [t1, t2] = await Promise.all([ticket(), ticket()]);
     // As a phone gone out of reach: the connection is there, nothing answers.
-    const gone = new WebSocket(url, { autoPong: false });
-    const here = new WebSocket(url);
+    const gone = new WebSocket(`ws://${origin}/ws?ticket=${t1}`, { autoPong: false });
+    const here = new WebSocket(`ws://${origin}/ws?ticket=${t2}`);
+    cleanups.push(() => {
+      gone.terminate();
+      here.terminate();
+    });
     await Promise.all([gone, here].map((s) => new Promise((resolve) => s.once("open", resolve))));
     const started = Date.now();
     await new Promise((resolve) => gone.once("close", resolve));

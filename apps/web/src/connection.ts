@@ -21,17 +21,25 @@ export interface ConnectionOptions {
   pingMs?: number;
 }
 
-function readToken(): string | null {
+export function readToken(): string | null {
   if (typeof location === "undefined") return null;
   const url = new URL(location.href);
-  const fromUrl = url.searchParams.get("token");
+  const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
+  const fromHash = hashParams.get("token");
+  const fromQuery = url.searchParams.get("token");
+  const fromUrl = fromHash || fromQuery;
   if (fromUrl) {
     try {
       localStorage.setItem(TOKEN_KEY, fromUrl);
     } catch {
       // private mode: the token lives only in this tab
     }
-    url.searchParams.delete("token");
+    if (fromHash !== null) {
+      hashParams.delete("token");
+      const nextHash = hashParams.toString();
+      url.hash = nextHash ? `#${nextHash}` : "";
+    }
+    if (fromQuery !== null) url.searchParams.delete("token");
     history.replaceState(history.state, "", url);
     return fromUrl;
   }
@@ -93,12 +101,17 @@ export class Connection {
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private pingTimer: ReturnType<typeof setInterval> | undefined;
   private pongTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Incremented on each open attempt so superseded async ticket fetches never open a second socket. */
+  private attempt = 0;
 
   constructor(options: ConnectionOptions = {}) {
     this.askTimeoutMs = options.askTimeoutMs ?? ASK_TIMEOUT_MS;
     this.pingMs = options.pingMs ?? PING_MS;
-    if (!this.token) this.state = { ...this.state, status: "unauthorized" };
-    else this.open();
+    if (!this.token || !/^[\x21-\x7e]+$/.test(this.token)) {
+      this.state = { ...this.state, status: "unauthorized" };
+    } else {
+      void this.open();
+    }
     // A phone's screen coming back on, or its network: the connection is checked at once
     // rather than at the next ping, and a wait before a new try is cut short.
     if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
@@ -121,7 +134,7 @@ export class Connection {
       clearTimeout(this.retryTimer);
       this.retryTimer = undefined;
       this.retry = 0;
-      this.open();
+      void this.open();
     }
   }
 
@@ -265,10 +278,40 @@ export class Connection {
     return true;
   }
 
-  private open(): void {
+  private async open(): Promise<void> {
+    const attempt = ++this.attempt;
+    let ticket: string | null = null;
+    try {
+      const response = await fetch("/api/ws-ticket", {
+        method: "POST",
+        headers: { authorization: `Bearer ${this.token ?? ""}` },
+      });
+      if (attempt !== this.attempt) return;
+      if (response.status === 401) {
+        if (this.renewal) {
+          await this.renewal;
+          if (attempt === this.attempt) void this.open();
+          return;
+        }
+        this.set({ ...this.state, status: "unauthorized" });
+        return;
+      }
+      if (response.ok) {
+        const body = (await response.json().catch(() => null)) as { ticket?: unknown } | null;
+        if (typeof body?.ticket === "string" && body.ticket) ticket = body.ticket;
+      }
+    } catch {
+      // Network unreachable: retry with backoff below.
+    }
+    if (attempt !== this.attempt) return;
+    if (!ticket) {
+      this.set({ ...this.state, status: "closed" });
+      this.scheduleRetry();
+      return;
+    }
     const url = new URL("/ws", location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    url.searchParams.set("token", this.token ?? "");
+    url.searchParams.set("ticket", ticket);
     const socket = new WebSocket(url);
     this.socket = socket;
     let opened = false;
@@ -316,6 +359,16 @@ export class Connection {
     socket.onclose = (event) => this.lost(socket, opened, event.code);
   }
 
+  private scheduleRetry(): void {
+    clearTimeout(this.retryTimer);
+    const wait = Math.min(1000 * 2 ** this.retry, 10_000);
+    this.retry += 1;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      void this.open();
+    }, wait);
+  }
+
   /** The connection is gone: what waited on it fails, and a new one is tried after a wait. */
   private lost(which: WebSocket, wasOpen: boolean, code?: number): void {
     // Once only, whether the heartbeat or the browser noticed first.
@@ -328,8 +381,7 @@ export class Connection {
     }
     this.pending.clear();
     this.set({ ...this.state, status: "closed" });
-    const wait = Math.min(1000 * 2 ** this.retry, 10_000);
-    this.retry += 1;
+    const attempt = this.attempt;
     // A refused upgrade looks like any other failure; ask the server whether the token is the cause.
     // After a renewal the old token is refused too, so it is asked again, with the new one
     // on the device that renewed it.
@@ -337,11 +389,9 @@ export class Connection {
       wasOpen && code !== TOKEN_RENEWED ? true : this.tokenAccepted(),
     );
     void check.then((accepted) => {
+      if (attempt !== this.attempt) return;
       if (!accepted) return this.set({ ...this.state, status: "unauthorized" });
-      this.retryTimer = setTimeout(() => {
-        this.retryTimer = undefined;
-        this.open();
-      }, wait);
+      this.scheduleRetry();
     });
   }
 

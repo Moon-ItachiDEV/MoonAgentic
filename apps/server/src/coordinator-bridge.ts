@@ -40,6 +40,8 @@ const text = (value: string, isError = false) => ({
   ...(isError ? { isError: true } : {}),
 });
 
+const START_TEAM_TIMEOUT_MS = 15 * 60_000;
+
 async function call(tool: string, args: unknown, cancelled: AbortSignal) {
   const token = await access;
   if (!url || !token) return text("MoonAgentic n'a pas donné d'accès à ce pont.", true);
@@ -48,7 +50,10 @@ async function call(tool: string, args: unknown, cancelled: AbortSignal) {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
       body: JSON.stringify({ tool, args: args ?? {} }),
-      signal: AbortSignal.any([cancelled, AbortSignal.timeout(60_000)]),
+      signal: AbortSignal.any([
+        cancelled,
+        AbortSignal.timeout(tool === "start_team" ? START_TEAM_TIMEOUT_MS : 60_000),
+      ]),
     });
     const body = (await response.json()) as { result?: unknown; error?: string };
     if (!response.ok || body.error) return text(body.error ?? `Refusé (${response.status}).`, true);

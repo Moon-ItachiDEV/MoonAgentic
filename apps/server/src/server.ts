@@ -55,7 +55,7 @@ server.listen(port, values.host, () => {
   const address = server.address();
   const uiPort = values.dev ? 5173 : typeof address === "object" && address ? address.port : port;
   const host = values.host === "0.0.0.0" ? "localhost" : values.host;
-  console.log(`MoonAgentic est prêt : http://${host}:${uiPort}/?token=${token}`);
+  console.log(`MoonAgentic est prêt : http://${host}:${uiPort}/#token=${token}`);
   if (!LOOPBACK.has(values.host)) {
     console.warn(
       "Attention : MoonAgentic écoute au-delà de cette machine, sans chiffrement. Ce lien donne " +

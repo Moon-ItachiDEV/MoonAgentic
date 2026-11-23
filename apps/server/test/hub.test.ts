@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Item, ServerMessage, Thread } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
+import { backupNow } from "../src/backups.ts";
 import { historyBefore } from "../src/history.ts";
 import { type Client, Hub } from "../src/hub.ts";
 import { LEGACY_MODE, modelOption } from "../src/session.ts";
@@ -630,7 +631,7 @@ describe("Hub with the demo agent", () => {
 
   it("hands enabled MCP servers to agents, and never shows their secrets to clients", async () => {
     const { hub, store, client, projectId } = setup();
-    hub.addMcpServer({
+    await hub.addMcpServer({
       name: "fichiers",
       transport: {
         type: "stdio",
@@ -640,7 +641,7 @@ describe("Hub with the demo agent", () => {
       },
     });
     // The demo agent cannot reach HTTP servers, so it must not be given one.
-    hub.addMcpServer({
+    await hub.addMcpServer({
       name: "web",
       transport: {
         type: "http",
@@ -648,17 +649,17 @@ describe("Hub with the demo agent", () => {
         headers: [{ name: "Authorization", value: "Bearer s3cret" }],
       },
     });
-    const off = hub.addMcpServer({
+    const off = await hub.addMcpServer({
       name: "coupé",
       transport: { type: "stdio", command: "off", args: [], env: [] },
     });
     await hub.handle(client, { type: "mcp.setEnabled", id: off, enabled: false });
-    expect(() =>
+    await expect(
       hub.addMcpServer({
         name: "Web",
         transport: { type: "stdio", command: "x", args: [], env: [] },
       }),
-    ).toThrow("déjà");
+    ).rejects.toThrow("déjà");
 
     const threadId = hub.createThread({
       projectId,
@@ -1419,4 +1420,236 @@ describe("quotas on Hub", () => {
     expect(client.messages).toContainEqual({ type: "done", requestId: "q1" });
     expect(reads).toBe(1);
   });
+});
+
+describe("security boundaries", () => {
+  it("refuses reserving the internal moonagentic MCP server name", async () => {
+    const { hub } = setup();
+    for (const reserved of ["moonagentic", "MoonAgentic", "  MOONAGENTIC  "]) {
+      await expect(
+        hub.addMcpServer({
+          name: reserved,
+          transport: { type: "stdio", command: "node", args: [], env: [] },
+        }),
+      ).rejects.toThrow("réservé");
+    }
+  });
+
+  it("keeps MCP secret values out of state.sqlite and its backups, and migrates legacy secrets", async () => {
+    const { dir, store, hub } = setup();
+    const id = await hub.addMcpServer({
+      name: "api",
+      transport: {
+        type: "http",
+        url: "https://mcp.example.com",
+        headers: [{ name: "Authorization", value: "Bearer ultra-secret-42" }],
+      },
+    });
+    // Nothing in SQLite or a daily backup holds the secret value.
+    const rawSetting = JSON.stringify(store.getSetting("mcpServers", []));
+    expect(rawSetting).not.toContain("ultra-secret-42");
+    expect(rawSetting).toContain("Authorization");
+    const backup = backupNow(store, path.join(dir, "backups"))!;
+    expect(readFileSync(backup).toString("latin1")).not.toContain("ultra-secret-42");
+    // Hydrated records in memory still carry the secret for agents.
+    expect(await hub.catalog.mcpServers()).toMatchObject([
+      {
+        id,
+        transport: { headers: [{ name: "Authorization", value: "Bearer ultra-secret-42" }] },
+      },
+    ]);
+
+    // Simulate a legacy database that stored plaintext secrets directly in SQLite.
+    const legacyDir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-legacy-mcp-"));
+    const legacyStore = new Store(path.join(legacyDir, "state.sqlite"));
+    legacyStore.setSetting("mcpServers", [
+      {
+        id: "old-1",
+        name: "legacy",
+        enabled: true,
+        transport: {
+          type: "stdio",
+          command: "npx",
+          args: ["srv"],
+          env: [{ name: "API_KEY", value: "legacy-plain-secret" }],
+        },
+      },
+    ]);
+    const migratedHub = new Hub(legacyStore, new Agents({ demo: true }), {
+      worktreesDir: path.join(legacyDir, ".worktrees"),
+      homeDir: legacyDir,
+      prWatchMs: 0,
+    });
+    cleanups.push(async () => {
+      await migratedHub.close();
+      legacyStore.close();
+      rmSync(legacyDir, { recursive: true, force: true });
+    });
+    await migratedHub.catalog.ready;
+    // Secret was moved out of SQLite and is still available when hydrated.
+    expect(JSON.stringify(legacyStore.getSetting("mcpServers", []))).not.toContain(
+      "legacy-plain-secret",
+    );
+    const migratedBackup = backupNow(legacyStore, path.join(legacyDir, "backups"))!;
+    expect(readFileSync(migratedBackup).toString("latin1")).not.toContain("legacy-plain-secret");
+    expect(await migratedHub.catalog.mcpServers()).toMatchObject([
+      {
+        id: "old-1",
+        transport: { env: [{ name: "API_KEY", value: "legacy-plain-secret" }] },
+      },
+    ]);
+  });
+
+  it("keeps snapshot working and reports mcpSecretsError when the MCP secret vault cannot be read", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-bad-vault-"));
+    const vaultFile = path.join(
+      dir,
+      process.platform === "win32" ? "mcp-secrets.dpapi" : "mcp-secrets.json",
+    );
+    writeFileSync(vaultFile, "{corrupt-vault-data", "utf8");
+    const store = new Store(path.join(dir, "state.sqlite"));
+    store.setSetting("mcpServers", [
+      {
+        id: "srv-1",
+        name: "api",
+        enabled: true,
+        transport: {
+          type: "stdio",
+          command: "npx",
+          args: ["srv"],
+          env: [{ name: "API_KEY", value: "" }],
+        },
+      },
+    ]);
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(dir, ".worktrees"),
+      homeDir: dir,
+      prWatchMs: 0,
+    });
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    // Synchronous snapshot succeeds immediately even before async vault loading finishes.
+    const initial = hub.snapshot();
+    expect(initial.mcpServers).toMatchObject([{ id: "srv-1", name: "api" }]);
+
+    // Once vault loading finishes, the error is surfaced in snapshot without crashing agents.
+    await hub.catalog.ready;
+    expect(hub.snapshot().mcpSecretsError).toMatch(/secrets MCP/i);
+    expect(await hub.catalog.mcpServers()).toMatchObject([
+      { id: "srv-1", transport: { env: [{ name: "API_KEY", value: "" }] } },
+    ]);
+
+    // Removing the last MCP server clears the unreadable vault and error.
+    await hub.catalog.removeMcpServer("srv-1");
+    expect(hub.snapshot().mcpSecretsError).toBeUndefined();
+  });
+
+  it("blocks writes/fetch/other on full-mode reviewers, and also blocks execute on coordinators", async () => {
+    const { dir, store, hub, projectId } = setup();
+    const agent = path.join(dir, "kind-agent.mjs");
+    // Mock ACP agent that requests permission for the ToolKind sent in the prompt.
+    writeFileSync(
+      agent,
+      `import { createInterface } from "node:readline";
+      const send = (msg) => console.log(JSON.stringify({ jsonrpc: "2.0", ...msg }));
+      let pending = null;
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const msg = JSON.parse(line);
+        if (!msg.method) {
+          if (pending) { const done = pending; pending = null; done(msg.result); }
+          return;
+        }
+        const { id, method, params } = msg;
+        if (method === "initialize") {
+          send({ id, result: { protocolVersion: 1, agentCapabilities: {} } });
+        } else if (method === "session/new") {
+          send({ id, result: { sessionId: "s1" } });
+        } else if (method === "session/prompt") {
+          const kind = (params.prompt.at(-1)?.text ?? "").trim();
+          const toolCall = {
+            toolCallId: "tc-" + kind,
+            title: "Tool " + kind,
+            ...(kind === "missing" ? {} : { kind }),
+            status: "pending",
+          };
+          pending = (result) => {
+            const ok = result?.outcome?.outcome === "selected";
+            send({
+              method: "session/update",
+              params: {
+                sessionId: "s1",
+                update: {
+                  sessionUpdate: "agent_message_chunk",
+                  content: { type: "text", text: ok ? "AUTO" : "STOP" },
+                },
+              },
+            });
+            send({ id, result: { stopReason: ok ? "end_turn" : "cancelled" } });
+          };
+          send({
+            id: 77,
+            method: "session/request_permission",
+            params: {
+              sessionId: "s1",
+              toolCall,
+              options: [
+                { optionId: "allow", name: "Autoriser", kind: "allow_once" },
+                { optionId: "deny", name: "Refuser", kind: "reject_once" },
+              ],
+            },
+          });
+        }
+      });`,
+    );
+    const agentId = hub.addCustomAgent({
+      name: "KindProbe",
+      command: process.execPath,
+      args: [agent],
+    });
+
+    const check = async (threadId: string, kind: string, shouldAutoApprove: boolean) => {
+      hub.send(threadId, kind);
+      if (shouldAutoApprove) {
+        await hub.whenIdle(threadId);
+        const last = store.listItems(threadId).findLast((i) => i.kind === "agent");
+        expect(last && "text" in last ? last.text : "").toBe("AUTO");
+      } else {
+        await expect
+          .poll(() => store.getThread(threadId)!.status, { timeout: 10_000 })
+          .toBe("waiting");
+        await hub.cancel(threadId);
+        await hub.whenIdle(threadId);
+      }
+    };
+
+    // Reviewer with full permissionMode: read/search/think/execute auto-approve (so shell-based
+    // reviewers like Codex can inspect diffs/files), while writes/fetch/other/missing wait.
+    const reviewerId = hub.createThread({
+      projectId,
+      agentId,
+      permissionMode: "full",
+      role: "reviewer",
+      text: "",
+    });
+    for (const allowed of ["read", "search", "think", "execute"]) {
+      await check(reviewerId, allowed, true);
+    }
+    for (const blocked of ["other", "fetch", "edit", "delete", "move", "missing"]) {
+      await check(reviewerId, blocked, false);
+    }
+
+    // Coordinator switched to full permissionMode: execute/other/fetch/edits still wait on user.
+    const coordinatorId = hub.openCoordinator(projectId, agentId);
+    hub.setPermissionMode(coordinatorId, "full");
+    for (const allowed of ["read", "search", "think"]) {
+      await check(coordinatorId, allowed, true);
+    }
+    for (const blocked of ["execute", "other", "fetch", "edit"]) {
+      await check(coordinatorId, blocked, false);
+    }
+  }, 60_000);
 });

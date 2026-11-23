@@ -151,6 +151,7 @@ function GithubRow() {
 export function ConnectionsDialog(props: {
   agents: AgentInfo[];
   mcpServers: McpServerInfo[];
+  mcpSecretsError?: string | null;
   onOpenMcp: () => void;
   onClose: () => void;
 }) {
@@ -269,6 +270,7 @@ export function ConnectionsDialog(props: {
           </div>
         )}
         <h3>Serveurs MCP</h3>
+        {props.mcpSecretsError && <p className="error">{props.mcpSecretsError}</p>}
         <div className="cx-mcp">
           <span>
             {props.mcpServers.length === 0

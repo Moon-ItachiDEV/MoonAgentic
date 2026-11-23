@@ -4,8 +4,9 @@ import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  AgentSession,
   agentEnv,
+  AgentSession,
+  electronEnv,
   jsonLines,
   needsSignIn,
   PROMPT_INACTIVITY_MS,
@@ -495,15 +496,112 @@ describe("prompt inactivity watchdog", () => {
 });
 
 describe("agentEnv", () => {
+  it("strips MoonAgentic, GitHub, git credential and service-manager variables while keeping tool/LLM env", () => {
+    const clean = agentEnv({
+      PATH: "/usr/bin",
+      HOME: "/home/u",
+      ANTHROPIC_API_KEY: "sk-ant-keep",
+      MOONAGENTIC_DEMO_MODELS: "options",
+      MOONAGENTIC_DEMO_DELAY_MS: "0",
+      MOONAGENTIC_TOKEN: "root-secret",
+      MOONAGENTIC_GITHUB_TOKEN: "gho_secret",
+      MOONAGENTIC_COORDINATOR_BOOTSTRAP: "boot",
+      MOONAGENTIC_COORDINATOR_URL: "http://127.0.0.1:4747",
+      MOONAGENTIC_HOME: "/home/u/.moonagentic",
+      GH_TOKEN: "ghp_host",
+      GITHUB_TOKEN: "ghp_host2",
+      gh_enterprise_token: "ghe_host",
+      GIT_ASKPASS: "/bin/askpass",
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "!secret",
+      TAILSCALE_AUTHKEY: "tskey-secret",
+      NPM_TOKEN: "npm_secret",
+      NOTIFY_SOCKET: "/run/systemd/notify",
+    });
+    expect(clean).toEqual({
+      PATH: "/usr/bin",
+      HOME: "/home/u",
+      ANTHROPIC_API_KEY: "sk-ant-keep",
+      MOONAGENTIC_DEMO_MODELS: "options",
+      MOONAGENTIC_DEMO_DELAY_MS: "0",
+    });
+  });
+
+  it("never passes stripped host secrets to a spawned ACP agent process", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-env-"));
+    let session: AgentSession | undefined;
+    cleanups.push(async () => {
+      await session?.close().catch(() => undefined);
+      delete process.env.MOONAGENTIC_GITHUB_TOKEN;
+      delete process.env.GH_TOKEN;
+      delete process.env.MOONAGENTIC_TOKEN;
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+    process.env.MOONAGENTIC_GITHUB_TOKEN = "gho_must_not_leak";
+    process.env.GH_TOKEN = "ghp_must_not_leak";
+    process.env.MOONAGENTIC_TOKEN = "root_must_not_leak";
+
+    const agent = path.join(dir, "env-agent.mjs");
+    writeFileSync(
+      agent,
+      `import { createInterface } from "node:readline";
+      const send = (msg) => console.log(JSON.stringify({ jsonrpc: "2.0", ...msg }));
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const { id, method } = JSON.parse(line);
+        if (method === "initialize") {
+          send({ id, result: { protocolVersion: 1, agentCapabilities: {} } });
+        } else if (method === "session/new") {
+          send({ id, result: { sessionId: "s1" } });
+        } else if (method === "session/prompt") {
+          const leaked = ["MOONAGENTIC_GITHUB_TOKEN", "GH_TOKEN", "MOONAGENTIC_TOKEN"].filter(
+            (k) => process.env[k] !== undefined,
+          );
+          send({
+            method: "session/update",
+            params: {
+              sessionId: "s1",
+              update: {
+                sessionUpdate: "agent_message_chunk",
+                content: { type: "text", text: JSON.stringify(leaked) },
+              },
+            },
+          });
+          send({ id, result: { stopReason: "end_turn" } });
+        }
+      });`,
+    );
+
+    let reply = "";
+    session = await AgentSession.start({
+      launch: { command: process.execPath, args: [agent] },
+      cwd: dir,
+      previousSessionId: null,
+      handlers: {
+        onUpdate: (u) => {
+          if (u.sessionUpdate === "agent_message_chunk" && u.content.type === "text") {
+            reply += u.content.text;
+          }
+        },
+        requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+        onExit: () => undefined,
+      },
+    });
+    await session.prompt("check env");
+    expect(JSON.parse(reply)).toEqual([]);
+  });
+});
+
+describe("electronEnv", () => {
   const env = { PATH: "/bin", ELECTRON_RUN_AS_NODE: "1" };
 
   it("keeps ELECTRON_RUN_AS_NODE only for adapters run by the app's own program", () => {
-    expect(agentEnv("/app/MoonAgentic", env, "/app/MoonAgentic")).toEqual(env);
-    expect(agentEnv("/usr/local/bin/agy", env, "/app/MoonAgentic")).toEqual({ PATH: "/bin" });
+    expect(electronEnv("/app/MoonAgentic", env, "/app/MoonAgentic")).toEqual(env);
+    expect(electronEnv("/usr/local/bin/agy", env, "/app/MoonAgentic")).toEqual({ PATH: "/bin" });
   });
 
   it("leaves the environment as is outside the desktop app", () => {
     const plain = { PATH: "/bin" };
-    expect(agentEnv("/usr/local/bin/agy", plain, "/usr/bin/node")).toBe(plain);
+    expect(electronEnv("/usr/local/bin/agy", plain, "/usr/bin/node")).toBe(plain);
   });
 });

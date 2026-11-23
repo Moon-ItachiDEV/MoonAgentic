@@ -19,8 +19,8 @@ const fake = fileURLToPath(new URL("./fake-launcher.ts", import.meta.url));
 
 describe("readLine", () => {
   it("finds the address the server prints once ready", () => {
-    expect(readLine("MoonAgentic est prêt : http://127.0.0.1:4747/?token=a-b_c")).toEqual({
-      ready: "http://127.0.0.1:4747/?token=a-b_c",
+    expect(readLine("MoonAgentic est prêt : http://127.0.0.1:4747/#token=a-b_c")).toEqual({
+      ready: "http://127.0.0.1:4747/#token=a-b_c",
     });
   });
 
@@ -69,7 +69,7 @@ describe("ServerProcess", () => {
     const { server, states } = run("steady");
     server.start();
     await until(states, (s) => s.some((x) => x.kind === "ready"));
-    expect(server.state).toEqual({ kind: "ready", url: "http://127.0.0.1:4999/?token=abc" });
+    expect(server.state).toEqual({ kind: "ready", url: "http://127.0.0.1:4999/#token=abc" });
     await server.stop();
     expect(states.map((s) => s.kind)).toEqual(["starting", "ready", "stopping", "stopped"]);
   });

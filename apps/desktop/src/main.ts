@@ -78,7 +78,7 @@ function start(): void {
 function appUrl(): string | undefined {
   try {
     const token = readFileSync(path.join(dataDir, "token"), "utf8").trim();
-    return `http://127.0.0.1:${PORT}/?token=${encodeURIComponent(token)}`;
+    return `http://127.0.0.1:${PORT}/#token=${encodeURIComponent(token)}`;
   } catch {
     return server.state.kind === "ready" ? server.state.url : undefined;
   }

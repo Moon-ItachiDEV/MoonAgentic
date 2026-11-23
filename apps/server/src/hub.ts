@@ -70,7 +70,7 @@ import { COORDINATOR_TOOLS } from "./coordinator-tools.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
 import { shipTarget, Teams, teamStatus } from "./team.ts";
-import { mcpInfo } from "./mcp.ts";
+import { RESERVED_MCP_NAME } from "./mcp.ts";
 import { type QuotaReader, Quotas } from "./quotas.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
@@ -180,8 +180,18 @@ const archiveRef = (threadId: string) => `refs/moonagentic/${threadId}/archive`;
 const workFolder = (workspace: Workspace) =>
   workspace.subdir ? path.join(workspace.path, workspace.subdir) : workspace.path;
 
-/** What a team's reviewer never does on its own, whatever its access: it reads, it does not change. */
-const READ_ONLY_REFUSED = new Set(["edit", "delete", "move"]);
+/**
+ * What a coordinator may do on its own when granted full access: only strictly read-only
+ * inspection (`read`, `search`, `think`). Commands (`execute`), file edits, network fetches
+ * and unknown/unspecified (`other`) tools wait on the user.
+ */
+export const COORDINATOR_ALLOWED = new Set(["read", "search", "think"]);
+/**
+ * What a team's reviewer may do on its own in full access: read-only inspection plus shell
+ * commands (`execute`), since agents such as Codex inspect files and git diffs via the shell.
+ * File edits, deletes, moves, network fetches and unknown (`other`) tools still wait on the user.
+ */
+export const REVIEWER_ALLOWED = new Set(["read", "search", "think", "execute"]);
 
 const TEAM_AT_WORK = "Cette équipe travaille encore : arrête-la d'abord.";
 
@@ -353,6 +363,8 @@ export class Hub {
       whenIdle: (id) => this.whenIdle(id),
       setArchived: (id, archived) => this.setArchived(id, archived),
       discover: (agentId, projectId) => this.discover(agentId, projectId),
+      confirmTeamPermission: (coordinatorId, task, signal) =>
+        this.confirmTeamPermission(coordinatorId, task, signal),
     });
     store.recoverAfterRestart();
     this.teams.recover();
@@ -391,11 +403,13 @@ export class Hub {
   }
 
   snapshot(): Snapshot {
+    const mcpSecretsError = this.catalog.mcpSecretsError();
     return {
       coordinator: this.coordinators.coordinatorSettings(),
       favorites: this.catalog.favorites(),
       requests: this.pendingRequests(),
-      mcpServers: this.catalog.mcpServers().map(mcpInfo),
+      mcpServers: this.catalog.mcpServerInfos(),
+      ...(mcpSecretsError ? { mcpSecretsError } : {}),
       agents: this.catalog.list(),
       projects: this.store.listProjects().map((p) => this.withGit(p)),
       threads: this.store.listThreads(),
@@ -733,7 +747,7 @@ export class Hub {
         this.catalog.toggleFavorite(message.agentId, message.model, message.starred);
         return;
       case "mcp.add": {
-        const id = this.catalog.addMcpServer(message.server);
+        const id = await this.catalog.addMcpServer(message.server);
         client.send({ type: "created", requestId: message.requestId, id });
         return;
       }
@@ -741,7 +755,7 @@ export class Hub {
         this.catalog.setMcpEnabled(message.id, message.enabled);
         return;
       case "mcp.remove":
-        this.catalog.removeMcpServer(message.id);
+        await this.catalog.removeMcpServer(message.id);
         return;
       case "workspace.review":
         // The panel waits for this reply, so a failure is sent to it rather than thrown.
@@ -940,8 +954,13 @@ export class Hub {
   }
 
   /** One tool call of a coordinator, from its bridge. */
-  coordinatorCall(token: string, tool: string, args: unknown): Promise<unknown> {
-    return this.coordinators.coordinatorCall(token, tool, args);
+  coordinatorCall(
+    token: string,
+    tool: string,
+    args: unknown,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    return this.coordinators.coordinatorCall(token, tool, args, signal);
   }
 
   /**
@@ -1758,7 +1777,7 @@ export class Hub {
     this.catalog.removeCustomAgent(agentId);
   }
 
-  addMcpServer(input: McpServerInput): string {
+  addMcpServer(input: McpServerInput): Promise<string> {
     return this.catalog.addMcpServer(input);
   }
 
@@ -2008,11 +2027,17 @@ export class Hub {
   ): Promise<AgentSession> {
     // Until the thread's own model and settings are applied, the agent's are not news.
     let ready = false;
+    const coordinatorMcp = this.coordinators.coordinatorServer(thread);
+    const catalogMcp = await this.catalog.mcpServers();
+    const userMcp =
+      thread.kind === "coordinator"
+        ? catalogMcp.filter((s) => s.name.trim().toLowerCase() !== RESERVED_MCP_NAME)
+        : catalogMcp;
     const session = await AgentSession.start({
       launch: this.agents.launch(thread.agentId),
       cwd,
       previousSessionId: this.store.getSessionId(thread.id),
-      mcpServers: [...this.catalog.mcpServers(), ...this.coordinators.coordinatorServer(thread)],
+      mcpServers: [...userMcp, ...coordinatorMcp],
       signal: AbortSignal.any([stop, AbortSignal.timeout(START_TIMEOUT_MS)]),
       handlers: {
         onUpdate: (update) => this.applyUpdate(thread.id, update),
@@ -2237,11 +2262,15 @@ export class Hub {
   ): Promise<acp.RequestPermissionResponse> {
     const thread = this.requireThread(threadId);
     if (request.toolCall.title) this.upsertTool(threadId, request.toolCall);
-    // A reviewer only reads and runs checks: even with full access, a change waits on the user.
-    // Nor does a coordinator change files: it routes, and the threads it opens do the work.
-    const edits =
-      (thread.role === "reviewer" || thread.kind === "coordinator") &&
-      READ_ONLY_REFUSED.has(request.toolCall.kind ?? "");
+    // A coordinator only reads and routes; a team reviewer may also run read-only shell checks
+    // (Codex reads files via execute), while file edits, fetches and unknown tools wait on the user.
+    const allowed =
+      thread.kind === "coordinator"
+        ? COORDINATOR_ALLOWED
+        : thread.role === "reviewer"
+          ? REVIEWER_ALLOWED
+          : undefined;
+    const readOnlyDenied = !!allowed && !allowed.has(request.toolCall.kind ?? "");
     // MoonAgentic's own tools are the coordinator's work, already limited by the server:
     // asking the user before each one would make it useless.
     this.noteToolName(threadId, request.toolCall);
@@ -2250,11 +2279,12 @@ export class Hub {
     const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
     const own =
       thread.kind === "coordinator" &&
+      !!this.coordinatorUrl &&
       (named !== undefined
         ? OWN_TOOL.test(named)
         : OWN_TOOL.test(request.toolCall.title ?? "") &&
           (!request.toolCall.kind || request.toolCall.kind === "other"));
-    if ((thread.permissionMode === "full" && !edits) || own) {
+    if ((thread.permissionMode === "full" && !readOnlyDenied) || own) {
       const allow =
         request.options.find((o) => o.kind === "allow_once") ??
         request.options.find((o) => o.kind === "allow_always");
@@ -2277,6 +2307,59 @@ export class Hub {
       this.pendingPermissions.set(id, { threadId, resolve });
       this.broadcastRequests();
       signal.addEventListener("abort", () => this.settlePermission(id), { once: true });
+    });
+  }
+
+  /**
+   * Asks the user once before a supervised coordinator launches a saved full-access team.
+   * Reuses the same permission card and « À traiter » queue as agent permissions.
+   */
+  private confirmTeamPermission(
+    coordinatorId: string,
+    task: string,
+    signal?: AbortSignal,
+  ): Promise<PermissionMode | null> {
+    if (signal?.aborted) return Promise.resolve(null);
+    const preview = summaryOf(task, 80);
+    const id = `permission:${randomUUID()}`;
+    this.putItem(coordinatorId, {
+      id,
+      kind: "permission",
+      title: preview
+        ? `Lancer l'équipe en accès complet : ${preview}`
+        : "Lancer l'équipe en accès complet",
+      options: [
+        { optionId: "full", name: "Autoriser en accès complet", kind: "allow_once" },
+        { optionId: "supervised", name: "Lancer en supervisé", kind: "allow_once" },
+        { optionId: "reject", name: "Refuser", kind: "reject_once" },
+      ],
+      outcome: null,
+      at: Date.now(),
+    });
+    this.updateThread(coordinatorId, { status: "waiting" });
+    this.admit();
+    return new Promise<PermissionMode | null>((resolve) => {
+      const onAbort = () => {
+        this.settlePermission(id);
+        if (
+          this.store.getThread(coordinatorId)?.status === "waiting" &&
+          ![...this.pendingPermissions.values()].some((p) => p.threadId === coordinatorId)
+        ) {
+          this.updateThread(coordinatorId, {
+            status: this.turns.has(coordinatorId) ? "running" : "idle",
+          });
+        }
+      };
+      const done = (response: acp.RequestPermissionResponse) => {
+        signal?.removeEventListener("abort", onAbort);
+        if (response.outcome.outcome !== "selected") return resolve(null);
+        if (response.outcome.optionId === "full") return resolve("full");
+        if (response.outcome.optionId === "supervised") return resolve("supervised");
+        resolve(null);
+      };
+      this.pendingPermissions.set(id, { threadId: coordinatorId, resolve: done });
+      this.broadcastRequests();
+      signal?.addEventListener("abort", onAbort, { once: true });
     });
   }
 

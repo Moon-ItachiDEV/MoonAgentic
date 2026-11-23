@@ -752,6 +752,8 @@ export interface Snapshot {
   favorites: Favorites;
   requests: PendingRequest[];
   mcpServers: McpServerInfo[];
+  /** Set when MCP secrets could not be decrypted/read from disk (e.g. DPAPI vault moved machines). */
+  mcpSecretsError?: string;
   agents: AgentInfo[];
   projects: Project[];
   threads: Thread[];
@@ -767,7 +769,7 @@ export type ServerMessage =
   | { type: "coordinatorSettings"; settings: CoordinatorSettings }
   /** Every permission request still waiting, after one is added or answered. */
   | { type: "requests"; requests: PendingRequest[] }
-  | { type: "mcpServers"; servers: McpServerInfo[] }
+  | { type: "mcpServers"; servers: McpServerInfo[]; error?: string }
   | { type: "project"; project: Project }
   | { type: "thread"; thread: Thread }
   /** The thread was deleted, its timeline with it. */
