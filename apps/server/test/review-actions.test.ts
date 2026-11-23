@@ -65,7 +65,8 @@ async function threadOnBranch() {
   return { root, repo, remote, hub, threadId, workspace, dir: workspace().path };
 }
 
-describe("dropping one file's changes", () => {
+// Many git commands each: Windows runners are slow at them.
+describe("dropping one file's changes", { timeout: 40_000 }, () => {
   it("puts a changed file back, removes a new one, and undoes a rename", async () => {
     const { hub, threadId, dir } = await threadOnBranch();
     const head = git(dir, "rev-parse", "HEAD");
@@ -128,7 +129,8 @@ describe("dropping one file's changes", () => {
   });
 });
 
-describe("keeping up with the branch it started from", () => {
+// Many git commands each: Windows runners are slow at them.
+describe("keeping up with the branch it started from", { timeout: 40_000 }, () => {
   it("says it is up to date, then behind, and merges main in with the work kept", async () => {
     const { repo, hub, threadId, dir, workspace } = await threadOnBranch();
     writeFileSync(path.join(dir, "README.md"), "# Demo\nle travail du fil\n");
