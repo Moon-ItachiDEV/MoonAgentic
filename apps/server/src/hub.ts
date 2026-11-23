@@ -1514,6 +1514,11 @@ export class Hub {
       this.setPendingRestore(threadId, undefined);
       return { removed, thread };
     });
+    // The images of the messages taken out go too: the composer got them back to send again.
+    this.attachments.remove(
+      threadId,
+      removed.flatMap((i) => (i.kind === "user" ? (i.images ?? []).map((image) => image.id) : [])),
+    );
     this.broadcast({ type: "thread", thread });
     this.sendToViewers(threadId, {
       type: "items",

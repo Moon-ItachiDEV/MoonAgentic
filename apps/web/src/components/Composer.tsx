@@ -7,7 +7,14 @@ import type {
   Skill,
   Thread,
 } from "@moonagentic/protocol";
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  type ChangeEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   type AppAction,
   atMessageStart,
@@ -30,10 +37,13 @@ import {
   startDictation,
 } from "../dictation.ts";
 import { connection, newId } from "../connection.ts";
+import { carriesFiles, IMAGE_ACCEPT, pastedImages } from "../images.ts";
+import { useImageDrafts } from "../use-image-drafts.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { quotaWarning, roomiest } from "../quotas.ts";
 import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
+import { ComposerImages } from "./ComposerImages.tsx";
 import { ContextGauge } from "./ContextGauge.tsx";
 import {
   IconArrowUp,
@@ -141,6 +151,11 @@ export function Composer(props: {
   const [focused, setFocused] = useState(false);
   /** A press that started inside the composer, so a blur it causes does not fold it. */
   const pressedInside = useRef(false);
+  const images = useImageDrafts();
+  const filePicker = useRef<HTMLInputElement>(null);
+  const camera = useRef<HTMLInputElement>(null);
+  /** Files are being dragged over the page: the composer shows it takes them. */
+  const [dropping, setDropping] = useState(false);
 
   const agentId =
     thread?.agentId ??
@@ -224,15 +239,22 @@ export function Composer(props: {
   }, [pickerOpen]);
   useEffect(
     () =>
-      onFillComposer((threadId, value) => {
+      onFillComposer((threadId, value, files) => {
         if (threadId !== thread?.id) return;
         setText(value);
+        if (files.length) images.add(files);
         input.current?.focus();
       }),
     [thread?.id],
   );
 
-  const canSend = text.trim().length > 0 && !busy && !running && !!agent?.available && !!project;
+  const canSend =
+    (text.trim().length > 0 || images.ready.length > 0) &&
+    !images.sending &&
+    !busy &&
+    !running &&
+    !!agent?.available &&
+    !!project;
   const canDictate = !!project && dictationSupported();
 
   const startVoice = () => {
@@ -503,7 +525,7 @@ export function Composer(props: {
 
   const submit = async () => {
     const typed = text.trim();
-    if (!typed || busy) return;
+    if ((!typed && !images.drafts.length) || busy) return;
     // MoonAgentic's own commands run here; the rest of the line stays in the composer.
     const submission = resolveSubmission(typed, commands);
     if (submission.kind === "action") {
@@ -513,8 +535,14 @@ export function Composer(props: {
     }
     if (!canSend || !agentId || !project) return;
     const value = submission.text;
+    const attachments = images.ready.length ? { attachments: images.ready.map((i) => i.id) } : {};
     if (thread) {
-      if (connection.send({ type: "thread.send", threadId: thread.id, text: value })) setText("");
+      if (
+        connection.send({ type: "thread.send", threadId: thread.id, text: value, ...attachments })
+      ) {
+        setText("");
+        images.sent();
+      }
       return;
     }
     setBusy(true);
@@ -534,8 +562,10 @@ export function Composer(props: {
         ...(changed.length ? { settings: Object.fromEntries(changed) } : {}),
         ...(project.git ? { isolated } : {}),
         text: value,
+        ...attachments,
       });
       setText("");
+      images.sent();
       // Gone to another page while the thread was being made: it is not pulled back from
       // there. The thread is in the lists, at work.
       if (location.pathname === from) props.onCreated(id);
@@ -571,6 +601,59 @@ export function Composer(props: {
     }
   }
 
+  const takePicked = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = [...(event.target.files ?? [])];
+    // Emptied, so picking the same file again is seen.
+    event.target.value = "";
+    if (files.length) images.add(files);
+    input.current?.focus();
+  };
+
+  // Files dropped anywhere on the page go to the message; without this the browser would
+  // leave the app to show the file instead.
+  const canTake = !!project;
+  const addImages = useRef(images.add);
+  addImages.current = images.add;
+  useEffect(() => {
+    let over = 0;
+    const enter = (event: DragEvent) => {
+      if (!carriesFiles(event.dataTransfer)) return;
+      over += 1;
+      if (canTake) setDropping(true);
+    };
+    const leave = (event: DragEvent) => {
+      if (!carriesFiles(event.dataTransfer)) return;
+      over = Math.max(0, over - 1);
+      if (!over) setDropping(false);
+    };
+    const hover = (event: DragEvent) => {
+      if (!carriesFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = canTake ? "copy" : "none";
+    };
+    const drop = (event: DragEvent) => {
+      if (!carriesFiles(event.dataTransfer)) return;
+      event.preventDefault();
+      over = 0;
+      setDropping(false);
+      const files = [...(event.dataTransfer?.files ?? [])];
+      if (canTake && files.length) {
+        addImages.current(files);
+        input.current?.focus();
+      }
+    };
+    window.addEventListener("dragenter", enter);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("dragover", hover);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragenter", enter);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("dragover", hover);
+      window.removeEventListener("drop", drop);
+    };
+  }, [canTake]);
+
   const hints = narrow ? "" : " @ fichiers, $ skills, / commandes";
   const placeholder = !project
     ? "Crée d'abord un projet pour parler à un agent"
@@ -581,7 +664,8 @@ export function Composer(props: {
         : `Demande n'importe quoi à tes agents…${hints}`;
 
   // On a phone the composer is one line until it is used, as in the mockup.
-  const open = focused || !!text || !!voice || plusOpen || pickerOpen || suggesting;
+  const hasImages = images.drafts.length > 0;
+  const open = focused || !!text || hasImages || !!voice || plusOpen || pickerOpen || suggesting;
   const seconds = voice ? Math.floor((Date.now() - voice.started) / 1000) : 0;
   const heardText = voice ? `${voice.heard.final} ` : "";
 
@@ -618,7 +702,7 @@ export function Composer(props: {
     <>
       {notice}
       <div
-        className={`composer${open ? " open" : ""}${voice ? " vx-on" : ""}`}
+        className={`composer${open ? " open" : ""}${voice ? " vx-on" : ""}${dropping ? " drop" : ""}`}
         ref={root}
         onFocus={() => setFocused(true)}
         onPointerDownCapture={() => {
@@ -662,6 +746,30 @@ export function Composer(props: {
             </div>
           </div>
         )}
+        <ComposerImages drafts={images.drafts} onRemove={images.remove} />
+        {dropping && (
+          <div className="cdrop" aria-hidden>
+            Dépose l'image pour la joindre
+          </div>
+        )}
+        <input
+          ref={filePicker}
+          type="file"
+          accept={IMAGE_ACCEPT}
+          multiple
+          hidden
+          aria-label="Choisir des images"
+          onChange={takePicked}
+        />
+        <input
+          ref={camera}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+          aria-label="Prendre une photo"
+          onChange={takePicked}
+        />
         <textarea
           ref={input}
           hidden={!!voice}
@@ -683,6 +791,12 @@ export function Composer(props: {
             if (dismissed !== null && e.target.value.length <= dismissed + 1) setDismissed(null);
           }}
           onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+          onPaste={(e) => {
+            const files = pastedImages(e.clipboardData);
+            if (!files.length) return;
+            e.preventDefault();
+            images.add(files);
+          }}
           onFocus={() => {
             // Skills or commands added to the folder since show up without a reload.
             loadCatalog();
@@ -738,6 +852,10 @@ export function Composer(props: {
             onToggle={(open) => {
               setPlusOpen(open);
               if (open) setMenu(false);
+            }}
+            onImage={(from) => {
+              setPlusOpen(false);
+              (from === "camera" ? camera : filePicker).current?.click();
             }}
             onPick={(insert) => {
               setPlusOpen(false);
@@ -855,7 +973,7 @@ export function Composer(props: {
             >
               <IconStop />
             </button>
-          ) : !text.trim() && canDictate ? (
+          ) : !text.trim() && !hasImages && canDictate ? (
             <button
               className="send"
               aria-label="Mode vocal"
@@ -868,6 +986,7 @@ export function Composer(props: {
             <button
               className="send"
               aria-label="Envoyer"
+              title={images.sending ? "L'image finit d'arriver sur le serveur" : undefined}
               disabled={!canSend}
               onClick={() => void submit()}
             >

@@ -173,7 +173,7 @@ describe("the HTTP server", () => {
     const { headers } = await fetch(`http://${origin}/`);
     const policy = headers.get("content-security-policy") ?? "";
     expect(policy).toContain("frame-ancestors 'none'");
-    expect(policy).toContain("img-src 'self' data:");
+    expect(policy).toContain("img-src 'self' data: blob:");
     expect(policy).toContain(`connect-src 'self' ws://${origin}`);
     expect(headers.get("x-content-type-options")).toBe("nosniff");
     expect(headers.get("referrer-policy")).toBe("no-referrer");

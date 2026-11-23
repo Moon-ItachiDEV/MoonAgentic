@@ -168,12 +168,15 @@ describe("thread workspaces", () => {
 
   it("goes back to the files before a message, and the agent starts over from what is left", async () => {
     const { hub, store, projectId } = repository();
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+    const before = hub.attachments.add(png, "avant.png");
     const threadId = hub.createThread({
       projectId,
       agentId: "demo",
       permissionMode: "full",
       isolated: true,
       text: "Un",
+      attachments: [before.id],
     });
     await hub.whenIdle(threadId);
     const dir = store.getThread(threadId)!.workspace!.path;
@@ -181,8 +184,10 @@ describe("thread workspaces", () => {
     writeFileSync(path.join(dir, ".gitignore"), "cache/\n");
     mkdirSync(path.join(dir, "cache"));
     writeFileSync(path.join(dir, "cache", "garde.txt"), "ignoré\n");
-    hub.send(threadId, "Deux");
+    const after = hub.attachments.add(png, "après.png");
+    hub.send(threadId, "Deux", undefined, undefined, undefined, undefined, [after.id]);
     await hub.whenIdle(threadId);
+    expect(hub.attachments.find(threadId, after.id)).toBeDefined();
     const second = store.listItems(threadId).filter((i) => i.kind === "user")[1]!;
     expect(second).toMatchObject({
       text: "Deux",
@@ -198,6 +203,9 @@ describe("thread workspaces", () => {
     // Handed to another agent since: going back goes back to the agent of that time too.
     await hub.switchAgent(threadId, "demo-2");
     await hub.restore(threadId, second.id);
+    // The image of the message taken out goes with it; an earlier message keeps its own.
+    expect(hub.attachments.find(threadId, after.id)).toBeUndefined();
+    expect(hub.attachments.find(threadId, before.id)).toBeDefined();
     expect(store.getThread(threadId)?.agentId).toBe("demo");
     expect(store.listItems(threadId).some((i) => i.kind === "handoff")).toBe(false);
 
@@ -222,7 +230,7 @@ describe("thread workspaces", () => {
     hub.send(threadId, "Trois");
     await hub.whenIdle(threadId);
     expect(lastTurnSaid(store.listItems(threadId))).toContain(
-      "J'ai reçu l'historique, qui commence par « Un ».",
+      "J'ai reçu l'historique, qui commence par « Un [image jointe : ",
     );
   });
 
