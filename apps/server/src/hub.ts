@@ -833,6 +833,20 @@ export class Hub {
         });
         return;
       }
+      case "activity": {
+        this.flushAll();
+        const offsetMs = message.tzOffset * 60_000;
+        // From the start of the oldest day asked for, in the client's time zone.
+        const today = Math.floor((Date.now() - offsetMs) / 86_400_000);
+        const since = (today - message.days + 1) * 86_400_000 + offsetMs;
+        client.send({
+          type: "activity",
+          requestId: message.requestId,
+          days: this.store.activityDays(since, offsetMs),
+          firstAt: this.store.firstThreadAt(),
+        });
+        return;
+      }
       case "search":
         client.send({
           type: "searched",

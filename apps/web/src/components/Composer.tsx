@@ -1,6 +1,7 @@
 import type {
   AgentInfo,
   Favorites,
+  McpServerInfo,
   PermissionMode,
   ProjectCommand,
   Project,
@@ -40,19 +41,19 @@ import { connection, newId } from "../connection.ts";
 import { carriesFiles, IMAGE_ACCEPT, pastedImages } from "../images.ts";
 import { useImageDrafts } from "../use-image-drafts.ts";
 import { readPref, writePref } from "../prefs.ts";
-import { quotaWarning, roomiest } from "../quotas.ts";
+import { quotaWarning, roomiest, tightest } from "../quotas.ts";
 import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { ComposerImages } from "./ComposerImages.tsx";
-import { ContextGauge } from "./ContextGauge.tsx";
+import { AccessChip, Queue, Tray, type TrayQuota } from "./ComposerTray.tsx";
 import {
   IconArrowUp,
-  IconBranch,
-  IconClose,
+  IconBolt,
+  IconCaret,
   IconMic,
-  IconShield,
+  IconQueue,
+  IconSparkle,
   IconStop,
-  IconWave,
 } from "./icons.tsx";
 import { Presence } from "./Presence.tsx";
 import { Picker } from "./Picker.tsx";
@@ -83,6 +84,13 @@ export function Composer(props: {
   /** What the empty field says, when it is not the usual invitation. */
   placeholder?: string;
   onNewProject: () => void;
+  /** The projects a new conversation can start in, picked from the tray under the box. */
+  projects?: Project[];
+  onPickProject?: (id: string) => void;
+  /** The MCP servers handed to every agent, listed in the tray. */
+  mcpServers?: McpServerInfo[];
+  /** Opens the MCP servers' settings. */
+  onMcp?: () => void;
   onCreated: (threadId: string) => void;
   /** Saves the thread as a Markdown file. */
   onExport: () => void;
@@ -109,6 +117,10 @@ export function Composer(props: {
   const [text, setText] = useState("");
   const [menu, setMenu] = useState(false);
   const [plusOpen, setPlusOpen] = useState(false);
+  const [accessOpen, setAccessOpen] = useState(false);
+  const [trayMenu, setTrayMenu] = useState<"project" | "branch" | "mcp" | null>(null);
+  /** Messages typed while the agent works: sent one by one once it is done. */
+  const [queue, setQueue] = useState<{ id: string; text: string }[]>([]);
   // A favorite of another agent picked in a thread: its model, once that agent has the thread.
   const [handoffModel, setHandoffModel] = useState<{
     threadId: string;
@@ -219,6 +231,31 @@ export function Composer(props: {
       connection.send({ type: "thread.setModel", threadId: thread.id, model: handoffModel.model });
   }, [handoffModel, thread?.id, thread?.agentId, running]);
 
+  // What was put in line leaves once the agent is done, one message per turn. A message just
+  // sent waits for its turn to start before the next one goes, or a few seconds if it failed.
+  const queuedAt = useRef(0);
+  const [, recheck] = useState(0);
+  useEffect(() => {
+    if (running) queuedAt.current = 0;
+    if (!thread || running || !queue.length) return;
+    const wait = queuedAt.current + 4000 - Date.now();
+    if (wait > 0) {
+      const timer = setTimeout(() => recheck((n) => n + 1), wait);
+      return () => clearTimeout(timer);
+    }
+    const [first, ...rest] = queue;
+    if (connection.send({ type: "thread.send", threadId: thread.id, text: first!.text })) {
+      queuedAt.current = Date.now();
+      setQueue(rest);
+    }
+  });
+  const enqueue = () => {
+    const typed = text.trim();
+    if (!typed) return;
+    setQueue((q) => [...q, { id: newId(), text: typed }]);
+    putText("", 0);
+  };
+
   // Close the picker on Escape or on any press outside the composer.
   useEffect(() => {
     if (!pickerOpen) return;
@@ -287,11 +324,13 @@ export function Composer(props: {
   useEffect(() => {
     if (!voice) return;
     const timer = setInterval(() => tick((n) => n + 1), 1000);
+    // Escape drops what was said; Enter keeps it, as the tray says.
     const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
+      if (event.key !== "Escape" && event.key !== "Enter") return;
       event.preventDefault();
       event.stopPropagation();
-      cancelVoice();
+      if (event.key === "Enter") stopVoice();
+      else cancelVoice();
     };
     document.addEventListener("keydown", escape, true);
     return () => {
@@ -523,17 +562,24 @@ export function Composer(props: {
     el.style.height = `${el.scrollHeight}px`;
   }, [text]);
 
-  const submit = async () => {
+  const submit = async (to?: string) => {
     const typed = text.trim();
     if ((!typed && !images.drafts.length) || busy) return;
-    // MoonAgentic's own commands run here; the rest of the line stays in the composer.
+    // MoonAgentic's own commands run here, even while the agent works; the rest of the line
+    // stays in the composer.
     const submission = resolveSubmission(typed, commands);
     if (submission.kind === "action") {
       putText(submission.rest, submission.rest.length);
       runAction(submission.action, submission.rest);
       return;
     }
-    if (!canSend || !agentId || !project) return;
+    // While the agent works, what is typed waits in line rather than being refused.
+    if (running && typed && !images.drafts.length) {
+      enqueue();
+      return;
+    }
+    const sendTo = to ?? agentId;
+    if (!canSend || !sendTo || !project) return;
     const value = submission.text;
     const attachments = images.ready.length ? { attachments: images.ready.map((i) => i.id) } : {};
     if (thread) {
@@ -546,7 +592,9 @@ export function Composer(props: {
       return;
     }
     setBusy(true);
-    const changed = Object.entries(settings).filter(
+    // Handed to another agent at its limit: that agent starts with its own model and settings.
+    const own = sendTo === agentId;
+    const changed = Object.entries(own ? settings : {}).filter(
       ([id, value]) => agent?.settings?.find((s) => s.id === id)?.current !== value,
     );
     // Where the user was when they sent it: the new thread opens only if they stayed.
@@ -556,9 +604,9 @@ export function Composer(props: {
         type: "thread.create",
         requestId: newId(),
         projectId: project.id,
-        agentId,
+        agentId: sendTo,
         permissionMode: newMode,
-        ...(model ? { model } : {}),
+        ...(model && own ? { model } : {}),
         ...(changed.length ? { settings: Object.fromEntries(changed) } : {}),
         ...(project.git ? { isolated } : {}),
         text: value,
@@ -577,8 +625,7 @@ export function Composer(props: {
     }
   };
 
-  const toggleMode = () => {
-    const next: PermissionMode = mode === "full" ? "supervised" : "full";
+  const setMode = (next: PermissionMode) => {
     if (thread)
       connection.send({
         type: "thread.setPermissionMode",
@@ -654,75 +701,192 @@ export function Composer(props: {
     };
   }, [canTake]);
 
-  const hints = narrow ? "" : " @ fichiers, $ skills, / commandes";
   const placeholder = !project
     ? "Crée d'abord un projet pour parler à un agent"
-    : props.placeholder
-      ? props.placeholder
-      : thread
-        ? `Répondre à ${agent?.name ?? "l'agent"}…${hints}`
-        : `Demande n'importe quoi à tes agents…${hints}`;
+    : voice
+      ? "Je t'écoute…"
+      : props.placeholder
+        ? props.placeholder
+        : thread && running
+          ? narrow
+            ? "Ajouter une consigne…"
+            : `Ajouter une consigne pendant que ${agent?.name ?? "l'agent"} travaille…`
+          : thread
+            ? `Répondre à ${agent?.name ?? "l'agent"}…`
+            : narrow
+              ? "Demande à tes agents…"
+              : "Demande n'importe quoi à tes agents…";
 
   // On a phone the composer is one line until it is used, as in the mockup.
   const hasImages = images.drafts.length > 0;
-  const open = focused || !!text || hasImages || !!voice || plusOpen || pickerOpen || suggesting;
+  const open =
+    focused ||
+    !!text ||
+    hasImages ||
+    !!voice ||
+    plusOpen ||
+    pickerOpen ||
+    accessOpen ||
+    !!trayMenu ||
+    suggesting;
   const seconds = voice ? Math.floor((Date.now() - voice.started) / 1000) : 0;
   const heardText = voice ? `${voice.heard.final} ` : "";
+  const full = mode === "full";
 
-  const notice = warning && agent && quotaSeen[agent.id] !== warning.key && !voice && (
-    <div className={`qt-notice ${warning.level}`} role="status">
-      <span className="qt-dot" aria-hidden />
-      <div className="qt-msg">
-        {warning.text} {warning.when && <span>{warning.when}</span>}
-      </div>
-      <div className="qt-acts">
-        {roomier && !running ? (
-          <button className="btn sm" onClick={() => pickAgent(roomier.id)}>
-            Passer à {roomier.name}
-          </button>
-        ) : (
-          props.onSubscriptions && (
-            <button className="btn sm" onClick={props.onSubscriptions}>
-              Voir les limites
-            </button>
-          )
-        )}
+  // The top level of the model's effort is « Galaxie »: a star says so on the agent's chip.
+  const effort = agent?.available ? agent.settings?.find((s) => s.kind === "effort") : undefined;
+  const galaxy =
+    !!effort &&
+    effort.choices.length > 1 &&
+    settings[effort.id] === effort.choices[effort.choices.length - 1]!.id;
+
+  // Nearly out on its subscription: a row on top of the tray, with an agent that has room.
+  const worst = agent ? tightest(quotas.find((q) => q.agentId === agent.id)) : undefined;
+  const atLimit = warning?.level === "full";
+  const trayQuota: TrayQuota | undefined =
+    warning && agent && worst && quotaSeen[agent.id] !== warning.key
+      ? {
+          level: warning.level,
+          usedPercent: worst.usedPercent,
+          text: warning.text,
+          ...(warning.when ? { when: warning.when } : {}),
+          ...(roomier && !running
+            ? {
+                roomier: { id: roomier.id, name: roomier.name },
+                onSwitch: () => pickAgent(roomier.id),
+              }
+            : {}),
+          ...(props.onSubscriptions ? { onLimits: props.onSubscriptions } : {}),
+          onDismiss: () => dismissQuotaWarning(agent.id, warning.key),
+        }
+      : undefined;
+
+  const closeMenus = (keep?: "plus" | "access" | "picker" | "tray") => {
+    if (keep !== "plus") setPlusOpen(false);
+    if (keep !== "access") setAccessOpen(false);
+    if (keep !== "picker") setMenu(false);
+    if (keep !== "tray") setTrayMenu(null);
+  };
+  const hasText = text.trim().length > 0;
+  const agentLabel = agent?.name ?? (thread ? "Agent retiré" : "Aucun agent installé");
+
+  let sendButtons: React.ReactNode;
+  if (voice)
+    sendButtons = (
+      <button className="send vox" aria-label="Terminer la dictée" onClick={stopVoice}>
+        <span className="vx-sq" />
+        <span className="vx-t">
+          {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
+        </span>
+      </button>
+    );
+  else if (running)
+    // While the agent works, Stop never leaves; what is typed goes in line beside it.
+    sendButtons = (
+      <>
         <button
-          className="ib"
-          aria-label="Masquer cet avertissement"
-          onClick={() => dismissQuotaWarning(agent.id, warning.key)}
+          className={`send stop${hasText ? " soft" : ""}`}
+          aria-label="Arrêter"
+          title="Arrêter"
+          onClick={() => thread && connection.send({ type: "thread.cancel", threadId: thread.id })}
         >
-          <IconClose />
+          <IconStop size={10} />
         </button>
-      </div>
-    </div>
-  );
+        {hasText && (
+          <button
+            className="send"
+            aria-label="Mettre en file"
+            title="Mettre en file : part dès que l'agent a fini"
+            onClick={enqueue}
+          >
+            <IconQueue />
+          </button>
+        )}
+      </>
+    );
+  else if (atLimit && roomier && !thread && (hasText || hasImages))
+    sendButtons = (
+      <button
+        className="send alt"
+        aria-label={`Envoyer à ${roomier.name}`}
+        disabled={!canSend}
+        onClick={() => void submit(roomier.id)}
+      >
+        <IconArrowUp />
+        {narrow ? roomier.name : `Envoyer à ${roomier.name}`}
+      </button>
+    );
+  else
+    sendButtons = (
+      <button
+        className="send"
+        aria-label="Envoyer"
+        title={images.sending ? "L'image finit d'arriver sur le serveur" : undefined}
+        disabled={!canSend}
+        onClick={() => void submit()}
+      >
+        <IconArrowUp />
+      </button>
+    );
 
   return (
-    <>
-      {notice}
+    <div
+      className={`cmp${open ? " open" : ""}${voice ? " voice" : ""}${full ? " fullacc" : ""}`}
+      ref={root}
+      onFocus={() => setFocused(true)}
+      onPointerDownCapture={() => {
+        pressedInside.current = true;
+      }}
+      onBlur={(e) => {
+        const box = e.currentTarget;
+        if (box.contains(e.relatedTarget as Node | null)) return;
+        // Safari gives no `relatedTarget` when a button is touched: wait for the click to
+        // land before folding the composer, then fold only if the focus really left it.
+        if (pressedInside.current) {
+          setTimeout(() => {
+            pressedInside.current = false;
+            if (!box.contains(document.activeElement)) setFocused(false);
+          }, 300);
+          return;
+        }
+        setFocused(false);
+      }}
+    >
+      <Queue
+        items={queue}
+        onRemove={(id) => setQueue((q) => q.filter((m) => m.id !== id))}
+        onNow={(id) => {
+          // Stops the turn; the message leaves first as soon as the agent has stopped.
+          setQueue((q) => [...q.filter((m) => m.id === id), ...q.filter((m) => m.id !== id)]);
+          if (thread) connection.send({ type: "thread.cancel", threadId: thread.id });
+        }}
+      />
       <div
-        className={`composer${open ? " open" : ""}${voice ? " vx-on" : ""}${dropping ? " drop" : ""}`}
-        ref={root}
-        onFocus={() => setFocused(true)}
-        onPointerDownCapture={() => {
-          pressedInside.current = true;
-        }}
-        onBlur={(e) => {
-          const box = e.currentTarget;
-          if (box.contains(e.relatedTarget as Node | null)) return;
-          // Safari gives no `relatedTarget` when a button is touched: wait for the click to
-          // land before folding the composer, then fold only if the focus really left it.
-          if (pressedInside.current) {
-            setTimeout(() => {
-              pressedInside.current = false;
-              if (!box.contains(document.activeElement)) setFocused(false);
-            }, 300);
-            return;
-          }
-          setFocused(false);
-        }}
+        className={`composer${focused ? " focus" : ""}${full ? " full" : ""}${voice ? " vx-on" : ""}${dropping ? " drop" : ""}`}
       >
+        <div className="cmp-lead">
+          <button
+            aria-label={`Agent : ${agentLabel}${modelName ? `, ${modelName}` : ""}`}
+            disabled={thread ? running : !agent?.available}
+            onClick={() => {
+              closeMenus("picker");
+              setMenu(true);
+            }}
+          >
+            <AgentBadge agent={agent} />
+          </button>
+          {full && (
+            <button
+              aria-label="Accès complet : l'agent agit sans demander"
+              onClick={() => {
+                closeMenus("access");
+                setAccessOpen(true);
+              }}
+            >
+              <IconBolt />
+            </button>
+          )}
+        </div>
         {voice && (
           <div className="vxp">
             <div className="vxp-t" aria-live="polite">
@@ -733,16 +897,8 @@ export function Composer(props: {
                   <span className="vxp-cur">{voice.heard.interim}</span>
                 </>
               ) : (
-                <span className="vxp-ph">Je t'écoute…</span>
+                <span className="vxp-ph">{placeholder}</span>
               )}
-            </div>
-            <div className="vxp-w">
-              <button className="vxp-x" aria-label="Annuler la dictée" onClick={cancelVoice}>
-                <IconClose />
-              </button>
-              <span className="vxp-level" aria-hidden>
-                <i />
-              </span>
             </div>
           </div>
         )}
@@ -827,6 +983,12 @@ export function Composer(props: {
                 return;
               }
             }
+            // Shift+Tab in the text switches the access mode, as the menu's foot says.
+            if (e.key === "Tab" && e.shiftKey) {
+              e.preventDefault();
+              setMode(full ? "supervised" : "full");
+              return;
+            }
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
               void submit();
@@ -836,22 +998,11 @@ export function Composer(props: {
         <div className="cbar">
           <PlusMenu
             open={plusOpen}
-            branch={
-              !thread && project?.git
-                ? {
-                    on: isolated,
-                    onToggle: () => {
-                      setIsolated(!isolated);
-                      writePref("isolated", String(!isolated));
-                    },
-                  }
-                : undefined
-            }
             disabled={!project}
             inThread={!!thread}
             onToggle={(open) => {
               setPlusOpen(open);
-              if (open) setMenu(false);
+              if (open) closeMenus("plus");
             }}
             onImage={(from) => {
               setPlusOpen(false);
@@ -875,78 +1026,127 @@ export function Composer(props: {
               );
             }}
           />
-          <button
-            className="agentchip"
-            // In a thread whose agent is gone, the picker is how it goes to another one.
-            disabled={thread ? running : !agent?.available}
-            title={
-              thread && running
-                ? "L'agent et ses réglages se changent entre deux réponses"
-                : thread && !agent?.available
-                  ? "Cet agent n'est plus disponible : choisis-en un autre pour continuer"
-                  : undefined
-            }
-            aria-haspopup="menu"
-            aria-expanded={pickerOpen}
-            onClick={() => setMenu((m) => !m)}
-          >
-            <AgentBadge agent={agent} />
-            <span className="lbl">
-              {agent?.name ?? (thread ? "Agent retiré" : "Aucun agent installé")}
-              {modeName && <span className="sep"> · </span>}
-              {modeName && <span className="mode">{modeName}</span>}
-              {modelName && <span className="sep"> · </span>}
-              {modelName}
-            </span>
-          </button>
+          <AccessChip
+            mode={mode}
+            open={accessOpen}
+            narrow={narrow}
+            disabled={!project}
+            onToggle={(open) => {
+              setAccessOpen(open);
+              if (open) closeMenus("access");
+            }}
+            onPick={(next) => {
+              setMode(next);
+              setAccessOpen(false);
+              input.current?.focus();
+            }}
+          />
           <span className="grow" />
-          {!thread && project?.git && isolated && (
+          <div className="ag-wrap">
             <button
-              className="perm branch on mark"
-              aria-label="Branche à part"
-              title="Branche à part : l'agent travaille sur sa propre branche, dans une copie du projet. Change-le dans le menu +."
+              className="agentchip chip"
+              // In a thread whose agent is gone, the picker is how it goes to another one.
+              disabled={thread ? running : !agent?.available}
+              title={
+                thread && running
+                  ? "L'agent et ses réglages se changent entre deux réponses"
+                  : thread && !agent?.available
+                    ? "Cet agent n'est plus disponible : choisis-en un autre pour continuer"
+                    : undefined
+              }
+              aria-label={`Agent : ${agentLabel}${modelName ? `, ${modelName}` : ""}`}
+              aria-haspopup="menu"
+              aria-expanded={pickerOpen}
               onClick={() => {
-                setPlusOpen(true);
-                setMenu(false);
+                if (!menu) closeMenus("picker");
+                setMenu((m) => !m);
               }}
             >
-              <IconBranch size={13} />
+              <AgentBadge agent={agent} />
+              <span className="lbl">
+                {!narrow && <span className="nm">{agentLabel}</span>}
+                {modeName && <span className="mode">{modeName}</span>}
+                {modelName && <span className="mdl">{modelName}</span>}
+                {narrow && !modelName && <span className="nm">{agentLabel}</span>}
+              </span>
+              {galaxy && (
+                <span className="gxs" title="Effort Galaxie">
+                  <IconSparkle />
+                </span>
+              )}
+              <IconCaret />
             </button>
-          )}
-          <button
-            className={`perm${mode === "full" ? " full" : ""}`}
-            onClick={toggleMode}
-            title={
-              mode === "full"
-                ? "L'agent agit sans demander"
-                : "L'agent demande avant de modifier ou lancer quoi que ce soit"
-            }
-          >
-            <IconShield />
-            {mode === "full" ? "Accès complet" : "Supervisé"}
-          </button>
-          {thread?.usage && (
-            <ContextGauge
-              usage={thread.usage}
-              action={
-                thread.canCompact
+            <Presence show={pickerOpen}>
+              <Picker
+                agents={agents}
+                agent={agent}
+                model={model}
+                favorites={props.favorites}
+                projectId={project?.id}
+                inThread={!!thread}
+                agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
+                settings={settings}
+                {...(thread?.usage
                   ? {
-                      label: "Compacter la conversation",
-                      disabled: running,
-                      run: () =>
-                        connection.send({
-                          type: "thread.send",
-                          threadId: thread.id,
-                          text: "/compact",
-                        }),
+                      context: {
+                        used: thread.usage.used,
+                        size: thread.usage.size,
+                        ...(thread.canCompact && !running
+                          ? {
+                              onCompact: () => {
+                                setMenu(false);
+                                connection.send({
+                                  type: "thread.send",
+                                  threadId: thread.id,
+                                  text: "/compact",
+                                });
+                              },
+                            }
+                          : {}),
+                      },
                     }
-                  : undefined
-              }
-            />
-          )}
+                  : {})}
+                onPickSetting={pickSetting}
+                onPickAgent={pickAgent}
+                onPickAgentModel={(id, model, stay) => {
+                  if (thread) {
+                    // The model is set once the new agent has the thread: the server takes one change at a time.
+                    if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
+                    connection.send({
+                      type: "thread.switchAgent",
+                      threadId: thread.id,
+                      agentId: id,
+                    });
+                  } else {
+                    setPickedAgentId(id);
+                    writePref("agent", id);
+                    if (model) {
+                      setModelPicks((p) => ({ ...p, [id]: model }));
+                      writePref(`model.${id}`, model);
+                    }
+                  }
+                  if (stay) return;
+                  setMenu(false);
+                  input.current?.focus();
+                }}
+                onPickModel={(id, stay) => {
+                  if (thread)
+                    connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
+                  else if (agent) {
+                    setModelPicks((p) => ({ ...p, [agent.id]: id }));
+                    writePref(`model.${agent.id}`, id);
+                  }
+                  if (stay) return;
+                  setMenu(false);
+                  input.current?.focus();
+                }}
+                onClose={() => setMenu(false)}
+              />
+            </Presence>
+          </div>
           {canDictate && (
             <button
-              className="mic-btn"
+              className={`mic-btn${voice ? " rec" : ""}`}
               aria-label={voice ? "Arrêter la dictée" : "Dicter"}
               title={voice ? "Arrêter la dictée" : "Dicter"}
               aria-pressed={!!voice}
@@ -955,44 +1155,10 @@ export function Composer(props: {
               <IconMic />
             </button>
           )}
-          {voice ? (
-            <button className="send vox" aria-label="Terminer la dictée" onClick={stopVoice}>
-              <span className="vx-sq" />
-              <IconWave />
-              <span className="vx-t">
-                {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
-              </span>
-            </button>
-          ) : running ? (
-            <button
-              className="send stop"
-              aria-label="Arrêter"
-              onClick={() =>
-                thread && connection.send({ type: "thread.cancel", threadId: thread.id })
-              }
-            >
-              <IconStop />
-            </button>
-          ) : !text.trim() && !hasImages && canDictate ? (
-            <button
-              className="send"
-              aria-label="Mode vocal"
-              title="Mode vocal"
-              onClick={startVoice}
-            >
-              <IconWave />
-            </button>
-          ) : (
-            <button
-              className="send"
-              aria-label="Envoyer"
-              title={images.sending ? "L'image finit d'arriver sur le serveur" : undefined}
-              disabled={!canSend}
-              onClick={() => void submit()}
-            >
-              <IconArrowUp />
-            </button>
-          )}
+          {sendButtons}
+        </div>
+        <div className="vlevel" aria-hidden>
+          <i />
         </div>
         {suggesting && trigger && (
           <Suggestions
@@ -1004,50 +1170,36 @@ export function Composer(props: {
             onHover={setActive}
           />
         )}
-        <Presence show={pickerOpen}>
-          <Picker
-            agents={agents}
-            agent={agent}
-            model={model}
-            favorites={props.favorites}
-            projectId={project?.id}
-            inThread={!!thread}
-            agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
-            settings={settings}
-            onPickSetting={pickSetting}
-            onPickAgent={pickAgent}
-            onPickAgentModel={(id, model, stay) => {
-              if (thread) {
-                // The model is set once the new agent has the thread: the server takes one change at a time.
-                if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
-                connection.send({ type: "thread.switchAgent", threadId: thread.id, agentId: id });
-              } else {
-                setPickedAgentId(id);
-                writePref("agent", id);
-                if (model) {
-                  setModelPicks((p) => ({ ...p, [id]: model }));
-                  writePref(`model.${id}`, model);
-                }
-              }
-              if (stay) return;
-              setMenu(false);
-              input.current?.focus();
-            }}
-            onPickModel={(id, stay) => {
-              if (thread)
-                connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
-              else if (agent) {
-                setModelPicks((p) => ({ ...p, [agent.id]: id }));
-                writePref(`model.${agent.id}`, id);
-              }
-              if (stay) return;
-              setMenu(false);
-              input.current?.focus();
-            }}
-            onClose={() => setMenu(false)}
-          />
-        </Presence>
       </div>
-    </>
+      <Tray
+        menu={trayMenu}
+        onMenu={(m) => {
+          setTrayMenu(m);
+          if (m) closeMenus("tray");
+        }}
+        narrow={narrow}
+        project={project}
+        {...(!thread && props.projects && props.onPickProject
+          ? { projects: props.projects, onPickProject: props.onPickProject }
+          : {})}
+        onNewProject={props.onNewProject}
+        {...(!thread && project?.git
+          ? {
+              isolated: {
+                on: isolated,
+                onPick: (on: boolean) => {
+                  setIsolated(on);
+                  writePref("isolated", String(on));
+                },
+              },
+            }
+          : {})}
+        {...(thread?.workspace ? { branch: thread.workspace.branch } : {})}
+        mcpServers={props.mcpServers ?? []}
+        onMcp={props.onMcp ?? props.onConnections}
+        {...(trayQuota && !voice ? { quota: trayQuota } : {})}
+        {...(voice ? { voice: { onStop: stopVoice, onCancel: cancelVoice } } : {})}
+      />
+    </div>
   );
 }

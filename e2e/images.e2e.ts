@@ -175,7 +175,8 @@ describe("images jointes", () => {
     await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
     await page.keyboard.press("Escape");
     // The demo agent asks before it changes a file: here it is let through.
-    await page.getByRole("button", { name: "Supervisé" }).click();
+    await page.getByRole("button", { name: /Mode d'accès/ }).click();
+    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
 
     const red = png(40, 30, [220, 40, 40]);
     const blue = png(30, 40, [40, 80, 220]);

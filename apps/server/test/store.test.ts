@@ -89,6 +89,58 @@ describe("database schema versions", () => {
   });
 });
 
+describe("activity per day", () => {
+  it("counts the user's and the agents' messages by the client's day, team briefs left out", () => {
+    const store = new Store(path.join(folder(), "state.sqlite"));
+    store.addProject({ id: "p", name: "p", path: "/tmp/p", createdAt: 1 });
+    store.addThread({
+      id: "t",
+      projectId: "p",
+      title: "t",
+      agentId: "demo",
+      status: "idle",
+      permissionMode: "supervised",
+      createdAt: Date.UTC(2026, 10, 21, 8),
+      updatedAt: 0,
+    });
+    const at = (d: number, h: number) => Date.UTC(2026, 10, d, h);
+    store.putItem("t", { id: "1", kind: "user", text: "a", at: at(21, 9) });
+    store.putItem("t", { id: "2", kind: "agent", text: "b", at: at(21, 10) });
+    store.putItem("t", { id: "3", kind: "user", text: "brief", byTeam: true, at: at(21, 11) });
+    store.putItem("t", { id: "4", kind: "thought", text: "c", at: at(21, 12) });
+    // 23:30 UTC on the 22nd is already the 23rd in Paris (UTC+1, offset -60 min).
+    store.putItem("t", { id: "5", kind: "agent", text: "d", at: Date.UTC(2026, 10, 22, 23, 30) });
+    const day = (d: number) => Math.floor(Date.UTC(2026, 10, d) / 86_400_000);
+    expect(store.activityDays(0, 0)).toEqual([
+      { day: day(21), count: 2 },
+      { day: day(22), count: 1 },
+    ]);
+    expect(store.activityDays(0, -60 * 60_000)).toEqual([
+      { day: day(21), count: 2 },
+      { day: day(23), count: 1 },
+    ]);
+    expect(store.activityDays(at(22, 0), 0)).toEqual([{ day: day(22), count: 1 }]);
+    expect(store.firstThreadAt()).toBe(Date.UTC(2026, 10, 21, 8));
+    store.close();
+  });
+
+  it("counts from its own index, without reading the messages", () => {
+    const store = new Store(":memory:");
+    const plan = store.db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT CAST((json_extract(data, '$.at') - 0) / 86400000 AS INTEGER) AS day, COUNT(*)
+           FROM items
+           WHERE json_extract(data, '$.kind') IN ('user', 'agent')
+             AND json_extract(data, '$.byTeam') IS NOT 1
+             AND json_extract(data, '$.at') >= 0
+           GROUP BY day`,
+      )
+      .all() as { detail: string }[];
+    expect(plan.map((row) => row.detail).join(" | ")).toContain("items_activity_at");
+    store.close();
+  });
+});
+
 /** A store with one project and two threads, the second one the latest to move. */
 function withThreads(file = ":memory:"): Store {
   const store = new Store(file);
