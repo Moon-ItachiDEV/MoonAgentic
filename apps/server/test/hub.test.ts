@@ -257,8 +257,13 @@ describe("Hub with the demo agent", () => {
         .listItems(threadId)
         .some((i) => i.kind === "agent" && i.text.includes("je ne touche à rien")),
     ).toBe(true);
-    await hub.cancel(threadId);
+    // That turn asks in its turn, and ends as any other.
+    const open = () =>
+      store.listItems(threadId).find((i) => i.kind === "permission" && i.outcome === null);
+    await expect.poll(open).toBeTruthy();
+    hub.respondToPermission(threadId, open()!.id, "allow");
     await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)).toMatchObject({ status: "idle" });
   });
 
   it("answers permission requests itself in full access", async () => {
