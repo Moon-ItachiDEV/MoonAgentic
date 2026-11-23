@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ReviewFile } from "@moonagentic/protocol";
 import { findOnPath } from "./agents.ts";
+import { GIT_QUIET, gitQuietEnv } from "./git-own.ts";
 import { githubAccount } from "./github-account.ts";
 import { githubGitAuth } from "./github.ts";
 
@@ -35,7 +36,7 @@ function git(
   return new Promise((resolve, reject) => {
     execFile(
       "git",
-      args,
+      [...GIT_QUIET, ...args],
       {
         cwd,
         env: { ...process.env, ...NO_PROMPT, ...env },
@@ -59,7 +60,7 @@ export function isGitRepo(dir: string): boolean {
   try {
     const out = execFileSync(
       "git",
-      ["rev-parse", "--is-inside-work-tree", "--verify", "--quiet", "HEAD"],
+      [...GIT_QUIET, "rev-parse", "--is-inside-work-tree", "--verify", "--quiet", "HEAD"],
       { cwd: dir, stdio: ["ignore", "pipe", "ignore"] },
     );
     return out.toString().startsWith("true");
@@ -263,8 +264,13 @@ export function reviewChanges(
       );
     }
     const numstat = await git(dir, ["diff", "--numstat", "-z", "-M", base], env);
-    // An external diff tool from the user's config would replace the unified diff.
-    const patch = await git(dir, ["diff", "--no-color", "--no-ext-diff", "-M", base], env);
+    // An external diff tool from the user's config would replace the unified diff, and a
+    // text converter named by the repository would be run on each file shown.
+    const patch = await git(
+      dir,
+      ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", base],
+      env,
+    );
     const files = parseDiff(numstat, patch);
     let lines = 0;
     const shown = files.slice(0, MAX_REVIEW_FILES).map((file) => {
@@ -630,7 +636,7 @@ async function openPullRequest(
         args,
         {
           cwd: dir,
-          env: { ...process.env, ...NO_PROMPT, ...githubAccount()?.ghEnv() },
+          env: { ...process.env, ...NO_PROMPT, ...gitQuietEnv(), ...githubAccount()?.ghEnv() },
           timeout: NETWORK_TIMEOUT_MS,
         },
         (error, stdout, stderr) =>
