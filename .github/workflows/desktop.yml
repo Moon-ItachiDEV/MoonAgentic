@@ -1,0 +1,62 @@
+name: Desktop
+
+# Builds the desktop installers: on a pull request that touches the app, to try them (kept 7
+# days in the run's artifacts); on a `v*` tag, attached to that tag's GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "apps/desktop/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  installer:
+    name: Installeur (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            target: --win
+            files: apps/desktop/release/*.exe
+          - name: Mac
+            os: macos-14
+            target: --mac
+            files: apps/desktop/release/*.dmg
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @moonagentic/desktop compile
+      - run: pnpm --filter @moonagentic/desktop stage
+      - name: Build the installer
+        working-directory: apps/desktop
+        run: pnpm exec electron-builder ${{ matrix.target }} --publish ${{ startsWith(github.ref, 'refs/tags/v') && 'always' || 'never' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No paid certificate: nothing to look for in the keychain.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      - if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: MoonAgentic-${{ matrix.name }}
+          path: ${{ matrix.files }}
+          retention-days: 7
+          compression-level: 0
