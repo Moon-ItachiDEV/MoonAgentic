@@ -72,6 +72,11 @@ describe("teamFeed", () => {
       key: "old brief",
       indices: [0],
     });
+    // The end of a longer thread does not start with the thread's first message.
+    expect(teamFeed(thread({ role: "reviewer", parentId: "lead" }), items, true)[0]).toEqual({
+      kind: "item",
+      index: 0,
+    });
   });
 
   it("keeps a question the agent asks in sight", () => {

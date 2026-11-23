@@ -1573,7 +1573,7 @@ describe("streamed text", () => {
     const putItem = store.putItem.bind(store);
     store.putItem = (threadId, item) => {
       if (item.kind === "agent") writes += 1;
-      putItem(threadId, item);
+      return putItem(threadId, item);
     };
     await hub.handle(client, {
       type: "thread.create",

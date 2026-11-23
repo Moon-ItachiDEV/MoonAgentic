@@ -13,6 +13,7 @@ import type {
   Schedule,
   ServerMessage,
   Thread,
+  TimelineMark,
 } from "@moonagentic/protocol";
 
 export type ConnectionStatus = "connecting" | "open" | "closed" | "unauthorized";
@@ -23,6 +24,14 @@ export interface Review {
   error?: string;
   /** Files left out because there are too many to list. */
   omitted?: number;
+}
+
+/**
+ * Which part of a thread's timeline this screen holds: from the item numbered `first` to the
+ * end, with `earlier` items before it left on the server, as of the server's change `rev`.
+ */
+export interface Held extends TimelineMark {
+  earlier: number;
 }
 
 export interface State {
@@ -47,6 +56,8 @@ export interface State {
   /** What each agent's subscription has left, as last read. */
   quotas: AgentQuota[];
   items: Record<string, Item[]>;
+  /** What part of each of those timelines is held. */
+  held: Record<string, Held>;
   /** The last review fetched for each thread with its own branch. */
   reviews: Record<string, Review>;
   notice: string | null;
@@ -113,11 +124,13 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, schedules: state.schedules.filter((s) => s.id !== message.id) };
     case "threadRemoved": {
       const { [message.threadId]: _items, ...items } = state.items;
+      const { [message.threadId]: _held, ...held } = state.held;
       const { [message.threadId]: _review, ...reviews } = state.reviews;
       return {
         ...state,
         threads: state.threads.filter((t) => t.id !== message.threadId),
         items,
+        held,
         reviews,
         requests: state.requests.filter((r) => r.threadId !== message.threadId),
         questions: state.questions.filter((q) => q.threadId !== message.threadId),
@@ -132,6 +145,7 @@ export function reduce(state: State, message: ServerMessage): State {
         projects: state.projects.filter((p) => p.id !== message.projectId),
         threads: state.threads.filter((t) => !gone.has(t.id)),
         items: Object.fromEntries(Object.entries(state.items).filter(([id]) => !gone.has(id))),
+        held: Object.fromEntries(Object.entries(state.held).filter(([id]) => !gone.has(id))),
         reviews: Object.fromEntries(Object.entries(state.reviews).filter(([id]) => !gone.has(id))),
         requests: state.requests.filter((r) => !gone.has(r.threadId)),
         questions: state.questions.filter((q) => !gone.has(q.threadId)),
@@ -139,25 +153,51 @@ export function reduce(state: State, message: ServerMessage): State {
         schedules: state.schedules.filter((s) => s.projectId !== message.projectId),
       };
     }
-    case "items":
-      return { ...state, items: { ...state.items, [message.threadId]: message.items } };
-    case "item": {
-      const items = state.items[message.threadId];
-      if (!items) return state;
+    case "items": {
+      const { type: _type, threadId, items, ...held } = message;
       return {
         ...state,
-        items: { ...state.items, [message.threadId]: upsert(items, message.item, false) },
+        items: { ...state.items, [threadId]: items },
+        held: { ...state.held, [threadId]: held },
       };
     }
+    case "item":
+      return changed(state, message.threadId, [message], message.rev);
+    case "changes":
+      return changed(state, message.threadId, message.items, message.rev);
     case "append": {
       const items = state.items[message.threadId];
-      if (!items) return state;
+      const held = state.held[message.threadId];
+      if (!items || !held) return state;
       const next = items.map((item) =>
         item.id === message.itemId && "text" in item
           ? { ...item, text: item.text + message.text }
           : item,
       );
-      return { ...state, items: { ...state.items, [message.threadId]: next } };
+      return {
+        ...state,
+        items: { ...state.items, [message.threadId]: next },
+        held: { ...state.held, [message.threadId]: { ...held, rev: message.rev } },
+      };
+    }
+    case "page": {
+      const items = state.items[message.threadId];
+      const held = state.held[message.threadId];
+      // Only the stretch just before what is held: an answer that comes late, after the
+      // timeline was sent again, has nowhere to go.
+      if (!items || held?.first !== message.before) return state;
+      const known = new Set(items.map((i) => i.id));
+      return {
+        ...state,
+        items: {
+          ...state.items,
+          [message.threadId]: [...message.items.filter((i) => !known.has(i.id)), ...items],
+        },
+        held: {
+          ...state.held,
+          [message.threadId]: { ...held, first: message.first, earlier: message.earlier },
+        },
+      };
     }
     case "githubLogin": {
       const { type: _type, ...result } = message;
@@ -172,6 +212,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "catalog":
     case "searched":
     case "fullItem":
+    case "timeline":
     case "github":
     case "githubRepos":
     case "githubDevice":
@@ -180,6 +221,32 @@ export function reduce(state: State, message: ServerMessage): State {
     case "pong":
       return state;
   }
+}
+
+/**
+ * Takes items new or changed into a thread's timeline. One from before what the screen
+ * holds is left where it is, on the server: it is not the timeline's next item.
+ */
+function changed(
+  state: State,
+  threadId: string,
+  changes: { item: Item; seq: number }[],
+  rev: number,
+): State {
+  const held = state.held[threadId];
+  const before = state.items[threadId];
+  if (!before || !held) return state;
+  const items = before.slice();
+  for (const { item, seq } of changes) {
+    const index = items.findIndex((i) => i.id === item.id);
+    if (index !== -1) items[index] = item;
+    else if (seq >= held.first) items.push(item);
+  }
+  return {
+    ...state,
+    items: { ...state.items, [threadId]: items },
+    held: { ...state.held, [threadId]: { ...held, rev } },
+  };
 }
 
 function upsert<T extends { id: string }>(list: T[], value: T, newestFirst = true): T[] {
@@ -206,6 +273,7 @@ export const initialState: State = {
   schedules: [],
   quotas: [],
   items: {},
+  held: {},
   reviews: {},
   notice: null,
   githubLogin: null,
