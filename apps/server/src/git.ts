@@ -846,6 +846,8 @@ export async function mergeForecast(dir: string, target: string): Promise<MergeF
     "--write-tree",
     "--name-only",
     "--no-messages",
+    // Paths as they are, accents included, rather than quoted with octal escapes.
+    "-z",
     target,
     work,
   ]);
@@ -857,7 +859,7 @@ export async function mergeForecast(dir: string, target: string): Promise<MergeF
     );
   }
   // The merged tree first, then each file in conflict.
-  const conflicts = merged.code === 1 ? merged.stdout.split("\n").slice(1).filter(Boolean) : [];
+  const conflicts = merged.code === 1 ? merged.stdout.split("\0").slice(1).filter(Boolean) : [];
   return { target, behind, conflicts: [...new Set(conflicts)] };
 }
 
@@ -880,7 +882,28 @@ export async function syncWithBranch(dir: string, target: string, message: strin
     await gitCode(dir, ["merge", "--abort"]);
     throw new Error(merged.stderr.trim() || "La fusion n'a pas abouti : rien n'a changé.");
   }
+  // The merge went through, but putting the work not committed back on top of it may not:
+  // git still says 0, leaves the files in conflict and keeps the work in its stash. All is
+  // put back as it was before, work included, rather than left half done.
+  const unmerged = await unmergedFiles(dir);
+  if (unmerged.length) {
+    await git(dir, ["reset", "-q", "--hard", "ORIG_HEAD"]);
+    const top = (await git(dir, ["stash", "list", "-1", "--format=%gs"])).trim();
+    if (top === "autostash") await git(dir, ["stash", "pop", "-q", "--index"]);
+    throw new Error(
+      `Fusionner ${target} entrerait en conflit avec le travail non commité sur ` +
+        `${unmerged.slice(0, 5).join(", ")}${unmerged.length > 5 ? "…" : ""} : rien n'a changé. ` +
+        "Commite ce travail d'abord, ou demande à l'agent de faire la fusion.",
+    );
+  }
   return (await git(dir, ["merge-base", "HEAD", target])).trim();
+}
+
+/** The files git has in conflict in the folder, paths as they are. */
+async function unmergedFiles(dir: string): Promise<string[]> {
+  const entries = (await git(dir, ["ls-files", "-u", "-z"])).split("\0").filter(Boolean);
+  // Each entry is « mode object stage<TAB>path », once for each side of the conflict.
+  return [...new Set(entries.map((entry) => entry.slice(entry.indexOf("\t") + 1)))];
 }
 
 /** How long asking the remote for its branch may take, before the last known copy is used. */
