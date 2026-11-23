@@ -8,6 +8,8 @@ import { Home } from "./components/Home.tsx";
 import {
   IconBack,
   IconCode,
+  IconCheck,
+  IconExpand,
   IconShield,
   IconArrowLeft,
   IconMenu,
@@ -150,6 +152,16 @@ export function App() {
   const coordinator = routeProject ? coordinatorOf(state.threads, routeProject.id) : undefined;
   /** The thread the composer writes to. */
   const spoken = thread ?? coordinator;
+  // One of the project's threads, open beside its coordinator: both stay in sight.
+  const beside =
+    coordinator && route.name === "project" && route.threadId
+      ? state.threads.find(
+          (t) =>
+            t.id === route.threadId &&
+            t.projectId === coordinator.projectId &&
+            t.id !== coordinator.id,
+        )
+      : undefined;
   const pickProject = (id: string) => {
     setPickedProjectId(id);
     writePref("project", id);
@@ -165,14 +177,17 @@ export function App() {
     if (target?.kind === "coordinator") {
       setProjectTab("chat");
       go({ name: "project", projectId: target.projectId });
+    } else if (coordinator && target?.projectId === coordinator.projectId) {
+      // From its project's page, a thread opens beside the coordinator.
+      go({ name: "project", projectId: target.projectId, threadId: id });
     } else go({ name: "thread", threadId: id });
   };
   const togglePin = (id: string, pinned: boolean) =>
     connection.send({ type: "thread.setPinned", threadId: id, pinned });
-  const exportThread = () => {
-    const items = spoken && state.items[spoken.id];
-    if (!spoken || !items) return;
-    downloadMarkdown(exportFileName(spoken.title), threadMarkdown(spoken, items, state.agents));
+  const exportThread = (t: Thread | undefined = spoken) => {
+    const items = t && state.items[t.id];
+    if (!t || !items) return;
+    downloadMarkdown(exportFileName(t.title), threadMarkdown(t, items, state.agents));
   };
   const setArchived = (id: string, archived: boolean) =>
     connection.send({ type: "thread.setArchived", threadId: id, archived });
@@ -214,7 +229,7 @@ export function App() {
           label: thread.pinned ? "Désépingler" : "Épingler",
           run: () => togglePin(thread.id, !thread.pinned),
         },
-        { label: "Exporter en Markdown", run: exportThread },
+        { label: "Exporter en Markdown", run: () => exportThread() },
         {
           label: thread.archived ? "Rouvrir" : "Marquer résolu",
           run: () => setArchived(thread.id, !thread.archived),
@@ -248,7 +263,11 @@ export function App() {
             icon: <IconPin />,
             run: () => togglePin(thread.id, !thread.pinned),
           },
-          { label: "Exporter cette discussion en Markdown", icon: <IconFile />, run: exportThread },
+          {
+            label: "Exporter cette discussion en Markdown",
+            icon: <IconFile />,
+            run: () => exportThread(),
+          },
           {
             label: thread.archived
               ? "Rouvrir cette discussion"
@@ -264,6 +283,55 @@ export function App() {
         ]
       : []),
   ];
+
+  /** What a conversation is written from: its composer, or the way to reopen it once resolved. */
+  const composerFor = (t: Thread | undefined, placeholder?: string) =>
+    t?.archived ? (
+      <div className="archived-bar" role="status">
+        <IconArchive />
+        <span>Cette discussion est résolue.</span>
+        <button className="btn sm" onClick={() => setArchived(t.id, false)}>
+          Rouvrir
+        </button>
+      </div>
+    ) : (
+      <Composer
+        key={t?.id ?? "new"}
+        agents={state.agents}
+        favorites={state.favorites}
+        thread={t}
+        project={project}
+        {...(placeholder ? { placeholder } : {})}
+        onNewProject={() => setCreatingProject(true)}
+        onCreated={(id) => navigate({ name: "thread", threadId: id })}
+        onExport={() => exportThread(t)}
+        onSearch={() => setSearchOpen(true)}
+        onRequests={() => setRequestsOpen(true)}
+        onConnections={() => setConnectionsOpen(true)}
+        onArchive={() => t && setArchived(t.id, true)}
+        onDelete={() => t && askDeleteThread(t)}
+        onTeam={(task) => setTeamTask(task)}
+        onSchedule={(text) => setScheduling({ text })}
+        onSettings={() => go({ name: "settings", section: "general" })}
+      />
+    );
+
+  /** Under the coordinator's conversation: what its project's threads wait for, then its composer. */
+  const coordinatorDock = coordinator && routeProject && (
+    <>
+      {!coordinator.archived && (
+        <ProjectRequests
+          requests={projectRequests(state.requests, state.threads, routeProject.id)}
+          threads={state.threads}
+          onOpenThread={(id, itemId) => {
+            focusItem(id, itemId);
+            openThread(id);
+          }}
+        />
+      )}
+      {composerFor(coordinator)}
+    </>
+  );
 
   const reviewing = reviewOpen && !!thread?.workspace && !thread.archived;
   const reviewCount = thread ? state.reviews[thread.id]?.files?.length : undefined;
@@ -357,7 +425,7 @@ export function App() {
         />
       )}
       <div className="side-scrim" onClick={() => setDrawer(false)} />
-      <main className="center">
+      <main className={`center${beside && wide ? " with-thread" : ""}`}>
         <header className="top">
           <button
             className="ib mobile-only menu-btn"
@@ -478,7 +546,7 @@ export function App() {
                   threads={state.threads}
                   agents={state.agents}
                   ready={state.ready}
-                  onOpenThread={(id) => go({ name: "thread", threadId: id })}
+                  onOpenThread={openThread}
                   onNewThread={() => {
                     pickProject(routeProject.id);
                     go({ name: "home" });
@@ -513,18 +581,79 @@ export function App() {
                   items={state.items[coordinator.id]}
                   agents={state.agents}
                   threads={state.threads}
-                  onOpenThread={(id) => go({ name: "thread", threadId: id })}
+                  onOpenThread={openThread}
                 />
+              );
+              // The thread picked in the list takes the list's place, a way back above it.
+              const pane = beside && (
+                <section className="pp-thread" aria-label={beside.title}>
+                  <header className="pp-crumb">
+                    <button
+                      className="pp-crumb-back"
+                      onClick={() => go({ name: "project", projectId: routeProject.id })}
+                    >
+                      Fils de discussion
+                    </button>
+                    <span className="pp-crumb-sep" aria-hidden="true">
+                      ›
+                    </span>
+                    <span className="pp-crumb-t" title={beside.title}>
+                      {beside.title}
+                    </span>
+                    <button
+                      className="ib"
+                      aria-label={beside.archived ? "Rouvrir" : "Marquer résolu"}
+                      title={beside.archived ? "Rouvrir" : "Marquer résolu"}
+                      aria-pressed={!!beside.archived}
+                      onClick={() => setArchived(beside.id, !beside.archived)}
+                    >
+                      <IconCheck size={15} />
+                    </button>
+                    <button
+                      className="ib"
+                      aria-label="Ouvrir en grand"
+                      title="Ouvrir en grand, avec le code"
+                      onClick={() => go({ name: "thread", threadId: beside.id })}
+                    >
+                      <IconExpand />
+                    </button>
+                    <ThreadMenu
+                      actions={[
+                        {
+                          label: beside.pinned ? "Désépingler" : "Épingler",
+                          run: () => togglePin(beside.id, !beside.pinned),
+                        },
+                        { label: "Exporter en Markdown", run: () => exportThread(beside) },
+                        { label: "Supprimer…", danger: true, run: () => askDeleteThread(beside) },
+                      ]}
+                    />
+                  </header>
+                  <ThreadView
+                    key={beside.id}
+                    thread={beside}
+                    items={state.items[beside.id]}
+                    agents={state.agents}
+                    threads={state.threads}
+                    onOpenThread={openThread}
+                  />
+                  <div className="dock pp-dock">
+                    {composerFor(beside, "Oriente ce fil de discussion…")}
+                  </div>
+                </section>
               );
               // Wide enough: the conversation, the threads beside it. Else one at a time.
               if (wide) {
                 return (
                   <div className="pp-split">
-                    {chat}
-                    {page(true)}
+                    <div className="pp-main">
+                      {chat}
+                      <div className="dock">{coordinatorDock}</div>
+                    </div>
+                    {pane || page(true)}
                   </div>
                 );
               }
+              if (pane) return pane;
               return (
                 <div className="pp-stack">
                   <div className="pp-tabs" role="tablist" aria-label="Page du projet">
@@ -580,8 +709,10 @@ export function App() {
         {route.name !== "settings" &&
           route.name !== "planner" &&
           // Under the « Fils » tab the coordinator's conversation is out of sight: so is its composer.
-          !(coordinator && !wide && projectTab === "threads") && (
-            <div className={`dock${coordinator && wide ? " beside-threads" : ""}`}>
+          // A thread shown alone on a narrow screen brings its own.
+          // Beside its threads, the coordinator's is under its own conversation.
+          !(coordinator && (wide || projectTab === "threads" || beside)) && (
+            <div className="dock">
               {route.name === "home" && (narrow || sideOff) && (
                 <HomeCards
                   state={state}
@@ -596,46 +727,7 @@ export function App() {
                   }
                 />
               )}
-              {thread?.archived ? (
-                <div className="archived-bar" role="status">
-                  <IconArchive />
-                  <span>Cette discussion est résolue.</span>
-                  <button className="btn sm" onClick={() => setArchived(thread.id, false)}>
-                    Rouvrir
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {coordinator && routeProject && (
-                    <ProjectRequests
-                      requests={projectRequests(state.requests, state.threads, routeProject.id)}
-                      threads={state.threads}
-                      onOpenThread={(id, itemId) => {
-                        focusItem(id, itemId);
-                        openThread(id);
-                      }}
-                    />
-                  )}
-                  <Composer
-                    key={spoken?.id ?? "new"}
-                    agents={state.agents}
-                    favorites={state.favorites}
-                    thread={spoken}
-                    project={project}
-                    onNewProject={() => setCreatingProject(true)}
-                    onCreated={(id) => navigate({ name: "thread", threadId: id })}
-                    onExport={exportThread}
-                    onSearch={() => setSearchOpen(true)}
-                    onRequests={() => setRequestsOpen(true)}
-                    onConnections={() => setConnectionsOpen(true)}
-                    onArchive={() => spoken && setArchived(spoken.id, true)}
-                    onDelete={() => spoken && askDeleteThread(spoken)}
-                    onTeam={(task) => setTeamTask(task)}
-                    onSchedule={(text) => setScheduling({ text })}
-                    onSettings={() => go({ name: "settings", section: "general" })}
-                  />
-                </>
-              )}
+              {coordinator ? coordinatorDock : composerFor(spoken)}
               {route.name === "home" && narrow && (
                 <TabBar
                   state={state}

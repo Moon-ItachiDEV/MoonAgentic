@@ -272,3 +272,9 @@ export const IconClose = ({ size = 13 }: P) => (
     <path d="M6 6l12 12M18 6 6 18" />
   </svg>
 );
+
+export const IconExpand = ({ size = 15 }: P) => (
+  <svg {...base(size)}>
+    <path d="M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7" />
+  </svg>
+);

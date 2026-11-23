@@ -594,9 +594,37 @@ describe("composer", () => {
     expect(await page.locator(".pp-row", { hasText: "Coordinateur" }).count()).toBe(0);
     if (shots) await page.waitForTimeout(300);
     await shot(page, "p5-coordinateur");
+    // The thread opens beside the coordinator: both conversations in sight, each its composer.
     await card.getByRole("button", { name: "Ouvrir" }).click();
-    await page.getByText("Corrige : Export Safari").first().waitFor();
-    await inSidebar.click();
+    const pane = page.locator(".pp-thread");
+    await pane.getByText("Corrige : Export Safari").first().waitFor();
+    await card.waitFor();
+    expect(new URL(page.url()).pathname).toMatch(/^\/p\/[^/]+\/f\/[^/]+$/);
+    await pane.getByPlaceholder("Oriente ce fil de discussion…").waitFor();
+    expect(await composer(page).count()).toBe(2);
+    if (shots) await page.waitForTimeout(300);
+    await shot(page, "p10-fil-a-cote");
+    // On a phone it takes the screen, the way back to the project above it.
+    await page.setViewportSize({ width: 390, height: 780 });
+    await expect.poll(() => composer(page).count()).toBe(1);
+    await pane.getByText("Corrige : Export Safari").first().waitFor();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    if (shots) await page.waitForTimeout(300);
+    await shot(page, "p11-fil-mobile");
+    await page.setViewportSize({ width: 1280, height: 820 });
+    // The address keeps it: a reload comes back to the same two conversations.
+    await page.reload();
+    await pane.getByText("Corrige : Export Safari").first().waitFor();
+    await card.waitFor();
+    await pane.getByRole("button", { name: "Fils de discussion" }).click();
+    await beside.waitFor();
+    expect(await pane.count()).toBe(0);
+    // From the list too, a thread opens beside the coordinator.
+    await beside.locator(".pp-open, button").first().click();
+    await pane.waitFor();
+    await pane.getByRole("button", { name: "Fils de discussion" }).click();
 
     // On a phone, the conversation and the threads take turns; nothing spills past the screen.
     await page.setViewportSize({ width: 390, height: 780 });

@@ -66,6 +66,8 @@ export function Composer(props: {
   favorites: Favorites;
   thread: Thread | undefined;
   project: Project | undefined;
+  /** What the empty field says, when it is not the usual invitation. */
+  placeholder?: string;
   onNewProject: () => void;
   onCreated: (threadId: string) => void;
   /** Saves the thread as a Markdown file. */
@@ -531,9 +533,11 @@ export function Composer(props: {
   const hints = narrow ? "" : " @ fichiers, $ skills, / commandes";
   const placeholder = !project
     ? "Crée d'abord un projet pour parler à un agent"
-    : thread
-      ? `Répondre à ${agent?.name ?? "l'agent"}…${hints}`
-      : `Demande n'importe quoi à tes agents…${hints}`;
+    : props.placeholder
+      ? props.placeholder
+      : thread
+        ? `Répondre à ${agent?.name ?? "l'agent"}…${hints}`
+        : `Demande n'importe quoi à tes agents…${hints}`;
 
   // On a phone the composer is one line until it is used, as in the mockup.
   const open = focused || !!text || !!voice || plusOpen || pickerOpen || suggesting;

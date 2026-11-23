@@ -69,7 +69,7 @@ export class Connection {
   private readonly listeners = new Set<() => void>();
   private readonly pending = new Map<string, Pending>();
   private socket: WebSocket | null = null;
-  private openThreadId: string | null = null;
+  private openThreadIds = new Set<string>();
   private retry = 0;
   private token = readToken();
   /** A token being renewed: reconnecting waits for it, so it does not try the old one. */
@@ -184,10 +184,8 @@ export class Connection {
   }
 
   send(message: ClientMessage): boolean {
-    if (message.type === "thread.open") this.openThreadId = message.threadId;
-    if (message.type === "thread.leave" && this.openThreadId === message.threadId) {
-      this.openThreadId = null;
-    }
+    if (message.type === "thread.open") this.openThreadIds.add(message.threadId);
+    if (message.type === "thread.leave") this.openThreadIds.delete(message.threadId);
     if (this.socket?.readyState !== WebSocket.OPEN) return false;
     this.socket.send(JSON.stringify(message));
     return true;
@@ -204,8 +202,8 @@ export class Connection {
       opened = true;
       this.retry = 0;
       this.set({ ...this.state, status: "open" });
-      if (this.openThreadId)
-        socket.send(JSON.stringify({ type: "thread.open", threadId: this.openThreadId }));
+      for (const threadId of this.openThreadIds)
+        socket.send(JSON.stringify({ type: "thread.open", threadId }));
     };
     socket.onmessage = (event) => {
       let message: ServerMessage;
