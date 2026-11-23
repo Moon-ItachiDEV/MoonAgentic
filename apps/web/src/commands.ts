@@ -191,8 +191,7 @@ export function triggerAt(text: string, caret: number): Trigger | null {
   const word = before.slice(start);
   const kind = word[0];
   if (kind !== "/" && kind !== "@" && kind !== "$") return null;
-  // A command is the message's first word; a mention or a skill can be anywhere.
-  if (kind === "/" && text.slice(0, start).trim()) return null;
+  // Any word can start with `/`, `@` or `$`; a path like /usr/bin is not a command.
   const query = word.slice(1);
   if (kind === "/" && query.includes("/")) return null;
   const after = /^\S*/.exec(text.slice(caret))?.[0] ?? "";
@@ -209,6 +208,19 @@ export function replaceTrigger(
   const next = `${text.slice(0, trigger.start)}${value} ${rest}`;
   return { text: next, caret: trigger.start + value.length + 1 };
 }
+
+/** The text without the trigger's word, and where the caret goes. */
+export function removeTrigger(text: string, trigger: Trigger): { text: string; caret: number } {
+  const before = text.slice(0, trigger.start);
+  let after = text.slice(trigger.end);
+  // One space goes with the word, so no double space is left behind.
+  if (!before || /\s$/.test(before)) after = after.replace(/^ /, "");
+  return { text: before + after, caret: before.length };
+}
+
+/** Whether the trigger's word is the message's first word. */
+export const atMessageStart = (text: string, trigger: Trigger): boolean =>
+  !text.slice(0, trigger.start).trim();
 
 /** How a file is written after `@`: between quotes when its path holds a space. */
 export const mention = (file: string): string =>

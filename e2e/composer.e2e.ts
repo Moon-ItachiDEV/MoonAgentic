@@ -141,6 +141,16 @@ describe("composer", () => {
     await composer(page).fill("/rev");
     await composer(page).press("Enter");
     await expect.poll(() => composer(page).inputValue()).toContain("Relis les changements");
+    // `/` opens the commands after a space in the middle of a message too, and the picked one
+    // goes in place.
+    await composer(page).fill("");
+    await composer(page).pressSequentially("donne ton avis sur le projet /");
+    await expect.poll(() => options(page).count()).toBeGreaterThan(1);
+    await composer(page).pressSequentially("dep");
+    await expect.poll(() => options(page).first().textContent()).toContain("/deploy");
+    await shot(page, "c7-commande-milieu");
+    await composer(page).press("Enter");
+    expect(await composer(page).inputValue()).toBe("donne ton avis sur le projet /deploy ");
 
     // `@` searches the project's files, `$` its skills.
     await composer(page).fill("Lis @app");

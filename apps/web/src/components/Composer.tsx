@@ -10,11 +10,13 @@ import type {
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   type AppAction,
+  atMessageStart,
   composerCommands,
   fillTemplate,
   matchCommands,
   mention,
   planModes,
+  removeTrigger,
   replaceTrigger,
   resolveSubmission,
   triggerAt,
@@ -430,6 +432,22 @@ export function Composer(props: {
       return;
     }
     const command = item.command;
+    if (!atMessageStart(text, trigger)) {
+      // In the middle of a message the command goes in place, and the rest of the text stays.
+      if (command.action) {
+        const left = removeTrigger(text, trigger);
+        putText(left.text, left.caret);
+        runAction(command.action, left.text.trim());
+        return;
+      }
+      const word =
+        command.template && !command.template.includes("$ARGUMENTS")
+          ? command.template
+          : `/${command.name}`;
+      const next = replaceTrigger(text, trigger, word);
+      putText(next.text, next.caret);
+      return;
+    }
     const rest = text.slice(trigger.end).trim();
     if (command.action) {
       putText(rest, rest.length);
