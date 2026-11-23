@@ -84,6 +84,7 @@ import { shipTarget, Teams, teamStatus } from "./team.ts";
 import { mcpInfo, type McpServerRecord } from "./mcp.ts";
 import { toolQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn } from "./session.ts";
+import { AgentPool } from "./sessions.ts";
 import type { Store } from "./store.ts";
 
 export interface Client {
@@ -118,10 +119,6 @@ const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolCon
 
 /** How long an agent may take to open its session before the turn gives up. */
 const START_TIMEOUT_MS = 120_000;
-/** An agent with nothing to do is stopped after this long; its session resumes next time. */
-const IDLE_MS = 10 * 60_000;
-/** Agents kept running at once; past it, the one left alone longest is stopped first. */
-const MAX_LIVE_AGENTS = 8;
 
 export interface HubOptions {
   /** Where threads with their own branch get their worktree. */
@@ -241,12 +238,11 @@ export class Hub {
   private readonly store: Store;
   private readonly agents: Agents;
   private readonly clients = new Set<Client>();
-  private readonly sessions = new Map<string, Promise<AgentSession>>();
+  /** The agents running for threads. */
+  private readonly pool: AgentPool;
   private readonly turns = new Map<string, Promise<void>>();
   /** Threads whose running turn the user asked to stop. */
   private readonly cancelled = new Set<string>();
-  /** Stops an agent that is still starting, by thread. */
-  private readonly starting = new Map<string, AbortController>();
   /** Steps under way (a push, a step back, a hand-off), awaited before the server stops. */
   private readonly steps = new Set<Promise<unknown>>();
   /** Identifies the running turn, so a turn's plan and text stay separate from the next. */
@@ -272,16 +268,7 @@ export class Hub {
     string,
     { item: TextItem; dirty: boolean; timer?: NodeJS.Timeout }
   >();
-  /** Stops each idle agent when its time is up. */
-  private readonly idleTimers = new Map<string, NodeJS.Timeout>();
-  /** When each running agent last finished a turn, to stop the one left alone longest. */
-  private readonly lastUsed = new Map<string, number>();
-  /** Agents being stopped for a pause: the thread's next agent starts once they are gone. */
-  private readonly pausing = new Map<string, Promise<void>>();
-  private readonly idleMs: number;
-  private useSeq = 0;
   private closed = false;
-  private readonly maxLiveAgents: number;
 
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
@@ -310,8 +297,17 @@ export class Hub {
     this.store = store;
     this.agents = agents;
     this.worktreesDir = options.worktreesDir;
-    this.idleMs = options.idleMs ?? IDLE_MS;
-    this.maxLiveAgents = Math.max(1, options.maxLiveAgents ?? MAX_LIVE_AGENTS);
+    this.pool = new AgentPool({
+      idleMs: options.idleMs,
+      maxLiveAgents: options.maxLiveAgents,
+      busy: (id) =>
+        this.turns.has(id) ||
+        this.busy.has(id) ||
+        [...this.pendingPermissions.values()].some((p) => p.threadId === id),
+      running: (id) => this.turns.has(id),
+      closed: () => this.closed,
+      steps: this.steps,
+    });
     this.homeDir = options.homeDir ?? os.homedir();
     this.pullRequests = options.pullRequests ?? localPullRequests;
     const watchMs = options.prWatchMs ?? PR_WATCH_MS;
@@ -1353,7 +1349,7 @@ export class Hub {
     this.updateThread(threadId, { status: "running", error: null });
     this.turnIds.set(threadId, randomUUID());
     this.cancelled.delete(threadId);
-    this.clearIdle(threadId);
+    this.pool.clearIdle(threadId);
     const turn = this.runTurn(thread, text, itemId, context).finally(() => {
       const cancelled = this.cancelled.has(threadId);
       this.turns.delete(threadId);
@@ -1361,7 +1357,7 @@ export class Hub {
       this.cancelled.delete(threadId);
       this.toolNames.delete(threadId);
       this.flushText(threadId);
-      this.leftIdle(threadId);
+      this.pool.leftIdle(threadId);
       if (!this.closed) {
         const summary = summaryOf(this.lastReply(threadId));
         const now = this.store.getThread(threadId);
@@ -1398,9 +1394,9 @@ export class Hub {
     // An agent only cancels a prompt it already has: one that is still starting never sees
     // the request, so the turn remembers it and stops before sending its prompt.
     if (this.turns.has(threadId)) this.cancelled.add(threadId);
-    this.starting.get(threadId)?.abort();
+    this.pool.abortStart(threadId);
     this.settlePermissions(threadId);
-    const session = await this.sessions.get(threadId)?.catch(() => undefined);
+    const session = await this.pool.get(threadId)?.catch(() => undefined);
     await session?.cancel();
   }
 
@@ -1412,7 +1408,7 @@ export class Hub {
       throw new Error("Attends la fin de la réponse pour changer de modèle.");
     // A message sent meanwhile waits: the agent never gets a prompt in the middle of it.
     await this.exclusive(threadId, "Attends la fin du changement de modèle.", async () => {
-      const session = await this.sessions.get(threadId)?.catch(() => undefined);
+      const session = await this.pool.get(threadId)?.catch(() => undefined);
       const choices = session?.model?.choices ?? this.store.getAgentModels(thread.agentId)?.models;
       if (!choices?.some((c) => c.id === model)) throw new Error("Modèle inconnu.");
       if (session?.model) {
@@ -1434,7 +1430,7 @@ export class Hub {
     if (this.turns.has(threadId))
       throw new Error("Attends la fin de la réponse pour changer ce réglage.");
     await this.exclusive(threadId, "Attends la fin du changement de réglage.", async () => {
-      const session = await this.sessions.get(threadId)?.catch(() => undefined);
+      const session = await this.pool.get(threadId)?.catch(() => undefined);
       const offered = session?.settings ?? this.store.getAgentModels(thread.agentId)?.settings;
       const setting = offered?.find((s) => s.id === settingId);
       if (!setting?.choices.some((c) => c.id === value)) throw new Error("Réglage inconnu.");
@@ -1902,82 +1898,7 @@ export class Hub {
 
   /** How many agents run for threads right now, starting ones included. */
   get liveAgents(): number {
-    // Those being paused still run until their process is gone.
-    return this.sessions.size + this.pausing.size;
-  }
-
-  /** Whether the thread's agent has nothing under way and can be stopped. */
-  private canPause(threadId: string): boolean {
-    return (
-      this.sessions.has(threadId) &&
-      !this.turns.has(threadId) &&
-      !this.busy.has(threadId) &&
-      !this.starting.has(threadId) &&
-      ![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)
-    );
-  }
-
-  private clearIdle(threadId: string): void {
-    clearTimeout(this.idleTimers.get(threadId));
-    this.idleTimers.delete(threadId);
-  }
-
-  /** A turn has ended: the agent waits, and is stopped if nothing comes. */
-  private leftIdle(threadId: string): void {
-    this.clearIdle(threadId);
-    if (this.closed || !this.sessions.has(threadId)) {
-      this.lastUsed.delete(threadId);
-      return;
-    }
-    // A counter rather than the time: two turns ending in the same millisecond keep an order.
-    this.lastUsed.set(threadId, ++this.useSeq);
-    const timer = setTimeout(() => {
-      this.idleTimers.delete(threadId);
-      this.pause(threadId);
-    }, this.idleMs);
-    timer.unref();
-    this.idleTimers.set(threadId, timer);
-  }
-
-  /**
-   * Stops the thread's agent but keeps its session: the next message resumes it, or gives a
-   * new one the conversation so far.
-   */
-  private pause(threadId: string): void {
-    const session = this.sessions.get(threadId);
-    if (!session || !this.canPause(threadId)) {
-      // Busy right now: tried again once it has been left alone as long again.
-      if (session && !this.turns.has(threadId)) this.leftIdle(threadId);
-      return;
-    }
-    // A message sent meanwhile is not refused: its agent starts once this one is gone.
-    this.sessions.delete(threadId);
-    this.lastUsed.delete(threadId);
-    this.clearIdle(threadId);
-    const closing: Promise<void> = session
-      .then((s) => s.close())
-      .catch(() => undefined)
-      .finally(() => {
-        if (this.pausing.get(threadId) === closing) this.pausing.delete(threadId);
-        this.steps.delete(closing);
-      });
-    this.pausing.set(threadId, closing);
-    this.steps.add(closing);
-  }
-
-  /** Before an agent starts, stops the ones left alone longest while too many run. */
-  private makeRoom(threadId: string): void {
-    let live = this.sessions.size;
-    if (live < this.maxLiveAgents) return;
-    const idle = [...this.lastUsed]
-      .filter(([id]) => id !== threadId && this.canPause(id))
-      .sort((a, b) => a[1] - b[1]);
-    for (const [id] of idle) {
-      if (live < this.maxLiveAgents) break;
-      // The agent leaves the count at once; its process stops in the background.
-      this.pause(id);
-      live -= 1;
-    }
+    return this.pool.live;
   }
 
   /** Runs a step that no turn and no other such step may overlap. */
@@ -2005,29 +1926,15 @@ export class Hub {
     const borrowers = this.store.listThreads().filter((t) => t.worksIn === threadId);
     const busy = borrowers.find((t) => this.turns.has(t.id) || this.busy.has(t.id));
     if (busy) throw new Error(`« ${busy.title} » travaille dans ce dossier : arrête-le d'abord.`);
-    await Promise.all(
-      borrowers.map(async (t) => {
-        const session = this.sessions.get(t.id);
-        this.sessions.delete(t.id);
-        this.clearIdle(t.id);
-        this.lastUsed.delete(t.id);
-        await session?.then((s) => s.close()).catch(() => undefined);
-        await this.pausing.get(t.id);
-      }),
-    );
+    await Promise.all(borrowers.map((t) => this.pool.stop(t.id)));
   }
 
   /** Stops the thread's agent and forgets its session, so the next turn starts a new one. */
   private async forgetSession(threadId: string): Promise<void> {
-    const session = this.sessions.get(threadId);
-    this.sessions.delete(threadId);
-    this.clearIdle(threadId);
-    this.lastUsed.delete(threadId);
+    const stopped = this.pool.stop(threadId);
     // Its bridge stops with it: what it held opens nothing any more.
     this.dropCoordinatorAccess(threadId);
-    await session?.then((s) => s.close()).catch(() => undefined);
-    // An agent being paused is gone too before its files change (Windows holds them open).
-    await this.pausing.get(threadId);
+    await stopped;
     this.store.setSessionId(threadId, null);
   }
 
@@ -2111,8 +2018,7 @@ export class Hub {
     this.teams.close();
     // A review starting reads the changes first; it must not reach the store once closed.
     await this.teams.settled();
-    for (const timer of this.idleTimers.values()) clearTimeout(timer);
-    this.idleTimers.clear();
+    this.pool.clearTimers();
     await this.recovered;
     for (const threadId of new Set([...this.pendingPermissions.values()].map((p) => p.threadId))) {
       this.settlePermissions(threadId);
@@ -2120,21 +2026,15 @@ export class Hub {
     await this.catalog.close();
     // An agent still starting is stopped now rather than waited for, and its turn ends
     // as stopped, not as failed.
-    for (const [threadId, stop] of this.starting) {
+    for (const threadId of this.pool.startingThreads()) {
       this.cancelled.add(threadId);
-      stop.abort();
+      this.pool.abortStart(threadId);
     }
-    const sessions = [...this.sessions.values()];
-    this.sessions.clear();
-    await Promise.all(
-      sessions.map((s) => s.then((session) => session.close()).catch(() => undefined)),
-    );
+    await this.pool.closeAll();
     await Promise.all(this.turns.values());
     await Promise.all([...this.steps].map((step) => step.catch(() => undefined)));
     // A turn that ended meanwhile armed no timer (closed), but leaves nothing behind either.
-    for (const timer of this.idleTimers.values()) clearTimeout(timer);
-    this.idleTimers.clear();
-    this.lastUsed.clear();
+    this.pool.clear();
     // Text an agent sent after its turn ended is still written down.
     for (const threadId of this.drafts.keys()) this.flushText(threadId);
   }
@@ -2146,7 +2046,7 @@ export class Hub {
     context?: string,
   ): Promise<void> {
     try {
-      const continuing = this.sessions.has(thread.id);
+      const continuing = this.pool.has(thread.id);
       const session = await this.session(thread);
       await this.checkpoint(thread.id, itemId);
       if (this.cancelled.has(thread.id)) {
@@ -2218,28 +2118,18 @@ export class Hub {
   }
 
   private session(thread: Thread): Promise<AgentSession> {
-    const existing = this.sessions.get(thread.id);
+    const existing = this.pool.get(thread.id);
     if (existing) return existing;
     const project = this.store.getProject(thread.projectId);
     if (!project) return Promise.reject(new Error("Projet introuvable."));
-    this.makeRoom(thread.id);
-    const stop = new AbortController();
-    this.starting.set(thread.id, stop);
-    // Only the session it started may take itself out: one paused earlier may exit late.
-    const owns = () => this.sessions.get(thread.id) === started;
-    const paused = this.pausing.get(thread.id) ?? Promise.resolve();
-    const started: Promise<AgentSession> = paused
-      .then(() => this.prepareWorkspace(thread.id, project))
-      .then((cwd) => this.startSession(thread, cwd, stop.signal, owns))
-      .finally(() => {
-        if (this.starting.get(thread.id) === stop) this.starting.delete(thread.id);
-      });
-    this.sessions.set(thread.id, started);
+    const started = this.pool.open(thread.id, (signal, owns) =>
+      this.prepareWorkspace(thread.id, project).then((cwd) =>
+        this.startSession(thread, cwd, signal, owns),
+      ),
+    );
     started.then(
       (s) => this.store.setSessionId(thread.id, s.sessionId),
-      () => {
-        if (owns()) this.sessions.delete(thread.id);
-      },
+      () => undefined,
     );
     return started;
   }
@@ -2353,10 +2243,7 @@ export class Hub {
         requestPermission: (request, signal) => this.requestPermission(thread.id, request, signal),
         onExit: (reason) => {
           if (!owns()) return;
-          this.sessions.delete(thread.id);
-          // An idle agent that quits on its own leaves no timer or place in the queue.
-          this.clearIdle(thread.id);
-          this.lastUsed.delete(thread.id);
+          this.pool.exited(thread.id);
           this.settlePermissions(thread.id);
           if (reason && this.turns.has(thread.id)) {
             this.updateThread(thread.id, { status: "error", error: reason });
