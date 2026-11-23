@@ -1,4 +1,5 @@
 import { AttachmentRefused, Attachments } from "./attachments.ts";
+import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import os from "node:os";
@@ -96,6 +97,7 @@ import { TurnLine } from "./turn-line.ts";
 import type { Store } from "./store.ts";
 import {
   forecastFor,
+  listedWorktreeFile,
   readWorktreeFile,
   rejectReviewFile,
   syncWorkspace,
@@ -104,6 +106,8 @@ import {
 
 export interface Client {
   send(message: ServerMessage): void;
+  /** The paired device that opened it; none for the computer itself. */
+  deviceId?: string;
   /** The threads whose timelines this client is showing: a coordinator's, and one beside it. */
   openThreadIds?: Set<string>;
 }
@@ -294,6 +298,11 @@ export class Hub {
   private readonly worktreesDir: string;
   /** The images sent with messages. */
   readonly attachments: Attachments;
+  /** The addresses artifacts are shown from, each for one thread's folder. */
+  readonly artifactLinks = new ArtifactLinks((id) => {
+    const thread = this.store.getThread(id);
+    return thread && !thread.archived ? thread.workspace : undefined;
+  });
   /**
    * Threads busy with their branch or their agent (a push, a step back, a hand-off), with
    * what to answer a message or another such step meanwhile.
@@ -742,6 +751,27 @@ export class Hub {
           .filter((p) => p !== project.id && this.store.getProject(p));
         this.store.setSetting(PINNED_PROJECTS, message.pinned ? [...others, project.id] : others);
         this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
+      case "artifacts.list":
+        client.send({
+          type: "artifacts",
+          requestId: message.requestId,
+          ...(await findArtifacts(this.store.listThreads())),
+        });
+        return;
+      case "artifacts.open": {
+        const workspace = this.requireLiveThread(message.threadId).workspace;
+        if (!(await listedWorktreeFile(workspace, message.path))) {
+          throw new Error("Ce fichier n'est plus dans la copie de travail de ce fil.");
+        }
+        const { ticket, expiresAt } = this.artifactLinks.issue(message.threadId, client.deviceId);
+        client.send({
+          type: "artifactLink",
+          requestId: message.requestId,
+          url: artifactUrl(ticket, message.path),
+          expiresAt,
+        });
         return;
       }
       case "project.branches":

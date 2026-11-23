@@ -18,6 +18,7 @@ import {
   IconArchive,
   IconChevron,
   IconClock,
+  IconCopies,
   IconClose,
   IconCompose,
   IconFolder,
@@ -61,6 +62,9 @@ export function Sidebar(props: {
   /** True on a project's page. */
   onProject: boolean;
   onOpenPlanner: () => void;
+  /** True on the « Artefacts » page. */
+  onArtifacts: boolean;
+  onOpenArtifacts: () => void;
   /** The planner's « Planifiées » view: the tasks MoonAgentic starts by itself. */
   onOpenSchedules: () => void;
   onNewThread: () => void;
@@ -493,6 +497,14 @@ export function Sidebar(props: {
         >
           <IconList />
           Planner
+        </button>
+        <button
+          className={props.onArtifacts ? "on" : ""}
+          aria-current={props.onArtifacts ? "page" : undefined}
+          onClick={props.onOpenArtifacts}
+        >
+          <IconCopies size={16} />
+          Artefacts
         </button>
       </nav>
       <div className="side-scroll">

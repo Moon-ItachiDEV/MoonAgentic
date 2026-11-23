@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { RemoteAccess } from "@moonagentic/protocol";
 import { MAX_IMAGE_BYTES } from "@moonagentic/protocol";
+import { ArtifactLinks } from "../src/artifacts.ts";
 import { Attachments } from "../src/attachments.ts";
 import { COORDINATOR_PATH } from "../src/coordinator-tools.ts";
 import {
@@ -41,8 +42,10 @@ async function serve(
   writeFileSync(path.join(webDir, "index.html"), "<title>MoonAgentic</title>");
   let connected = 0;
   const images = new Attachments(path.join(webDir, "..", `${path.basename(webDir)}-images`));
+  const links = new ArtifactLinks(() => undefined);
   const hub = {
     attachments: images,
+    artifactLinks: links,
     connect: () => {
       connected += 1;
       return () => undefined;
@@ -84,7 +87,7 @@ async function serve(
     expect(res.status).toBe(200);
     return ((await res.json()) as { ticket: string }).ticket;
   };
-  return { origin, webDir, connections: () => connected, renewed, asked, ticket, images };
+  return { origin, webDir, connections: () => connected, renewed, asked, ticket, images, links };
 }
 
 /** Opens a socket and returns the HTTP status on rejection, or `"open"` on success. */
@@ -363,7 +366,7 @@ describe("the HTTP server", () => {
 
   it("pairs a device with a one-time code: its own token works, the computer's stays", async () => {
     const devices = new Devices();
-    const { origin, ticket } = await serve({ devices });
+    const { origin, ticket, links } = await serve({ devices });
     const call = (url: string, init: { method?: string; token?: string; body?: unknown } = {}) =>
       fetch(`http://${origin}${url}`, {
         method: init.method ?? "GET",
@@ -414,9 +417,14 @@ describe("the HTTP server", () => {
     const ownerSocket = new WebSocket(`ws://${origin}/ws?ticket=${await ticket(TOKEN)}`);
     await new Promise((resolve) => ownerSocket.once("open", resolve));
     const ownerClosed = new Promise<number>((resolve) => ownerSocket.once("close", resolve));
+    const forget = vi.spyOn(links, "forget");
     const renewed = await call("/api/remote/token", { method: "POST", token: TOKEN });
     const { token: owner } = (await renewed.json()) as { token: string };
     expect(await ownerClosed).toBe(TOKEN_RENEWED);
+    // The computer's addresses to show artifacts stop with its old token; the phone's stay.
+    const renewedWhose = forget.mock.calls.at(-1)![0];
+    expect(renewedWhose(undefined)).toBe(true);
+    expect(renewedWhose(device.id)).toBe(false);
     expect(phoneSocket.readyState).toBe(WebSocket.OPEN);
 
     // Revoked: its connection closes, its pending ticket and token stop working.
@@ -434,6 +442,11 @@ describe("the HTTP server", () => {
     expect(revoked.status).toBe(200);
     expect(((await revoked.json()) as { devices: unknown[] }).devices).toEqual([]);
     expect(await phoneClosed).toBe(DEVICE_REVOKED);
+    // So do the phone's addresses to show artifacts, and only its.
+    const revokedWhose = forget.mock.calls.at(-1)![0];
+    expect(revokedWhose(device.id)).toBe(true);
+    expect(revokedWhose(undefined)).toBe(false);
+    expect(revokedWhose("autre")).toBe(false);
     expect(await socketStatus(`ws://${origin}/ws?ticket=${pending}`)).toBe(401);
     expect((await call("/api/auth", { token: phone })).status).toBe(401);
   });

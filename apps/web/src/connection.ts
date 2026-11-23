@@ -34,6 +34,8 @@ export const LONG_ASKS_MS: Readonly<Record<string, number>> = {
   "workspace.sync": 3 * 60_000,
   // The remote is asked for its branch, then each branch is compared with it.
   "project.branches": 2 * 60_000,
+  // Each thread with its own branch is asked what changed there.
+  "artifacts.list": 2 * 60_000,
   "project.deleteBranches": 3 * 60_000,
 };
 /** How long the page waits for the answer to a request of this type. */
@@ -165,7 +167,11 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
                                 ? Extract<ServerMessage, { type: "projectBranches" }>
                                 : T extends "project.deleteBranches"
                                   ? Extract<ServerMessage, { type: "branchesDeleted" }>
-                                  : ServerMessage;
+                                  : T extends "artifacts.list"
+                                    ? Extract<ServerMessage, { type: "artifacts" }>
+                                    : T extends "artifacts.open"
+                                      ? Extract<ServerMessage, { type: "artifactLink" }>
+                                      : ServerMessage;
 
 export class Connection {
   private state: State = initialState;
