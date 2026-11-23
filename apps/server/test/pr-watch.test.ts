@@ -105,6 +105,12 @@ describe("what calls for a fix", () => {
   });
 });
 
+/**
+ * How long to wait for the agent's turn or a push: a demo agent's start, a worktree and a
+ * push take seconds on Windows runners, far past expect.poll's one-second default.
+ */
+const SLOW = { timeout: 30_000, interval: 100 };
+
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
     .toString()
@@ -167,10 +173,7 @@ async function watched() {
   return { hub, store, github, threadId, client, pushed, fixes };
 }
 
-/** An agent's turn and a git push take seconds on a slow machine: no wait keeps the default one. */
-const SLOW = { timeout: 15_000 };
-
-describe("a thread that fixes its pull request", { timeout: 40_000 }, () => {
+describe("a thread that fixes its pull request", { timeout: 90_000 }, () => {
   it("sends its agent once per failure, pushes the fix, and gives up after the last try", async () => {
     const { hub, store, github, threadId, client, pushed, fixes } = await watched();
     github.pr = failing();
@@ -208,8 +211,7 @@ describe("a thread that fixes its pull request", { timeout: 40_000 }, () => {
       prWatch: { ...store.getThread(threadId)!.prWatch!, tries: PR_WATCH_TRIES },
     });
     github.pr = failing("c".repeat(40));
-    // Once the last fix is pushed, which takes git a while on a slow machine; each read is
-    // awaited, so none is left when the hub closes.
+    // Once the last fix is pushed; each read is awaited, so none is left when the hub closes.
     await expect
       .poll(async () => {
         await hub.pullRequest(threadId);
