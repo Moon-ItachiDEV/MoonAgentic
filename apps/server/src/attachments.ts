@@ -86,17 +86,37 @@ export class Attachments {
     return path.join(this.dir, threadId);
   }
 
-  private files(folder: string, id: string): { bytes: string; about: string } {
+  /**
+   * The two files of an image: its bytes, and what is known about it. The bytes carry the
+   * extension of their kind, as an agent given the file tells an image from text by it.
+   */
+  private files(folder: string, id: string, type: ImageType): { bytes: string; about: string } {
     if (!SAFE_NAME.test(id)) throw new AttachmentRefused("Image introuvable.", 404);
-    return { bytes: path.join(folder, id), about: path.join(folder, `${id}.json`) };
+    return {
+      bytes: path.join(folder, `${id}.${EXTENSION[type]}`),
+      about: path.join(folder, `${id}.json`),
+    };
+  }
+
+  /** Every file an image of this id may have left in the folder, whatever its kind. */
+  private allFiles(folder: string, id: string): string[] {
+    if (!SAFE_NAME.test(id)) return [];
+    return [
+      path.join(folder, `${id}.json`),
+      ...Object.values(EXTENSION).map((ext) => path.join(folder, `${id}.${ext}`)),
+    ];
   }
 
   private about(folder: string, id: string): ImageRef | undefined {
-    const { bytes, about } = this.files(folder, id);
+    if (!SAFE_NAME.test(id)) throw new AttachmentRefused("Image introuvable.", 404);
     try {
-      const read = JSON.parse(readFileSync(about, "utf8")) as Partial<ImageRef>;
+      const read = JSON.parse(
+        readFileSync(path.join(folder, `${id}.json`), "utf8"),
+      ) as Partial<ImageRef>;
       const type = IMAGE_TYPES.find((t) => t === read.mime);
-      if (!type || !existsSync(bytes)) return undefined;
+      if (!type) return undefined;
+      const { bytes } = this.files(folder, id, type);
+      if (!existsSync(bytes)) return undefined;
       return { id, name: cleanName(read.name, type), mime: type, size: statSync(bytes).size };
     } catch {
       return undefined;
@@ -132,7 +152,7 @@ export class Attachments {
       mime: type,
       size: bytes.length,
     };
-    const files = this.files(folder, image.id);
+    const files = this.files(folder, image.id, type);
     writeFileSync(files.bytes, bytes, { mode: 0o600 });
     writeFileSync(files.about, JSON.stringify({ name: image.name, mime: image.mime }), {
       mode: 0o600,
@@ -161,8 +181,8 @@ export class Attachments {
     const to = this.folder(threadId);
     mkdirSync(to, { recursive: true, mode: 0o700 });
     for (const image of images) {
-      const waiting = this.files(from, image.id);
-      const kept = this.files(to, image.id);
+      const waiting = this.files(from, image.id, image.mime);
+      const kept = this.files(to, image.id, image.mime);
       renameSync(waiting.about, kept.about);
       renameSync(waiting.bytes, kept.bytes);
     }
@@ -174,7 +194,7 @@ export class Attachments {
     try {
       const folder = this.folder(threadId);
       const image = this.about(folder, id);
-      return image ? { image, file: this.files(folder, id).bytes } : undefined;
+      return image ? { image, file: this.files(folder, id, image.mime).bytes } : undefined;
     } catch {
       return undefined;
     }
@@ -182,15 +202,9 @@ export class Attachments {
 
   /** Throws away an image that was joined to a message and then taken off before sending. */
   discard(id: string): void {
-    const folder = path.join(this.dir, PENDING);
-    let files: { bytes: string; about: string };
-    try {
-      files = this.files(folder, id);
-    } catch {
-      return;
+    for (const file of this.allFiles(path.join(this.dir, PENDING), id)) {
+      rmSync(file, { force: true });
     }
-    rmSync(files.bytes, { force: true });
-    rmSync(files.about, { force: true });
   }
 
   /** The thread is deleted: its images go with it. */

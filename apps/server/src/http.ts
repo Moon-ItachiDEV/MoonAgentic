@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, readFileSync, statSync } from "node:fs";
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import path from "node:path";
 import {
   ClientMessage,
@@ -219,6 +219,29 @@ export function buildId(webDir: string): string | null {
   }
   builtPage = { file, stamp, id };
   return id;
+}
+
+/** How much of a refused upload is still read, and for how long, before it is cut. */
+const REFUSED_DRAIN_BYTES = 2 * MAX_IMAGE_BYTES;
+const REFUSED_DRAIN_MS = 30_000;
+
+/**
+ * Reads and drops what is left of an upload already refused. Closing on a sender that is
+ * still writing resets the connection on Windows before it has read the answer, and it
+ * would see a network failure instead of the reason. Within limits: one that never stops
+ * is cut.
+ */
+function dropRest(req: IncomingMessage): void {
+  let left = REFUSED_DRAIN_BYTES;
+  const cut = () => req.socket.destroy();
+  const timer = setTimeout(cut, REFUSED_DRAIN_MS);
+  timer.unref();
+  req.on("data", (chunk: Buffer) => {
+    left -= chunk.length;
+    if (left < 0) cut();
+  });
+  req.once("close", () => clearTimeout(timer));
+  req.resume();
 }
 
 /**
@@ -522,22 +545,23 @@ export function createHttpServer(options: {
             ),
           );
         if (Number(req.headers["content-length"] ?? 0) > MAX_IMAGE_BYTES) {
-          // Said before any of it is read; the rest is not waited for.
-          res.setHeader("connection", "close");
+          // Said before any of it is kept.
           tooLarge();
+          dropRest(req);
           return;
         }
         const chunks: Buffer[] = [];
         let size = 0;
-        req.on("data", (chunk: Buffer) => {
+        const keep = (chunk: Buffer) => {
           size += chunk.length;
           if (size <= MAX_IMAGE_BYTES) return void chunks.push(chunk);
-          // A sender that lied about the length, or gave none: stopped as soon as it shows.
+          // A sender that lied about the length, or gave none: refused as soon as it shows.
           chunks.length = 0;
-          req.pause();
-          res.setHeader("connection", "close");
+          req.off("data", keep);
           tooLarge();
-        });
+          dropRest(req);
+        };
+        req.on("data", keep);
         req.on("error", () => undefined);
         req.on("end", () => {
           if (size > MAX_IMAGE_BYTES) return;
@@ -568,7 +592,11 @@ export function createHttpServer(options: {
           return;
         }
         const stream = createReadStream(found.file);
-        stream.on("error", () => res.destroy());
+        stream.on("error", () => {
+          // Gone between the look and the read, such as with its thread: not there, said so.
+          if (res.headersSent) res.destroy();
+          else res.writeHead(404, { "cache-control": "no-store" }).end();
+        });
         res.on("close", () => stream.destroy());
         stream.once("open", () => {
           res.writeHead(200, {

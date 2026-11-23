@@ -112,14 +112,17 @@ describe("images sent with a message", () => {
     const old = images.add(PNG);
     images.discard(removed.id);
     expect(status(() => images.bind("fil-1", [removed.id]))).toBe(404);
+    expect(readdirSync(path.join(dir, "pending")).some((f) => f.startsWith(removed.id))).toBe(
+      false,
+    );
 
     const longAgo = new Date(Date.now() - PENDING_TTL_MS - 60_000);
-    for (const name of [old.id, `${old.id}.json`]) {
+    for (const name of [`${old.id}.png`, `${old.id}.json`]) {
       utimesSync(path.join(dir, "pending", name), longAgo, longAgo);
     }
     images.sweep();
     expect(readdirSync(path.join(dir, "pending")).sort()).toEqual(
-      [kept.id, `${kept.id}.json`].sort(),
+      [`${kept.id}.png`, `${kept.id}.json`].sort(),
     );
 
     images.bind("fil-1", [kept.id]);
@@ -152,7 +155,8 @@ describe("images sent with a message", () => {
     const links = images.blocks("fil-1", sent, false);
     expect(links.map((b) => b.type)).toEqual(["resource_link", "resource_link"]);
     expect(links[0]).toMatchObject({ name: "petite.png", size: PNG.length });
-    expect((links[0] as { uri: string }).uri).toMatch(/^file:\/\/.*fil-1/);
+    // The file carries the extension of its kind: an agent tells an image from text by it.
+    expect((links[0] as { uri: string }).uri).toMatch(/^file:\/\/.*fil-1\/[0-9a-f-]+\.png$/);
     // An image that is gone is left out, not sent as a broken link.
     images.forget("fil-1");
     expect(images.blocks("fil-1", sent, true)).toEqual([]);

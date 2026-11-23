@@ -3,7 +3,7 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { RemoteAccess } from "@moonagentic/protocol";
 import { MAX_IMAGE_BYTES } from "@moonagentic/protocol";
@@ -383,6 +383,8 @@ describe("the HTTP server", () => {
     expect(((await script.json()) as { message: string }).message).toContain("PNG, JPEG");
     const heavy = await post(Buffer.concat([png, Buffer.alloc(MAX_IMAGE_BYTES)]));
     expect(heavy.status).toBe(413);
+    // The reason is read, not a connection cut while the image was still being sent.
+    expect(((await heavy.json()) as { message: string }).message).toContain("10 Mo");
 
     const taken = await post(png);
     expect(taken.status).toBe(201);
@@ -405,6 +407,10 @@ describe("the HTTP server", () => {
     expect(read.headers.get("x-content-type-options")).toBe("nosniff");
     expect(read.headers.get("cache-control")).toContain("private");
     expect(Buffer.from(await read.arrayBuffer())).toEqual(png);
+    // Gone between the look and the read, as when its thread is deleted: not there, said so.
+    const found = images.find("fil-1", image.id)!;
+    vi.spyOn(images, "find").mockReturnValueOnce({ ...found, file: `${found.file}.parti` });
+    expect((await fetch(address("fil-1"), { headers: auth })).status).toBe(404);
 
     // Taken off before sending: thrown away. One already sent stays its thread's.
     const dropped = (await (await post(png)).json()) as { id: string };
