@@ -1,7 +1,7 @@
 import { createElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
+import { AppFailed, ErrorBoundary } from "./components/ErrorBoundary.tsx";
 
 function findButton(
   node: ReactNode,
@@ -84,6 +84,35 @@ describe("ErrorBoundary", () => {
     boundary.componentDidCatch(err, { componentStack: "\n  in Planner" });
 
     expect(errorSpy).toHaveBeenCalledWith("Erreur d'affichage :", err, "\n  in Planner");
+  });
+
+  it("forgets the error when what it shows changes, such as another thread", () => {
+    const boundary = new ErrorBoundary({ children: null, resetKey: "fil-2" });
+    boundary.state = ErrorBoundary.getDerivedStateFromError(new Error("Fil illisible"));
+    const setState = vi.spyOn(boundary, "setState").mockImplementation(() => undefined);
+    // The same thread drawn again: the error stays, rather than be thrown in a loop.
+    boundary.componentDidUpdate({ children: null, resetKey: "fil-2" });
+    expect(setState).not.toHaveBeenCalled();
+    // It came from another thread: this one gets its chance.
+    boundary.componentDidUpdate({ children: null, resetKey: "fil-1" });
+    expect(setState).toHaveBeenCalledWith({ error: null });
+    // Nothing to forget when all is well.
+    setState.mockClear();
+    boundary.state = { error: null };
+    boundary.componentDidUpdate({ children: null, resetKey: "fil-0" });
+    expect(setState).not.toHaveBeenCalled();
+  });
+
+  it("leaves a page at the root rather than a white screen, with a way back", () => {
+    const reload = vi.fn();
+    const tree = AppFailed({ error: new Error("l is not a function"), reload });
+    const html = renderToStaticMarkup(tree);
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("MoonAgentic n&#x27;a pas pu s&#x27;afficher");
+    expect(html).toContain("Tes agents continuent sur le serveur");
+    expect(html).toContain("l is not a function");
+    findButton(tree, "Recharger")?.props.onClick?.();
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 
   it("supports a custom fallback with a working reload callback", () => {

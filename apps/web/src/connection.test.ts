@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HIDDEN_FRAME_MS } from "./frame.ts";
 import {
   ASK_TIMEOUT_MS,
+  askTimeoutFor,
   Connection,
   NOT_SENT,
   PING_MS,
@@ -264,6 +265,45 @@ describe("Connection", () => {
     expect(() =>
       socket.emitMessage(JSON.stringify({ type: "searched", requestId: "req-default", hits: [] })),
     ).not.toThrow();
+  });
+
+  it("waits for a clone, a push or a merge as long as the server works on it", async () => {
+    expect(askTimeoutFor("search")).toBe(ASK_TIMEOUT_MS);
+    expect(askTimeoutFor("project.clone")).toBeGreaterThan(15 * 60_000);
+    expect(askTimeoutFor("workspace.ship")).toBeGreaterThan(5 * 60_000);
+    expect(askTimeoutFor("team.ship")).toBe(askTimeoutFor("workspace.ship"));
+    expect(askTimeoutFor("workspace.mergePr")).toBeGreaterThan(2 * 60_000);
+    // A longer usual wait is never cut short.
+    expect(askTimeoutFor("workspace.mergePr", 10 * 60_000)).toBe(10 * 60_000);
+
+    const { conn, socket } = await setupConnection();
+    socket.open();
+    let failed: unknown;
+    const pushed = conn
+      .request({
+        type: "workspace.ship",
+        requestId: "req-ship",
+        threadId: "t1",
+        message: "Corrige la réponse",
+        pr: true,
+        files: ["src/app.ts"],
+      })
+      .catch((error: unknown) => {
+        failed = error;
+        return undefined;
+      });
+    // Past the usual minute the page still waits: the push may take the server minutes.
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(failed).toBeUndefined();
+    socket.emitMessage(
+      JSON.stringify({
+        type: "shipped",
+        requestId: "req-ship",
+        url: "https://github.com/o/r/pull/1",
+      }),
+    );
+    await expect(pushed).resolves.toBe("https://github.com/o/r/pull/1");
+    expect(failed).toBeUndefined();
   });
 
   it("supports an injectable timeout on Connection and per ask call", async () => {

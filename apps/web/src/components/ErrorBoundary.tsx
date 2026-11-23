@@ -6,6 +6,11 @@ export interface ErrorBoundaryProps {
   fallback?: (error: Error, reload: () => void) => ReactNode;
   /** Called when the user clicks « Recharger »; defaults to reloading the page. */
   onReload?: () => void;
+  /**
+   * What the screen shows, such as a thread's id: when it changes, the error is forgotten,
+   * so another thread opens even though the one before could not be drawn.
+   */
+  resetKey?: string;
 }
 
 interface ErrorBoundaryState {
@@ -18,6 +23,10 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   static getDerivedStateFromError(error: unknown): ErrorBoundaryState {
     return { error: error instanceof Error ? error : new Error(String(error)) };
+  }
+
+  componentDidUpdate(before: ErrorBoundaryProps): void {
+    if (this.state.error && before.resetKey !== this.props.resetKey) this.setState({ error: null });
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
@@ -51,4 +60,23 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       </div>
     );
   }
+}
+
+/**
+ * The last resort, around the whole app: an error nothing else caught leaves this page
+ * rather than a white screen. The server is another program, and goes on with its work.
+ */
+export function AppFailed({ error, reload }: { error: Error; reload: () => void }) {
+  return (
+    <div className="gate" role="alert">
+      <div>
+        <h1>MoonAgentic n'a pas pu s'afficher</h1>
+        <p>Tes agents continuent sur le serveur : recharge la page pour les retrouver.</p>
+        {error.message && <p className="failed">{error.message}</p>}
+        <button className="btn pri" type="button" onClick={reload}>
+          Recharger
+        </button>
+      </div>
+    </div>
+  );
 }
