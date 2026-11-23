@@ -14,9 +14,11 @@ import {
   bearerToken,
   createHttpServer,
   decode,
+  DEVICE_REVOKED,
   type RateLimitOptions,
   TOKEN_RENEWED,
 } from "../src/http.ts";
+import { Devices } from "../src/devices.ts";
 import { CoordinatorRefused, type Hub } from "../src/hub.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -32,6 +34,7 @@ async function serve(
     maxClients?: number;
     wsTicketTtlMs?: number;
     rateLimit?: RateLimitOptions;
+    devices?: Devices;
   } = {},
 ) {
   const webDir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-web-"));
@@ -356,6 +359,98 @@ describe("the HTTP server", () => {
     expect(await socketStatus(`ws://${origin}/ws?ticket=${pendingTicket}`)).toBe(401);
     expect(await socketOpens(`ws://${origin}/ws?ticket=${await ticket(token)}`)).toBe(true);
     expect((await renew(TOKEN)).status).toBe(401);
+  });
+
+  it("pairs a device with a one-time code: its own token works, the computer's stays", async () => {
+    const devices = new Devices();
+    const { origin, ticket } = await serve({ devices });
+    const call = (url: string, init: { method?: string; token?: string; body?: unknown } = {}) =>
+      fetch(`http://${origin}${url}`, {
+        method: init.method ?? "GET",
+        headers: {
+          ...(init.token ? { authorization: `Bearer ${init.token}` } : {}),
+          "content-type": "application/json",
+        },
+        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+      });
+
+    expect((await call("/api/pair/start", { method: "POST" })).status).toBe(401);
+    const start = await call("/api/pair/start", { method: "POST", token: TOKEN });
+    expect(start.status).toBe(200);
+    const { code } = (await start.json()) as { code: string };
+
+    const wrong = await call("/api/pair", {
+      method: "POST",
+      body: { code: "AAAA2222", name: "x" },
+    });
+    expect(wrong.status).toBe(401);
+    expect(((await wrong.json()) as { message: string }).message).toMatch(/expiré/);
+    const pair = await call("/api/pair", { method: "POST", body: { code, name: "iPhone" } });
+    expect(pair.status).toBe(200);
+    const { token: phone, device } = (await pair.json()) as {
+      token: string;
+      device: { id: string; name: string };
+    };
+    expect(device.name).toBe("iPhone");
+    // Used once only.
+    expect((await call("/api/pair", { method: "POST", body: { code, name: "x" } })).status).toBe(
+      401,
+    );
+
+    // The phone's token opens the app, but not what only the computer may do.
+    expect((await call("/api/auth", { token: phone })).status).toBe(204);
+    expect((await call("/api/remote", { token: phone })).status).toBe(200);
+    expect((await call("/api/devices", { token: phone })).status).toBe(403);
+    expect((await call("/api/pair/start", { method: "POST", token: phone })).status).toBe(403);
+    expect((await call("/api/remote/token", { method: "POST", token: phone })).status).toBe(403);
+    const listed = await call("/api/devices", { token: TOKEN });
+    expect(((await listed.json()) as { devices: { name: string }[] }).devices).toMatchObject([
+      { name: "iPhone" },
+    ]);
+
+    // Renewing the computer's token leaves the phone connected.
+    const phoneSocket = new WebSocket(`ws://${origin}/ws?ticket=${await ticket(phone)}`);
+    await new Promise((resolve) => phoneSocket.once("open", resolve));
+    const ownerSocket = new WebSocket(`ws://${origin}/ws?ticket=${await ticket(TOKEN)}`);
+    await new Promise((resolve) => ownerSocket.once("open", resolve));
+    const ownerClosed = new Promise<number>((resolve) => ownerSocket.once("close", resolve));
+    const renewed = await call("/api/remote/token", { method: "POST", token: TOKEN });
+    const { token: owner } = (await renewed.json()) as { token: string };
+    expect(await ownerClosed).toBe(TOKEN_RENEWED);
+    expect(phoneSocket.readyState).toBe(WebSocket.OPEN);
+
+    // Revoked: its connection closes, its pending ticket and token stop working.
+    const pending = await ticket(phone);
+    const phoneClosed = new Promise<number>((resolve) => phoneSocket.once("close", resolve));
+    expect(
+      (await call("/api/devices/revoke", { method: "POST", token: owner, body: { id: "nope" } }))
+        .status,
+    ).toBe(404);
+    const revoked = await call("/api/devices/revoke", {
+      method: "POST",
+      token: owner,
+      body: { id: device.id },
+    });
+    expect(revoked.status).toBe(200);
+    expect(((await revoked.json()) as { devices: unknown[] }).devices).toEqual([]);
+    expect(await phoneClosed).toBe(DEVICE_REVOKED);
+    expect(await socketStatus(`ws://${origin}/ws?ticket=${pending}`)).toBe(401);
+    expect((await call("/api/auth", { token: phone })).status).toBe(401);
+  });
+
+  it("counts wrong pairing codes as failed sign-ins", async () => {
+    const { origin } = await serve({ rateLimit: { maxAuthFailures: 3 } });
+    const pair = () =>
+      fetch(`http://${origin}/api/pair`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: "AAAA2222", name: "x" }),
+      });
+    for (let i = 0; i < 3; i++) expect((await pair()).status).toBe(401);
+    expect((await pair()).status).toBe(429);
+    expect(
+      (await fetch(`http://${origin}/api/pair`, { method: "POST", body: "pas du json" })).status,
+    ).toBe(429);
   });
 
   it("takes an image only from who holds the token, and reads it back by its thread", async () => {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export type { RemoteAccess, RemoteAddress } from "./remote.ts";
+export type { PairedDevice, RemoteAccess, RemoteAddress } from "./remote.ts";
 export { defaultTeam, pickMember, TEAM_PRESETS, type TeamPreset } from "./team-presets.ts";
 
 // Zod builds faster checks with `new Function` when it can, and tries it as soon as a

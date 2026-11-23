@@ -27,12 +27,12 @@ import {
 } from "./components/icons.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
-import { MoonMark } from "./components/MoonMark.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
 import { ProjectRequests, projectRequests } from "./components/ProjectRequests.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
+import { PairGate } from "./components/PairGate.tsx";
 import { ProjectPage } from "./components/ProjectPage.tsx";
 import { HomeCards } from "./components/HomeCards.tsx";
 import { steady, useSame } from "./steady.tsx";
@@ -152,7 +152,7 @@ export function App() {
     lastPage.current = pageProjectId;
   }, [pageProjectId]);
 
-  if (state.status === "unauthorized") return <Unauthorized />;
+  if (state.status === "unauthorized") return <PairGate />;
 
   const thread: Thread | undefined =
     route.name === "thread" ? state.threads.find((t) => t.id === route.threadId) : undefined;
@@ -982,21 +982,6 @@ export function App() {
           <button onClick={() => connection.dismissNotice()}>Fermer</button>
         </div>
       )}
-    </div>
-  );
-}
-
-function Unauthorized() {
-  return (
-    <div className="gate">
-      <div>
-        <MoonMark width={44} height={44} />
-        <h1>Lien de connexion requis</h1>
-        <p>
-          Ouvre MoonAgentic avec le lien affiché par le serveur au démarrage, celui qui finit par{" "}
-          <code>#token=…</code>.
-        </p>
-      </div>
     </div>
   );
 }

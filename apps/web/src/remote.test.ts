@@ -1,6 +1,6 @@
 import type { RemoteAccess } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
-import { addressText, remoteAdvice, remoteLink } from "./remote.ts";
+import { addressText, remoteAdvice } from "./remote.ts";
 
 const access = (over: Partial<RemoteAccess>): RemoteAccess => ({
   port: 4747,
@@ -11,12 +11,6 @@ const access = (over: Partial<RemoteAccess>): RemoteAccess => ({
 });
 
 describe("remote access, as told to the user", () => {
-  it("builds the link another device opens", () => {
-    expect(
-      remoteLink({ kind: "tailscale-https", url: "https://mini.tail1234.ts.net" }, "a_b-c"),
-    ).toBe("https://mini.tail1234.ts.net/#token=a_b-c");
-  });
-
   it("warns about an address with no encryption, or open to the internet", () => {
     expect(addressText({ kind: "tailscale-https", url: "https://m.ts.net" }).tone).toBe("ok");
     expect(addressText({ kind: "lan", url: "http://192.168.1.20:4747" }).tone).toBe("warn");

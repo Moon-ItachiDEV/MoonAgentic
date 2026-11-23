@@ -5,6 +5,7 @@ import { Agents } from "./agents.ts";
 import { serverArgs } from "./args.ts";
 import { dailyBackups } from "./backups.ts";
 import { preparePrivateDataDir } from "./data-dir.ts";
+import { Devices } from "./devices.ts";
 import { createHttpServer, newToken } from "./http.ts";
 import { GithubAccount, setGithubAccount } from "./github-account.ts";
 import { systemVault } from "./github-vault.ts";
@@ -73,6 +74,8 @@ hub.attachments.sweep();
 const server = createHttpServer({
   hub,
   token,
+  // Each paired phone or tablet, with its own token, kept in the database.
+  devices: new Devices(store),
   // Written whole beside the old one, then put in its place: a power cut keeps one of the two.
   onTokenRenewed: (renewed) => writeFileAtomic(tokenFile, renewed),
   ...(!values.dev && existsSync(webDir) ? { webDir } : {}),

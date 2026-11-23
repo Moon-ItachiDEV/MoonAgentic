@@ -11,6 +11,7 @@ import "./settings.css";
 import "./sidebar.css";
 import "./github.css";
 import "./remote.css";
+import "./pairing.css";
 import "./pull-request.css";
 import "./composer.css";
 import "./decision.css";

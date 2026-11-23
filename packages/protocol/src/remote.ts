@@ -25,3 +25,15 @@ export interface RemoteAccess {
   /** The addresses that work right now, the best one first. None when there is none. */
   addresses: RemoteAddress[];
 }
+
+/**
+ * A phone or tablet paired with this MoonAgentic, with a token of its own. The token itself is
+ * never listed: only the device it came to.
+ */
+export interface PairedDevice {
+  id: string;
+  name: string;
+  createdAt: number;
+  /** When it last connected, within a minute. */
+  lastSeen?: number;
+}

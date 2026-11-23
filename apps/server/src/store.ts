@@ -269,6 +269,19 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
           AND json_extract(data, '$.byTeam') IS NOT 1;
     `);
   },
+  // 6. The devices paired with this MoonAgentic, each with a token of its own. Only a hash of
+  // the token is kept: a copy of the database opens nothing.
+  (db) => {
+    db.exec(`
+      CREATE TABLE devices (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        last_seen INTEGER
+      );
+    `);
+  },
 ];
 
 /** How many messages the search's index takes in one write. */
@@ -316,6 +329,15 @@ export function migrate(
   }
 }
 
+/** A paired device as kept: never its token, only the token's hash. */
+export interface DeviceRow {
+  id: string;
+  name: string;
+  tokenHash: string;
+  createdAt: number;
+  lastSeen?: number;
+}
+
 /** Durable state: projects, threads and each thread's timeline items. */
 export class Store {
   readonly db: DatabaseSync;
@@ -358,6 +380,42 @@ export class Store {
       this.db.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  /** The paired devices, oldest first. */
+  listDevices(): DeviceRow[] {
+    return (
+      this.sql(
+        `SELECT id, name, token_hash, created_at, last_seen FROM devices ORDER BY created_at, id`,
+      ).all() as {
+        id: string;
+        name: string;
+        token_hash: string;
+        created_at: number;
+        last_seen: number | null;
+      }[]
+    ).map((r) => ({
+      id: r.id,
+      name: r.name,
+      tokenHash: r.token_hash,
+      createdAt: r.created_at,
+      ...(r.last_seen !== null ? { lastSeen: r.last_seen } : {}),
+    }));
+  }
+
+  addDevice(device: DeviceRow): void {
+    this.sql(
+      `INSERT INTO devices (id, name, token_hash, created_at, last_seen) VALUES (?, ?, ?, ?, ?)`,
+    ).run(device.id, device.name, device.tokenHash, device.createdAt, device.lastSeen ?? null);
+  }
+
+  touchDevice(id: string, at: number): void {
+    this.sql(`UPDATE devices SET last_seen = ? WHERE id = ?`).run(at, id);
+  }
+
+  /** True when there was such a device. */
+  removeDevice(id: string): boolean {
+    return Number(this.sql(`DELETE FROM devices WHERE id = ?`).run(id).changes) > 0;
   }
 
   getSetting<T>(key: string, fallback: T): T {
