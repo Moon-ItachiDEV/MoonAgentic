@@ -1,0 +1,2 @@
+# LF everywhere, whatever core.autocrlf says: prettier checks for it, on Windows too.
+* text=auto eol=lf

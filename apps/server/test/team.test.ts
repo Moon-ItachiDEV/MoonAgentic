@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
-import type { Team } from "@moonagentic/protocol";
+import type { Team, Thread } from "@moonagentic/protocol";
 import {
   diffText,
+  LEAD_LANE,
   readBrief,
   readPlan,
   readVerdict,
   recordTimeline,
+  type TeamHost,
+  Teams,
   teamStatus,
 } from "../src/team.ts";
 
@@ -116,6 +119,117 @@ describe("recordTimeline", () => {
       { at: 12, lane: 0, phase: "done" },
       { at: 12, lane: -2, phase: "merging" },
     ]);
+  });
+});
+
+describe("Teams.planned", () => {
+  function setupTeam(sendImpl?: (threadId: string, text: string) => void) {
+    const threads = new Map<string, Thread>();
+    const replies = new Map<string, string>();
+    const sent: { threadId: string; text: string }[] = [];
+    let seq = 0;
+    const host: TeamHost = {
+      thread: (id) => threads.get(id),
+      threads: () => [...threads.values()],
+      createThread: (input) => {
+        const id = `t${++seq}`;
+        threads.set(id, {
+          id,
+          projectId: input.projectId,
+          title: input.title,
+          agentId: input.agentId,
+          status: "running",
+          permissionMode: input.permissionMode,
+          ...(input.model ? { model: input.model } : {}),
+          ...(input.parentId ? { parentId: input.parentId } : {}),
+          role: input.role,
+          ...(input.worksIn ? { worksIn: input.worksIn } : {}),
+          ...(input.team ? { team: input.team } : {}),
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        return id;
+      },
+      send: (threadId, text) => {
+        sent.push({ threadId, text });
+        sendImpl?.(threadId, text);
+      },
+      cancel: async () => undefined,
+      setTeam: (threadId, team) => {
+        const existing = threads.get(threadId);
+        if (existing) threads.set(threadId, { ...existing, team });
+      },
+      lastReply: (threadId) => replies.get(threadId) ?? "",
+      changes: async () => ({ files: [] }),
+      mergeInto: async () => [],
+      ship: async () => ({ prOpened: false }),
+      unfinishedMerge: async () => undefined,
+      contains: async () => false,
+    };
+    const teams = new Teams(host);
+    const leadId = teams.start({
+      projectId: "p1",
+      task: "Construire la fonctionnalité",
+      lead: { agentId: "demo" },
+      coder: { agentId: "demo" },
+      coders: 1,
+      permissionMode: "supervised",
+    });
+    return { threads, replies, sent, host, teams, leadId };
+  }
+
+  it("marks the team as failed with the error when host.send throws on plan retry", () => {
+    const { threads, replies, teams, leadId } = setupTeam(() => {
+      throw new Error("Ce fil est archivé.");
+    });
+    replies.set(leadId, "Voici une réponse sans JSON.");
+
+    expect(() => teams.turnEnded(leadId, false)).not.toThrow();
+
+    const team = threads.get(leadId)?.team;
+    expect(team?.phase).toBe("failed");
+    expect(team?.planTries).toBe(1);
+    expect(team?.error).toBe("Ce fil est archivé.");
+    expect(teams.isActive(leadId)).toBe(false);
+    expect(team?.timeline?.at(-1)).toMatchObject({ lane: LEAD_LANE, phase: "failed" });
+  });
+
+  it("marks the team as failed even when host.send throws a non-Error value", () => {
+    const { threads, replies, teams, leadId } = setupTeam(() => {
+      throw "canal fermé";
+    });
+    replies.set(leadId, "Toujours aucun plan.");
+
+    teams.turnEnded(leadId, false);
+
+    const team = threads.get(leadId)?.team;
+    expect(team?.phase).toBe("failed");
+    expect(team?.planTries).toBe(1);
+    expect(team?.error).toBe("canal fermé");
+    expect(teams.isActive(leadId)).toBe(false);
+  });
+
+  it("keeps the team in planning when the plan retry message is sent, then fails past MAX_PLAN_TRIES", () => {
+    const { threads, replies, sent, teams, leadId } = setupTeam();
+    replies.set(leadId, "Pas de bloc json.");
+
+    teams.turnEnded(leadId, false);
+    expect(threads.get(leadId)?.team?.phase).toBe("planning");
+    expect(threads.get(leadId)?.team?.planTries).toBe(1);
+    expect(sent).toHaveLength(1);
+    expect(teams.isActive(leadId)).toBe(true);
+
+    teams.turnEnded(leadId, false);
+    expect(threads.get(leadId)?.team?.phase).toBe("planning");
+    expect(threads.get(leadId)?.team?.planTries).toBe(2);
+    expect(sent).toHaveLength(2);
+
+    teams.turnEnded(leadId, false);
+    expect(threads.get(leadId)?.team?.phase).toBe("failed");
+    expect(threads.get(leadId)?.team?.planTries).toBe(3);
+    expect(threads.get(leadId)?.team?.error).toBe("Le chef n'a pas donné de plan lisible.");
+    expect(sent).toHaveLength(2);
+    expect(teams.isActive(leadId)).toBe(false);
   });
 });
 

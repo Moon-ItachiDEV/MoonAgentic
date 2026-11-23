@@ -722,11 +722,20 @@ export class Teams {
         });
         return;
       }
-      this.save(lead.id, { ...team, planTries: tries });
-      this.host.send(
-        lead.id,
-        'Je n\'ai pas trouvé ton plan. Réponds seulement avec le bloc json demandé : {"tasks": [{"title": "…", "brief": "…"}]}',
-      );
+      try {
+        this.host.send(
+          lead.id,
+          'Je n\'ai pas trouvé ton plan. Réponds seulement avec le bloc json demandé : {"tasks": [{"title": "…", "brief": "…"}]}',
+        );
+        this.save(lead.id, { ...team, planTries: tries });
+      } catch (error) {
+        this.save(lead.id, {
+          ...team,
+          phase: "failed",
+          planTries: tries,
+          error: message(error),
+        });
+      }
       return;
     }
     const tasks: TeamTask[] = plan.map((p) => ({ ...p, status: "waiting" }));

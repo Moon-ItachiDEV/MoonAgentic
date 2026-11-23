@@ -19,6 +19,7 @@ import { TeamCard } from "./TeamCard.tsx";
 import { TeamStrip } from "./TeamStrip.tsx";
 import { withoutTeamJson } from "../team-json.ts";
 import { isTeamThread, teamFeed } from "../team-feed.ts";
+import { activityFeed, activityLabel, activitySteps } from "../activity.ts";
 
 export function ThreadView({
   thread,
@@ -116,6 +117,9 @@ export function ThreadView({
   const lastOwn = items?.findLastIndex((i) => i.kind === "user" && i.from !== "coordinator") ?? -1;
   const firstNew = items?.findIndex((i, n) => n > lastOwn && i.kind === "result") ?? -1;
 
+  const team = isTeamThread(thread);
+  const blocks = items ? (team ? teamFeed(thread, items) : activityFeed(items)) : [];
+
   const renderItem = (i: number, clamp?: boolean, showBy?: boolean) => {
     const item = items![i]!;
     return (
@@ -178,32 +182,31 @@ export function ThreadView({
             Sous-tâche de l'équipe « {lead.title.replace(/^Équipe : /, "")} »
           </button>
         )}
-        {items &&
-          (isTeamThread(thread)
-            ? teamFeed(thread, items).map((block, b, blocks) => {
-                if (block.kind === "detail") {
-                  return (
-                    <TeamDetail
-                      key={block.key}
-                      items={items}
-                      indices={block.indices}
-                      live={working && block.indices.some((i) => i > lastUser)}
-                      revealed={!!reveal && block.indices.some((i) => items[i]?.id === reveal)}
-                      onFold={() => setReveal(undefined)}
-                      render={renderItem}
-                    />
-                  );
-                }
-                // An answer gets its agent's name unless the block just above is one too:
-                // what is folded away does not count.
-                const above = blocks[b - 1];
-                const showBy =
-                  items[block.index]?.kind === "agent" &&
-                  !(above?.kind === "item" && items[above.index]?.kind === "agent");
-                return renderItem(block.index, block.clamp, showBy);
-              })
-            : items.map((_, i) => renderItem(i)))}
-        {thread.status === "running" && (
+        {blocks.map((block, b) => {
+          if (block.kind === "detail") {
+            return (
+              <ActivityDetail
+                key={block.key}
+                items={items!}
+                indices={block.indices}
+                live={working && b === blocks.length - 1 && block.indices.some((i) => i > lastUser)}
+                revealed={!!reveal && block.indices.some((i) => items![i]?.id === reveal)}
+                onFold={() => setReveal(undefined)}
+                render={renderItem}
+              />
+            );
+          }
+          if (!team) return renderItem(block.index);
+          // An answer gets its agent's name unless the block just above is one too:
+          // what is folded away does not count.
+          const above = blocks[b - 1];
+          const showBy =
+            items![block.index]?.kind === "agent" &&
+            !(above?.kind === "item" && items![above.index]?.kind === "agent");
+          return renderItem(block.index, block.clamp, showBy);
+        })}
+        {/* The live line of the stretch at work says what the agent does: no second line. */}
+        {thread.status === "running" && blocks.at(-1)?.kind !== "detail" && (
           <div className="working">
             <span className="spin" />
             {agent?.name ?? "L'agent"} travaille…
@@ -386,10 +389,10 @@ function FeedItem({
 }
 
 /**
- * What a team's agent did out of sight, folded: while it works, its last step shows.
- * Opened, it is the thread as it ran, the engine's own messages included.
+ * What an agent did on the way, folded into one line: while it works, the line says what
+ * it does now. Opened, it is the thread as it ran, the engine's own messages included.
  */
-function TeamDetail({
+function ActivityDetail({
   items,
   indices,
   live,
@@ -407,9 +410,8 @@ function TeamDetail({
 }) {
   const [opened, setOpened] = useState(false);
   const open = opened || revealed;
-  const steps = indices.filter((i) => items[i]?.kind === "tool").length;
-  const lastTool = indices.map((i) => items[i]).findLast((i) => i?.kind === "tool");
-  const label = live && lastTool?.kind === "tool" ? lastTool.title : "Voir le détail";
+  const { steps, failed } = activitySteps(items, indices);
+  const label = live ? activityLabel(items[indices.at(-1)!]) : "Voir le détail";
   return (
     <div className={`team-detail${open ? " open" : ""}`}>
       <button
@@ -425,6 +427,7 @@ function TeamDetail({
         {steps > 0 && (
           <span className="meta">
             {steps} {steps > 1 ? "étapes" : "étape"}
+            {failed > 0 && ` · ${failed} ${failed > 1 ? "échecs" : "échec"}`}
           </span>
         )}
       </button>

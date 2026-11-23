@@ -1,7 +1,15 @@
 import type { ReviewFile, Thread } from "@moonagentic/protocol";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { connection, newId, type Review } from "../connection.ts";
-import { type DiffLine, type LineComment, parsePatch, reviewMessage } from "../diff.ts";
+import {
+  type DiffLine,
+  findRow,
+  type LineComment,
+  parsePatch,
+  placeComments,
+  reviewMessage,
+  rowPlace,
+} from "../diff.ts";
 import { IconBranch, IconChevron, IconX } from "./icons.tsx";
 import { PullRequestStatus, usePullRequest } from "./PullRequestStatus.tsx";
 
@@ -28,7 +36,11 @@ export function looksSecret(file: string): boolean {
   );
 }
 
-const lineKey = (path: string, i: number) => `${path}#${i}`;
+/** How long a sent review may take to start the agent before its remarks come back. */
+const SEND_WAIT = 10_000;
+
+/** The remark being written: the line it goes on, found again by its code if lines move. */
+type Editing = { id?: string; line: number; removed: boolean; code: string; text: string };
 
 /** One changed file: its header with the tick, then its numbered diff, each line open to a remark. */
 function FileCard(props: {
@@ -36,24 +48,35 @@ function FileCard(props: {
   open: boolean;
   ticked: boolean;
   canComment: boolean;
-  comments: Record<string, LineComment>;
+  /** This file's remarks, by row of its diff as it is now. */
+  comments: Map<number, LineComment> | undefined;
   onToggle: () => void;
   onTick: (ticked: boolean) => void;
-  onComment: (key: string, comment: LineComment | null) => void;
+  onComment: (comment: LineComment) => void;
+  onRemove: (id: string) => void;
 }) {
   const { file } = props;
   const lines = useMemo(() => (props.open ? parsePatch(file.patch) : []), [props.open, file.patch]);
-  const [editing, setEditing] = useState<{ key: string; text: string } | null>(null);
+  const [editing, setEditing] = useState<Editing | null>(null);
+  // Found again on each render: a fresh diff moves the box with its line.
+  const editRow = editing ? findRow(lines, editing) : -1;
   const status = STATUS[file.status];
   const secret = looksSecret(file.path);
 
-  const save = (key: string, line: DiffLine) => {
-    if (!editing?.text.trim() || line.kind === "hunk" || line.kind === "note") return;
-    props.onComment(key, {
+  const edit = (line: DiffLine, comment: LineComment | undefined) => {
+    const place = rowPlace(line);
+    if (!place) return;
+    setEditing({ id: comment?.id, ...place, code: line.text, text: comment?.text ?? "" });
+  };
+
+  const save = () => {
+    if (!editing?.text.trim()) return;
+    props.onComment({
+      id: editing.id ?? newId(),
       path: file.path,
-      line: (line.kind === "del" ? line.old : line.new) ?? 0,
-      removed: line.kind === "del",
-      code: line.text,
+      line: editing.line,
+      removed: editing.removed,
+      code: editing.code,
       text: editing.text,
     });
     setEditing(null);
@@ -98,14 +121,14 @@ function FileCard(props: {
       {props.open && file.patch && (
         <div className="rvd" role="table" aria-label={`Changements de ${file.path}`}>
           {lines.map((line, i) => {
-            const key = lineKey(file.path, i);
+            const key = `${i}:${line.kind}:${line.text}`;
             if (line.kind === "hunk" || line.kind === "note")
               return (
                 <div key={key} className={`rvd-l ${line.kind}`} role="row">
                   <span className="rvd-t">{line.text}</span>
                 </div>
               );
-            const comment = props.comments[key];
+            const comment = props.comments?.get(i);
             const sign = line.kind === "add" ? "+" : line.kind === "del" ? "−" : " ";
             return (
               <div key={key} className="rvd-g">
@@ -114,11 +137,11 @@ function FileCard(props: {
                   role="row"
                   tabIndex={props.canComment ? 0 : undefined}
                   title={props.canComment ? "Commenter cette ligne" : undefined}
-                  onClick={() => props.canComment && setEditing({ key, text: comment?.text ?? "" })}
+                  onClick={() => props.canComment && edit(line, comment)}
                   onKeyDown={(e) => {
                     if (props.canComment && e.key === "Enter") {
                       e.preventDefault();
-                      setEditing({ key, text: comment?.text ?? "" });
+                      edit(line, comment);
                     }
                   }}
                 >
@@ -127,18 +150,18 @@ function FileCard(props: {
                   <span className="rvd-s">{sign}</span>
                   <span className="rvd-t">{line.text || " "}</span>
                 </div>
-                {editing?.key === key ? (
+                {editing && editRow === i ? (
                   <div className="rvc-edit">
                     <textarea
                       autoFocus
                       rows={2}
                       placeholder="Ce que l'agent doit changer ici"
                       value={editing.text}
-                      onChange={(e) => setEditing({ key, text: e.target.value })}
+                      onChange={(e) => setEditing({ ...editing, text: e.target.value })}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                           e.preventDefault();
-                          save(key, line);
+                          save();
                         }
                         if (e.key === "Escape") {
                           e.stopPropagation();
@@ -151,7 +174,7 @@ function FileCard(props: {
                         <button
                           className="btn quiet sm"
                           onClick={() => {
-                            props.onComment(key, null);
+                            props.onRemove(comment.id);
                             setEditing(null);
                           }}
                         >
@@ -162,18 +185,14 @@ function FileCard(props: {
                       <button className="btn quiet sm" onClick={() => setEditing(null)}>
                         Annuler
                       </button>
-                      <button
-                        className="btn pri sm"
-                        disabled={!editing.text.trim()}
-                        onClick={() => save(key, line)}
-                      >
+                      <button className="btn pri sm" disabled={!editing.text.trim()} onClick={save}>
                         {comment ? "Modifier" : "Ajouter"}
                       </button>
                     </div>
                   </div>
                 ) : (
                   comment && (
-                    <button className="rvc" onClick={() => setEditing({ key, text: comment.text })}>
+                    <button className="rvc" onClick={() => edit(line, comment)}>
                       {comment.text}
                     </button>
                   )
@@ -219,13 +238,20 @@ export function ReviewPanel({
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
   /** Files the user folded or unfolded, by path; the others follow the size of the change. */
   const [opened, setOpened] = useState<Record<string, boolean>>({});
-  const [comments, setComments] = useState<Record<string, LineComment>>({});
+  const [comments, setComments] = useState<LineComment[]>([]);
+  /** The remarks just sent, until the agent's turn starts; they come back if it does not. */
+  const [sending, setSending] = useState<string[] | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const sendTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const ticked = (f: ReviewFile) => ticks[f.path] ?? !looksSecret(f.path);
   const picked = files?.filter(ticked) ?? [];
   const totalLines = files?.reduce((n, f) => n + (f.added ?? 0) + (f.removed ?? 0), 0) ?? 0;
   const isOpen = (f: ReviewFile, i: number) =>
     opened[f.path] ?? (totalLines <= OPEN_ALL_LINES || i === 0);
-  const remarks = Object.values(comments);
+  // Each remark found again on its file and line in the review as it is now.
+  const placed = useMemo(() => placeComments(files, comments), [files, comments]);
+  const remarks = placed.all;
+  const lost = remarks.filter((c) => c.lost);
 
   // The server holds the files; ask on opening, once the branch exists, and whenever a
   // turn starts or ends.
@@ -262,10 +288,35 @@ export function ReviewPanel({
     }
   };
 
+  // The agent's turn started: the remarks reached it and leave the list.
+  useEffect(() => {
+    if (!sending || !running) return;
+    clearTimeout(sendTimer.current);
+    const sent = new Set(sending);
+    setComments((c) => c.filter((comment) => !sent.has(comment.id)));
+    setSending(null);
+  }, [sending, running]);
+  useEffect(() => () => clearTimeout(sendTimer.current), []);
+
   const sendRemarks = () => {
-    if (!remarks.length || running) return;
-    connection.send({ type: "thread.send", threadId: thread.id, text: reviewMessage(remarks) });
-    setComments({});
+    if (!remarks.length || running || sending) return;
+    setSendError(null);
+    const sent = connection.send({
+      type: "thread.send",
+      threadId: thread.id,
+      text: reviewMessage(remarks),
+    });
+    if (!sent) {
+      setSendError("Pas de connexion au serveur : tes commentaires sont gardés.");
+      return;
+    }
+    setSending(remarks.map((c) => c.id));
+    // Refused by the server (the agent busy, the thread closed): nothing starts, and the
+    // remarks stay here to send again.
+    sendTimer.current = setTimeout(() => {
+      setSending(null);
+      setSendError("L'agent n'a pas démarré : tes commentaires sont gardés, renvoie-les.");
+    }, SEND_WAIT);
   };
 
   const added = files?.reduce((n, f) => n + (f.added ?? 0), 0) ?? 0;
@@ -335,17 +386,17 @@ export function ReviewPanel({
                   open={isOpen(f, i)}
                   ticked={ticked(f)}
                   canComment={!thread.archived}
-                  comments={comments}
+                  comments={placed.rows.get(f.path)}
                   onToggle={() => setOpened((o) => ({ ...o, [f.path]: !isOpen(f, i) }))}
                   onTick={(on) => setTicks((t) => ({ ...t, [f.path]: on }))}
-                  onComment={(key, comment) =>
-                    setComments((c) => {
-                      const next = { ...c };
-                      if (comment) next[key] = comment;
-                      else delete next[key];
-                      return next;
-                    })
+                  onComment={(comment) =>
+                    setComments((c) =>
+                      c.some((x) => x.id === comment.id)
+                        ? c.map((x) => (x.id === comment.id ? comment : x))
+                        : [...c, comment],
+                    )
                   }
+                  onRemove={(id) => setComments((c) => c.filter((x) => x.id !== id))}
                 />
               ))}
               {!!review?.omitted && (
@@ -358,18 +409,55 @@ export function ReviewPanel({
           )}
         </div>
         <div className="rv-foot">
+          {lost.length > 0 && (
+            <div className="rv-lost" role="status">
+              <p>
+                {lost.length > 1
+                  ? `${lost.length} commentaires portent sur une ligne qui a changé depuis.`
+                  : "Un commentaire porte sur une ligne qui a changé depuis."}{" "}
+                {lost.length > 1
+                  ? "L'agent les recevra avec leur ancienne place."
+                  : "L'agent le recevra avec son ancienne place."}
+              </p>
+              {lost.map((c) => (
+                <div key={c.id} className="rv-lost-c">
+                  <span className="rv-lost-w">
+                    {c.path}:{c.line}
+                    {c.code.trim() && <code>{c.code.trim()}</code>}
+                  </span>
+                  <span className="rv-lost-t">{c.text}</span>
+                  <button
+                    className="btn quiet sm"
+                    disabled={!!sending}
+                    onClick={() => setComments((all) => all.filter((x) => x.id !== c.id))}
+                  >
+                    Retirer
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           {remarks.length > 0 && (
             <div className="rv-remarks">
               <span>
-                {remarks.length} {remarks.length > 1 ? "commentaires" : "commentaire"}
+                {sending
+                  ? "Envoi à l'agent…"
+                  : `${remarks.length} ${remarks.length > 1 ? "commentaires" : "commentaire"}`}
               </span>
               <span className="grow" />
-              <button className="btn quiet sm" onClick={() => setComments({})}>
+              <button
+                className="btn quiet sm"
+                disabled={!!sending}
+                onClick={() => {
+                  setComments([]);
+                  setSendError(null);
+                }}
+              >
                 Effacer
               </button>
               <button
                 className="btn pri sm"
-                disabled={running}
+                disabled={running || !!sending}
                 title={running ? "L'agent travaille encore" : undefined}
                 onClick={sendRemarks}
               >
@@ -377,6 +465,7 @@ export function ReviewPanel({
               </button>
             </div>
           )}
+          {sendError && <p className="rv-msg error">{sendError}</p>}
           {pull.pr ? (
             <PullRequestStatus
               pr={pull.pr}

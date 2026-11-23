@@ -72,7 +72,7 @@ export const COORDINATOR_TOOLS: CoordinatorTool[] = [
   {
     name: "start_team",
     description:
-      "Lance une équipe d'agents sur une tâche trop grosse pour un seul fil : un chef la découpe, des codeurs travaillent en même temps, puis relecture, tests et fusion. Elle reprend l'équipe que l'utilisateur a réglée la dernière fois. Seulement quand l'utilisateur demande une équipe ou que la tâche a clairement plusieurs morceaux indépendants.",
+      "Lance une équipe d'agents sur une tâche trop grosse pour un seul fil : un chef la découpe, des codeurs travaillent en même temps, puis relecture, tests et fusion. Elle reprend l'équipe que l'utilisateur a réglée la dernière fois, ou une équipe par défaut s'il n'en a jamais réglé. Seulement quand l'utilisateur demande une équipe ou que la tâche a clairement plusieurs morceaux indépendants.",
     inputSchema: {
       type: "object",
       properties: {
