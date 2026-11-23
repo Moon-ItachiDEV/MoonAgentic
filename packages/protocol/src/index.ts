@@ -124,7 +124,7 @@ export interface ContextUsage {
 }
 
 /**
- * An MCP server handed to every agent session. Secret values (environment variables, HTTP
+ * An MCP server handed to agent sessions. Secret values (environment variables, HTTP
  * headers) stay on the server; clients only see their names.
  */
 export interface McpServerInfo {
@@ -136,6 +136,13 @@ export interface McpServerInfo {
   target: string;
   /** Names of the environment variables (stdio) or headers (http) it is given. */
   secretNames: string[];
+  /** The projects whose threads get it: every project when left out, none when empty. */
+  projectIds?: string[];
+  /**
+   * Given to a team's reviewers, testers and mergers too. Left out, only the agents that
+   * write the code get it: a thread's own agent, a coordinator, a team's lead and coders.
+   */
+  allRoles?: boolean;
 }
 
 export interface Project {
@@ -901,6 +908,10 @@ export const McpServerInput = z.object({
       headers: secrets(HEADER_NAME, (a, b) => a.toLowerCase() === b.toLowerCase()),
     }),
   ]),
+  /** The projects whose threads get it: every project when left out. */
+  projectIds: z.array(id).max(500).optional(),
+  /** Given to a team's reviewers, testers and mergers too. */
+  allRoles: z.boolean().optional(),
 });
 export type McpServerInput = z.infer<typeof McpServerInput>;
 
@@ -1122,6 +1133,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("mcp.add"), requestId: id, server: McpServerInput }),
   z.object({ type: z.literal("mcp.setEnabled"), id, enabled: z.boolean() }),
+  /** Says who gets the server: which projects (`null` for all of them), and which roles. */
+  z.object({
+    type: z.literal("mcp.setScope"),
+    id,
+    projectIds: z.array(id).max(500).nullable(),
+    allRoles: z.boolean(),
+  }),
   z.object({ type: z.literal("mcp.remove"), id }),
   /**
    * Starts the agent briefly to learn which models it offers, and whether it is ready.

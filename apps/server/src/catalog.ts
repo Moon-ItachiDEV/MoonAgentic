@@ -328,7 +328,7 @@ export class AgentCatalog {
     return this.rawMcpServers().map((s) => hydrateMcpSecrets(s, this.mcpSecrets.get(s.id)));
   }
 
-  /** Registers an MCP server for every agent session started from now on. */
+  /** Registers an MCP server for the agent sessions started from now on. */
   async addMcpServer(input: McpServerInput): Promise<string> {
     const key = input.name.trim().toLowerCase();
     if (key === RESERVED_MCP_NAME) {
@@ -339,7 +339,14 @@ export class AgentCatalog {
       throw new Error(`Un serveur MCP s'appelle déjà « ${input.name} ».`);
     }
     const id = randomUUID();
-    const record: McpServerRecord = { ...input, id, enabled: true };
+    const { projectIds, allRoles, ...server } = input;
+    const record: McpServerRecord = {
+      ...server,
+      id,
+      enabled: true,
+      ...(projectIds ? { projectIds: this.knownProjects(projectIds) } : {}),
+      ...(allRoles ? { allRoles: true } : {}),
+    };
     const secrets = extractMcpSecrets(record);
     if (Object.keys(secrets).length) await this.mcpSecrets.set(id, secrets);
     this.updateMcpServers((servers) => [...servers, stripMcpSecrets(record)]);
@@ -349,6 +356,39 @@ export class AgentCatalog {
   setMcpEnabled(id: string, enabled: boolean): void {
     if (!this.rawMcpServers().some((s) => s.id === id)) return;
     this.updateMcpServers((servers) => servers.map((s) => (s.id === id ? { ...s, enabled } : s)));
+  }
+
+  /** Says which projects get the server (`null` for every project), and which roles. */
+  setMcpScope(id: string, projectIds: string[] | null, allRoles: boolean): void {
+    if (!this.rawMcpServers().some((s) => s.id === id)) return;
+    this.updateMcpServers((servers) =>
+      servers.map((s) => {
+        if (s.id !== id) return s;
+        const { projectIds: _projects, allRoles: _roles, ...rest } = s;
+        return {
+          ...rest,
+          ...(projectIds ? { projectIds: this.knownProjects(projectIds) } : {}),
+          ...(allRoles ? { allRoles: true } : {}),
+        };
+      }),
+    );
+  }
+
+  /**
+   * A project is gone: the servers that were for it are no longer. One that was for it
+   * alone is left for no project, never widened to all of them.
+   */
+  projectRemoved(projectId: string): void {
+    if (!this.rawMcpServers().some((s) => s.projectIds?.includes(projectId))) return;
+    this.updateMcpServers((servers) =>
+      servers.map((s) =>
+        s.projectIds ? { ...s, projectIds: s.projectIds.filter((p) => p !== projectId) } : s,
+      ),
+    );
+  }
+
+  private knownProjects(projectIds: string[]): string[] {
+    return [...new Set(projectIds)].filter((id) => this.store.getProject(id));
   }
 
   async removeMcpServer(id: string): Promise<void> {
