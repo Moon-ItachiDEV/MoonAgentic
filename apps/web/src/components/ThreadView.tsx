@@ -10,6 +10,7 @@ import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "re
 import { messageTokens } from "../commands.ts";
 import { fillComposer } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
+import { openQuestion as askedQuestion } from "../decision.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
@@ -117,13 +118,7 @@ export function ThreadView({
   }, [items, thread.status]);
 
   // A question the agent asked with a tool can be answered until the user writes again.
-  const lastQuestion = items?.findLast(
-    (i) => i.kind === "user" || (i.kind === "tool" && i.questions),
-  );
-  const openQuestion =
-    lastQuestion?.kind === "tool" && thread.status === "idle" && !thread.archived
-      ? lastQuestion.id
-      : undefined;
+  const openQuestion = askedQuestion(items, thread)?.id;
 
   // Only the current turn's tools are at work: one left unfinished earlier stays still.
   const lastUser = items?.findLastIndex((i) => i.kind === "user") ?? -1;
@@ -414,7 +409,7 @@ function FeedItem({
       );
     case "tool":
       if (item.questions) {
-        return <QuestionCard item={item} threadId={thread.id} open={item.id === openQuestion} />;
+        return <QuestionCard item={item} open={item.form === "open" || item.id === openQuestion} />;
       }
       return <ToolRow item={item} live={live} />;
     case "plan":
@@ -443,7 +438,7 @@ function FeedItem({
         </div>
       );
     case "permission":
-      return <PermissionCard item={item} threadId={thread.id} />;
+      return <PermissionCard item={item} />;
   }
 }
 
@@ -578,93 +573,35 @@ const TOOL_KIND: Record<string, string> = {
   think: "réflexion",
 };
 
+/** What waits for the user is answered on the card above the composer: here, a reminder. */
+const WAITING = (
+  <span className="ask-wait">
+    <i aria-hidden />
+    Attend ta réponse, au-dessus du champ de saisie
+  </span>
+);
+
 /**
- * A question the agent asks with a tool of its own, such as Antigravity's `ask_question`.
- * The turn has ended on it: the answer goes out as the user's next message.
+ * A question the agent asks with a tool of its own (Antigravity's `ask_question`, Claude
+ * Code's AskUserQuestion). The feed keeps what was asked and answered; the answer itself
+ * is given on the decision card, above the composer.
  */
-function QuestionCard({
-  item,
-  threadId,
-  open,
-}: {
-  item: Extract<Item, { kind: "tool" }>;
-  threadId: string;
-  open: boolean;
-}) {
+function QuestionCard({ item, open }: { item: Extract<Item, { kind: "tool" }>; open: boolean }) {
   const questions = item.questions ?? [];
-  const [picked, setPicked] = useState<Record<number, string[]>>({});
-  // One question with one answer goes out on the click; anything more is sent together.
-  const direct = questions.length === 1 && !questions[0]?.multi;
-  // Sent once: a second click before the thread shows as running would send it twice.
-  const [sent, setSent] = useState(false);
-  if (sent && !open) setSent(false);
-  const send = (text: string) => {
-    if (!sent && connection.send({ type: "thread.send", threadId, text })) setSent(true);
-  };
-  const complete = questions.every((_, i) => picked[i]?.length);
   return (
     <div className={`approve ask${open ? "" : " done"}`}>
       {questions.map((q, i) => (
-        <div key={i} className="ask-q" role="group" aria-label={q.question}>
+        <div key={i} className="ask-q">
           <div className="q">
             <span>
-              {i === 0 && open && "L'agent te pose une question : "}
               <b>{q.question}</b>
+              {item.form === "answered" && item.answers?.[i] && ` · ${item.answers[i]}`}
             </span>
           </div>
-          {open && (
-            <div className="row">
-              {q.options.map((option) => {
-                const on = picked[i]?.includes(option) ?? false;
-                return (
-                  <button
-                    key={option}
-                    className={`btn sm${on ? " pri" : ""}`}
-                    aria-pressed={direct ? undefined : on}
-                    disabled={sent}
-                    onClick={() => {
-                      if (direct) return send(option);
-                      setPicked((p) => {
-                        const mine = p[i] ?? [];
-                        const next = !q.multi
-                          ? [option]
-                          : on
-                            ? mine.filter((o) => o !== option)
-                            : [...mine, option];
-                        return { ...p, [i]: next };
-                      });
-                    }}
-                  >
-                    {option}
-                  </button>
-                );
-              })}
-            </div>
-          )}
         </div>
       ))}
-      {open && !direct && (
-        <div className="row">
-          <button
-            className="btn sm pri"
-            disabled={!complete || sent}
-            onClick={() =>
-              send(
-                questions
-                  .map((q, i) =>
-                    questions.length > 1
-                      ? `${q.question} ${picked[i]?.join(", ")}`
-                      : (picked[i]?.join(", ") ?? ""),
-                  )
-                  .join("\n"),
-              )
-            }
-          >
-            Répondre
-          </button>
-        </div>
-      )}
-      {open && <div className="ask-hint">Tu peux aussi répondre en écrivant un message.</div>}
+      {open && <div className="ask-hint">{WAITING}</div>}
+      {item.form === "cancelled" && <div className="ask-hint">Sans réponse.</div>}
     </div>
   );
 }
@@ -739,13 +676,7 @@ function ToolBody({ content }: { content: ToolContent }) {
   );
 }
 
-function PermissionCard({
-  item,
-  threadId,
-}: {
-  item: Extract<Item, { kind: "permission" }>;
-  threadId: string;
-}) {
+function PermissionCard({ item }: { item: Extract<Item, { kind: "permission" }> }) {
   if (item.outcome !== null) {
     const chosen = item.options.find((o) => o.optionId === item.outcome);
     return (
@@ -762,24 +693,7 @@ function PermissionCard({
           L'agent demande ton accord : <b>{item.title}</b>
         </span>
       </div>
-      <div className="row">
-        {item.options.map((o) => (
-          <button
-            key={o.optionId}
-            className={`btn sm${o.kind.startsWith("allow") ? (o.kind === "allow_once" ? " pri" : "") : " quiet"}`}
-            onClick={() =>
-              connection.send({
-                type: "permission.respond",
-                threadId,
-                itemId: item.id,
-                optionId: o.optionId,
-              })
-            }
-          >
-            {o.name}
-          </button>
-        ))}
-      </div>
+      <div className="ask-hint">{WAITING}</div>
     </div>
   );
 }

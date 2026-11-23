@@ -42,8 +42,10 @@ import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { TeamDialog } from "./components/TeamDialog.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
+import { DecisionCard } from "./components/DecisionCard.tsx";
 import { connection, newId } from "./connection.ts";
 import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
+import { waits } from "./decision.ts";
 import { focusItem } from "./focus.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { navigate, useRoute } from "./router.ts";
@@ -296,26 +298,47 @@ export function App() {
         </button>
       </div>
     ) : (
-      <Composer
-        key={t?.id ?? "new"}
-        agents={state.agents}
-        favorites={state.favorites}
-        thread={t}
-        project={project}
-        {...(placeholder ? { placeholder } : {})}
-        onNewProject={() => setCreatingProject(true)}
-        onCreated={(id) => navigate({ name: "thread", threadId: id })}
-        onExport={() => exportThread(t)}
-        onSearch={() => setSearchOpen(true)}
-        onRequests={() => setRequestsOpen(true)}
-        onConnections={() => setConnectionsOpen(true)}
-        onArchive={() => t && setArchived(t.id, true)}
-        onDelete={() => t && askDeleteThread(t)}
-        onTeam={(task) => setTeamTask(task)}
-        onSchedule={(text) => setScheduling({ text })}
-        onSettings={() => go({ name: "settings", section: "general" })}
-        onSubscriptions={() => go({ name: "settings", section: "subscriptions" })}
-      />
+      <>
+        {t && (
+          <DecisionCard
+            waits={waits({
+              thread: t,
+              items: state.items[t.id],
+              requests: state.requests,
+              questions: state.questions,
+              // A coordinator's page already lists what its project's threads wait for.
+              own: t.kind === "coordinator",
+            })}
+            threadId={t.id}
+            threads={state.threads}
+            agents={state.agents}
+            onOpenThread={(id, itemId) => {
+              focusItem(id, itemId);
+              openThread(id);
+            }}
+          />
+        )}
+        <Composer
+          key={t?.id ?? "new"}
+          agents={state.agents}
+          favorites={state.favorites}
+          thread={t}
+          project={project}
+          {...(placeholder ? { placeholder } : {})}
+          onNewProject={() => setCreatingProject(true)}
+          onCreated={(id) => navigate({ name: "thread", threadId: id })}
+          onExport={() => exportThread(t)}
+          onSearch={() => setSearchOpen(true)}
+          onRequests={() => setRequestsOpen(true)}
+          onConnections={() => setConnectionsOpen(true)}
+          onArchive={() => t && setArchived(t.id, true)}
+          onDelete={() => t && askDeleteThread(t)}
+          onTeam={(task) => setTeamTask(task)}
+          onSchedule={(text) => setScheduling({ text })}
+          onSettings={() => go({ name: "settings", section: "general" })}
+          onSubscriptions={() => go({ name: "settings", section: "subscriptions" })}
+        />
+      </>
     );
 
   /** Under the coordinator's conversation: what its project's threads wait for, then its composer. */

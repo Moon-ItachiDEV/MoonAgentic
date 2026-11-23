@@ -13,6 +13,11 @@ export interface SessionHandlers {
     request: acp.RequestPermissionRequest,
     signal: AbortSignal,
   ): Promise<acp.RequestPermissionResponse>;
+  /** The agent asks the user to fill a form (a question with choices) and waits for it. */
+  elicit?(
+    request: acp.CreateElicitationRequest,
+    signal: AbortSignal,
+  ): Promise<acp.CreateElicitationResponse>;
   /** The agent process ended; `reason` carries its last stderr lines when it failed. */
   onExit(reason: string | undefined): void;
   /**
@@ -537,6 +542,15 @@ export class AgentSession {
         } finally {
           watchdog.resume();
         }
+      })
+      .onRequest("elicitation/create", async ({ params, signal }) => {
+        if (!handlers.elicit) return { action: "decline" };
+        watchdog.pause();
+        try {
+          return await handlers.elicit(params, signal);
+        } finally {
+          watchdog.resume();
+        }
       });
 
     await spawned;
@@ -593,7 +607,13 @@ export class AgentSession {
     const handshake = async (): Promise<AgentSession> => {
       const init = await connection.agent.request("initialize", {
         protocolVersion: acp.PROTOCOL_VERSION,
-        clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+        clientCapabilities: {
+          fs: { readTextFile: false, writeTextFile: false },
+          terminal: false,
+          // Questions with choices are shown above the composer; Claude Code only asks its
+          // own when the client says it can show them.
+          ...(handlers.elicit ? { elicitation: { form: {} } } : {}),
+        },
         clientInfo: { name: "MoonAgentic", version: "0.1.0" },
       });
       // The agent answers with the protocol version it speaks; any other is not understood here.

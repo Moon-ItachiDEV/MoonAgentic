@@ -96,6 +96,78 @@ describe("Hub with the demo agent", () => {
     });
   });
 
+  it("holds the turn on a question asked with a form, and goes on with the answer", async () => {
+    const { hub, store, client, projectId } = setup();
+    const asked = client.next((m) => m.type === "questions" && m.questions.length > 0);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      // A question is not a permission: full access still waits for the user's answer.
+      permissionMode: "full",
+      text: "/choix",
+    });
+    const waiting = await asked;
+    if (waiting.type !== "questions") throw new Error("unreachable");
+    const [question] = waiting.questions;
+    expect(store.getThread(threadId)?.status).toBe("waiting");
+    expect(question).toMatchObject({
+      threadId,
+      questions: [
+        {
+          question: "Quelle file de messages ?",
+          options: ["Kafka (Recommandé)", "SQS", "File Postgres"],
+          descriptions: [expect.any(String), expect.any(String), expect.any(String)],
+        },
+      ],
+    });
+    expect(hub.snapshot().questions).toHaveLength(1);
+    expect(() =>
+      hub.respondToQuestion(threadId, question!.itemId, [{ picks: ["Inconnu"] }]),
+    ).toThrow("Réponds à chaque question.");
+
+    hub.respondToQuestion(threadId, question!.itemId, [{ picks: ["SQS"] }]);
+    await hub.whenIdle(threadId);
+    const items = store.listItems(threadId);
+    expect(items.find((i) => i.kind === "tool")).toMatchObject({
+      form: "answered",
+      answers: ["SQS"],
+      status: "completed",
+    });
+    expect(lastTurnSaid(items)).toBe("Compris : SQS.");
+    expect(hub.snapshot().questions).toEqual([]);
+    expect(() => hub.respondToQuestion(threadId, question!.itemId, [{ picks: ["SQS"] }])).toThrow(
+      "Cette question n'attend plus de réponse.",
+    );
+  });
+
+  it("takes the user's own words for an answer, and drops the question when the turn is stopped", async () => {
+    const { hub, store, client, projectId } = setup();
+    let asked = client.next((m) => m.type === "questions" && m.questions.length > 0);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "/apercus",
+    });
+    let waiting = await asked;
+    if (waiting.type !== "questions") throw new Error("unreachable");
+    expect(waiting.questions[0]?.questions[0]?.previews?.[0]).toContain("await send(");
+    hub.respondToQuestion(threadId, waiting.questions[0]!.itemId, [{ picks: [], text: "Un flux" }]);
+    await hub.whenIdle(threadId);
+    expect(lastTurnSaid(store.listItems(threadId))).toBe("Compris : Un flux.");
+
+    asked = client.next((m) => m.type === "questions" && m.questions.length > 0);
+    hub.send(threadId, "/choix");
+    waiting = await asked;
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+    expect(hub.snapshot().questions).toEqual([]);
+    expect(store.listItems(threadId).findLast((i) => i.kind === "tool")).toMatchObject({
+      form: "cancelled",
+    });
+    expect(store.getThread(threadId)?.status).toBe("idle");
+  });
+
   it("lets a team's reviewer with full access run things, but asks before it changes a file", async () => {
     const { hub, store, client, projectId } = setup();
     const asked = client.next(isPermissionRequest);
