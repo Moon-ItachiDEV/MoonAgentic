@@ -183,6 +183,31 @@ export interface RateLimitOptions {
 export const MISSING = Symbol("missing");
 
 /**
+ * Who the rate limiters count against: when a request arrives through loopback with
+ * `X-Forwarded-For` (e.g. `tailscale serve`), count against the rightmost forwarded address
+ * added by the local proxy rather than `127.0.0.1`, so a remote device cannot lock out the
+ * computer itself or other devices.
+ */
+export function rateKey(req: Pick<IncomingMessage, "socket" | "headers">): string {
+  const remoteIp = req.socket.remoteAddress ?? "unknown";
+  if (LOCAL.has(remoteIp)) {
+    const xff = req.headers["x-forwarded-for"];
+    const raw = Array.isArray(xff) ? xff.join(",") : xff;
+    if (raw) {
+      const forwarded = raw
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .at(-1)
+        ?.slice(0, 64);
+      if (forwarded) return `forwarded:${forwarded}`;
+    }
+    return "local";
+  }
+  return remoteIp;
+}
+
+/**
  * The file of the built web app a request asks for, or the app's page for any other path
  * (the app has its own routes). A missing file under `/assets/` is `MISSING`, never the page:
  * a tab left open across an update asks for its old chunks, and HTML in their place would
@@ -200,7 +225,16 @@ export function staticFile(webDir: string, rawUrl: string): string | typeof MISS
   if (pathname.includes("\0")) return undefined;
   const requested = path.join(webDir, path.normalize(pathname));
   const inside = requested.startsWith(webDir + path.sep);
-  if (inside && statSync(requested, { throwIfNoEntry: false })?.isFile()) return requested;
+  let isFile = false;
+  if (inside) {
+    try {
+      isFile = statSync(requested, { throwIfNoEntry: false })?.isFile() === true;
+    } catch {
+      // Long names (ENAMETOOLONG), unreadable segments, etc.: refuse cleanly, never crash.
+      return undefined;
+    }
+  }
+  if (isFile) return requested;
   if (inside && requested.startsWith(path.join(webDir, "assets") + path.sep)) return MISSING;
   return path.join(webDir, "index.html");
 }
@@ -465,43 +499,58 @@ export function createHttpServer(options: {
     res.end(JSON.stringify({ message: "Trop de requêtes. Réessaie dans un instant." }));
   };
 
-  const server = createServer((req, res) => {
+  const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
     for (const [name, value] of Object.entries(securityHeaders(req.headers.host)))
       res.setHeader(name, value);
     const given = bearerToken(req.headers.authorization);
     const remoteIp = req.socket.remoteAddress ?? "unknown";
-    // Only a wrong token counts against this address, not a missing one: another site open in
-    // the browser can send requests here without a token, never with one, and must not be
-    // able to lock the user out.
-    const countFailure = () => {
-      if (given) authFailures.record(remoteIp);
+    const clientKey = rateKey(req);
+    const crossSite =
+      !allowedWsOrigin(req.headers.origin, req.headers.host) ||
+      req.headers["sec-fetch-site"] === "cross-site";
+    // Requests from another site, or with no token at all, never consume the local API quota.
+    const authGate = (): Who | undefined => {
+      if (crossSite) {
+        dropRest(req);
+        res.writeHead(403).end();
+        return undefined;
+      }
+      if (!given) {
+        dropRest(req);
+        res.writeHead(401).end();
+        return undefined;
+      }
+      const limit = apiLimiter.take(clientKey);
+      if (!limit.ok) {
+        dropRest(req);
+        tooMany(res, limit.retryAfterSec);
+        return undefined;
+      }
+      const authLimit = authFailures.check(clientKey);
+      if (!authLimit.ok) {
+        dropRest(req);
+        tooMany(res, authLimit.retryAfterSec);
+        return undefined;
+      }
+      const who = identify(given);
+      if (!who) {
+        authFailures.record(clientKey);
+        dropRest(req);
+        res.writeHead(401).end();
+        return undefined;
+      }
+      return who;
     };
     if (req.url === "/api/auth") {
-      const limit = apiLimiter.take(remoteIp);
-      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
-      const authLimit = authFailures.check(remoteIp);
-      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
-      if (!identify(given)) {
-        countFailure();
-        res.writeHead(401).end();
-        return;
-      }
+      if (!authGate()) return;
       res.writeHead(204).end();
       return;
     }
     if (req.url === "/api/ws-ticket") {
-      const limit = apiLimiter.take(remoteIp);
-      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
-      const authLimit = authFailures.check(remoteIp);
-      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
+      const who = authGate();
+      if (!who) return;
       if (req.method !== "POST") {
         res.writeHead(405).end();
-        return;
-      }
-      const who = identify(given);
-      if (!who) {
-        countFailure();
-        res.writeHead(401).end();
         return;
       }
       json(res, 200, { ticket: issueWsTicket(who) });
@@ -571,16 +620,8 @@ export function createHttpServer(options: {
       return;
     }
     if (req.url === "/api/remote" || req.url === "/api/remote/token") {
-      const limit = apiLimiter.take(remoteIp);
-      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
-      const authLimit = authFailures.check(remoteIp);
-      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
-      const who = identify(given);
-      if (!who) {
-        countFailure();
-        res.writeHead(401).end();
-        return;
-      }
+      const who = authGate();
+      if (!who) return;
       const renew = req.url === "/api/remote/token";
       if (req.method !== (renew ? "POST" : "GET")) {
         res.writeHead(405).end();
@@ -624,11 +665,23 @@ export function createHttpServer(options: {
     }
     if (req.url === "/api/pair") {
       // A device with a code shown on the computer: the only call here without a token.
-      const limit = apiLimiter.take(remoteIp);
-      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
-      const authLimit = authFailures.check(remoteIp);
-      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
+      if (crossSite) {
+        dropRest(req);
+        res.writeHead(403).end();
+        return;
+      }
+      const limit = apiLimiter.take(clientKey);
+      if (!limit.ok) {
+        dropRest(req);
+        return tooMany(res, limit.retryAfterSec);
+      }
+      const authLimit = authFailures.check(clientKey);
+      if (!authLimit.ok) {
+        dropRest(req);
+        return tooMany(res, authLimit.retryAfterSec);
+      }
       if (req.method !== "POST") {
+        dropRest(req);
         res.writeHead(405).end();
         return;
       }
@@ -637,11 +690,6 @@ export function createHttpServer(options: {
       if (!/^application\/json\s*(;|$)/i.test(req.headers["content-type"] ?? "")) {
         dropRest(req);
         return json(res, 415, { message: "Une demande d'appairage s'envoie en JSON." });
-      }
-      if (!allowedWsOrigin(req.headers.origin, req.headers.host)) {
-        dropRest(req);
-        res.writeHead(403).end();
-        return;
       }
       void readJson(req, MAX_PAIR_BODY).then((body) => {
         const code = typeof body?.code === "string" ? body.code : "";
@@ -655,7 +703,7 @@ export function createHttpServer(options: {
           });
         }
         if (!paired) {
-          authFailures.record(remoteIp);
+          authFailures.record(clientKey);
           return json(res, 401, {
             message: "Ce code ne marche pas : il a expiré ou a déjà servi. Demandes-en un nouveau.",
           });
@@ -666,16 +714,8 @@ export function createHttpServer(options: {
     }
     if (req.url === "/api/pair/start" || req.url?.startsWith("/api/devices")) {
       // Only the computer pairs and revokes devices: a phone that was lost cannot add others.
-      const limit = apiLimiter.take(remoteIp);
-      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
-      const authLimit = authFailures.check(remoteIp);
-      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
-      const who = identify(given);
-      if (!who) {
-        countFailure();
-        res.writeHead(401).end();
-        return;
-      }
+      const who = authGate();
+      if (!who) return;
       if (!who.owner) return json(res, 403, { message: ONLY_ON_COMPUTER });
       if (req.url === "/api/pair/start" && req.method === "POST") {
         return json(res, 200, devices.startPairing());
@@ -699,8 +739,9 @@ export function createHttpServer(options: {
     }
     const asked = parseUrl(req.url ?? "/")?.pathname ?? "";
     if (asked.startsWith(`${ARTIFACTS_PATH}/`)) {
-      // An artifact shown in the app: its address is the permission, for some minutes.
-      const limit = apiLimiter.take(remoteIp);
+      // An artifact shown in the app (inside a sandboxed iframe with an opaque origin):
+      // its short-lived ticket in the URL is the permission, not same-origin headers.
+      const limit = apiLimiter.take(clientKey);
       if (!limit.ok) return tooMany(res, limit.retryAfterSec);
       if (req.method !== "GET" && req.method !== "HEAD") {
         res.writeHead(405).end();
@@ -736,15 +777,7 @@ export function createHttpServer(options: {
     }
     if (asked === ATTACHMENTS_PATH || asked.startsWith(`${ATTACHMENTS_PATH}/`)) {
       // The images sent with messages: received before the message, read back by its thread.
-      const limit = apiLimiter.take(remoteIp);
-      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
-      const authLimit = authFailures.check(remoteIp);
-      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
-      if (!identify(given)) {
-        countFailure();
-        res.writeHead(401).end();
-        return;
-      }
+      if (!authGate()) return;
       const refused = (error: unknown) => {
         if (res.writableEnded) return;
         if (error instanceof AttachmentRefused) json(res, error.status, { message: error.message });
@@ -836,9 +869,19 @@ export function createHttpServer(options: {
       res.writeHead(404).end();
       return;
     }
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405).end();
+      return;
+    }
     if (req.url === "/api/build") {
       // Which version of the app is built here, so a tab opened before an update offers to
       // reload. It says no more than the page itself, which anyone reaching the server reads.
+      if (req.method === "HEAD") {
+        res
+          .writeHead(200, { "content-type": "application/json", "cache-control": "no-store" })
+          .end();
+        return;
+      }
       json(res, 200, { id: buildId(webDir) });
       return;
     }
@@ -863,8 +906,23 @@ export function createHttpServer(options: {
           ? "public, max-age=31536000, immutable"
           : "no-cache",
       });
+      if (req.method === "HEAD") {
+        stream.destroy();
+        res.end();
+        return;
+      }
       stream.pipe(res);
     });
+  };
+
+  const server = createServer((req, res) => {
+    try {
+      handleRequest(req, res);
+    } catch (error) {
+      console.error("Requête HTTP :", error);
+      if (!res.headersSent) res.writeHead(500, { "cache-control": "no-store" }).end();
+      else res.destroy();
+    }
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
@@ -884,81 +942,86 @@ export function createHttpServer(options: {
   }, options.heartbeatMs ?? HEARTBEAT_MS);
   heartbeat.unref();
   server.on("upgrade", (req, socket, head) => {
-    const url = parseUrl(req.url ?? "/");
-    if (url?.pathname !== "/ws") {
-      socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      return;
-    }
-    if (!allowedWsOrigin(req.headers.origin, req.headers.host)) {
-      socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
-      return;
-    }
-    const remoteIp = req.socket.remoteAddress ?? "unknown";
-    const limit = wsLimiter.take(remoteIp);
-    if (!limit.ok) {
-      socket.end(`HTTP/1.1 429 Too Many Requests\r\nRetry-After: ${limit.retryAfterSec}\r\n\r\n`);
-      return;
-    }
-    const authLimit = authFailures.check(remoteIp);
-    if (!authLimit.ok) {
-      socket.end(
-        `HTTP/1.1 429 Too Many Requests\r\nRetry-After: ${authLimit.retryAfterSec}\r\n\r\n`,
-      );
-      return;
-    }
-    const who =
-      consumeWsTicket(url.searchParams.get("ticket")) ??
-      identify(bearerToken(req.headers.authorization));
-    if (!who) {
-      authFailures.record(remoteIp);
-      socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
-      return;
-    }
-    if (wss.clients.size + upgrading >= maxClients) {
-      socket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
-      return;
-    }
-    upgrading += 1;
-    let settled = false;
-    const finishUpgrade = () => {
-      if (settled) return;
-      settled = true;
-      upgrading -= 1;
-    };
-    socket.once("close", finishUpgrade);
-    socket.once("error", finishUpgrade);
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      finishUpgrade();
-      const client: Client = {
-        send: (message: ServerMessage) => {
-          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
-        },
-        ...(who.owner ? {} : { deviceId: who.deviceId }),
+    try {
+      const url = parseUrl(req.url ?? "/");
+      if (url?.pathname !== "/ws") {
+        socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        return;
+      }
+      if (!allowedWsOrigin(req.headers.origin, req.headers.host)) {
+        socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+        return;
+      }
+      const clientKey = rateKey(req);
+      const limit = wsLimiter.take(clientKey);
+      if (!limit.ok) {
+        socket.end(`HTTP/1.1 429 Too Many Requests\r\nRetry-After: ${limit.retryAfterSec}\r\n\r\n`);
+        return;
+      }
+      const authLimit = authFailures.check(clientKey);
+      if (!authLimit.ok) {
+        socket.end(
+          `HTTP/1.1 429 Too Many Requests\r\nRetry-After: ${authLimit.retryAfterSec}\r\n\r\n`,
+        );
+        return;
+      }
+      const who =
+        consumeWsTicket(url.searchParams.get("ticket")) ??
+        identify(bearerToken(req.headers.authorization));
+      if (!who) {
+        authFailures.record(clientKey);
+        socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
+        return;
+      }
+      if (wss.clients.size + upgrading >= maxClients) {
+        socket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+        return;
+      }
+      upgrading += 1;
+      let settled = false;
+      const finishUpgrade = () => {
+        if (settled) return;
+        settled = true;
+        upgrading -= 1;
       };
-      const disconnect = hub.connect(client);
-      sockets.set(ws, who);
-      ws.on("close", () => sockets.delete(ws));
-      alive.add(ws);
-      ws.on("pong", () => alive.add(ws));
-      ws.on("close", disconnect);
-      // A broken connection closes on its own; without a listener its error would stop the server.
-      ws.on("error", () => ws.terminate());
-      ws.on("message", (data) => {
-        const decoded = decode(data.toString());
-        if ("error" in decoded) {
-          client.send(decoded.error);
-          return;
-        }
-        const message = decoded.message;
-        hub.handle(client, message).catch((error: unknown) => {
-          client.send({
-            type: "error",
-            ...("requestId" in message ? { requestId: message.requestId } : {}),
-            message: error instanceof Error ? error.message : String(error),
+      socket.once("close", finishUpgrade);
+      socket.once("error", finishUpgrade);
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        finishUpgrade();
+        const client: Client = {
+          send: (message: ServerMessage) => {
+            if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
+          },
+          ...(who.owner ? {} : { deviceId: who.deviceId }),
+        };
+        const disconnect = hub.connect(client);
+        sockets.set(ws, who);
+        ws.on("close", () => sockets.delete(ws));
+        alive.add(ws);
+        ws.on("pong", () => alive.add(ws));
+        ws.on("close", disconnect);
+        // A broken connection closes on its own; without a listener its error would stop the server.
+        ws.on("error", () => ws.terminate());
+        ws.on("message", (data) => {
+          const decoded = decode(data.toString());
+          if ("error" in decoded) {
+            client.send(decoded.error);
+            return;
+          }
+          const message = decoded.message;
+          hub.handle(client, message).catch((error: unknown) => {
+            client.send({
+              type: "error",
+              ...("requestId" in message ? { requestId: message.requestId } : {}),
+              message: error instanceof Error ? error.message : String(error),
+            });
           });
         });
       });
-    });
+    } catch (error) {
+      console.error("Upgrade WebSocket :", error);
+      socket.destroy();
+    }
   });
   // A coordinator's bridge runs on this machine: it reaches the server on the loopback.
   server.on("listening", () => {
