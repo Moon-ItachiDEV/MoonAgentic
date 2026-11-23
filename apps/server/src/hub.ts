@@ -1446,6 +1446,7 @@ export class Hub {
           ? `Équipe terminée : ${n} morceau${n > 1 ? "x" : ""} fusionné${n > 1 ? "s" : ""}.`
           : `Équipe en échec${team.error ? ` : ${team.error}` : "."}`,
       files: [],
+      ...(team.phase === "failed" ? { failed: true } : {}),
       at: Date.now(),
     });
   }

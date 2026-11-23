@@ -541,6 +541,8 @@ export type Item =
       files: string[];
       /** How many more it changed. */
       moreFiles?: number;
+      /** True when what ended is a failure, such as a team that could not finish. */
+      failed?: boolean;
       at: number;
     }
   /** The thread went from one agent to another; agent items before it are `from`'s. */

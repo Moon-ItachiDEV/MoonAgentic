@@ -8,8 +8,8 @@ import {
   type Project,
   type TeamMember,
   WORK_KINDS,
-  type WorkKind,
 } from "@moonagentic/protocol";
+import { KIND_LABEL } from "../project-threads.ts";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
 import {
@@ -145,14 +145,6 @@ export function SettingsNav(props: {
     </aside>
   );
 }
-
-const KIND_LABEL: Record<WorkKind, string> = {
-  question: "Question",
-  bug: "Bug",
-  fonctionnalite: "Fonctionnalité",
-  relecture: "Relecture",
-  tests: "Tests",
-};
 
 function Row(props: { title: string; text?: ReactNode; children?: ReactNode }) {
   return (

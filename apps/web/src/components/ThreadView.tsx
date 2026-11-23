@@ -27,7 +27,10 @@ export function ThreadView({
   agents,
   threads,
   onOpenThread,
+  intro,
 }: {
+  /** Shown above the conversation, such as a coordinator's ways to start. */
+  intro?: ReactNode;
   thread: Thread;
   items: Item[] | undefined;
   agents: AgentInfo[];
@@ -153,6 +156,7 @@ export function ThreadView({
       }}
     >
       <div className="feed">
+        {intro}
         {/* A team started before the timeline was recorded has nothing to draw. */}
         {!!strip?.team.timeline?.length && (
           <TeamStrip
@@ -288,13 +292,13 @@ function FeedItem({
     case "result": {
       const done = threads.find((t) => t.id === item.threadId);
       return (
-        <div className="result">
+        <div className={`result${item.failed ? " failed-result" : ""}`}>
           <button
             className="result-t"
             disabled={!done}
             onClick={() => done && onOpenThread(done.id)}
           >
-            <IconCheck size={12} />
+            {item.failed ? <IconAlert size={13} /> : <IconCheck size={12} />}
             {done?.title ?? item.title}
           </button>
           <p className="result-s">{item.summary}</p>
