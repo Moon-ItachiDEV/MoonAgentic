@@ -1,26 +1,29 @@
-/* The decision card, above the composer: same width, same 24px corners, 8px apart.
-   Inside, everything sits on two vertical edges: 16px (tag, question, key caps, preview)
-   and 48px (labels, descriptions, the user's own answer). Rows are 8px inside the card,
-   so their corners are 24 - 8 = 16. Spacing steps: 2, 4, 8, 12, 16. */
+/* The decision card, above the composer: it wears the composer « Plateau » edge (the same
+   gradient hairline, lit rim, halo and layered lift, from composer.css), the same width and
+   the same 20px corners, 8px apart. Inside, everything sits on two vertical edges: 16px (tag,
+   question, key caps, preview) and 48px (labels, descriptions, the user's own answer). Rows are
+   8px inside the card, so their corners are 20 - 8 = 12. Spacing steps: 2, 4, 8, 12, 16. */
 .dcard,
 .dcard-fold {
   --dc-hi: color-mix(in srgb, var(--fg) 5%, transparent);
-  --dc-ring: color-mix(in srgb, var(--fg) 9%, transparent);
   --dc-out: cubic-bezier(0.2, 0, 0, 1);
-  width: min(600px, 100%);
+  --dc-row: 12px;
+  width: min(680px, 100%);
   margin-bottom: 8px;
-  background: var(--surface);
   border: 1px solid transparent;
+  background:
+    linear-gradient(180deg, var(--surface-hi), var(--surface-lo)) padding-box,
+    linear-gradient(180deg, var(--edge-hi), var(--edge-lo)) border-box;
   box-shadow:
-    0 0 0 1px var(--dc-ring),
-    0 1px 2px rgba(0, 0, 0, 0.04),
-    0 12px 32px -16px rgba(0, 0, 0, 0.18);
+    inset 0 1px 0 var(--rim),
+    0 0 0 4px var(--halo),
+    var(--lift);
 }
 .dcard {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   padding: 8px;
-  border-radius: 24px;
+  border-radius: 20px;
   font-size: 14px;
   line-height: 20px;
 }
@@ -149,7 +152,7 @@ button.dcard-ib:active,
   width: 100%;
   min-height: 36px;
   padding: 8px;
-  border-radius: 16px;
+  border-radius: var(--dc-row);
   text-align: start;
   transition: background-color 0.12s;
 }
@@ -377,6 +380,13 @@ button.dcard-ib:active,
   flex: none;
 }
 
+/* On a phone the composer rounds to 24px; the card follows, and so do its rows. */
+@media (max-width: 860px) {
+  .dcard {
+    --dc-row: 16px;
+    border-radius: 24px;
+  }
+}
 @media (max-width: 640px) {
   .dcard-o:not(:has(.dcard-od)) {
     min-height: 44px;

@@ -2,7 +2,7 @@ import type { QueuedMessage, Thread } from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { queueState } from "../queue.ts";
-import { IconClose } from "./icons.tsx";
+import { IconArrowUp, IconClose } from "./icons.tsx";
 
 /** Sends a change to the server; a refusal is shown rather than lost. */
 const call = (message: Parameters<typeof connection.request>[0]) =>
@@ -13,32 +13,26 @@ const call = (message: Parameters<typeof connection.request>[0]) =>
     );
 
 /**
- * The messages the user wrote for after the turn under way, above the composer. Each can
- * be changed or taken out while it waits. What is shown is what the server holds.
+ * The messages written for after the turn under way, above the composer's field. Each can be
+ * changed, taken out, or sent now while it waits. What is shown is what the server holds.
  */
 export function MessageQueue({ thread }: { thread: Thread }) {
   const state = queueState(thread);
   if (state.count === 0) return null;
   return (
-    <section className="mq" aria-label="Messages en file">
-      <div className="mq-h">
-        <span role="status">{state.label}</span>
-        {state.paused && (
-          <button
-            className="mq-go"
-            onClick={() =>
-              void call({ type: "thread.queueSend", requestId: newId(), threadId: thread.id })
-            }
-          >
-            Envoyer
-          </button>
-        )}
-      </div>
-      <ol className="mq-list">
-        {(thread.queue ?? []).map((message, index) => (
-          <Queued key={message.id} threadId={thread.id} message={message} place={index + 1} />
-        ))}
-      </ol>
+    <section className="cqueue" aria-label="Messages en file">
+      <p className="cq-h" role="status">
+        {state.label}
+      </p>
+      {(thread.queue ?? []).map((message, index) => (
+        <Queued
+          key={message.id}
+          threadId={thread.id}
+          message={message}
+          place={index + 1}
+          paused={state.paused}
+        />
+      ))}
     </section>
   );
 }
@@ -47,10 +41,12 @@ function Queued({
   threadId,
   message,
   place,
+  paused,
 }: {
   threadId: string;
   message: QueuedMessage;
   place: number;
+  paused: boolean;
 }) {
   const [draft, setDraft] = useState<string | null>(null);
   const field = useRef<HTMLTextAreaElement>(null);
@@ -76,26 +72,23 @@ function Queued({
     setDraft(null);
   };
   return (
-    <li className="mq-row">
-      <span className="mq-n" aria-hidden>
-        {place}
-      </span>
+    <div className="qm">
+      {message.from === "coordinator" && <span className="l">Coordinateur</span>}
       {draft === null ? (
         <button
-          className="mq-tx"
+          className="t"
           title="Modifier ce message"
           aria-label={`Modifier le message ${place}${
             message.from === "coordinator" ? " du coordinateur" : ""
           } : ${message.text}`}
           onClick={() => setDraft(message.text)}
         >
-          {message.from === "coordinator" && <span className="mq-from">Coordinateur</span>}
           {message.text}
         </button>
       ) : (
         <textarea
           ref={field}
-          className="mq-edit"
+          className="cq-edit"
           autoFocus
           rows={1}
           aria-label={`Message ${place} en file`}
@@ -113,8 +106,25 @@ function Queued({
           }}
         />
       )}
+      {place === 1 && draft === null && (
+        // While the agent works, sending now stops its turn first; after a stop or an error
+        // nothing goes by itself, and this is how the messages go on.
+        <button
+          title={paused ? "Envoie ce message à l'agent" : "Arrête l'agent et envoie ce message"}
+          onClick={() =>
+            void call({
+              type: "thread.queueSend",
+              requestId: newId(),
+              threadId,
+              id: message.id,
+            })
+          }
+        >
+          <IconArrowUp size={13} />
+          {paused ? "Envoyer" : "Envoyer maintenant"}
+        </button>
+      )}
       <button
-        className="mq-x"
         aria-label={`Retirer le message ${place} de la file`}
         title="Retirer de la file"
         // Before the field's blur, which would save what is being typed.
@@ -132,6 +142,6 @@ function Queued({
       >
         <IconClose />
       </button>
-    </li>
+    </div>
   );
 }

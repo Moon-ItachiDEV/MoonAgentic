@@ -815,6 +815,14 @@ export interface QuotaWindow {
  * to follow. When `state` is `ok`, `note` may still explain that a newer refresh failed
  * temporarily and the previous figures were kept.
  */
+/** One day of the home page's activity map. */
+export interface ActivityDay {
+  /** Days since 1 January 1970, in the asking device's time zone. */
+  day: number;
+  /** Messages written that day by the user or an agent (a team's own briefs left out). */
+  count: number;
+}
+
 export interface AgentQuota {
   agentId: AgentId;
   state: "ok" | "unreadable" | "none" | "loading";
@@ -917,6 +925,18 @@ export type ServerMessage =
   /** What `$` and `/` can offer in a thread's folder, beyond the agent's own commands. */
   | { type: "catalog"; requestId: string; skills: Skill[]; commands: ProjectCommand[] }
   | { type: "searched"; requestId: string; hits: SearchHit[] }
+  /**
+   * Messages written each day, the user's and the agents', for the home page's activity map.
+   * `day` counts days since 1 January 1970 in the asking device's time zone; days without a
+   * message are left out. `firstAt`: when the first thread was started, so days before it
+   * are drawn as « before MoonAgentic » rather than as days without work.
+   */
+  | {
+      type: "activity";
+      requestId: string;
+      days: ActivityDay[];
+      firstAt?: number;
+    }
   /** An item whole, with what its copy in the timeline left out. */
   | { type: "fullItem"; requestId: string; threadId: string; item: Item }
   | {
@@ -1110,8 +1130,16 @@ export const ClientMessage = z.discriminatedUnion("type", [
     id,
     text: messageText,
   }),
-  /** Sends the first message that waits now: after a stop or an error, nothing goes by itself. */
-  z.object({ type: z.literal("thread.queueSend"), requestId: id, threadId: id }),
+  /**
+   * Sends a message that waits now, the first one unless `id` names another: after a stop or
+   * an error nothing goes by itself. With a turn under way, the turn is stopped first.
+   */
+  z.object({
+    type: z.literal("thread.queueSend"),
+    requestId: id,
+    threadId: id,
+    id: id.optional(),
+  }),
   /** Puts the files back as they were before this message and forgets what came after. */
   z.object({ type: z.literal("thread.restore"), requestId: id, threadId: id, itemId: id }),
   /** Asks for an item whole: a tool's large result, when its line is opened. */
@@ -1239,6 +1267,14 @@ export const ClientMessage = z.discriminatedUnion("type", [
     requestId: id,
     projectId: id,
     threadId: id.optional(),
+  }),
+  /** Counts the messages written each day over the last `days` days, for the home page. */
+  z.object({
+    type: z.literal("activity"),
+    requestId: id,
+    /** The device's `Date#getTimezoneOffset()`, in minutes, so days end at its midnight. */
+    tzOffset: z.number().int().min(-900).max(900),
+    days: z.number().int().min(1).max(400),
   }),
   /** Finds messages containing the text, in every thread. */
   z.object({

@@ -95,7 +95,7 @@ describe("message queue", () => {
     const { page, composer } = await newThread("file");
     const queue = page.getByRole("region", { name: "Messages en file" });
     const said = () => page.locator(".u-wrap").allTextContents();
-    const rows = () => queue.locator(".mq-tx").allTextContents();
+    const rows = () => queue.locator(".qm .t").allTextContents();
 
     await composer.fill("Corrige la réponse");
     await page.keyboard.press("Enter");
@@ -103,11 +103,11 @@ describe("message queue", () => {
     await page.getByRole("button", { name: "Arrêter" }).waitFor();
     await expect
       .poll(() => composer.getAttribute("placeholder"))
-      .toBe("Écris la suite : elle partira à la fin du tour…");
+      .toBe("Ajouter une consigne pendant que Agent de démo travaille…");
 
     // Written now, a message waits above the composer instead of being refused.
     await composer.fill("Ensuite, lance les tests");
-    await page.getByRole("button", { name: "Envoyer à la fin du tour" }).waitFor();
+    await page.getByRole("button", { name: "Mettre en file" }).waitFor();
     await page.keyboard.press("Enter");
     await expect.poll(rows).toEqual(["Ensuite, lance les tests"]);
     expect(await composer.inputValue()).toBe("");
@@ -151,6 +151,17 @@ describe("message queue", () => {
     await queue.getByRole("button", { name: "Envoyer", exact: true }).click();
     await expect.poll(async () => (await said()).length).toBe(3);
     expect((await said())[2]).toContain("Puis ouvre la PR");
+    await expect.poll(() => queue.count()).toBe(0);
+
+    // « Envoyer maintenant » does not wait for the turn's end: it stops the agent, which was
+    // asking again, and the message goes at once.
+    await page.getByRole("button", { name: "Arrêter" }).waitFor();
+    await composer.fill("Tout de suite");
+    await page.getByRole("button", { name: "Mettre en file" }).click();
+    await expect.poll(rows).toEqual(["Tout de suite"]);
+    await queue.getByRole("button", { name: "Envoyer maintenant" }).click();
+    await expect.poll(async () => (await said()).length, { timeout: 15_000 }).toBe(4);
+    expect((await said())[3]).toContain("Tout de suite");
     await expect.poll(() => queue.count()).toBe(0);
     await page.close();
   });

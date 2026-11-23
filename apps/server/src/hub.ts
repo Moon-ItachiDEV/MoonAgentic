@@ -228,6 +228,8 @@ export class Hub {
   private readonly turns = new Map<string, Promise<void>>();
   /** Threads whose running turn the user asked to stop. */
   private readonly cancelled = new Set<string>();
+  /** Threads whose turn was stopped so that a message that waits goes at once. */
+  private readonly sendAfterStop = new Set<string>();
   /** Turns started by a coordinator, a team or a planned task that wait for a place. */
   private readonly line = new TurnLine();
   /** Kills the agent of each thread asked to stop, if its turn has not ended in time. */
@@ -623,9 +625,7 @@ export class Hub {
         client.send({ type: "done", requestId: message.requestId });
         return;
       case "thread.queueSend":
-        if (this.turns.has(message.threadId))
-          throw new Error("L'agent travaille encore sur ce fil.");
-        this.sendNextQueued(message.threadId);
+        this.sendQueuedNow(message.threadId, message.id);
         client.send({ type: "done", requestId: message.requestId });
         return;
       case "coordinator.open": {
@@ -814,6 +814,20 @@ export class Hub {
           requestId: message.requestId,
           skills: findSkills(dir, this.homeDir).map(({ file: _file, ...skill }) => skill),
           commands: findProjectCommands(dir),
+        });
+        return;
+      }
+      case "activity": {
+        this.flushAll();
+        const offsetMs = message.tzOffset * 60_000;
+        // From the start of the oldest day asked for, in the client's time zone.
+        const today = Math.floor((Date.now() - offsetMs) / 86_400_000);
+        const since = (today - message.days + 1) * 86_400_000 + offsetMs;
+        client.send({
+          type: "activity",
+          requestId: message.requestId,
+          days: this.store.activityDays(since, offsetMs),
+          firstAt: this.store.firstThreadAt(),
         });
         return;
       }
@@ -1175,6 +1189,28 @@ export class Hub {
   }
 
   /**
+   * Sends a message that waits without waiting for the turn's end: the first one, or the one
+   * named, which then goes first. A turn under way is stopped, and the message leaves as
+   * soon as the agent has stopped.
+   */
+  sendQueuedNow(threadId: string, id?: string): void {
+    const queue = this.requireLiveThread(threadId).queue ?? [];
+    if (id) {
+      const chosen = queue.find((m) => m.id === id);
+      if (!chosen) throw new Error("Ce message est déjà parti.");
+      if (queue[0] !== chosen) {
+        this.updateThread(threadId, { queue: [chosen, ...queue.filter((m) => m !== chosen)] });
+      }
+    }
+    if (!this.turns.has(threadId)) {
+      this.sendNextQueued(threadId);
+      return;
+    }
+    this.sendAfterStop.add(threadId);
+    this.cancel(threadId).catch((error: unknown) => console.error("File de messages :", error));
+  }
+
+  /**
    * Sends the first message that waits, as a turn of its own. Called when a turn ends by
    * itself, and when the user asks. One that cannot go now keeps its place. `afterError`:
    * the turn ended on an error, which the user looks at before their own messages go on;
@@ -1283,8 +1319,15 @@ export class Hub {
       }
       // A turn the user stopped starts nothing by itself: what waits goes after the next one.
       // One that ended on an error holds the user's own messages back: they look at it first.
+      // Unless they stopped it for a message that waits to go now.
       const failed = this.store.getThread(threadId)?.status === "error";
-      if (!this.closed && !cancelled && this.sendNextQueued(threadId, failed)) return;
+      const atOnce = this.sendAfterStop.delete(threadId);
+      if (
+        !this.closed &&
+        (atOnce || !cancelled) &&
+        this.sendNextQueued(threadId, failed && !atOnce)
+      )
+        return;
       // A place is free: the next thread in line behind the same coordinator starts.
       const openedBy = this.closed ? undefined : this.store.getThread(threadId)?.openedBy;
       if (openedBy) this.coordinators.drainLine(openedBy);

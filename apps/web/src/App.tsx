@@ -39,7 +39,6 @@ import { steady, useSame } from "./steady.tsx";
 import { coordinatorOf, listedThreads } from "./project-threads.ts";
 import { Sidebar as PlainSidebar } from "./components/Sidebar.tsx";
 import { TabBar } from "./components/TabBar.tsx";
-import { MessageQueue } from "./components/MessageQueue.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { TeamDialog } from "./components/TeamDialog.tsx";
@@ -90,6 +89,8 @@ export function App() {
   const narrow = useNarrow();
   // On a computer, the side bar can be folded away, as in the mockup.
   const [sideOff, setSideOff] = useState(() => readPref("sideOff") === "true");
+  // The home page's overview, unless the user folded it away on this device.
+  const [overviewShown, setOverviewShown] = useState(() => readPref("homeOverview") !== "off");
   const foldSide = (off: boolean) => {
     setSideOff(off);
     writePref("sideOff", String(off));
@@ -341,7 +342,6 @@ export function App() {
             }}
           />
         )}
-        {t && <MessageQueue thread={t} />}
         <Composer
           key={t?.id ?? "new"}
           agents={state.agents}
@@ -350,6 +350,10 @@ export function App() {
           project={project}
           {...(placeholder ? { placeholder } : {})}
           onNewProject={() => setCreatingProject(true)}
+          projects={state.projects}
+          onPickProject={pickProject}
+          mcpServers={state.mcpServers}
+          onMcp={() => setMcpOpen(true)}
           onCreated={(id) => navigate({ name: "thread", threadId: id })}
           onExport={() => exportThread(t)}
           onSearch={() => setSearchOpen(true)}
@@ -466,6 +470,10 @@ export function App() {
             askRemoveProject(id);
           }}
           onOpenSettings={() => go({ name: "settings", section: "general" })}
+          onOpenSubscriptions={() => {
+            setDrawer(false);
+            go({ name: "settings", section: "subscriptions" });
+          }}
           onOpenSearch={() => {
             setDrawer(false);
             setSearchOpen(true);
@@ -797,7 +805,27 @@ export function App() {
             </Suspense>
           </ErrorBoundary>
         ) : (
-          <Home state={state} project={project} onNewProject={() => setCreatingProject(true)} />
+          <Home
+            state={state}
+            project={project}
+            onNewProject={() => setCreatingProject(true)}
+            overview={{
+              shown: overviewShown,
+              narrow,
+              onToggle: (shown) => {
+                setOverviewShown(shown);
+                writePref("homeOverview", shown ? "on" : "off");
+              },
+              onOpenThread: (t) =>
+                go(
+                  t.kind === "coordinator"
+                    ? { name: "project", projectId: t.projectId }
+                    : { name: "thread", threadId: t.id },
+                ),
+              onOpenPlanner: () => go({ name: "planner" }),
+              onOpenSubscriptions: () => go({ name: "settings", section: "subscriptions" }),
+            }}
+          />
         )}
         {route.name !== "settings" &&
           route.name !== "planner" &&
@@ -806,7 +834,7 @@ export function App() {
           // Beside its threads, the coordinator's is under its own conversation.
           !(coordinator && (wide || projectTab === "threads" || beside)) && (
             <div className="dock">
-              {route.name === "home" && (narrow || sideOff) && (
+              {route.name === "home" && (narrow || sideOff) && !overviewShown && (
                 <HomeCards
                   state={state}
                   agents={state.agents}

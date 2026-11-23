@@ -110,7 +110,8 @@ describe("decision card", () => {
     await card(page).getByText("Géré, rien à faire tourner, mais pas de rejeu").waitFor();
     expect(await card(page).locator(".dcard-o").count()).toBe(4);
     await shot(page, "a1-question");
-    // The card sits just above the composer, on its edges.
+    // The card sits just above the composer, on its edges, once it has slid in.
+    await card(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
     const [box, below] = await Promise.all([
       card(page).boundingBox(),
       page.locator(".composer").boundingBox(),

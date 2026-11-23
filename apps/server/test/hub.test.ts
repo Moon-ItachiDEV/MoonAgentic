@@ -1927,9 +1927,6 @@ describe("messages written while the agent works", () => {
       text: " ",
     });
     expect(waiting(store, threadId)).toEqual(["Deuxième, corrigé", "Troisième"]);
-    await expect(
-      hub.handle(client, { type: "thread.queueSend", requestId: "s", threadId }),
-    ).rejects.toThrow("travaille encore");
 
     // Each goes when the turn before it ends, as a turn of its own.
     await expect
@@ -1953,6 +1950,36 @@ describe("messages written while the agent works", () => {
     expect(waiting(store, threadId)).toEqual([]);
     expect(texts(store.listItems(threadId)).at(-1)).toBe("Dernier");
     await hub.whenIdle(threadId);
+  }, 30_000);
+
+  it("go now when the user says so: the turn is stopped and the chosen one leaves first", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+    });
+    // The agent asks before it acts: its turn would not end by itself.
+    await asking(store, threadId);
+    await hub.handle(client, { type: "thread.queue", requestId: "q1", threadId, text: "Ensuite" });
+    await hub.handle(client, { type: "thread.queue", requestId: "q2", threadId, text: "Urgent" });
+    const urgent = store.getThread(threadId)!.queue![1]!;
+    await hub.handle(client, {
+      type: "thread.setPermissionMode",
+      threadId,
+      permissionMode: "full",
+    });
+    await hub.handle(client, { type: "thread.queueSend", requestId: "s", threadId, id: urgent.id });
+    // The turn under way is stopped, the chosen message goes, and the other follows it.
+    await expect
+      .poll(() => texts(store.listItems(threadId)), { timeout: 20_000 })
+      .toEqual(["Corrige la réponse", "Urgent", "Ensuite"]);
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)).not.toHaveProperty("queue");
+    await expect(
+      hub.handle(client, { type: "thread.queueSend", requestId: "s2", threadId, id: urgent.id }),
+    ).rejects.toThrow("déjà parti");
   }, 30_000);
 
   it("stay where they are after a stop, until the user sends them, and across a restart", async () => {

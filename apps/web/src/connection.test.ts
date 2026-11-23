@@ -222,6 +222,27 @@ describe("Connection heartbeat", () => {
 });
 
 describe("Connection", () => {
+  it("keeps a thread open until every part of the page that shows it has left", async () => {
+    const { conn, socket } = await setupConnection();
+    socket.open();
+    const sent = () =>
+      socket.sent.map((m) => JSON.parse(m) as { type: string }).filter((m) => m.type !== "ping");
+    const before = sent().length;
+
+    // The conversation, then the team's tree, show the same thread.
+    conn.send({ type: "thread.open", threadId: "t" });
+    conn.send({ type: "thread.open", threadId: "t" });
+    conn.send({ type: "thread.leave", threadId: "t" });
+    expect(
+      sent()
+        .slice(before)
+        .map((m) => m.type),
+    ).toEqual(["thread.open", "thread.open"]);
+
+    conn.send({ type: "thread.leave", threadId: "t" });
+    expect(sent().at(-1)).toEqual({ type: "thread.leave", threadId: "t" });
+  });
+
   it("times out ask after 60 s by default and cleans up pending", async () => {
     expect(ASK_TIMEOUT_MS).toBe(60_000);
     const { conn, socket } = await setupConnection();

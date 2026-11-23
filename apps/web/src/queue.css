@@ -1,80 +1,35 @@
-/* The messages that wait for the end of the turn, above the composer. */
-.mq {
-  width: min(600px, 100%);
-  margin-bottom: 8px;
-  padding: 8px 8px 6px;
-  border: 1px solid var(--line);
-  border-radius: 16px;
-  background: var(--surface);
-  font-size: 13px;
-}
-.mq-h {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 26px;
-  padding: 0 6px 4px;
-  color: var(--muted);
-  font-size: 12px;
-}
-.mq-h span {
-  flex: 1;
-  min-width: 0;
-}
-.mq-go {
-  flex: none;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-size: 12px;
-  color: var(--fg);
-}
-.mq-go:hover {
-  border-color: var(--accent);
-}
-.mq-list {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  max-height: 168px;
+/* The messages that wait for the end of the turn, above the composer's field. The rows are
+   the composer's own (`.cqueue`, `.qm` in composer.css); what is here is added to them. */
+.cqueue {
+  max-height: 190px;
   overflow-y: auto;
 }
-.mq-row {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 28px;
-  align-items: start;
-  gap: 4px;
-  border-radius: 10px;
+.cq-h {
+  margin: 0;
+  padding: 0 6px;
+  font-size: 12px;
+  color: var(--muted);
 }
-.mq-row:hover {
-  background: var(--hover);
-}
-.mq-n {
-  padding-top: 7px;
-  text-align: center;
-  font: 500 11px/1.4 var(--mono);
-  color: var(--faint);
-}
-.mq-tx {
-  padding: 6px 4px;
+/* The text is pressed to change it. */
+.qm button.t {
+  display: block;
+  height: auto;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 6px;
   text-align: start;
-  line-height: 1.4;
-  color: var(--fg);
-  /* Two lines of a long message: the whole of it shows when it is changed. */
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  font-size: inherit;
+  color: var(--fg2);
 }
-.mq-edit {
-  margin: 2px 0;
-  padding: 4px 6px;
+.qm button.t:hover {
+  background: none;
+  color: var(--fg);
+}
+.cq-edit {
+  flex: 1;
+  min-width: 0;
   max-height: 140px;
+  padding: 3px 6px;
   border: 1px solid var(--accent);
   border-radius: 8px;
   background: var(--bg);
@@ -83,24 +38,4 @@
   line-height: 1.4;
   resize: none;
   outline: 0;
-}
-.mq-x {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 30px;
-  border-radius: 8px;
-  color: var(--faint);
-}
-.mq-x:hover {
-  color: var(--fg);
-}
-/* Left by the project's coordinator, not written by the user. */
-.mq-from {
-  margin-right: 6px;
-  padding: 1px 6px;
-  border-radius: 6px;
-  background: var(--hover);
-  font-size: 11px;
-  color: var(--muted);
 }

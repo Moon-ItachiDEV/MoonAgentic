@@ -137,7 +137,8 @@ describe("longs fils", () => {
     await page.getByRole("button", { name: "Options", exact: true }).click();
     await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
     await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: "Supervisé" }).click();
+    await page.getByRole("button", { name: /Mode d'accès/ }).click();
+    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
 
     await composer.fill("Lis le gros fichier");
     await composer.press("Enter");

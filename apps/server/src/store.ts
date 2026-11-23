@@ -9,6 +9,7 @@ import type {
   Project,
   Schedule,
   SearchHit,
+  ActivityDay,
   Thread,
   ThreadStatus,
   Workspace,
@@ -254,6 +255,16 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
           WHERE json_extract(data, '$.kind') IN ('user', 'agent')
             AND json_extract(data, '$.byTeam') IS NOT 1
           ORDER BY json_extract(data, '$.at'), rowid;
+    `);
+  },
+  // 5. The home page's activity map counts messages per day: an index of when each message
+  // was written, holding only what the user or an agent said, so counting reads that index
+  // alone, never the messages themselves.
+  (db) => {
+    db.exec(`
+      CREATE INDEX items_activity_at ON items(json_extract(data, '$.at'))
+        WHERE json_extract(data, '$.kind') IN ('user', 'agent')
+          AND json_extract(data, '$.byTeam') IS NOT 1;
     `);
   },
 ];
@@ -677,6 +688,32 @@ export class Store {
         },
       ];
     });
+  }
+
+  /**
+   * Messages from the user or an agent written on each day since `since`, counted by the day
+   * they fall on once shifted by `offsetMs` (the client's time zone). A team's own briefs
+   * are left out, as in search.
+   */
+  /** Messages per day since `since`, read from `items_activity_at` (its conditions, word for word). */
+  activityDays(since: number, offsetMs: number): ActivityDay[] {
+    const rows = this.sql(
+      `SELECT CAST((json_extract(data, '$.at') - ?) / 86400000 AS INTEGER) AS day, COUNT(*) AS count
+         FROM items
+         WHERE json_extract(data, '$.kind') IN ('user', 'agent')
+           AND json_extract(data, '$.byTeam') IS NOT 1
+           AND json_extract(data, '$.at') >= ?
+         GROUP BY day
+         ORDER BY day`,
+    ).all(offsetMs, since) as { day: number; count: number }[];
+    return rows.map((row) => ({ day: Number(row.day), count: Number(row.count) }));
+  }
+
+  /** When the first thread still kept was started, if any. */
+  firstThreadAt(): number | undefined {
+    const row = this.sql(`SELECT MIN(created_at) AS first FROM threads`).get() as
+      { first: number | null } | undefined;
+    return row?.first ?? undefined;
   }
 
   listPlanTasks(): PlanTask[] {
