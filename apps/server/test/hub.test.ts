@@ -2010,7 +2010,8 @@ describe("messages written while the agent works", () => {
       worktreesDir: path.join(dir, ".worktrees"),
       homeDir: path.join(dir, ".home"),
     });
-    cleanups.push(async () => {
+    // Closed before the first server's folder is removed: Windows keeps an open database.
+    cleanups.unshift(async () => {
       await restarted.close();
       again.close();
     });
