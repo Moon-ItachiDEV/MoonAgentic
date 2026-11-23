@@ -525,6 +525,23 @@ export type Item =
   | { id: string; kind: "plan"; entries: PlanEntry[]; at: number }
   /** The coordinator opened a thread for a piece of work: a link to it, where it did. */
   | { id: string; kind: "opened"; threadId: string; title: string; at: number }
+  /**
+   * A thread the coordinator opened has finished what it was asked: its own last words and
+   * the files it changed, told where the user asked for the work.
+   */
+  | {
+      id: string;
+      kind: "result";
+      threadId: string;
+      title: string;
+      /** The start of the thread's last answer. */
+      summary: string;
+      /** The files changed on its branch, the first of them. */
+      files: string[];
+      /** How many more it changed. */
+      moreFiles?: number;
+      at: number;
+    }
   /** The thread went from one agent to another; agent items before it are `from`'s. */
   | { id: string; kind: "handoff"; from: AgentId; to: AgentId; at: number };
 

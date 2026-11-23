@@ -37,6 +37,9 @@ export function threadMarkdown(thread: Thread, items: Item[], agents: AgentInfo[
       case "opened":
         lines.push(`> Fil ouvert : ${item.title}`, "");
         return;
+      case "result":
+        lines.push(`> Résultat de « ${item.title} » : ${item.summary}`, "");
+        return;
       case "thought":
       case "permission":
         return;

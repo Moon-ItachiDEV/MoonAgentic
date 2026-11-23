@@ -329,7 +329,7 @@ export function App() {
           }}
         />
       )}
-      {composerFor(coordinator)}
+      {composerFor(coordinator, "Pose une question ou demande une tâche…")}
     </>
   );
 
