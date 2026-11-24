@@ -541,15 +541,28 @@ const server = createServer((req, res) => {
   res.setHeader("Content-Type", "application/json");
   res.end(JSON.stringify(req.url.endsWith("/GetUserStatus") ? {} : ${JSON.stringify(summary)}));
 });
-process.stdin.once("data", () => {
-  server.listen(0, "127.0.0.1", () => {
-    const port = server.address().port;
-    writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
-    writeFileSync(
-      path.join(${JSON.stringify(dir)}, "acp-server-2026-11-24-" + process.pid + ".log"),
-      "Language server listening on random port at " + port + " for HTTP\\n",
-    );
-  });
+// Like agy: answers the hello, and opens its server only when asked for the sessions.
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let end;
+  while ((end = buffer.indexOf("\\n")) !== -1) {
+    const message = JSON.parse(buffer.slice(0, end));
+    buffer = buffer.slice(end + 1);
+    if (message.method === "initialize")
+      console.log(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: 1 } }));
+    if (message.method === "session/new") process.exit(3);
+    if (message.method !== "session/list") continue;
+    server.listen(0, "127.0.0.1", () => {
+      const port = server.address().port;
+      writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+      writeFileSync(
+        path.join(${JSON.stringify(dir)}, "acp-server-2026-11-24-" + process.pid + ".log"),
+        "Language server listening on random port at " + port + " for HTTP\\n",
+      );
+    });
+  }
 });
 `,
     );

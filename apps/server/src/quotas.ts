@@ -563,6 +563,8 @@ const AGY_SERVICE = "/exa.language_server_pb.LanguageServerService/";
 const AGY_REQUEST_TIMEOUT_MS = 5_000;
 /** How long `agy acp` gets to open its local server. */
 const AGY_START_TIMEOUT_MS = 12_000;
+/** How long the answer to `initialize` is waited for before asking for the sessions anyway. */
+const AGY_HELLO_GRACE_MS = 2_000;
 const AGY_LOG_HEAD_BYTES = 64 * 1024;
 const AGY_MAX_LOGS = 6;
 
@@ -805,26 +807,50 @@ export async function startAgyServer(
   child.on("exit", () => {
     exited = true;
   });
-  child.stdout.resume();
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
     stderr = (stderr + chunk).slice(-MAX_STDERR_CHARS);
   });
   child.stdin.on("error", () => {});
   const stop = () => (exited ? Promise.resolve() : killTree(child, "SIGKILL"));
-  // agy opens its server as an ACP client says hello.
-  child.stdin.write(
-    `${JSON.stringify({
-      jsonrpc: "2.0",
-      id: 0,
-      method: "initialize",
-      params: {
-        protocolVersion: 1,
-        clientCapabilities: {},
-        clientInfo: { name: "MoonAgentic", version: "0.0.0" },
-      },
-    })}\n`,
-  );
+  const write = (message: object) => child.stdin.write(`${JSON.stringify(message)}\n`);
+  // agy opens its server on the first question about sessions, not on the hello. Listing
+  // them is the one that leaves nothing behind: `session/new` would save an empty conversation.
+  let listed = false;
+  const list = () => {
+    if (listed || exited) return;
+    listed = true;
+    write({ jsonrpc: "2.0", id: 1, method: "session/list", params: {} });
+  };
+  let buffer = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    if (listed) return;
+    buffer += chunk;
+    let end: number;
+    while ((end = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, end);
+      buffer = buffer.slice(end + 1);
+      try {
+        const message = JSON.parse(line) as { id?: unknown; method?: unknown };
+        if (message.id === 0 && message.method === undefined) list();
+      } catch {
+        // not an answer
+      }
+    }
+  });
+  write({
+    jsonrpc: "2.0",
+    id: 0,
+    method: "initialize",
+    params: {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: "MoonAgentic", version: "0.0.0" },
+    },
+  });
+  // Should the hello's answer be missed, the question is asked anyway.
+  const anyway = setTimeout(list, AGY_HELLO_GRACE_MS);
   try {
     while (Date.now() - startedAt < timeoutMs) {
       if (signal?.aborted) throw new TransientError("Lecture annulée.");
@@ -846,6 +872,8 @@ export async function startAgyServer(
   } catch (error) {
     await stop();
     throw error;
+  } finally {
+    clearTimeout(anyway);
   }
 }
 
