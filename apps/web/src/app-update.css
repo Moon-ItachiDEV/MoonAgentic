@@ -1,0 +1,223 @@
+/* MoonAgentic's own updates, from the reference mockup (ade/maquette, « Mise à jour »): the
+   pill at the foot of the side bar, its card (the PR card's shape, .prc), and the steps of
+   an install over every screen. Prefixed apu-. */
+
+.apu-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  width: calc(100% - 20px);
+  height: 34px;
+  margin: 8px 10px 0;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: var(--accbg);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+}
+.apu-pill:hover {
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface));
+}
+.apu-pill.on {
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.apu-pill.wait,
+.apu-pill.run {
+  background: var(--card);
+  color: var(--fg2);
+}
+.apu-pill.fail {
+  background: var(--errbg);
+  color: var(--err-tx);
+}
+.apu-pill-t {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.apu-pill-k {
+  margin-left: auto;
+  flex: none;
+  font-size: 12px;
+  opacity: 0.8;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Among the home page's pills. */
+.ov-pill.apu-ov {
+  background: var(--accbg);
+  box-shadow: none;
+  color: var(--accent);
+}
+.ov-pill.apu-ov > i {
+  background: var(--accent);
+}
+.ov-pill.apu-ov b {
+  color: var(--accent);
+}
+/* On the home page without the overview: under the greeting, centred like it. */
+.ov-pills.apu-home {
+  justify-content: center;
+  margin: 14px 0 0;
+  padding: 0;
+}
+
+/* The card: .prc's place and shape; its foot level with the pill. */
+.apu-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 4px;
+}
+.apu-tags .tag.err {
+  height: auto;
+  min-height: 22px;
+  padding-block: 3px;
+  white-space: normal;
+  line-height: 1.35;
+}
+.apu-sub {
+  margin: 14px 4px 6px;
+  font-size: 12px;
+  color: var(--faint);
+}
+.apu-list {
+  list-style: none;
+  margin: 0 4px 12px;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.apu-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--fg2);
+}
+.apu-m {
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--faint);
+}
+.apu-run {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--card);
+  font-size: 13px;
+  color: var(--fg2);
+}
+.apu-note {
+  margin: 8px 4px 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.apu-note.apu-lead {
+  margin: 0 4px 8px;
+}
+.prc-acts.apu-acts {
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: 4px;
+}
+.apu-acts a.btn {
+  text-decoration: none;
+}
+.apu-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 4px;
+  padding: 6px 6px 6px 10px;
+  border-radius: 12px;
+  background: var(--card);
+}
+.apu-cmd code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0;
+  color: var(--fg2);
+}
+.apu-bar {
+  height: 6px;
+  margin: 4px 4px 0;
+  border-radius: 3px;
+  background: var(--track);
+  overflow: hidden;
+}
+.apu-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.3s ease-out;
+}
+.t2.t2-now .t2-l {
+  font-weight: 500;
+}
+
+/* The install, over every screen: nothing to do, so no button. */
+.apu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: var(--scrim);
+}
+.apu-inst {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 61;
+  transform: translate(-50%, -50%);
+  width: 400px;
+  max-width: calc(100vw - 32px);
+  padding: 16px;
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--float);
+}
+.apu-ih {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 4px 0;
+  color: var(--fg);
+}
+.apu-ih h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.apu-ih small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+.apu-inst .tl2 {
+  margin: 14px 4px 10px;
+}
+.apu-inst .apu-note {
+  margin-top: 0;
+}
+@media (max-width: 860px) {
+  .apu-inst {
+    left: 8px;
+    right: 8px;
+    top: auto;
+    bottom: 8px;
+    width: auto;
+    max-width: none;
+    transform: none;
+    padding: 16px 16px max(16px, env(safe-area-inset-bottom));
+  }
+}

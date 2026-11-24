@@ -3,7 +3,8 @@ name: Desktop
 # Builds the desktop installers: on a pull request that touches the app, to try them (kept 7
 # days in the run's artifacts); on a `v*` tag, attached to that tag's GitHub Release. The
 # installers never publish themselves: two jobs creating the release at once made two
-# releases for v0.1.0. The `release` job creates it once, with both files.
+# releases for v0.1.0. The `release` job creates it once, with both files and their
+# SHA-256 in SHA256SUMS.txt, which the desktop app checks before installing an update.
 on:
   push:
     tags: ["v*"]
@@ -72,6 +73,11 @@ jobs:
         with:
           path: installers
           merge-multiple: true
+      # The desktop app downloads its update from the release and runs it only if its SHA-256
+      # matches this list: an installer corrupted or swapped on the way is refused.
+      - name: Fingerprint the installers
+        working-directory: installers
+        run: sha256sum -- *.exe *.dmg > SHA256SUMS.txt && cat SHA256SUMS.txt
       - name: Create the release with both installers
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

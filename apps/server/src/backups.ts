@@ -79,3 +79,36 @@ export function dailyBackups(store: Pick<Store, "backup">, dir: string): { stop(
     },
   };
 }
+
+const BEFORE_UPDATE = /^state-avant-[\w.-]+\.sqlite(\.tmp)?$/;
+
+/**
+ * Copies the database just before MoonAgentic replaces itself with `version`, beside the
+ * daily copies: the one made before the last update, should the new version go wrong. Only
+ * the latest is kept. Gives the file written.
+ */
+export async function backupBeforeUpdate(
+  store: Pick<Store, "backup">,
+  dir: string,
+  version: string,
+): Promise<string> {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const safe = version.replace(/[^\w.-]/g, "").slice(0, 40) || "version";
+  const file = path.join(dir, `state-avant-${safe}.sqlite`);
+  const partial = `${file}.tmp`;
+  try {
+    rmSync(partial, { force: true });
+    await store.backup(partial);
+    if (process.platform !== "win32") chmodSync(partial, 0o600);
+    renameSync(partial, file);
+  } catch (error) {
+    rmSync(partial, { force: true });
+    throw error;
+  }
+  for (const name of readdirSync(dir)) {
+    if (BEFORE_UPDATE.test(name) && name !== path.basename(file)) {
+      rmSync(path.join(dir, name), { force: true });
+    }
+  }
+  return file;
+}

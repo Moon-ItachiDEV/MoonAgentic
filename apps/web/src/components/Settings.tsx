@@ -35,6 +35,7 @@ import { mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
 import { matchSections } from "../settings-search.ts";
 import { isDark, readTheme, setTheme, subscribeTheme, type Theme } from "../theme.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
+import { AppUpdateSettings } from "./AppUpdate.tsx";
 import {
   IconArrowLeft,
   IconBranch,
@@ -570,6 +571,7 @@ export function SettingsPage(props: {
             <NotificationsRow />
           </div>
           <LockCard projects={props.projects} lockPin={props.lockPin} />
+          <AppUpdateSettings row={Row} toggle={Toggle} />
         </>
       );
       break;

@@ -12,7 +12,9 @@ import {
 } from "../overview.ts";
 import { formatPercent } from "../quotas.ts";
 import type { State } from "../state.ts";
+import { updateShown } from "../app-update.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
+import { AppUpdateHomePill } from "./AppUpdatePill.tsx";
 import { homeCards } from "./HomeCards.tsx";
 import {
   IconBoard,
@@ -166,8 +168,11 @@ export function Overview(props: {
           Masquer
         </button>
       </div>
-      {(!!pills.quota || pills.waiting + pills.working + pills.review > 0) && (
+      {(!!pills.quota ||
+        pills.waiting + pills.working + pills.review > 0 ||
+        updateShown(state.app)) && (
         <div className="ov-pills">
+          <AppUpdateHomePill />
           {pills.quota && (
             <button className="ov-pill q" onClick={props.onOpenSubscriptions}>
               <i />

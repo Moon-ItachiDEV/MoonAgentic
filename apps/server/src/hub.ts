@@ -120,6 +120,8 @@ import { AgentPool } from "./sessions.ts";
 import { light, TimelineLog } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
 import { sweepWorktrees } from "./worktree-sweep.ts";
+import { AppUpdates, type GitSource, type ShellChannel } from "./app-update.ts";
+import { backupBeforeUpdate } from "./backups.ts";
 import type { Store } from "./store.ts";
 import {
   forecastFor,
@@ -218,6 +220,12 @@ export interface HubOptions {
   quotaEveryMs?: number;
   /** Where the images sent with messages are kept; beside the worktrees unless given. */
   attachmentsDir?: string;
+  /** The desktop app's channel, when it started this server. */
+  shell?: ShellChannel;
+  /** The clone this server runs from, looked at for newer commits on `main`. */
+  appGit?: GitSource;
+  /** Where the database is copied before an update; beside the worktrees unless given. */
+  backupsDir?: string;
 }
 
 /** The setting that lists the projects kept at the top. */
@@ -355,6 +363,8 @@ export class Hub {
   readonly attachments: Attachments;
   /** The notifications sent to phones while MoonAgentic is closed. */
   readonly push: Push;
+  /** MoonAgentic's own version and updates. */
+  readonly app: AppUpdates;
   /** The projects locked with /lock, and the code that opens them. */
   readonly locks: ProjectLocks;
   /** The project of each thread looked at while some are locked: a thread never moves. */
@@ -443,6 +453,27 @@ export class Hub {
       quiet: (projectId) => this.locks.isLocked(projectId),
     });
     this.push.know(store.listThreads());
+    const backupsDir =
+      options.backupsDir ?? path.join(path.dirname(options.worktreesDir), "backups");
+    this.app = new AppUpdates({
+      settings: store,
+      broadcast: (m) => this.broadcast(m),
+      working: () => this.turns.size,
+      backup: async (version) => {
+        const file = await backupBeforeUpdate(store, backupsDir, version);
+        console.log(`Copie de la base avant la mise à jour : ${file}`);
+      },
+      // Said of no project: a locked one keeps its secrets.
+      notify: (title, body) =>
+        void this.push.deliver({ tag: "app-update", threadId: "", title, body }, ""),
+      // Tasks due while the app is replaced start after, as after any stop.
+      pause: () => this.scheduler.close(),
+      resume: () => {
+        if (!this.closed) void this.recovered.then(() => this.scheduler.start());
+      },
+      ...(options.shell ? { shell: options.shell } : {}),
+      ...(options.appGit ? { git: options.appGit } : {}),
+    });
     this.planner = new Planner(store, (m) => this.broadcast(m));
     this.quotas = new Quotas({
       readers: options.quotaReaders ?? {},
@@ -645,6 +676,7 @@ export class Hub {
       ...(pairedDevice ? { pairedDevice: true } : {}),
       ...(defaults ? { defaults } : {}),
       ...(presets ? { teamPresets: presets } : {}),
+      app: this.app.info(),
     };
   }
 
@@ -1160,6 +1192,27 @@ export class Hub {
           subscribed: !!message.endpoint && this.push.subscribed(message.endpoint, client.deviceId),
         });
         return;
+      case "app.check":
+        this.app.check();
+        return;
+      case "app.install": {
+        const device = client.deviceId
+          ? this.store.listDevices().find((d) => d.id === client.deviceId)
+          : undefined;
+        this.app.requestInstall(
+          message.when,
+          client.deviceId ? `depuis ${device?.name ?? "un appareil jumelé"}` : "sur cet ordinateur",
+        );
+        return;
+      }
+      case "app.cancel":
+        this.app.cancel();
+        return;
+      case "app.settings": {
+        const { type: _type, ...patch } = message;
+        this.app.setSettings(patch);
+        return;
+      }
       case "push.subscribe":
         this.push.subscribe(message, client.deviceId);
         client.send({ type: "done", requestId: message.requestId });
@@ -2266,6 +2319,10 @@ export class Hub {
   ): void {
     const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
+    // Nothing new starts while the app is replaced: it would be cut off a moment later.
+    if (this.app.switching) {
+      throw new Error("MoonAgentic installe sa mise à jour : réessaie après le redémarrage.");
+    }
     const busy = this.busy.get(threadId);
     if (busy) throw new Error(busy);
     // From here the images are the thread's own; one that is missing stops the message.
@@ -3286,6 +3343,7 @@ export class Hub {
     clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
     clearInterval(this.sweepTimer);
+    this.app.close();
     this.quotas.close();
     this.scheduler.close();
     this.teams.close();

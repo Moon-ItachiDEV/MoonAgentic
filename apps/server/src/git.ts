@@ -34,7 +34,7 @@ const NETWORK_TIMEOUT_MS = 5 * 60_000;
  */
 export const LOCAL_TIMEOUT_MS = 2 * 60_000;
 
-function git(
+export function git(
   cwd: string,
   args: string[],
   env?: NodeJS.ProcessEnv,

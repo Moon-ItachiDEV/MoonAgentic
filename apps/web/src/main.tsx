@@ -38,6 +38,7 @@ import "./update.css";
 import "./plan.css";
 import "./team-tree.css";
 import "./pr-board.css";
+import "./app-update.css";
 import "./team-presets.css";
 import "./project-settings.css";
 import { StrictMode } from "react";

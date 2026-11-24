@@ -1,4 +1,5 @@
 import type {
+  AppInfo,
   Defaults,
   TeamPreset,
   AgentQuota,
@@ -65,6 +66,8 @@ export interface State {
   defaults: Defaults | null;
   /** The teams set up in the settings; null while the suggested ones stand. */
   teamPresets: TeamPreset[] | null;
+  /** MoonAgentic's own version and what it knows of a newer one. */
+  app: AppInfo | null;
   items: Record<string, Item[]>;
   /** What part of each of those timelines is held. */
   held: Record<string, Held>;
@@ -96,6 +99,7 @@ export function reduce(state: State, message: ServerMessage): State {
         pairedDevice: message.snapshot.pairedDevice ?? false,
         defaults: message.snapshot.defaults ?? null,
         teamPresets: message.snapshot.teamPresets ?? null,
+        app: message.snapshot.app ?? null,
         mcpSecretsError: message.snapshot.mcpSecretsError ?? null,
         items: keep(state.items),
         held: keep(state.held),
@@ -108,6 +112,8 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, favorites: message.favorites };
     case "defaults":
       return { ...state, defaults: message.defaults };
+    case "app":
+      return { ...state, app: message.app };
     case "teamPresets":
       return { ...state, teamPresets: message.presets };
     case "coordinatorSettings":
@@ -313,6 +319,7 @@ export const initialState: State = {
   pairedDevice: false,
   defaults: null,
   teamPresets: null,
+  app: null,
   items: {},
   held: {},
   reviews: {},
