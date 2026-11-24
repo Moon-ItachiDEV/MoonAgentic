@@ -4,6 +4,7 @@ import type {
   AgentQuota,
   CoordinatorSettings,
   AgentInfo,
+  FavoriteRef,
   Favorites,
   Item,
   McpServerInfo,
@@ -42,6 +43,8 @@ export interface State {
   ready: boolean;
   agents: AgentInfo[];
   favorites: Favorites;
+  /** The order of the favorites wheel, as the user set it. */
+  favoriteOrder: FavoriteRef[];
   coordinator: CoordinatorSettings;
   /** Permission requests waiting in every thread. */
   requests: PendingRequest[];
@@ -94,6 +97,7 @@ export function reduce(state: State, message: ServerMessage): State {
         ...message.snapshot,
         lockPin: message.snapshot.lockPin ?? false,
         pairedDevice: message.snapshot.pairedDevice ?? false,
+        favoriteOrder: message.snapshot.favoriteOrder ?? [],
         defaults: message.snapshot.defaults ?? null,
         teamPresets: message.snapshot.teamPresets ?? null,
         mcpSecretsError: message.snapshot.mcpSecretsError ?? null,
@@ -105,7 +109,11 @@ export function reduce(state: State, message: ServerMessage): State {
     case "agents":
       return { ...state, agents: message.agents };
     case "favorites":
-      return { ...state, favorites: message.favorites };
+      return {
+        ...state,
+        favorites: message.favorites,
+        favoriteOrder: message.order ?? state.favoriteOrder,
+      };
     case "defaults":
       return { ...state, defaults: message.defaults };
     case "teamPresets":
@@ -300,6 +308,7 @@ export const initialState: State = {
   ready: false,
   agents: [],
   favorites: {},
+  favoriteOrder: [],
   coordinator: { routes: {} },
   requests: [],
   questions: [],

@@ -41,6 +41,19 @@ describe("wheelEntries", () => {
     expect(entries.map((e) => e.model)).toEqual(["opus"]);
   });
 
+  it("follows the user's order across agents, then the favorites it does not name", () => {
+    const entries = wheelEntries(
+      [claude, codex],
+      { claude: ["opus", "sonnet"], codex: ["gpt"] },
+      { agent: claude, model: "opus" },
+      [
+        { agentId: "codex", model: "gpt" },
+        { agentId: "claude", model: "sonnet" },
+      ],
+    );
+    expect(entries.map((e) => e.model)).toEqual(["gpt", "sonnet", "opus"]);
+  });
+
   it("shows an agent without models by its default", () => {
     const entries = wheelEntries([codex], {}, { agent: codex, model: undefined });
     expect(entries).toEqual([{ agent: codex, model: undefined, name: "Modèle par défaut" }]);

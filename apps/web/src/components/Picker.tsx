@@ -6,7 +6,14 @@ import {
   type Favorites,
   type ModelChoice,
 } from "@moonagentic/protocol";
-import { type ReactNode, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { connection } from "../connection.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconBack, IconCheck, IconOrbit, IconStar, IconX } from "./icons.tsx";
@@ -51,6 +58,8 @@ export function Picker(props: {
   onClose: () => void;
 }) {
   const { agent, favorites } = props;
+  // The wheel's order, set in Réglages › Modèles.
+  const order = useSyncExternalStore(connection.subscribe, connection.getState).favoriteOrder;
   const quotas = useQuotas();
   const [view, setView] = useState<View>(props.start ?? "model");
   const [direction, setDirection] = useState<"fwd" | "back">("fwd");
@@ -120,7 +129,7 @@ export function Picker(props: {
           </button>,
         )}
         <Wheel
-          entries={wheelEntries(props.agents, favorites, { agent, model: props.model })}
+          entries={wheelEntries(props.agents, favorites, { agent, model: props.model }, order)}
           agent={agent}
           model={props.model}
           inThread={props.inThread}
