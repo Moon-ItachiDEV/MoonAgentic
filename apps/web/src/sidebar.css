@@ -178,12 +178,12 @@
   background: var(--hover);
   color: var(--fg);
 }
-.thr-row .fold-proj svg:last-child,
+.thr-row .fold-proj > svg:last-child,
 .thr-row .fold-team svg {
   color: var(--faint);
   transition: transform 0.2s var(--ease);
 }
-.thr-row.proj.open .fold-proj svg:last-child,
+.thr-row.proj.open .fold-proj > svg:last-child,
 .thr-row .fold-team.open svg {
   transform: rotate(90deg);
 }

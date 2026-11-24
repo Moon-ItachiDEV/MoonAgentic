@@ -250,6 +250,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "worktreeFiles":
     case "worktreeFile":
     case "projectBranches":
+    case "projectSetup":
     case "branchesDeleted":
     case "artifacts":
     case "artifactLink":

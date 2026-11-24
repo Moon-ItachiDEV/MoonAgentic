@@ -5,7 +5,7 @@ import { execFile } from "node:child_process";
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ProjectCommand, Skill } from "@moonagentic/protocol";
+import { MAX_SETUP_FILE, type ProjectCommand, type Skill } from "@moonagentic/protocol";
 import { GIT_QUIET } from "./git-own.ts";
 
 /** Beyond this many files, the listing stops: `@` then finds only what it saw. */
@@ -186,9 +186,22 @@ export function frontMatter(source: string): { fields: Record<string, string>; b
   for (const line of (match[1] ?? "").split(/\r?\n/)) {
     const field = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line);
     if (!field?.[1]) continue;
-    fields[field[1].toLowerCase()] = (field[2] ?? "").trim().replace(/^(["'])(.*)\1$/, "$2");
+    fields[field[1].toLowerCase()] = unquote((field[2] ?? "").trim());
   }
   return { fields, body: source.slice(match[0].length) };
+}
+
+/** A front matter value without its quotes; a double-quoted one may hold escapes. */
+function unquote(value: string): string {
+  if (/^".*"$/.test(value)) {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (typeof parsed === "string") return parsed;
+    } catch {
+      // read as it is below
+    }
+  }
+  return value.replace(/^(["'])(.*)\1$/, "$2");
 }
 
 export interface SkillRecord extends Skill {
@@ -197,7 +210,7 @@ export interface SkillRecord extends Skill {
 }
 
 /** Where agents keep skills inside a project; Antigravity's are the last two. */
-const PROJECT_SKILL_ROOTS = [
+export const PROJECT_SKILL_ROOTS = [
   ".claude/skills",
   ".agents/skills",
   ".codex/skills",
@@ -213,7 +226,7 @@ const USER_SKILL_ROOTS = [
   ".gemini/config/skills",
   ".gemini/antigravity-cli/skills",
 ];
-const MAX_SKILL_FILE = 256 * 1024;
+const MAX_SKILL_FILE = MAX_SETUP_FILE;
 
 /** Skills found in the project and in the user's home folder; the project's win on a name. */
 export function findSkills(dir: string, home: string): SkillRecord[] {
@@ -266,7 +279,7 @@ const firstLine = (body: string) =>
     .trim()
     .slice(0, 200);
 
-const COMMANDS_DIR = ".moonagentic/commands";
+export const COMMANDS_DIR = ".moonagentic/commands";
 
 /** The project's own commands: one Markdown file each, named after the command. */
 export function findProjectCommands(dir: string): ProjectCommand[] {

@@ -10,6 +10,32 @@ export {
   TEAM_ROLES,
   teamPresets,
 } from "./team-presets.ts";
+export {
+  applyRulings,
+  applyVotes,
+  REVIEW_JUDGE,
+  verdictOf,
+  normalPath,
+  REVIEW_SEVERITIES,
+  REVIEW_SLOTS,
+  reviewAtWork,
+  severityOf,
+  slotReviewer,
+  synthesize,
+  type PrReview,
+  type PrReviewer,
+  type PrReviewPhase,
+  type ReviewFinding,
+  type ReviewNote,
+  type ReviewPoint,
+  type ReviewSeverity,
+  type ReviewSlot,
+  type ReviewVerdict,
+  type ReviewVote,
+  type ReviewRuling,
+  type PrJudge,
+} from "./pr-review.ts";
+import { reviewAtWork, type PrReview } from "./pr-review.ts";
 
 // Zod builds faster checks with `new Function` when it can, and tries it as soon as a
 // schema is made. The web app's content security policy forbids that, so it is turned off
@@ -200,6 +226,63 @@ export interface Project {
    * the code is given. Its agents keep working.
    */
   locked?: boolean;
+  /** Shown in place of the folder: an emoji or one or two letters, set in its settings. */
+  icon?: string;
+  /** The tint of its icon, among {@link PROJECT_COLORS}. */
+  color?: ProjectColor;
+}
+
+/** The tints a project's icon can take; the web app gives each its shade in both themes. */
+export const PROJECT_COLORS = [
+  "moon",
+  "sky",
+  "mint",
+  "sun",
+  "coral",
+  "rose",
+  "violet",
+  "slate",
+] as const;
+export type ProjectColor = (typeof PROJECT_COLORS)[number];
+/** At most this many characters for a project's icon: an emoji with its modifiers fits. */
+export const MAX_PROJECT_ICON = 16;
+/** At most this many bytes for a setup file edited from the app (AGENTS.md, a skill…). */
+export const MAX_SETUP_FILE = 256 * 1024;
+
+/** A skill kept in the project, with its text, for its settings. */
+export interface ProjectSkill {
+  name: string;
+  description: string;
+  /** Its `SKILL.md`, relative to the project. */
+  path: string;
+  /** What follows its front matter. */
+  body: string;
+}
+
+/**
+ * What a project gives its agents, read from its folder for its settings: the shared
+ * instructions (`AGENTS.md`), whether Claude Code reads them too, its commands and skills.
+ */
+export interface ProjectSetup {
+  /** `AGENTS.md` at the project's root; empty while there is none. */
+  rules: {
+    text: string;
+    exists: boolean;
+    /** Over {@link MAX_SETUP_FILE}: shown nowhere and not written from the app. */
+    tooBig?: true;
+  };
+  /**
+   * `CLAUDE.md`, which Claude Code reads in place of `AGENTS.md`: missing, importing
+   * `AGENTS.md` (or a link to it), or a separate file.
+   */
+  claude: "missing" | "imports" | "separate";
+  commands: ProjectCommand[];
+  skills: ProjectSkill[];
+  /**
+   * Those of these files git sees as changed and not yet committed, in a git project: a
+   * thread on its own branch starts from the last commit, so it does not see them yet.
+   */
+  uncommitted?: string[];
 }
 
 /** A thread's own branch, checked out in a separate folder (a git worktree). */
@@ -495,6 +578,8 @@ export interface Thread {
   worksIn?: string;
   /** The team this thread leads. */
   team?: Team;
+  /** The review of a pull request by several agents this thread runs, set with « /revue ». */
+  prReview?: PrReview;
   /** Set when the last turn ended with an error. */
   error?: string;
   createdAt: number;
@@ -560,10 +645,16 @@ export function threadGroup(thread: Thread, members: readonly Thread[] = []): Th
   if (
     thread.status === "running" ||
     !!thread.held ||
-    (thread.team && TEAM_AT_WORK.includes(thread.team.phase))
+    (thread.team && TEAM_AT_WORK.includes(thread.team.phase)) ||
+    reviewAtWork(thread.prReview)
   )
     return "running";
-  if (thread.status === "error" || thread.team?.phase === "failed") return "waiting";
+  if (
+    thread.status === "error" ||
+    thread.team?.phase === "failed" ||
+    thread.prReview?.phase === "failed"
+  )
+    return "waiting";
   const pr = thread.pr;
   if (pr?.state === "open" && (pr.checks === "failed" || pr.conflicts || prReady(pr)))
     return "waiting";
@@ -899,6 +990,13 @@ export interface CoordinatorSettings {
   routes: Partial<Record<RouteKind, TeamMember>>;
   /** Kept from the last team the user started by hand. */
   team?: TeamSetup;
+  /**
+   * Kept from the last « /revue » the user started: one per maker, in the order of
+   * `REVIEW_SLOTS`, `null` for a maker the user left out.
+   */
+  review?: (TeamMember | null)[];
+  /** And its judge; `null` when the user chose none. */
+  reviewJudge?: TeamMember | null;
   /** Threads a coordinator runs at once, the others waiting in line; 3 when left out. */
   parallel?: number;
   /** Turns the whole server runs at once, coordinators or not; 4 when left out. */
@@ -1057,6 +1155,7 @@ export type ServerMessage =
   | { type: "project"; project: Project }
   | { type: "defaults"; defaults: Defaults }
   | { type: "teamPresets"; presets: TeamPreset[] | null }
+  | { type: "projectSetup"; requestId: string; projectId: string; setup: ProjectSetup }
   | { type: "thread"; thread: Thread }
   /** The thread was deleted, its timeline with it. */
   | { type: "threadRemoved"; threadId: string }
@@ -1232,6 +1331,30 @@ export type ServerMessage =
 const id = z.string().min(1).max(200);
 /** Who takes a role in a team: an agent, on one of its models or its own default. */
 const teamMember = z.object({ agentId: id, model: id.optional() }).strict();
+/** How many bytes a text takes in UTF-8. */
+export function utf8Bytes(text: string): number {
+  let bytes = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0)!;
+    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+/** A setup file's text, within {@link MAX_SETUP_FILE} bytes once in UTF-8. */
+const setupText = z
+  .string()
+  .max(MAX_SETUP_FILE)
+  .refine((t) => utf8Bytes(t) <= MAX_SETUP_FILE, "Texte trop long.");
+/** A command's or a skill's name: lower case, digits, `-` and `_`, as a file name too. */
+const setupName = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "Un nom en minuscules, chiffres, - ou _.");
+/** A description: one line. */
+const setupLine = z
+  .string()
+  .trim()
+  .max(500)
+  .regex(/^[^\r\n]*$/, "Une seule ligne.");
 /** An item's number in its timeline, or a count of changes. */
 const seq = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const text = z.string().min(1).max(200_000);
@@ -1482,6 +1605,38 @@ export const ClientMessage = z.discriminatedUnion("type", [
   /** Stops the team, its lead and every coder at work. */
   z.object({ type: z.literal("team.stop"), threadId: id }),
   /**
+   * Has a pull request of the project's GitHub repository read by several agents at once,
+   * each on its own thread, and their findings put together. `pr` is its number or address.
+   */
+  z.object({
+    type: z.literal("review.start"),
+    requestId: id,
+    projectId: id,
+    pr: z.string().trim().min(1).max(300),
+    reviewers: z
+      .array(z.object({ agentId: id, model: id.optional() }))
+      .min(1)
+      .max(3),
+    /** Settles the points still disputed after the reviewers weighed each other's. */
+    judge: z.object({ agentId: id, model: id.optional() }).optional(),
+    /** What each maker's menu holds, `null` for nobody: kept for the next review. */
+    slots: z
+      .array(z.object({ agentId: id, model: id.optional() }).nullable())
+      .max(3)
+      .optional(),
+    /** Every command of the reviewers and the judge waits for the user's yes. */
+    supervised: z.boolean().optional(),
+  }),
+  /** Stops every reviewer still reading. */
+  z.object({ type: z.literal("review.stop"), threadId: id }),
+  /** Starts a reviewer that failed or was stopped again, in its own thread. */
+  z.object({
+    type: z.literal("review.retry"),
+    requestId: id,
+    threadId: id,
+    index: z.number().int().min(0).max(2),
+  }),
+  /**
    * Starts a piece that is blocked, failed or stopped again, its tries counted from zero;
    * without a piece, the merge that stopped.
    */
@@ -1604,6 +1759,68 @@ export const ClientMessage = z.discriminatedUnion("type", [
       .max(MAX_TEAM_PRESETS)
       .refine((list) => new Set(list.map((p) => p.id)).size === list.length, "Ids en double.")
       .nullable(),
+  }),
+  /** Its icon and tint in MoonAgentic; null puts back the folder, or the usual tint. */
+  z.object({
+    type: z.literal("project.setLook"),
+    projectId: id,
+    icon: z
+      .string()
+      .trim()
+      .min(1)
+      .max(MAX_PROJECT_ICON)
+      // One glyph or a few letters: no spaces, no control characters.
+      .regex(/^[^\s\p{Cc}]+$/u)
+      .nullable(),
+    color: z.enum(PROJECT_COLORS).nullable(),
+  }),
+  /** What the project gives its agents, read from its folder: answered with projectSetup. */
+  z.object({ type: z.literal("project.setup"), requestId: id, projectId: id }),
+  /** Writes `AGENTS.md` at the project's root. */
+  z.object({
+    type: z.literal("project.saveRules"),
+    requestId: id,
+    projectId: id,
+    text: setupText,
+  }),
+  /** Has Claude Code read `AGENTS.md` too: `CLAUDE.md` imports it, made if need be. */
+  z.object({ type: z.literal("project.linkClaude"), requestId: id, projectId: id }),
+  /** Writes a `/` command, `.moonagentic/commands/<name>.md`; `previous`: its old name. */
+  z.object({
+    type: z.literal("project.saveCommand"),
+    requestId: id,
+    projectId: id,
+    name: setupName,
+    previous: setupName.optional(),
+    description: setupLine,
+    template: setupText.refine((t) => t.trim().length > 0),
+  }),
+  z.object({
+    type: z.literal("project.removeCommand"),
+    requestId: id,
+    projectId: id,
+    name: setupName,
+  }),
+  /**
+   * Writes a skill: the one at `path` when given (one of the project's), else a new one in
+   * `.agents/skills/<name>/SKILL.md`.
+   */
+  z.object({
+    type: z.literal("project.saveSkill"),
+    requestId: id,
+    projectId: id,
+    path: z.string().max(300).optional(),
+    // As agents name them; a new one also needs a lower-case name, its folder's.
+    name: z.string().regex(/^[A-Za-z0-9][\w.-]{0,63}$/, "Un nom sans espace."),
+    description: setupLine.refine((d) => d.length > 0, "Décris-la en une ligne."),
+    body: setupText,
+  }),
+  /** Removes a project skill's `SKILL.md`; its folder goes too when nothing else is in it. */
+  z.object({
+    type: z.literal("project.removeSkill"),
+    requestId: id,
+    projectId: id,
+    path: z.string().max(300),
   }),
   /** Sets the code projects are locked with, or changes it: then the current one is needed. */
   z.object({

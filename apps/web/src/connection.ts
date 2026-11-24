@@ -170,15 +170,24 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
                                 ? Extract<ServerMessage, { type: "worktreeFile" }>
                                 : T extends "project.branches"
                                   ? Extract<ServerMessage, { type: "projectBranches" }>
-                                  : T extends "project.deleteBranches"
-                                    ? Extract<ServerMessage, { type: "branchesDeleted" }>
-                                    : T extends "artifacts.list"
-                                      ? Extract<ServerMessage, { type: "artifacts" }>
-                                      : T extends "artifacts.open"
-                                        ? Extract<ServerMessage, { type: "artifactLink" }>
-                                        : T extends "push.state"
-                                          ? Extract<ServerMessage, { type: "pushState" }>
-                                          : ServerMessage;
+                                  : T extends
+                                        | "project.setup"
+                                        | "project.saveRules"
+                                        | "project.linkClaude"
+                                        | "project.saveCommand"
+                                        | "project.removeCommand"
+                                        | "project.saveSkill"
+                                        | "project.removeSkill"
+                                    ? Extract<ServerMessage, { type: "projectSetup" }>
+                                    : T extends "project.deleteBranches"
+                                      ? Extract<ServerMessage, { type: "branchesDeleted" }>
+                                      : T extends "artifacts.list"
+                                        ? Extract<ServerMessage, { type: "artifacts" }>
+                                        : T extends "artifacts.open"
+                                          ? Extract<ServerMessage, { type: "artifactLink" }>
+                                          : T extends "push.state"
+                                            ? Extract<ServerMessage, { type: "pushState" }>
+                                            : ServerMessage;
 
 export class Connection {
   private state: State = initialState;

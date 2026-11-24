@@ -1,6 +1,15 @@
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import { COMPUTER_ACTOR, ProjectLocks } from "./locks.ts";
+import {
+  linkClaude,
+  readSetup,
+  removeCommand,
+  removeSkill,
+  saveCommand,
+  saveRules,
+  saveSkill,
+} from "./project-setup.ts";
 import { Push, type PushSend } from "./push.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
@@ -61,9 +70,11 @@ import {
   nothingPast,
   unfinishedMerge,
   ensureWorktree,
+  fetchPullRequest,
   forkPoint,
   githubRemote,
   removeWorktree,
+  deleteBranch,
   worktreeStart,
   branchName,
   dropCheckpoints,
@@ -97,7 +108,8 @@ import { cardText, Planner } from "./planner.ts";
 import { COORDINATOR_TOOLS } from "./coordinator-tools.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
-import { shipTarget, Teams, teamStatus } from "./team.ts";
+import { diffText, shipTarget, Teams, teamStatus } from "./team.ts";
+import { PrReviews, REVIEW_DIFF_LIMIT, reviewPrompt, reviewStatus } from "./pr-review.ts";
 import { mcpServersFor, RESERVED_MCP_NAME } from "./mcp.ts";
 import { type QuotaReader, Quotas } from "./quotas.ts";
 import { formContent, formQuestions, toolQuestions, type FormQuestions } from "./questions.ts";
@@ -200,6 +212,9 @@ export interface HubOptions {
 const PINNED_PROJECTS = "pinnedProjects";
 /** The user's defaults for a new thread, the same on every device. */
 const DEFAULTS = "defaults";
+/** Each project's icon and tint, as set in its settings. */
+const PROJECT_LOOKS = "projectLooks";
+type ProjectLook = Pick<Project, "icon" | "color">;
 
 /** The level a coordinator starts on, as agents name it. */
 const LOW_EFFORT = /^(low|bas)$/i;
@@ -256,6 +271,7 @@ export const COORDINATOR_ALLOWED = new Set(["read", "search", "think"]);
 export const REVIEWER_ALLOWED = new Set(["read", "search", "think", "execute"]);
 
 const TEAM_AT_WORK = "Cette équipe travaille encore : arrête-la d'abord.";
+const REVIEW_AT_WORK = "Cette revue est en cours : arrête-la d'abord.";
 
 /** A step back under way, kept until it is done so a stop in the middle is finished later. */
 type PendingRestore = { itemId: string; tree: string };
@@ -474,6 +490,15 @@ export class Hub {
       },
       lastReply: (id) => this.lastReply(id),
     });
+    this.reviews = new PrReviews({
+      thread: (id) => this.store.getThread(id),
+      threads: () => this.store.listThreads(),
+      createThread: (input) => this.createThread({ ...input, byTeam: true }),
+      send: (id, text) => this.send(id, text, undefined, true),
+      cancel: (id) => this.cancel(id),
+      setReview: (id, prReview) => this.updateThread(id, { prReview }),
+      lastReply: (id) => this.lastReply(id),
+    });
     this.coordinators = new Coordinators(store, {
       catalog: this.catalog,
       broadcast: (m) => this.broadcast(m),
@@ -501,6 +526,7 @@ export class Hub {
     // Messages the index does not have yet: all of them, the first time after an update.
     this.indexSearchSoon();
     this.teams.recover();
+    this.reviews.recover();
     // Once the threads say what they really are: a turn the last stop cut short is over,
     // and its card must not stay at work.
     this.planner.syncThreads();
@@ -531,6 +557,8 @@ export class Hub {
   readonly scheduler: Scheduler;
   /** Teams of agents, each run from its lead's thread. */
   readonly teams: Teams;
+  /** Reviews of pull requests by several agents, each run from its own thread. */
+  readonly reviews: PrReviews;
 
   /** Resolves once the steps back that a stop interrupted are finished. */
   readonly recovered: Promise<void>;
@@ -992,6 +1020,66 @@ export class Hub {
         this.store.setSetting(TEAM_PRESETS_SETTING, message.presets);
         this.broadcast({ type: "teamPresets", presets: message.presets });
         return;
+      case "project.setLook": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        const looks = Object.fromEntries(
+          Object.entries(this.store.getSetting<Record<string, ProjectLook>>(PROJECT_LOOKS, {}))
+            // Projects removed since are dropped on the way.
+            .filter(([p]) => p !== project.id && this.store.getProject(p)),
+        );
+        const look: ProjectLook = {
+          ...(message.icon ? { icon: message.icon } : {}),
+          ...(message.color ? { color: message.color } : {}),
+        };
+        this.store.setSetting(
+          PROJECT_LOOKS,
+          look.icon || look.color ? { ...looks, [project.id]: look } : looks,
+        );
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
+      case "project.setup":
+      case "project.saveRules":
+      case "project.linkClaude":
+      case "project.saveCommand":
+      case "project.removeCommand":
+      case "project.saveSkill":
+      case "project.removeSkill": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        if (this.locks.isLocked(project.id)) {
+          throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+        }
+        const dir = project.path;
+        switch (message.type) {
+          case "project.saveRules":
+            saveRules(dir, message.text);
+            break;
+          case "project.linkClaude":
+            linkClaude(dir);
+            break;
+          case "project.saveCommand":
+            saveCommand(dir, message);
+            break;
+          case "project.removeCommand":
+            removeCommand(dir, message.name);
+            break;
+          case "project.saveSkill":
+            saveSkill(dir, message);
+            break;
+          case "project.removeSkill":
+            removeSkill(dir, message.path);
+            break;
+        }
+        client.send({
+          type: "projectSetup",
+          requestId: message.requestId,
+          projectId: project.id,
+          setup: await readSetup(dir, !!this.withGit(project).git),
+        });
+        return;
+      }
       case "lock.setPin":
         this.locks.setPin(message.pin, message.current, COMPUTER_ACTOR);
         this.sendSnapshots();
@@ -1133,6 +1221,32 @@ export class Hub {
       }
       case "team.stop":
         await this.teams.stop(message.threadId);
+        return;
+      case "review.start": {
+        const id = this.startPrReview(message);
+        this.coordinators.setCoordinatorSettings({
+          ...this.coordinators.coordinatorSettings(),
+          review: (message.slots ?? message.reviewers).map((r) =>
+            r ? { agentId: r.agentId, ...(r.model ? { model: r.model } : {}) } : null,
+          ),
+          reviewJudge: message.judge
+            ? {
+                agentId: message.judge.agentId,
+                ...(message.judge.model ? { model: message.judge.model } : {}),
+              }
+            : null,
+        });
+        watch(client, id);
+        client.send({ type: "created", requestId: message.requestId, id });
+        client.send(this.opening(id));
+        return;
+      }
+      case "review.stop":
+        await this.reviews.stop(message.threadId);
+        return;
+      case "review.retry":
+        this.reviews.retry(message.threadId, message.index);
+        client.send({ type: "done", requestId: message.requestId });
         return;
       case "team.ship":
         await this.teams.ship(message.threadId);
@@ -1573,6 +1687,152 @@ export class Hub {
     });
   }
 
+  /**
+   * Starts « /revue » on a pull request of the project's GitHub repository: a thread of its
+   * own, whose folder gets the pull request's last commit, then one reviewer thread per
+   * agent, all reading in that folder at once. Returns the review's thread at once; what
+   * goes wrong while the pull request is fetched is kept on it.
+   */
+  startPrReview(input: {
+    projectId: string;
+    pr: string;
+    reviewers: { agentId: string; model?: string | undefined }[];
+    judge?: { agentId: string; model?: string | undefined } | undefined;
+    supervised?: boolean | undefined;
+  }): string {
+    const project = this.store.getProject(input.projectId);
+    if (!project) throw new Error("Projet introuvable.");
+    if (!this.withGit(project).git) {
+      throw new Error("Une revue a besoin d'un dépôt git relié à GitHub.");
+    }
+    const at = parsePullRequestUrl(input.pr);
+    const typed = /^#?(\d{1,9})$/.exec(input.pr.trim());
+    const number = at?.number ?? (typed ? Number(typed[1]) : undefined);
+    if (!number) {
+      throw new Error("Donne le numéro de la PR, ou son adresse : /revue 113.");
+    }
+    const reviewers = input.reviewers.map((r) => {
+      this.agents.launch(r.agentId);
+      return {
+        agentId: r.agentId,
+        ...(r.model ? { model: r.model } : {}),
+        status: "waiting" as const,
+      };
+    });
+    const first = reviewers[0]!;
+    if (input.judge) this.agents.launch(input.judge.agentId);
+    const id = this.createThread({
+      projectId: project.id,
+      // Its own agent answers what the user asks about the review, given what was found.
+      agentId: first.agentId,
+      ...(first.model ? { model: first.model } : {}),
+      permissionMode: "supervised",
+      isolated: false,
+      text: "",
+      title: `Revue de la PR #${number}`,
+    });
+    this.updateThread(id, {
+      prReview: {
+        phase: "preparing",
+        repo: at?.repo ?? "",
+        number,
+        reviewers,
+        ...(input.judge
+          ? {
+              judge: {
+                agentId: input.judge.agentId,
+                ...(input.judge.model ? { model: input.judge.model } : {}),
+              },
+            }
+          : {}),
+        ...(input.supervised ? { supervised: true as const } : {}),
+        startedAt: Date.now(),
+      },
+    });
+    const step = this.prepareReview(id, project, number, at?.repo).catch((error: unknown) => {
+      const review = this.store.getThread(id)?.prReview;
+      if (!review || this.closed) return;
+      this.updateThread(id, {
+        prReview: {
+          ...review,
+          phase: "failed",
+          endedAt: Date.now(),
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+    });
+    this.steps.add(step);
+    void step.finally(() => this.steps.delete(step));
+    return id;
+  }
+
+  /** Fetches the pull request into a folder of the review's own, then starts its reviewers. */
+  private async prepareReview(
+    threadId: string,
+    project: Project,
+    number: number,
+    asked: string | undefined,
+  ): Promise<void> {
+    const repo = await githubRemote(project.path);
+    if (!repo) throw new Error("Ce projet n'est pas relié à un dépôt GitHub.");
+    if (asked && asked.toLowerCase() !== repo.toLowerCase()) {
+      throw new Error(`Cette PR est dans ${asked}, mais ce projet est ${repo}.`);
+    }
+    const github = this.pullRequests();
+    if (!github) throw new Error("GitHub CLI (gh) est requis pour lire la PR.");
+    const pr = await github.find(repo, String(number));
+    if (!pr) throw new Error(`La PR #${number} n'existe pas dans ${repo}.`);
+    const { head, mergeBase } = await fetchPullRequest(project.path, number, pr.head, pr.base);
+    if (this.closed) return;
+    const start = await worktreeStart(project.path);
+    // The folder starts at the pull request's last commit; its changes are counted from
+    // where it leaves its base, so the review panel shows the pull request.
+    const workspace: Workspace = {
+      branch: branchName(`revue-pr-${number}`, threadId),
+      path: path.join(this.worktreesDir, threadId.slice(0, 8)),
+      base: mergeBase,
+      ...(start.subdir ? { subdir: start.subdir } : {}),
+    };
+    await ensureWorktree(project.path, workspace.path, workspace.branch, head);
+    // Until the thread keeps it, the folder and its branch are nobody's: dropped when the
+    // review was stopped, deleted or failed meanwhile, or they would stay on disk.
+    const drop = async () => {
+      await removeWorktree(project.path, workspace.path).catch(() => undefined);
+      await deleteBranch(project.path, workspace.branch).catch(() => undefined);
+    };
+    let changes: Awaited<ReturnType<typeof reviewChanges>>;
+    try {
+      changes = await reviewChanges(workspace.path, mergeBase);
+    } catch (error) {
+      await drop();
+      throw error;
+    }
+    const review = this.store.getThread(threadId)?.prReview;
+    if (this.closed || !review || review.phase !== "preparing") return drop();
+    this.updateThread(threadId, {
+      workspace,
+      prReview: {
+        ...review,
+        repo,
+        title: pr.title,
+        url: pr.url,
+        head,
+        base: pr.base,
+      },
+    });
+    const prompt = reviewPrompt({
+      repo,
+      number,
+      title: pr.title,
+      url: pr.url,
+      base: pr.base,
+      head,
+      diff: diffText(changes, REVIEW_DIFF_LIMIT),
+      others: review.reviewers.length - 1,
+    });
+    this.reviews.start(threadId, prompt);
+  }
+
   /** How coordinators route work, as set in the settings. */
   coordinatorSettings(): CoordinatorSettings {
     return this.coordinators.coordinatorSettings();
@@ -1604,6 +1864,7 @@ export class Hub {
    */
   private leadContext(threadId: string): string | undefined {
     const thread = this.store.getThread(threadId);
+    if (thread?.prReview && !thread.parentId) return reviewStatus(thread.prReview);
     if (thread?.role !== "lead" || !thread.team) return undefined;
     return teamStatus(thread.team, Date.now(), (id) => this.lastReply(id));
   }
@@ -2000,6 +2261,11 @@ export class Hub {
       } catch (error) {
         console.error("Équipe :", error);
       }
+      try {
+        if (!this.closed) this.reviews.turnEnded(threadId, cancelled);
+      } catch (error) {
+        console.error("Revue :", error);
+      }
       // What the user said with a refusal is their next message, now that the agent can
       // take one. A turn they stopped starts nothing, so the words go with it.
       const followUp = this.followUps.get(threadId);
@@ -2278,6 +2544,8 @@ export class Hub {
     const workspace = thread.workspace;
     if (!workspace?.base)
       throw new Error("Ce fil travaille dans le dossier du projet, sans branche à lui.");
+    if (thread.prReview)
+      throw new Error("Cette discussion relit une PR : elle n'a rien à pousser.");
     return this.exclusive(threadId, "Attends la fin de l'envoi de la branche.", async () => {
       const result = await ship(workspace.path, {
         branch: workspace.branch,
@@ -2403,7 +2671,7 @@ export class Hub {
     const target = lead ?? thread;
     if (target.archived || thread.archived) return;
     const atWork = (id: string) => this.turns.has(id) || this.busy.has(id);
-    if (atWork(threadId) || atWork(target.id) || this.teams.isActive(target.id)) return;
+    if (atWork(threadId) || atWork(target.id) || this.groupActive(target.id)) return;
     const path = thread.workspace?.path;
     if (!path || !existsSync(path) || !(await nothingPast(path, info.head))) return;
     await this.setArchived(target.id, true).catch((error) =>
@@ -2572,11 +2840,21 @@ export class Hub {
       throw new Error(
         "Le coordinateur ne se résout pas : supprime sa conversation pour repartir de zéro.",
       );
-    if (archived && this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
+    if (archived) this.refuseGroupAtWork(threadId);
     // A team goes to the archive whole, and comes back whole: never its lead alone.
     const members = this.teamMembers(threadId);
     const order = archived ? [...members, threadId] : [threadId, ...members.reverse()];
     for (const id of order) await this.setOneArchived(id, archived);
+  }
+
+  /** Whether the thread runs a team or a review still at work, or is one of its threads. */
+  private groupActive(threadId: string): boolean {
+    return this.teams.isActive(threadId) || this.reviews.isActive(threadId);
+  }
+
+  private refuseGroupAtWork(threadId: string): void {
+    if (this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
+    if (this.reviews.isActive(threadId)) throw new Error(REVIEW_AT_WORK);
   }
 
   /**
@@ -2637,7 +2915,7 @@ export class Hub {
           ? "Arrête d'abord les agents de cette équipe."
           : "Arrête d'abord l'agent de ce fil.",
       );
-    if (this.teams.isActive(threadId)) throw new Error(TEAM_AT_WORK);
+    this.refuseGroupAtWork(threadId);
     for (const id of [...members, threadId]) await this.deleteOneThread(id);
   }
 
@@ -2673,7 +2951,7 @@ export class Hub {
       throw new Error("Ce projet est déjà en cours de retrait.");
     const threads = this.store.listThreads().filter((t) => t.projectId === projectId);
     if (
-      threads.some((t) => this.turns.has(t.id) || this.busy.has(t.id) || this.teams.isActive(t.id))
+      threads.some((t) => this.turns.has(t.id) || this.busy.has(t.id) || this.groupActive(t.id))
     ) {
       throw new Error("Un fil de ce projet travaille encore : arrête-le d'abord.");
     }
@@ -2942,6 +3220,7 @@ export class Hub {
     this.quotas.close();
     this.scheduler.close();
     this.teams.close();
+    this.reviews.close();
     this.pool.clearTimers();
     for (const timer of this.forceStops.values()) clearTimeout(timer);
     this.forceStops.clear();
@@ -3200,12 +3479,15 @@ export class Hub {
     }
     const pinned = this.store.getSetting<string[]>(PINNED_PROJECTS, []).includes(project.id);
     const locked = this.locks.isLocked(project.id);
-    return git || pinned || locked
+    const look = this.store.getSetting<Record<string, ProjectLook>>(PROJECT_LOOKS, {})[project.id];
+    return git || pinned || locked || look
       ? {
           ...project,
           ...(git ? { git } : {}),
           ...(pinned ? { pinned } : {}),
           ...(locked ? { locked } : {}),
+          ...(look?.icon ? { icon: look.icon } : {}),
+          ...(look?.color ? { color: look.color } : {}),
         }
       : project;
   }

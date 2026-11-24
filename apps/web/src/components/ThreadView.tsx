@@ -33,6 +33,7 @@ import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MessageImages } from "./MessageImages.tsx";
 import { TeamCard } from "./TeamCard.tsx";
+import { ReviewCard } from "./ReviewCard.tsx";
 import { TeamStrip } from "./TeamStrip.tsx";
 import { withoutTeamJson } from "../team-json.ts";
 import { isTeamThread, teamFeed } from "../team-feed.ts";
@@ -46,6 +47,7 @@ import {
 import { StateGlyph } from "./StateGlyph.tsx";
 import { Mascot } from "./Mascot.tsx";
 import { mascotExpression } from "../mascot.ts";
+import { speakerName } from "../speaker.ts";
 import type { GlyphKind } from "../glyphs.ts";
 
 /** The working line's verb, when the agent's name stands before it. */
@@ -375,9 +377,20 @@ function Conversation({
             onOpenThread={onOpenThread}
           />
         )}
+        {thread.prReview && (
+          <ReviewCard
+            thread={thread}
+            review={thread.prReview}
+            threads={threads}
+            agents={agents}
+            onOpenThread={onOpenThread}
+          />
+        )}
         {lead && (
           <button className="team-parent" onClick={() => onOpenThread(lead.id)}>
-            Sous-tâche de l'équipe « {lead.title.replace(/^Équipe : /, "")} »
+            {lead.prReview
+              ? `Relecteur de la « ${lead.title} »`
+              : `Sous-tâche de l'équipe « ${lead.title.replace(/^Équipe : /, "")} »`}
           </button>
         )}
         {earlier > 0 && (
@@ -434,7 +447,8 @@ function Conversation({
               <StateGlyph kind={lastGlyph} size={18} />
             )}
             <span className="shimmer">
-              {agent?.name ?? "L'agent"} {WORKING_VERB[lastGlyph] ?? "travaille…"}
+              {agent ? speakerName(agent, thread) : "L'agent"}{" "}
+              {WORKING_VERB[lastGlyph] ?? "travaille…"}
             </span>
           </div>
         )}
@@ -598,7 +612,7 @@ const FeedItem = memo(function FeedItem({
           {showBy && (
             <div className="by">
               <AgentBadge agent={agent} small />
-              {agent?.name ?? "Agent retiré"}
+              {speakerName(agent, thread)}
             </div>
           )}
           {/* The team card shows the plan; its raw JSON is for the server only. */}
