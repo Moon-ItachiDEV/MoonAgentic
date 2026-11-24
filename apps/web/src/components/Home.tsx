@@ -4,6 +4,8 @@ import { isDiscussionsProject } from "../default-models.ts";
 import { mcpCount } from "../mcp-scope.ts";
 import { MoonMark } from "./MoonMark.tsx";
 import { Overview } from "./Overview.tsx";
+import { updateShown } from "../app-update.ts";
+import { AppUpdateHomePill } from "./AppUpdatePill.tsx";
 
 /** « Bonsoir » from 18 h until the small hours, « Bonjour » the rest of the day. */
 export const greeting = (hour: number) => (hour >= 18 || hour < 5 ? "Bonsoir" : "Bonjour");
@@ -59,6 +61,13 @@ export function Home({
                 </span>
               </>
             )}
+          </div>
+        )}
+        {/* Without the overview, the pill of a newer version still shows: on a phone, the
+            side bar is folded away. */}
+        {!(withOverview && overview.shown) && updateShown(state.app) && (
+          <div className="ov-pills apu-home">
+            <AppUpdateHomePill />
           </div>
         )}
         {withOverview &&

@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalSt
 import { Composer as PlainComposer, useNarrow } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
+import { AppUpdateHostOnDemand } from "./components/AppUpdatePill.tsx";
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Artifacts } from "./components/Artifacts.tsx";
 import { Home } from "./components/Home.tsx";
@@ -1111,6 +1112,7 @@ export function App() {
         />
       </Presence>
       <LockSheet />
+      <AppUpdateHostOnDemand />
       <Presence show={!!confirm}>
         {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
       </Presence>

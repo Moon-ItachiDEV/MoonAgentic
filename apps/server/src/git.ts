@@ -52,7 +52,7 @@ function gitSubcommand(args: string[]): string {
   return "git";
 }
 
-function git(
+export function git(
   cwd: string,
   args: string[],
   env?: NodeJS.ProcessEnv,

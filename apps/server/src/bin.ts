@@ -15,6 +15,7 @@ if (values.dev) {
     script,
     args: process.argv.slice(2),
     logDir: path.join(path.resolve(values["data-dir"]), "logs"),
+    relay: !!process.send,
   });
   process.on("SIGINT", () => supervisor.stop());
   process.on("SIGTERM", () => supervisor.stop());

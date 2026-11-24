@@ -57,6 +57,8 @@ export interface ServerProcessOptions {
   /** Read at each start, so that a PATH found later (see shell-path.ts) reaches the server. */
   env: () => NodeJS.ProcessEnv;
   onState: (state: ServerState) => void;
+  /** What the server says to the shell: the version it found, an install to run. */
+  onMessage?: (message: unknown) => void;
   platform?: NodeJS.Platform;
 }
 
@@ -116,6 +118,12 @@ export class ServerProcess {
     this.set({ kind: "stopped" });
   }
 
+  /** Says something to the server, when one runs; lost otherwise, as it asks again at start. */
+  send(message: object): void {
+    const child = this.child;
+    if (child?.connected) child.send(message, undefined, undefined, () => undefined);
+  }
+
   async restart(): Promise<void> {
     const stopped = this.stop();
     const stops = this.stops;
@@ -137,11 +145,12 @@ export class ServerProcess {
     const startedAt = Date.now();
     const child = spawn(this.options.command, [this.options.script, ...this.options.args], {
       env: this.options.env(),
-      // The channel carries no message: closing it asks the launcher to stop.
+      // Closing the channel asks the launcher to stop; it also carries the server's messages.
       stdio: ["ignore", "pipe", "pipe", "ipc"],
       windowsHide: true,
     });
     this.child = child;
+    child.on("message", (message) => this.options.onMessage?.(message));
     const lines = (stream: NodeJS.ReadableStream | null) => {
       let rest = "";
       stream?.on("data", (chunk: Buffer) => {

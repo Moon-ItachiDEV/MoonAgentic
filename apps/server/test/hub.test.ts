@@ -851,8 +851,43 @@ describe("Hub with the demo agent", () => {
     hub.toggleFavorite("demo", "precis", false);
 
     expect(hub.snapshot().favorites).toEqual({ demo: ["rapide"] });
-    expect(client.messages.at(-1)).toEqual({ type: "favorites", favorites: { demo: ["rapide"] } });
+    expect(client.messages.at(-1)).toEqual({
+      type: "favorites",
+      favorites: { demo: ["rapide"] },
+      order: [{ agentId: "demo", model: "rapide" }],
+    });
     expect(() => hub.toggleFavorite("__proto__", "x", true)).toThrow("Agent inconnu");
+  });
+
+  it("keeps the user's order of the favorites wheel, across agents", () => {
+    const { hub, client } = setup();
+    hub.toggleFavorite("demo", "rapide", true);
+    hub.toggleFavorite("hermes", "h4", true);
+    hub.toggleFavorite("demo", "precis", true);
+    // New favorites join the end, in the order they were starred.
+    expect(hub.snapshot().favoriteOrder).toEqual([
+      { agentId: "demo", model: "rapide" },
+      { agentId: "hermes", model: "h4" },
+      { agentId: "demo", model: "precis" },
+    ]);
+
+    // A reorder that names only some, or a model that is no favorite, keeps every favorite once.
+    hub.reorderFavorites([
+      { agentId: "demo", model: "precis" },
+      { agentId: "demo", model: "inconnu" },
+    ]);
+    const order = [
+      { agentId: "demo", model: "precis" },
+      { agentId: "demo", model: "rapide" },
+      { agentId: "hermes", model: "h4" },
+    ];
+    expect(hub.snapshot().favoriteOrder).toEqual(order);
+    expect(client.messages.at(-1)).toMatchObject({ type: "favorites", order });
+
+    // Unstarring takes it out of the order; starring it again puts it last.
+    hub.toggleFavorite("demo", "precis", false);
+    hub.toggleFavorite("demo", "precis", true);
+    expect(hub.snapshot().favoriteOrder?.at(-1)).toEqual({ agentId: "demo", model: "precis" });
   });
 
   it("gives Hermes and the user's Hermes bots their moon on every device, no one else", () => {

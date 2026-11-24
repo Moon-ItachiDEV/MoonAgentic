@@ -1,6 +1,15 @@
 import { z } from "zod";
 
 export type { PairedDevice, RemoteAccess, RemoteAddress } from "./remote.ts";
+export {
+  type AppInfo,
+  type AppKind,
+  type AppUpdate,
+  MAX_UPDATE_NOTES,
+  UPDATE_EVERY_MS,
+  type UpdateNote,
+} from "./app-update.ts";
+import type { AppInfo } from "./app-update.ts";
 export { type Notice, noticesFor, settledTags, waitingTag } from "./notices.ts";
 export {
   defaultTeam,
@@ -866,6 +875,34 @@ export type ItemKind = Item["kind"];
 /** Favorite model ids per agent, shared by every device. */
 export type Favorites = Record<AgentId, string[]>;
 
+/** One favorite model, as placed in the user's order of the favorites wheel. */
+export interface FavoriteRef {
+  agentId: AgentId;
+  model: string;
+}
+
+/**
+ * Every favorite in the user's order: the ones the order names first, as it names them, then
+ * the ones it does not name yet (starred elsewhere, or saved before there was an order), agent
+ * by agent. Refs to a model that is no longer a favorite are left out.
+ */
+export function orderedFavorites(favorites: Favorites, order: FavoriteRef[] = []): FavoriteRef[] {
+  const seen = new Set<string>();
+  const out: FavoriteRef[] = [];
+  const add = (agentId: string, model: string) => {
+    const key = `${agentId}\u0000${model}`;
+    if (seen.has(key) || !Object.hasOwn(favorites, agentId)) return;
+    if (!(favorites[agentId] ?? []).includes(model)) return;
+    seen.add(key);
+    out.push({ agentId, model });
+  };
+  for (const ref of order) add(ref.agentId, ref.model);
+  for (const [agentId, models] of Object.entries(favorites)) {
+    for (const model of models) add(agentId, model);
+  }
+  return out;
+}
+
 export const SCHEDULE_REPEATS = ["once", "hourly", "daily", "weekdays", "weekly"] as const;
 export type ScheduleRepeat = (typeof SCHEDULE_REPEATS)[number];
 
@@ -1073,6 +1110,8 @@ export interface AgentQuota {
 export interface Snapshot {
   coordinator: CoordinatorSettings;
   favorites: Favorites;
+  /** The order of the favorites wheel, as the user set it (see `orderedFavorites`). */
+  favoriteOrder?: FavoriteRef[];
   requests: PendingRequest[];
   /** Questions agents hold their turn on, in every thread. */
   questions: PendingQuestion[];
@@ -1093,6 +1132,8 @@ export interface Snapshot {
   defaults?: Defaults;
   /** The teams the user set up in the settings; none until edited once. */
   teamPresets?: TeamPreset[];
+  /** This MoonAgentic's version and what it knows of a newer one. */
+  app?: AppInfo;
 }
 
 /** What a new thread starts with unless chosen otherwise, kept by the server for every device. */
@@ -1169,7 +1210,7 @@ export interface Artifact {
 export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "agents"; agents: AgentInfo[] }
-  | { type: "favorites"; favorites: Favorites }
+  | { type: "favorites"; favorites: Favorites; order?: FavoriteRef[] }
   | { type: "coordinatorSettings"; settings: CoordinatorSettings }
   /** Every permission request still waiting, after one is added or answered. */
   | { type: "requests"; requests: PendingRequest[] }
@@ -1178,6 +1219,8 @@ export type ServerMessage =
   | { type: "mcpServers"; servers: McpServerInfo[]; error?: string }
   | { type: "project"; project: Project }
   | { type: "defaults"; defaults: Defaults }
+  /** The app's version, settings or update changed. */
+  | { type: "app"; app: AppInfo }
   | { type: "teamPresets"; presets: TeamPreset[] | null }
   | { type: "projectSetup"; requestId: string; projectId: string; setup: ProjectSetup }
   | { type: "thread"; thread: Thread }
@@ -1903,6 +1946,20 @@ export const ClientMessage = z.discriminatedUnion("type", [
     requestId: id,
     endpoint: z.string().max(2048),
   }),
+  /** Looks for a newer version of MoonAgentic now. */
+  z.object({ type: z.literal("app.check") }),
+  /** Installs the version downloaded: once no thread is at work, or at once. */
+  z.object({ type: z.literal("app.install"), when: z.enum(["idle", "now"]) }),
+  /** Takes back an install that waits for the threads to finish. */
+  z.object({ type: z.literal("app.cancel") }),
+  /** Changes how the app looks for versions and runs; those not given stay. */
+  z.object({
+    type: z.literal("app.settings"),
+    checks: z.boolean().optional(),
+    notify: z.boolean().optional(),
+    openAtLogin: z.boolean().optional(),
+    preventSleep: z.boolean().optional(),
+  }),
   /** Lists the artifacts of the threads' own branches; see `artifacts`. */
   z.object({ type: z.literal("artifacts.list"), requestId: id }),
   /** Asks for an address to show one artifact; see `artifactLink`. */
@@ -1969,6 +2026,11 @@ export const ClientMessage = z.discriminatedUnion("type", [
     agentId: id,
     model: id,
     starred: z.boolean(),
+  }),
+  /** Puts the favorites in this order: the wheel of the composer shows them so. */
+  z.object({
+    type: z.literal("favorites.reorder"),
+    order: z.array(z.object({ agentId: id, model: id }).strict()).max(500),
   }),
   /** Gives the agent its moon, or none (`null`): it then keeps its logo or letters. */
   z.object({

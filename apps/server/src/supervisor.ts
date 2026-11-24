@@ -180,11 +180,19 @@ export class DailyLog {
   }
 }
 
+/** A message between the desktop app and the server, which the supervisor passes on. */
+export const isShellMessage = (message: unknown): boolean =>
+  !!message &&
+  typeof message === "object" &&
+  typeof (message as { moon?: unknown }).moon === "string";
+
 export interface SuperviseOptions {
   /** The server's script, run with this Node. */
   script: string;
   args: string[];
   logDir: string;
+  /** Started by the desktop app: its messages and the server's are passed on both ways. */
+  relay?: boolean;
   /** Called once the supervisor is done, with the exit code to end with. */
   exit?: (code: number) => void;
   /** Redact secrets before forwarding child output to stdout/stderr (e.g. under systemd). */
@@ -221,13 +229,19 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
       process.execPath,
       [...process.execArgv, options.script, ...options.args],
       {
-        // The channel carries no message: its closing tells the server its supervisor is gone,
-        // however that happened, so it never lives on alone holding the port.
+        // Its closing tells the server its supervisor is gone, however that happened, so it
+        // never lives on alone holding the port. It also carries the desktop app's messages.
         stdio: ["inherit", "pipe", "pipe", "ipc"],
         windowsHide: true,
       },
     );
     child = started;
+    // What the server says to the desktop app goes on up, when the app started this one.
+    started.on("message", (message) => {
+      if (options.relay && isShellMessage(message) && process.send && process.connected) {
+        process.send(message, undefined, undefined, () => undefined);
+      }
+    });
     const pipeLines = (stream: { write(chunk: string | Buffer): unknown }) =>
       createLineBuffer((line) => {
         if (redactOut) stream.write(`${redact(line)}\n`);
@@ -271,6 +285,7 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
     if (stopping) return;
     stopping = true;
     clearTimeout(restartTimer);
+    if (options.relay) process.off("message", fromShell);
     if (!child) return exit(0);
     // Windows has no signal that lets the server stop its agents first: closing the channel
     // asks it to, there as elsewhere.
@@ -282,6 +297,13 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
     }, STOP_LIMIT_MS).unref();
   };
 
+  // What the desktop app says to the server goes on down, to the server running now.
+  const fromShell = (message: unknown) => {
+    if (isShellMessage(message) && child?.connected) {
+      child.send(message as object, undefined, undefined, () => undefined);
+    }
+  };
+  if (options.relay && process.send) process.on("message", fromShell);
   log.write("—— MoonAgentic démarre ——");
   start();
   return { stop };

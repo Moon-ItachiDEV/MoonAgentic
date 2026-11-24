@@ -1,6 +1,7 @@
 // Browser notifications, on this device only: asked for in the settings, then shown when a
 // thread starts waiting for the user or a team ends, while MoonAgentic stays open in a tab.
 import { type Notice, noticesFor, settledTags, type Thread } from "@moonagentic/protocol";
+import { updateNotice } from "./app-update.ts";
 import { connection } from "./connection.ts";
 import { desktopShell } from "./desktop.ts";
 import { readPref, writePref } from "./prefs.ts";
@@ -212,6 +213,12 @@ export function startNotifications(): void {
   let before: Thread[] | undefined;
   connection.subscribe(() => {
     const state = connection.getState();
+    // A newer version of MoonAgentic, once per version on this device.
+    const update = state.ready ? updateNotice(state.app, readPref("update.told")) : undefined;
+    if (update && notificationsOn()) {
+      writePref("update.told", state.app!.update.version!);
+      void notify(update);
+    }
     if (!state.ready || state.threads === before) return;
     const notices = before ? noticesFor(before, state.threads) : [];
     const settled = before ? settledTags(before, state.threads) : [];

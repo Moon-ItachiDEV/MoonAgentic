@@ -36,6 +36,7 @@ import { mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
 import { matchSections } from "../settings-search.ts";
 import { isDark, readTheme, setTheme, subscribeTheme, type Theme } from "../theme.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
+import { AppUpdateSettings } from "./AppUpdate.tsx";
 import {
   IconArrowLeft,
   IconBranch,
@@ -51,10 +52,10 @@ import {
   IconStar,
   IconUsers,
   IconWifi,
-  IconX,
 } from "./icons.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { MascotSettings } from "./MascotSettings.tsx";
+import { ModelFavorites } from "./ModelFavorites.tsx";
 import { RemoteAccess } from "./RemoteAccess.tsx";
 import { Subscriptions } from "./Subscriptions.tsx";
 import { TeamPresets } from "./TeamPresets.tsx";
@@ -644,6 +645,7 @@ export function SettingsPage(props: {
             <NotificationsRow />
           </div>
           <LockCard projects={props.projects} lockPin={props.lockPin} />
+          <AppUpdateSettings row={Row} toggle={Toggle} />
           <DiagnosticsCard />
         </>
       );
@@ -706,47 +708,9 @@ export function SettingsPage(props: {
     case "mascots":
       body = <MascotSettings agents={props.agents} />;
       break;
-    case "models": {
-      const withFavorites = props.agents.filter((a) => props.favorites[a.id]?.length);
-      body = withFavorites.length ? (
-        <div className="set-card">
-          {withFavorites.map((a) => (
-            <div key={a.id} className="set-row top">
-              <AgentBadge agent={a} />
-              <div className="set-tx">
-                <b>{a.name}</b>
-                <div className="set-chips">
-                  {(props.favorites[a.id] ?? []).map((m) => (
-                    <span key={m} className="set-chip">
-                      {modelNameOf(a.models, m)}
-                      <button
-                        aria-label={`Retirer ${m} des favoris`}
-                        onClick={() =>
-                          connection.send({
-                            type: "favorites.toggle",
-                            agentId: a.id,
-                            model: m,
-                            starred: false,
-                          })
-                        }
-                      >
-                        <IconX size={11} />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <p className="set-empty">
-          Aucun favori pour l'instant. Ouvre le menu modèle du composer, puis « Tous », et touche
-          l'étoile d'un modèle : il rejoint la roue des favoris.
-        </p>
-      );
+    case "models":
+      body = <ModelFavorites agents={props.agents} favorites={props.favorites} />;
       break;
-    }
     case "coordinator": {
       const named = (m: TeamMember) => {
         const agent = props.agents.find((a) => a.id === m.agentId);

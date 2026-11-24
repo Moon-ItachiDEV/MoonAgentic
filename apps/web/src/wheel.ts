@@ -1,27 +1,38 @@
-import type { AgentInfo, Favorites } from "@moonagentic/protocol";
+import {
+  type AgentInfo,
+  type FavoriteRef,
+  type Favorites,
+  orderedFavorites,
+} from "@moonagentic/protocol";
 import { modelLabel, modelNameOf } from "./model-label.ts";
 
 /** One line of the model wheel: a favorite model of an agent, or the agent's default. */
 export type WheelEntry = { agent: AgentInfo; model: string | undefined; name: string };
 
 /**
- * The lines of the wheel: every favorite of every agent that can run now, in the agents'
- * order, plus the current pick when it is not a favorite, so the wheel always shows it.
+ * The lines of the wheel: every favorite of every agent that can run now, in the order the
+ * user set in Réglages › Modèles, plus the current pick when it is not a favorite, so the
+ * wheel always shows it.
  */
 export function wheelEntries(
   agents: AgentInfo[],
   favorites: Favorites,
   current: { agent: AgentInfo | undefined; model: string | undefined },
+  order: FavoriteRef[] = [],
 ): WheelEntry[] {
   const entries: WheelEntry[] = [];
-  for (const agent of agents) {
-    if (!agent.available) continue;
-    for (const model of favorites[agent.id] ?? []) {
-      const known = agent.models?.find((m) => m.id === model);
-      // A favorite the agent no longer offers is left out once the list is known.
-      if (agent.models && !known) continue;
-      entries.push({ agent, model, name: known ? modelLabel(known) : model });
-    }
+  // Without an order, agent by agent as before.
+  const ranked = orderedFavorites(
+    Object.fromEntries(agents.map((a) => [a.id, favorites[a.id] ?? []])),
+    order,
+  );
+  for (const { agentId, model } of ranked) {
+    const agent = agents.find((a) => a.id === agentId);
+    if (!agent?.available) continue;
+    const known = agent.models?.find((m) => m.id === model);
+    // A favorite the agent no longer offers is left out once the list is known.
+    if (agent.models && !known) continue;
+    entries.push({ agent, model, name: known ? modelLabel(known) : model });
   }
   const { agent, model } = current;
   if (agent && !entries.some((e) => e.agent.id === agent.id && e.model === model)) {

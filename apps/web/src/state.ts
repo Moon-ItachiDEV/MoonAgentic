@@ -1,9 +1,11 @@
 import type {
+  AppInfo,
   Defaults,
   TeamPreset,
   AgentQuota,
   CoordinatorSettings,
   AgentInfo,
+  FavoriteRef,
   Favorites,
   Item,
   McpServerInfo,
@@ -42,6 +44,8 @@ export interface State {
   ready: boolean;
   agents: AgentInfo[];
   favorites: Favorites;
+  /** The order of the favorites wheel, as the user set it. */
+  favoriteOrder: FavoriteRef[];
   coordinator: CoordinatorSettings;
   /** Permission requests waiting in every thread. */
   requests: PendingRequest[];
@@ -65,6 +69,8 @@ export interface State {
   defaults: Defaults | null;
   /** The teams set up in the settings; null while the suggested ones stand. */
   teamPresets: TeamPreset[] | null;
+  /** MoonAgentic's own version and what it knows of a newer one. */
+  app: AppInfo | null;
   items: Record<string, Item[]>;
   /** What part of each of those timelines is held. */
   held: Record<string, Held>;
@@ -94,8 +100,10 @@ export function reduce(state: State, message: ServerMessage): State {
         ...message.snapshot,
         lockPin: message.snapshot.lockPin ?? false,
         pairedDevice: message.snapshot.pairedDevice ?? false,
+        favoriteOrder: message.snapshot.favoriteOrder ?? [],
         defaults: message.snapshot.defaults ?? null,
         teamPresets: message.snapshot.teamPresets ?? null,
+        app: message.snapshot.app ?? null,
         mcpSecretsError: message.snapshot.mcpSecretsError ?? null,
         items: keep(state.items),
         held: keep(state.held),
@@ -105,9 +113,15 @@ export function reduce(state: State, message: ServerMessage): State {
     case "agents":
       return { ...state, agents: message.agents };
     case "favorites":
-      return { ...state, favorites: message.favorites };
+      return {
+        ...state,
+        favorites: message.favorites,
+        favoriteOrder: message.order ?? state.favoriteOrder,
+      };
     case "defaults":
       return { ...state, defaults: message.defaults };
+    case "app":
+      return { ...state, app: message.app };
     case "teamPresets":
       return { ...state, teamPresets: message.presets };
     case "coordinatorSettings":
@@ -300,6 +314,7 @@ export const initialState: State = {
   ready: false,
   agents: [],
   favorites: {},
+  favoriteOrder: [],
   coordinator: { routes: {} },
   requests: [],
   questions: [],
@@ -314,6 +329,7 @@ export const initialState: State = {
   pairedDevice: false,
   defaults: null,
   teamPresets: null,
+  app: null,
   items: {},
   held: {},
   reviews: {},
