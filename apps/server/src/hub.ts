@@ -17,15 +17,19 @@ import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
+  AGENT_STOPPED,
   DEFAULT_MAX_TURNS,
   GOAL_MORE_TURNS,
   GOAL_TURNS,
   MAX_QUEUED_MESSAGES,
   PR_WATCH_TRIES,
+  RESUME_TEXT,
   threadPullRequest,
 } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
+  Defaults,
+  TeamPreset,
   AgentSetting,
   ClientMessage,
   ImageRef,
@@ -100,7 +104,7 @@ import {
 } from "./files.ts";
 import { type BranchOwner, deleteMergedBranches, projectBranches } from "./branches.ts";
 import { AgentCatalog, agentCommands } from "./catalog.ts";
-import { Coordinators } from "./coordinator.ts";
+import { Coordinators, TEAM_PRESETS_SETTING } from "./coordinator.ts";
 import { historyBefore } from "./history.ts";
 import { cardText, Planner } from "./planner.ts";
 import { COORDINATOR_TOOLS } from "./coordinator-tools.ts";
@@ -153,6 +157,15 @@ const TEXT_FLUSH_MS = 250;
  */
 const INDEX_STRETCH_MS = 20;
 const INDEX_PAUSE_MS = 50;
+
+/** How the ACP connection says the agent's process went away. */
+const CONNECTION_CLOSED = /\bconnection closed\b/i;
+
+/** A thread's error when its agent stopped mid-turn: plain words first, the detail after. */
+const stoppedError = (detail: string): string => {
+  const rest = detail.trim();
+  return rest ? `${AGENT_STOPPED}\n${rest}` : AGENT_STOPPED;
+};
 
 const titleFrom = (text: string, images = 0) => {
   const line = text.trim().split("\n")[0] ?? "";
@@ -208,6 +221,8 @@ export interface HubOptions {
 
 /** The setting that lists the projects kept at the top. */
 const PINNED_PROJECTS = "pinnedProjects";
+/** The user's defaults for a new thread, the same on every device. */
+const DEFAULTS = "defaults";
 /** Each project's icon and tint, as set in its settings. */
 const PROJECT_LOOKS = "projectLooks";
 type ProjectLook = Pick<Project, "icon" | "color">;
@@ -574,6 +589,8 @@ export class Hub {
 
   snapshot(pairedDevice = false): Snapshot {
     const mcpSecretsError = this.catalog.mcpSecretsError();
+    const defaults = this.store.getSetting<Defaults | null>(DEFAULTS, null);
+    const presets = this.store.getSetting<TeamPreset[] | null>(TEAM_PRESETS_SETTING, null);
     return {
       coordinator: this.coordinators.coordinatorSettings(),
       favorites: this.catalog.favorites(),
@@ -589,6 +606,8 @@ export class Hub {
       schedules: this.scheduler.list(),
       ...(this.locks.hasPin() ? { lockPin: true } : {}),
       ...(pairedDevice ? { pairedDevice: true } : {}),
+      ...(defaults ? { defaults } : {}),
+      ...(presets ? { teamPresets: presets } : {}),
     };
   }
 
@@ -943,6 +962,9 @@ export class Hub {
       case "thread.cancel":
         await this.cancel(message.threadId);
         return;
+      case "thread.resume":
+        this.resume(message.threadId);
+        return;
       case "item.get": {
         this.requireThread(message.threadId);
         const item = this.store.getItem(message.threadId, message.itemId);
@@ -998,6 +1020,20 @@ export class Hub {
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
+      case "defaults.set": {
+        const current = this.store.getSetting<Defaults | null>(DEFAULTS, null);
+        const defaults: Defaults = {
+          permissionMode: message.permissionMode ?? current?.permissionMode ?? "supervised",
+          isolated: message.isolated ?? current?.isolated ?? true,
+        };
+        this.store.setSetting(DEFAULTS, defaults);
+        this.broadcast({ type: "defaults", defaults });
+        return;
+      }
+      case "teamPresets.set":
+        this.store.setSetting(TEAM_PRESETS_SETTING, message.presets);
+        this.broadcast({ type: "teamPresets", presets: message.presets });
+        return;
       case "project.setLook": {
         const project = this.store.getProject(message.projectId);
         if (!project) throw new Error("Ce projet n'existe plus.");
@@ -1899,6 +1935,18 @@ export class Hub {
   }
 
   /**
+   * Takes a thread up again after its agent stopped. The agent is gone, so the next turn
+   * starts a new session, with the thread's model as it is now: the user may have picked
+   * another one meanwhile. What waits goes first; else the agent is asked to go on.
+   */
+  resume(threadId: string): void {
+    const thread = this.requireLiveThread(threadId);
+    if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
+    if (thread.queue?.length && this.sendNextQueued(threadId)) return;
+    this.sendByUser(threadId, RESUME_TEXT);
+  }
+
+  /**
    * Keeps a message for after the turn under way: the user's, or one the project's
    * coordinator leaves. With the thread free and nothing waiting before it, it is sent at
    * once: its turn ended while it was being written.
@@ -2426,6 +2474,11 @@ export class Hub {
       await change();
       return false;
     } catch (error) {
+      // An agent that went away takes the change with it: the next one starts with it.
+      if (CONNECTION_CLOSED.test(describe(error))) {
+        await this.pool.stop(threadId);
+        return true;
+      }
       if (!(error instanceof SettingTimeout)) throw error;
       console.warn(`Fil ${threadId} : ${error.message} L'agent est arrêté.`);
       await this.pool.stop(threadId);
@@ -3292,8 +3345,16 @@ export class Hub {
         return;
       }
       // An agent that crashed already left its own reason, which beats "connection closed".
+      const said = describe(error);
+      // An agent whose connection closed is of no more use, even if its process lingers:
+      // it goes, so a change of model and the next message start a new one.
+      if (CONNECTION_CLOSED.test(said)) await this.pool.stop(thread.id).catch(() => undefined);
       if (this.store.getThread(thread.id)?.status !== "error") {
-        this.updateThread(thread.id, { status: "error", error: describe(error) });
+        // Its process went away mid-turn: said plainly, with the technical detail under it.
+        this.updateThread(thread.id, {
+          status: "error",
+          error: CONNECTION_CLOSED.test(said) ? stoppedError(said) : said,
+        });
       }
     }
   }
@@ -3503,8 +3564,8 @@ export class Hub {
           if (!owns()) return;
           this.pool.exited(thread.id);
           this.settlePermissions(thread.id);
-          if (reason && this.turns.has(thread.id)) {
-            this.updateThread(thread.id, { status: "error", error: reason });
+          if (reason && this.turns.has(thread.id) && !this.cancelled.has(thread.id)) {
+            this.updateThread(thread.id, { status: "error", error: stoppedError(reason) });
           }
         },
         onConfig: ({ model, settings }) => {

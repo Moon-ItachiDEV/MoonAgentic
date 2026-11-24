@@ -1,0 +1,70 @@
+/* An agent that went away mid-turn: said plainly, with « Reprendre » and the model at hand.
+   Tinted, never outlined (ade/DESIGN-SYSTEM.md). */
+.stopped {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--err) 5%, var(--surface));
+  color: var(--fg);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.stopped-tx {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.stopped-tx b {
+  color: var(--err-tx);
+  font-weight: 500;
+  font-size: 14px;
+}
+.stopped-tx > span {
+  color: var(--muted);
+}
+.stopped details {
+  margin-top: 4px;
+  color: var(--faint);
+  font-size: 12px;
+}
+.stopped summary {
+  cursor: pointer;
+  width: fit-content;
+  list-style: none;
+}
+.stopped summary::-webkit-details-marker {
+  display: none;
+}
+.stopped summary:hover {
+  color: var(--muted);
+}
+.stopped code {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.stopped-act {
+  flex: none;
+  display: flex;
+  gap: 6px;
+}
+.stopped-act .btn:disabled {
+  opacity: 0.5;
+}
+/* A phone: the actions go under the words, « Reprendre » on the right. */
+@media (max-width: 560px) {
+  .stopped {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .stopped-act {
+    justify-content: flex-end;
+  }
+}
