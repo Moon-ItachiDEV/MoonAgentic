@@ -43,6 +43,7 @@ import { carriesFiles, IMAGE_ACCEPT, pastedImages } from "../images.ts";
 import { useImageDrafts } from "../use-image-drafts.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { looseDefault } from "../default-models.ts";
+import { modelNameOf } from "../model-label.ts";
 import type { ModelPick } from "./ModelSelect.tsx";
 import { setDefault, useDefaults } from "../defaults.ts";
 import { speakerName } from "../speaker.ts";
@@ -104,6 +105,8 @@ export function Composer(props: {
   /** The projects a new conversation can start in, picked from the tray under the box. */
   projects?: Project[];
   onPickProject?: (id: string) => void;
+  /** Starts a conversation outside any project (in « Discussions »). */
+  onPickLoose?: () => void;
   /** The MCP servers handed to every agent, listed in the tray. */
   mcpServers?: McpServerInfo[];
   /** Opens the MCP servers' settings. */
@@ -210,7 +213,7 @@ export function Composer(props: {
         : looseAgent.defaultModel
       : ((agent?.models?.some((m) => m.id === pickedModel) ? pickedModel : agent?.defaultModel) ??
         undefined);
-  const modelName = agent?.models?.find((m) => m.id === model)?.name ?? model;
+  const modelName = modelNameOf(agent?.models, model);
   const agentSettings = agentSettingsFor(agent, model);
   const settings = Object.fromEntries(
     agentSettings.map((s) => {
@@ -1303,7 +1306,11 @@ export function Composer(props: {
         narrow={narrow}
         project={project}
         {...(!thread && props.projects && props.onPickProject
-          ? { projects: props.projects, onPickProject: props.onPickProject }
+          ? {
+              projects: props.projects,
+              onPickProject: props.onPickProject,
+              ...(props.onPickLoose ? { onPickLoose: props.onPickLoose } : {}),
+            }
           : {})}
         onNewProject={props.onNewProject}
         {...(!thread && project?.git

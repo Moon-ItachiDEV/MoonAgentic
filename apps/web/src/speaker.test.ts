@@ -50,4 +50,28 @@ describe("speakerName", () => {
   it("says when the agent is gone", () => {
     expect(speakerName(undefined, { agentId: "x" })).toBe("Agent retiré");
   });
+
+  it("never prints « Default (recommended) » or « Par défaut » as the speaker name", () => {
+    const claudeWithDesc = {
+      id: "claude",
+      name: "Claude Code",
+      models: [
+        {
+          id: "default",
+          name: "Default (recommended)",
+          description: "Opus 4.6 · Most capable for complex work",
+        },
+      ],
+      defaultModel: "default",
+    };
+    expect(speakerName(claudeWithDesc, { agentId: "claude" })).toBe("Opus 4.6");
+
+    const claudePlain = {
+      id: "claude",
+      name: "Claude Code",
+      models: [{ id: "default", name: "Default (recommended)" }],
+      defaultModel: "default",
+    };
+    expect(speakerName(claudePlain, { agentId: "claude" })).toBe("Claude Code");
+  });
 });

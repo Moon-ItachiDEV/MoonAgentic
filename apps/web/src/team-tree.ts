@@ -9,6 +9,7 @@ import type {
 } from "@moonagentic/protocol";
 import { activityGlyph, activityLabel } from "./activity.ts";
 import type { GlyphKind } from "./glyphs.ts";
+import { modelNameOf } from "./model-label.ts";
 
 /**
  * The team as a tree of agents: the lead, then for each piece its coder with the reviewer
@@ -261,12 +262,7 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
   const byId = (id: string | undefined) => (id ? threads.find((t) => t.id === id) : undefined);
   const modelOf = (member: { agentId: string; model?: string | undefined }) => {
     const agent = agents.find((a) => a.id === member.agentId);
-    return (
-      agent?.models?.find((m) => m.id === member.model)?.name ??
-      member.model ??
-      agent?.name ??
-      member.agentId
-    );
+    return modelNameOf(agent?.models, member.model) ?? agent?.name ?? member.agentId;
   };
   const running = active(team);
   const lastPhases = new Map<number, TeamLanePhase[]>();

@@ -9,12 +9,14 @@ import {
   IconCaret,
   IconCheck,
   IconClose,
+  IconCompose,
   IconFolderFine,
   IconHand,
   IconPlus,
   IconSwap,
 } from "./icons.tsx";
 import { Presence } from "./Presence.tsx";
+import { isDiscussionsProject } from "../default-models.ts";
 import { mcpInProject } from "../mcp-scope.ts";
 
 /** Closes a menu on a press outside `root`, or on Escape, which gives the focus back to `back`. */
@@ -171,6 +173,8 @@ export function Tray(props: {
   /** The projects a new conversation can start in; absent in a thread, whose project is set. */
   projects?: Project[];
   onPickProject?: (id: string) => void;
+  /** Starts a conversation outside any project (in « Discussions »). */
+  onPickLoose?: () => void;
   onNewProject: () => void;
   /** A new conversation in a git project: whether the agent gets its own branch. */
   isolated?: { on: boolean; onPick: (on: boolean) => void };
@@ -188,6 +192,12 @@ export function Tray(props: {
   // Those this conversation's agent is given: for every project, or for this one.
   const servers = props.mcpServers.filter((s) => s.enabled && mcpInProject(s, props.project?.id));
   const { quota } = props;
+  const codeProject =
+    props.project && !isDiscussionsProject(props.project) ? props.project : undefined;
+  const codeProjects = props.projects?.filter((p) => !isDiscussionsProject(p));
+  const canPickProject =
+    !!codeProjects && !!props.onPickProject && (codeProjects.length > 0 || !!codeProject);
+  const showProject = !!codeProject || canPickProject;
 
   if (props.voice)
     return (
@@ -201,29 +211,32 @@ export function Tray(props: {
       </div>
     );
 
+  const hasContext = showProject || !!props.isolated || !!props.branch || servers.length > 0;
+  if (!hasContext && !quota) return null;
+
   const context = (
     <>
-      {props.project && (
+      {showProject && (
         <div className="tray-at">
           <button
             className="tb"
-            aria-haspopup={props.projects ? "menu" : undefined}
-            aria-expanded={props.projects ? props.menu === "project" : undefined}
-            title={props.project.path}
-            onClick={() => (props.projects ? toggle("project") : undefined)}
-            disabled={!props.projects}
+            aria-haspopup={canPickProject ? "menu" : undefined}
+            aria-expanded={canPickProject ? props.menu === "project" : undefined}
+            title={codeProject ? codeProject.path : "Discussion libre, hors projet"}
+            onClick={() => (canPickProject ? toggle("project") : undefined)}
+            disabled={!canPickProject}
           >
-            <IconFolderFine />
-            <span>{props.project.name}</span>
+            {codeProject ? <IconFolderFine /> : <IconCompose size={14} />}
+            <span>{codeProject ? codeProject.name : "Hors projet"}</span>
           </button>
-          {props.projects && (
+          {canPickProject && (
             <Anchored open={props.menu === "project"} side="left" width={300} label="Projet">
               <div className="menu-h">Projet</div>
-              {props.projects.map((p) => (
+              {codeProjects.map((p) => (
                 <button
                   key={p.id}
                   role="menuitemradio"
-                  aria-checked={p.id === props.project?.id}
+                  aria-checked={p.id === codeProject?.id}
                   onClick={() => {
                     props.onPickProject?.(p.id);
                     props.onMenu(null);
@@ -236,9 +249,28 @@ export function Tray(props: {
                     {p.name}
                     <small className="one">{p.path}</small>
                   </span>
-                  <span className="on-mark">{p.id === props.project?.id && <IconCheck />}</span>
+                  <span className="on-mark">{p.id === codeProject?.id && <IconCheck />}</span>
                 </button>
               ))}
+              {props.onPickLoose && (
+                <button
+                  role="menuitemradio"
+                  aria-checked={!codeProject}
+                  onClick={() => {
+                    props.onPickLoose?.();
+                    props.onMenu(null);
+                  }}
+                >
+                  <span className="ca-ic plain">
+                    <IconCompose size={14} />
+                  </span>
+                  <span className="tx">
+                    Hors projet
+                    <small className="one">Discussion libre, sans dossier de projet</small>
+                  </span>
+                  <span className="on-mark">{!codeProject && <IconCheck />}</span>
+                </button>
+              )}
               <div className="menu-sep" role="separator" />
               <button
                 role="menuitem"
@@ -256,7 +288,7 @@ export function Tray(props: {
           )}
         </div>
       )}
-      {(props.isolated || props.branch) && <span className="dv" aria-hidden />}
+      {showProject && (props.isolated || props.branch) && <span className="dv" aria-hidden />}
       {props.isolated && (
         <div className="tray-at">
           <button
@@ -386,7 +418,7 @@ export function Tray(props: {
           <IconClose />
         </button>
       </div>
-      <div className="crow">{context}</div>
+      {hasContext && <div className="crow">{context}</div>}
     </div>
   );
 }

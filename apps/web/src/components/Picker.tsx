@@ -11,6 +11,7 @@ import { connection } from "../connection.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { IconBack, IconCheck, IconOrbit, IconStar, IconX } from "./icons.tsx";
 import { entryKey, keepLines, type WheelEntry, wheelEntries } from "../wheel.ts";
+import { modelLabel, modelNameOf } from "../model-label.ts";
 import { formatPercent, quotaLevel, tightest } from "../quotas.ts";
 import { useQuotas } from "../use-quotas.ts";
 
@@ -86,7 +87,7 @@ export function Picker(props: {
 
   const agentSettings = agent?.available ? agentSettingsFor(agent, props.model) : [];
   const effort = agentSettings.find((s) => s.kind === "effort");
-  const modelName = agent?.models?.find((m) => m.id === props.model)?.name ?? props.model;
+  const modelName = modelNameOf(agent?.models, props.model);
   const otherSettings = agentSettings.filter((s) => s.kind !== "effort");
 
   const close = (
@@ -425,7 +426,7 @@ function AgentModels(props: {
           onClick={() => props.onPick(m.id)}
         >
           <span className="tx">
-            {m.name}
+            {modelLabel(m)}
             {m.description && <small>{m.description}</small>}
           </span>
           {on && (

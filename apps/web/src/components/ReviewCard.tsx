@@ -10,6 +10,7 @@ import {
 } from "@moonagentic/protocol";
 import { useState } from "react";
 import { connection, newId } from "../connection.ts";
+import { modelNameOf } from "../model-label.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
 import { StateGlyph } from "./StateGlyph.tsx";
 
@@ -235,9 +236,7 @@ export function ReviewCard({
   };
   const modelName = (r: PrReviewer) => {
     const agent = agents.find((a) => a.id === r.agentId);
-    return r.model
-      ? (agent?.models?.find((m) => m.id === r.model)?.name ?? r.model)
-      : "Modèle par défaut";
+    return modelNameOf(agent?.models, r.model) ?? "Modèle par défaut";
   };
   const name = (i: number) => {
     const r = review.reviewers[i];

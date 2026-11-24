@@ -50,6 +50,7 @@ import { ThreadView } from "./components/ThreadView.tsx";
 import { DecisionCard } from "./components/DecisionCard.tsx";
 import { connection, newId } from "./connection.ts";
 import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
+import { isDiscussionsProject, isLooseHome } from "./default-models.ts";
 import { waits } from "./decision.ts";
 import { focusItem } from "./focus.ts";
 import { askUnlock, lockProject } from "./lock.ts";
@@ -188,14 +189,18 @@ export function App() {
   // A locked project is never the one new conversations start in.
   const openProjects = state.projects.filter((p) => !p.locked);
   const looseHome = loose && route.name === "home";
-  const discussions = openProjects.find((p) => p.name === "Discussions");
+  const discussions = openProjects.find(isDiscussionsProject);
+  const codeProjects = openProjects.filter((p) => !isDiscussionsProject(p));
   // Outside a project, the conversation goes to « Discussions », made on the first message.
   const project =
     routeProject ??
     (looseHome
       ? discussions
       : (openProjects.find((p) => p.id === (thread?.projectId ?? pickedProjectId)) ??
-        openProjects[0]));
+        codeProjects[0] ??
+        discussions));
+  // On the home screen, starting without a code project (or in « Discussions ») starts on Hydrogen.
+  const looseConversation = isLooseHome({ routeName: route.name, loose, project });
 
   // On a project's page, the conversation is its coordinator's, once it has one.
   const coordinator = routeProject ? coordinatorOf(state.threads, routeProject.id) : undefined;
@@ -462,9 +467,10 @@ export function App() {
             : state.ready && !state.projects.length
               ? { onNeedProject: needDiscussions }
               : {})}
-          loose={!t && looseHome}
-          projects={openProjects}
+          loose={!t && looseConversation}
+          projects={codeProjects}
           onPickProject={pickProject}
+          onPickLoose={newLoose}
           mcpServers={state.mcpServers}
           onMcp={() => setMcpOpen(true)}
           onCreated={(id) => navigate({ name: "thread", threadId: id })}

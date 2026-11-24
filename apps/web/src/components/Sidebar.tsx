@@ -4,6 +4,7 @@ import { useQuotas } from "../use-quotas.ts";
 import { connection, type State } from "../connection.ts";
 import { useEffect, useRef, useState } from "react";
 import { pinnedFirst, waitingCount } from "../project-threads.ts";
+import { isDiscussionsProject } from "../default-models.ts";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 import { readPref, writePref } from "../prefs.ts";
 import { RECENT, recentAlwaysShown } from "../recent.ts";
@@ -184,13 +185,19 @@ export function Sidebar(props: {
     setFoldedActive({ lead: activeLead, keys: next });
     if (unfolded.has(key)) toggle(key);
   };
+  const codeProjects = state.projects.filter((p) => !isDiscussionsProject(p));
+  const discussionsProject = state.projects.find(isDiscussionsProject);
   // Opening a thread unfolds its project once, even when multi-project defaults it folded.
   const activeProject = active?.projectId;
   useEffect(() => {
     setFoldedActive((prev) =>
       prev.keys.size === 0 ? prev : { lead: activeLead, keys: new Set() },
     );
-    if (activeProject && !projectOpen(folds[activeProject], state.projects.length === 1)) {
+    if (
+      activeProject &&
+      activeProject !== discussionsProject?.id &&
+      !projectOpen(folds[activeProject], codeProjects.length === 1)
+    ) {
       setFold(activeProject, true);
     }
     // Only when the open thread changes, not on every fold.
@@ -201,7 +208,7 @@ export function Sidebar(props: {
   // Across projects, only when there are several; a thread whose project is gone too.
   const recent = [...byProject.values()]
     .flat()
-    .filter((t) => !t.pinned && (state.projects.length > 1 || !known.has(t.projectId)))
+    .filter((t) => !t.pinned && (codeProjects.length > 1 || !known.has(t.projectId)))
     .sort((a, b) => b.updatedAt - a.updatedAt)
     .slice(0, RECENT);
 
@@ -290,7 +297,7 @@ export function Sidebar(props: {
   const project = (p: State["projects"][number]) => {
     // Pinned ones too: « Épinglés » is a shortcut, the project still holds them.
     const all = byProject.get(p.id) ?? [];
-    const open = projectOpen(folds[p.id], state.projects.length === 1);
+    const open = projectOpen(folds[p.id], codeProjects.length === 1);
     const { always, foldable } = recentAlwaysShown(all, members, props.activeThreadId);
     const more = unfolded.has(`more:${p.id}`);
     const count = byProject.get(p.id)?.length ?? 0;
@@ -546,10 +553,62 @@ export function Sidebar(props: {
           <span>Projets</span>
           <IconChevron size={13} />
         </button>
-        {projectsOpen && state.ready && state.projects.length === 0 && (
+        {projectsOpen && state.ready && codeProjects.length === 0 && (
           <div className="empty-note">Aucun projet pour l'instant.</div>
         )}
-        {(projectsOpen ? pinnedFirst(state.projects) : []).flatMap(project)}
+        {(projectsOpen ? pinnedFirst(codeProjects) : []).flatMap(project)}
+        {discussionsProject &&
+          (() => {
+            const all = byProject.get(discussionsProject.id) ?? [];
+            const resolved = archived.filter((t) => t.projectId === discussionsProject.id);
+            if (!discussionsProject.locked && all.length === 0 && resolved.length === 0)
+              return null;
+            const { always, foldable } = recentAlwaysShown(all, members, props.activeThreadId);
+            const more = unfolded.has(`more:${discussionsProject.id}`);
+            const resolvedOpen = unfolded.has(`resolved:${discussionsProject.id}`);
+            return (
+              <>
+                <div className="sec-h">Discussions</div>
+                {discussionsProject.locked ? (
+                  <button
+                    className="more"
+                    onClick={() => props.onToggleLock(discussionsProject.id)}
+                  >
+                    <IconLock size={12} />
+                    Discussions verrouillées
+                  </button>
+                ) : (
+                  <>
+                    {(more ? all : always).flatMap((t) => tree(t, "disc:"))}
+                    {foldable > 0 && (
+                      <button
+                        className="more"
+                        aria-expanded={more}
+                        onClick={() => toggle(`more:${discussionsProject.id}`)}
+                      >
+                        {more ? "Voir moins" : `Voir plus (${foldable})`}
+                      </button>
+                    )}
+                    {resolved.length > 0 && (
+                      <>
+                        <button
+                          className={`more resolved${resolvedOpen ? " open" : ""}`}
+                          aria-expanded={resolvedOpen}
+                          onClick={() => toggle(`resolved:${discussionsProject.id}`)}
+                        >
+                          <IconArchive size={13} />
+                          Résolus ({resolved.length})
+                          <IconChevron size={11} />
+                        </button>
+                        {resolvedOpen &&
+                          resolved.map((t) => row(t, { key: `resolved:${t.id}`, child: true }))}
+                      </>
+                    )}
+                  </>
+                )}
+              </>
+            );
+          })()}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
         {pinned.flatMap((t) => tree(t, "pin:"))}
         {recent.length > 0 && <div className="sec-h">Récents</div>}
