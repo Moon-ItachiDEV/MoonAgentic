@@ -119,6 +119,7 @@ import { AgentSession, describe, needsSignIn, SettingTimeout } from "./session.t
 import { AgentPool } from "./sessions.ts";
 import { light, TimelineLog } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
+import { sweepWorktrees } from "./worktree-sweep.ts";
 import type { Store } from "./store.ts";
 import {
   forecastFor,
@@ -293,6 +294,8 @@ type PendingRestore = { itemId: string; tree: string };
  * (server.ts): what is left after it is cut short.
  */
 const CLOSE_LIMIT_MS = 11_000;
+/** How often the worktrees no thread holds any more are looked for. */
+const SWEEP_EVERY_MS = 24 * 60 * 60_000;
 
 /** Resolves once `work` settles, or after `ms` at most; a failure of `work` is not passed on. */
 function within(work: Promise<unknown>, ms: number): Promise<void> {
@@ -402,6 +405,7 @@ export class Hub {
   /** True while known pull requests are being asked about, so rounds never pile up. */
   private watching = false;
   private readonly prTimer: NodeJS.Timeout | undefined;
+  private sweepTimer: NodeJS.Timeout | undefined;
 
   constructor(store: Store, agents: Agents, options: HubOptions) {
     this.store = store;
@@ -555,7 +559,40 @@ export class Hub {
       for (const t of this.store.listThreads()) {
         if (t.goal?.state === "active") this.continueGoal(t.id);
       }
+      this.sweepSoon();
     });
+  }
+
+  /**
+   * Removes the worktrees no thread holds any more, now and then once a day: a server left
+   * on for months would otherwise fill its disk with them.
+   */
+  private sweepSoon(): void {
+    const sweep = () => {
+      if (this.closed) return;
+      const step = sweepWorktrees(this.worktreesDir, () => this.heldWorktrees())
+        .then((removed) => {
+          if (removed.length)
+            console.log(`Copies de travail sans fil retirées : ${removed.join(", ")}`);
+        })
+        .catch((error: unknown) => console.error("Nettoyage des copies de travail :", error));
+      this.steps.add(step);
+      void step.finally(() => this.steps.delete(step));
+    };
+    sweep();
+    this.sweepTimer = setInterval(sweep, SWEEP_EVERY_MS);
+    this.sweepTimer.unref();
+  }
+
+  /** The folders of the worktrees folder that a thread holds, archived ones included. */
+  private heldWorktrees(): string[] {
+    const held: string[] = [];
+    for (const thread of this.store.listThreads()) {
+      const dir = thread.workspace?.path;
+      if (!dir || !this.isOurWorktree(dir)) continue;
+      held.push(path.relative(this.worktreesDir, dir).split(/[\\/]/)[0]!);
+    }
+    return held;
   }
 
   /** The agents, their models and checks, the MCP servers and the favorites. */
@@ -3248,6 +3285,7 @@ export class Hub {
     const upTo = (work: Promise<unknown>) => within(work, deadline - Date.now());
     clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
+    clearInterval(this.sweepTimer);
     this.quotas.close();
     this.scheduler.close();
     this.teams.close();

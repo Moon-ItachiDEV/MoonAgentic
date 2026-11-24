@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -96,6 +104,37 @@ describe("supervisor", () => {
     );
   });
 
+  it("stops writing a day's file once it is full, then starts again the next day", () => {
+    const dir = tempDir();
+    const morning = new Date(2026, 10, 20, 9, 0, 0);
+    const log = new DailyLog(dir, 14, 200);
+    for (let i = 0; i < 50; i++) log.write(`ligne ${i} qui revient en boucle`, morning);
+    const today = readFileSync(path.join(dir, "moonagentic-2026-11-20.log"), "utf8");
+    expect(today.length).toBeLessThan(400);
+    expect(today).toContain("Journal plein pour aujourd'hui");
+    expect(today.match(/Journal plein/g)).toHaveLength(1);
+    // A restart the same day does not write past it either.
+    const again = new DailyLog(dir, 14, 200);
+    again.write("après redémarrage", morning);
+    expect(readFileSync(path.join(dir, "moonagentic-2026-11-20.log"), "utf8")).toBe(today);
+    again.write("le lendemain", new Date(2026, 10, 21, 9, 0, 0));
+    expect(readFileSync(path.join(dir, "moonagentic-2026-11-21.log"), "utf8")).toBe(
+      "09:00:00 le lendemain\n",
+    );
+  });
+
+  it("still deletes the oldest days when it starts again on a day already full", () => {
+    const dir = tempDir();
+    for (const day of ["17", "18", "19"])
+      writeFileSync(path.join(dir, `moonagentic-2026-11-${day}.log`), "x\n");
+    writeFileSync(path.join(dir, "moonagentic-2026-11-20.log"), "y".repeat(300));
+    new DailyLog(dir, 2, 200).write("encore", new Date(2026, 10, 20, 9, 0, 0));
+    expect(readdirSync(dir).sort()).toEqual([
+      "moonagentic-2026-11-19.log",
+      "moonagentic-2026-11-20.log",
+    ]);
+  });
+
   it("starts the server again after a crash, and stops with it once it ends cleanly", async () => {
     const dir = tempDir();
     const script = path.join(dir, "server.mjs");
@@ -163,21 +202,21 @@ describe("supervisor", () => {
 });
 
 describe("daily backups", () => {
-  it("copies the database once a day and keeps the last ones", () => {
+  it("copies the database once a day and keeps the last ones", async () => {
     const dir = tempDir();
     const store = new Store(path.join(dir, "state.sqlite"));
     store.addProject({ id: "p", name: "Projet", path: dir, createdAt: 1 });
     const backups = path.join(dir, "backups");
     const day = (d: number) => new Date(2026, 10, d, 12).getTime();
 
-    const first = backupNow(store, backups, day(20), 2);
+    const first = await backupNow(store, backups, day(20), 2);
     expect(first && existsSync(first)).toBe(true);
     // A copy cut short by a power cut is not taken for the day's copy.
     writeFileSync(path.join(backups, "state-2026-11-21.sqlite.tmp"), "moitié");
     // Once a day only.
-    expect(backupNow(store, backups, day(20), 2)).toBeUndefined();
-    backupNow(store, backups, day(21), 2);
-    backupNow(store, backups, day(22), 2);
+    expect(await backupNow(store, backups, day(20), 2)).toBeUndefined();
+    await backupNow(store, backups, day(21), 2);
+    await backupNow(store, backups, day(22), 2);
     expect(readdirSync(backups).sort()).toEqual([
       "state-2026-11-21.sqlite",
       "state-2026-11-22.sqlite",
@@ -188,5 +227,56 @@ describe("daily backups", () => {
     const copy = new Store(path.join(backups, "state-2026-11-22.sqlite"));
     expect(copy.listProjects().map((p) => p.name)).toEqual(["Projet"]);
     copy.close();
+  });
+
+  it("leaves no half copy behind when a copy fails, nor one cut short on an earlier day", async () => {
+    const dir = tempDir();
+    const backups = path.join(dir, "backups");
+    mkdirSync(backups);
+    writeFileSync(path.join(backups, "state-2026-11-19.sqlite.tmp"), "moitié d'avant-hier");
+    // A disk that fills up in the middle of the copy.
+    const full = {
+      backup: async (file: string) => {
+        writeFileSync(file, "début de copie");
+        throw new Error("ENOSPC: no space left on device");
+      },
+    };
+    await expect(backupNow(full, backups, new Date(2026, 10, 21, 12).getTime())).rejects.toThrow(
+      "ENOSPC",
+    );
+    expect(readdirSync(backups)).toEqual([]);
+  });
+
+  it("writes with synchronous NORMAL, as WAL allows without risking the database", () => {
+    const store = new Store(path.join(tempDir(), "state.sqlite"));
+    expect(store.db.prepare("PRAGMA synchronous").get()).toEqual({ synchronous: 1 });
+    store.close();
+  });
+
+  it("keeps the server answering while a large database is copied", async () => {
+    const dir = tempDir();
+    const store = new Store(path.join(dir, "state.sqlite"));
+    store.db.exec("CREATE TABLE filler (data BLOB)");
+    const insert = store.db.prepare("INSERT INTO filler VALUES (randomblob(4096))");
+    store.transaction(() => {
+      for (let i = 0; i < 6_000; i++) insert.run();
+    });
+    // Counts the turns of the event loop while the copy runs: a copy made in one go, as
+    // VACUUM INTO does, lets none through until it is done.
+    let turns = 0;
+    let copying = true;
+    const tick = () => {
+      if (!copying) return;
+      turns++;
+      setImmediate(tick);
+    };
+    setImmediate(tick);
+    const copy = await backupNow(store, path.join(dir, "backups"));
+    copying = false;
+    expect(turns).toBeGreaterThan(10);
+    store.close();
+    const restored = new Store(copy!);
+    expect(restored.db.prepare("SELECT count(*) AS n FROM filler").get()).toEqual({ n: 6_000 });
+    restored.close();
   });
 });

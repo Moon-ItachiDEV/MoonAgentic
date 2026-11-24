@@ -85,8 +85,12 @@ async function allow(page: Page) {
   await expect.poll(() => inbox.textContent(), { timeout: 15_000 }).toContain("1");
   await inbox.click();
   const requests = page.getByRole("dialog", { name: "À traiter" });
-  await requests.getByRole("button", { name: "Autoriser" }).click();
-  await requests.getByText("Aucun agent n'attend ta réponse.").waitFor();
+  const row = requests.locator(".rq-row").first();
+  const answered = await row.elementHandle();
+  await row.getByRole("button", { name: "Autoriser" }).click();
+  // That request goes. The list may not stay empty: the message in line starts a turn of
+  // its own at once, and the demo agent asks again.
+  await answered!.waitForElementState("hidden");
   await requests.getByRole("button", { name: "Fermer" }).click();
 }
 
@@ -103,7 +107,8 @@ describe("message queue", () => {
     await page.getByRole("button", { name: "Arrêter" }).waitFor();
     await expect
       .poll(() => composer.getAttribute("placeholder"))
-      .toBe("Ajouter une consigne pendant que Agent de démo travaille…");
+      // The model's name once the agent gave its models, its own name until then.
+      .toMatch(/^Ajouter une consigne pendant que (Démo rapide|Agent de démo) travaille…$/);
 
     // Written now, a message waits above the composer instead of being refused.
     await composer.fill("Ensuite, lance les tests");

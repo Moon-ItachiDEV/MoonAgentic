@@ -1,5 +1,5 @@
 import { chmodSync } from "node:fs";
-import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { backup, DatabaseSync, type StatementSync } from "node:sqlite";
 import type {
   AgentSetting,
   Item,
@@ -371,6 +371,9 @@ export interface DeviceRow {
   lastSeen?: number;
 }
 
+/** Pages copied per step of a backup, between which the server's own queries run. */
+const BACKUP_PAGES = 256;
+
 /** Durable state: projects, threads and each thread's timeline items. */
 export class Store {
   readonly db: DatabaseSync;
@@ -380,13 +383,22 @@ export class Store {
   constructor(file: string) {
     this.file = file;
     this.db = new DatabaseSync(file);
-    this.db.exec(`PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;`);
+    // In WAL mode, NORMAL syncs the disk at each checkpoint instead of at each write: a
+    // streamed reply writes many times a second. A power cut can lose the last writes, never
+    // the database.
+    this.db.exec(
+      `PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;`,
+    );
     migrate(this.db, file);
   }
 
-  /** Writes a consistent copy of the whole database to `file`, which must not exist yet. */
-  backup(file: string): void {
-    this.db.exec(`VACUUM INTO '${file.replaceAll("'", "''")}'`);
+  /**
+   * Writes a consistent copy of the whole database to `file`, which must not exist yet. The
+   * copy goes a few hundred pages at a time, off the main thread: the server keeps answering
+   * while a large database is copied.
+   */
+  async backup(file: string): Promise<void> {
+    await backup(this.db, file, { rate: BACKUP_PAGES });
   }
 
   private readonly statements = new Map<string, StatementSync>();

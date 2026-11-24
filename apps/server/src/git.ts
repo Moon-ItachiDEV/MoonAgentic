@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -273,6 +274,39 @@ async function makeWorktree(
  */
 export async function forkPoint(repoDir: string, branch: string): Promise<string> {
   return (await git(repoDir, ["merge-base", branch, "HEAD"])).trim();
+}
+
+/**
+ * The repository a folder is a worktree of, or undefined when it is none: no `.git` of its
+ * own, or a repository git no longer finds. A folder inside another repository is not taken
+ * for a worktree of it.
+ */
+export async function worktreeRepo(worktree: string): Promise<string | undefined> {
+  // A worktree git made has a `.git` file pointing at its repository; a `.git` folder is a
+  // repository of its own, which is nobody's worktree.
+  try {
+    if (!statSync(path.join(worktree, ".git")).isFile()) return undefined;
+  } catch {
+    return undefined;
+  }
+  try {
+    const [top, common] = (
+      await git(worktree, [
+        "rev-parse",
+        "--path-format=absolute",
+        "--show-toplevel",
+        "--git-common-dir",
+      ])
+    )
+      .trim()
+      .split(/\r?\n/);
+    if (!top || !common || !samePath(top, worktree)) return undefined;
+    // Git gives `C:/…` on Windows: the system's own separators, as every other path here.
+    const repo = path.resolve(path.basename(common) === ".git" ? path.dirname(common) : common);
+    return samePath(repo, worktree) ? undefined : repo;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Removes the worktree's folder; its branch and commits stay in the repository. */

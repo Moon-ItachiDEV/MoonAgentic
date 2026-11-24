@@ -2,7 +2,8 @@
 // and the project's own `/` commands. Every path a client names is checked to stay inside
 // the folder, symbolic links included.
 import { execFile } from "node:child_process";
-import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { type Dirent, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_SETUP_FILE, type ProjectCommand, type Skill } from "@moonagentic/protocol";
@@ -64,13 +65,17 @@ export async function gitFiles(dir: string): Promise<string[]> {
   return files.filter((f) => !gone.has(f)).slice(0, MAX_FILES);
 }
 
-function walk(dir: string): string[] {
+/**
+ * Walks a folder that is not a git repository. Each folder is read without blocking, so a
+ * large one (a home folder, a disk of photos) never stops the server answering meanwhile.
+ */
+export async function walk(dir: string): Promise<string[]> {
   const files: string[] = [];
-  const visit = (rel: string, depth: number) => {
+  const visit = async (rel: string, depth: number) => {
     if (files.length >= MAX_FILES || depth > MAX_DEPTH) return;
-    let entries;
+    let entries: Dirent[];
     try {
-      entries = readdirSync(path.join(dir, rel), { withFileTypes: true });
+      entries = await readdir(path.join(dir, rel), { withFileTypes: true });
     } catch {
       return;
     }
@@ -79,13 +84,13 @@ function walk(dir: string): string[] {
       if (files.length >= MAX_FILES) return;
       const child = rel ? `${rel}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
-        if (!SKIPPED.has(entry.name)) visit(child, depth + 1);
+        if (!SKIPPED.has(entry.name)) await visit(child, depth + 1);
       } else if (entry.isFile()) {
         files.push(child);
       }
     }
   };
-  visit("", 0);
+  await visit("", 0);
   return files;
 }
 

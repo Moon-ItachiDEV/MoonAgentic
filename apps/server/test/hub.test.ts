@@ -1833,7 +1833,7 @@ describe("security boundaries", () => {
     const rawSetting = JSON.stringify(store.getSetting("mcpServers", []));
     expect(rawSetting).not.toContain("ultra-secret-42");
     expect(rawSetting).toContain("Authorization");
-    const backup = backupNow(store, path.join(dir, "backups"))!;
+    const backup = (await backupNow(store, path.join(dir, "backups")))!;
     expect(readFileSync(backup).toString("latin1")).not.toContain("ultra-secret-42");
     // Hydrated records in memory still carry the secret for agents.
     expect(await hub.catalog.mcpServers()).toMatchObject([
@@ -1874,7 +1874,7 @@ describe("security boundaries", () => {
     expect(JSON.stringify(legacyStore.getSetting("mcpServers", []))).not.toContain(
       "legacy-plain-secret",
     );
-    const migratedBackup = backupNow(legacyStore, path.join(legacyDir, "backups"))!;
+    const migratedBackup = (await backupNow(legacyStore, path.join(legacyDir, "backups")))!;
     expect(readFileSync(migratedBackup).toString("latin1")).not.toContain("legacy-plain-secret");
     expect(await migratedHub.catalog.mcpServers()).toMatchObject([
       {

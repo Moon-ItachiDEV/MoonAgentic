@@ -8,12 +8,13 @@ import {
   rmSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Item, ServerMessage } from "@moonagentic/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agents } from "../src/agents.ts";
 import {
   branchName,
@@ -472,6 +473,26 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     await hub.whenIdle(threadId);
     return threadId;
   };
+
+  it("removes on start the worktrees no thread holds, and keeps those that one does", async () => {
+    const { root, hub, store, repo, projectId } = repository();
+    const threadId = await isolatedThread(hub, projectId);
+    const held = store.getThread(threadId)!.workspace!.path;
+    // A review cut short by a stop leaves a folder no thread ever recorded.
+    const orphan = path.join(root, "worktrees", "0rphan00");
+    git(repo, "worktree", "add", "-q", "-b", "revue-coupee", orphan);
+    const longAgo = new Date(Date.now() - 3 * 60 * 60_000);
+    for (const dir of [orphan, held]) utimesSync(dir, longAgo, longAgo);
+    await hub.close();
+
+    const again = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+    });
+    cleanups.unshift(() => again.close());
+    await vi.waitFor(() => expect(existsSync(orphan)).toBe(false), { timeout: 20_000 });
+    expect(existsSync(held)).toBe(true);
+    expect(git(repo, "worktree", "list")).not.toContain("0rphan00");
+  }, 40_000);
 
   it("archives a thread with its uncommitted files, and brings them back", async () => {
     const { hub, store, repo, projectId } = repository();
