@@ -46,7 +46,9 @@ import {
   activityLabel,
   activitySteps,
   imageInProgress,
+  imagesMarkdown,
   isPlanModeSwitch,
+  unshownImages,
 } from "../activity.ts";
 import { ImageDraft } from "./ImageDraft.tsx";
 import { StateGlyph } from "./StateGlyph.tsx";
@@ -419,6 +421,8 @@ function Conversation({
               working && b === blocks.length - 1 && block.indices.some((i) => i > lastUser);
             // The image being generated has its place in the thread, not only in the detail.
             const drafting = live ? imageInProgress(items!, block.indices) : undefined;
+            // Once made, the image takes the sketch's place when no answer shows it.
+            const made = unshownImages(items!, block.indices);
             return (
               <Fragment key={block.key}>
                 <ActivityDetail
@@ -431,6 +435,11 @@ function Conversation({
                   mascot={mascot && agent ? { mascot, name: agent.name } : undefined}
                 />
                 {drafting && <ImageDraft since={drafting.at} />}
+                {made.length > 0 && (
+                  <div className="made-imgs">
+                    <Markdown text={imagesMarkdown(made)} threadId={thread.id} />
+                  </div>
+                )}
               </Fragment>
             );
           }

@@ -11,14 +11,41 @@ import { MAX_SERVED_BYTES, servedType } from "./artifacts.ts";
 
 /**
  * Where agents put the images they generate outside the project: Antigravity's conversations
- * (`brain/<id>/…`) and pages, Codex's generated images.
+ * (`brain/<id>/…`) and pages, Codex's generated images. Antigravity started from the command
+ * line (`agy`, which is how the app runs it) keeps its own apart from the desktop one's, in
+ * `antigravity-cli`: looking only in `antigravity` never found an image made from the app.
  */
 export function generatedFolders(home: string): string[] {
+  const gemini = path.join(home, ".gemini");
   return [
-    path.join(home, ".gemini", "antigravity", "brain"),
-    path.join(home, ".gemini", "antigravity", "html_artifacts"),
+    path.join(gemini, "antigravity-cli", "brain"),
+    path.join(gemini, "antigravity", "brain"),
+    path.join(gemini, "antigravity-cli", "html_artifacts"),
+    path.join(gemini, "antigravity", "html_artifacts"),
     path.join(home, ".codex", "generated_images"),
   ];
+}
+
+/**
+ * The images a tool's result says it made, as it wrote them. Codex's image generation gives
+ * the file it saved as the address of an image or of a link, and as `savedPath`; none of it
+ * is in the agent's answer, which often only says « Voici l'image ».
+ */
+export function madeImages(content: unknown, rawOutput: unknown): string[] {
+  const made: string[] = [];
+  const add = (ref: unknown) => {
+    if (typeof ref !== "string" || !ref.trim() || made.includes(ref)) return;
+    const file = refPath(ref);
+    if (file && servedType(file)?.startsWith("image/")) made.push(ref);
+  };
+  for (const part of Array.isArray(content) ? content : []) {
+    const inner = (part as { type?: unknown; content?: { type?: unknown; uri?: unknown } } | null)
+      ?.content;
+    if ((part as { type?: unknown }).type !== "content" || !inner) continue;
+    if (inner.type === "image" || inner.type === "resource_link") add(inner.uri);
+  }
+  add((rawOutput as { savedPath?: unknown } | null | undefined)?.savedPath);
+  return made;
 }
 
 /** The path a reference names, as written: absolute, or relative to the thread's folder. */
@@ -75,8 +102,8 @@ export interface ServedFile {
 /**
  * The file a reference of a thread's answer leads to, when it can be served: of a kind that
  * is shown, no bigger than served files are, and inside one of `roots` once every link is
- * followed. A relative one is looked for in `folder`, then in `generated` and the folders right
- * in them: an agent names the image it made by its name alone.
+ * followed. A relative one is looked for in `folder`, then in `generated` and the folders
+ * below them: an agent names the image it made by its name alone.
  */
 export async function resolveThreadFile(
   ref: string,
@@ -134,34 +161,40 @@ async function firstServed(files: string[], roots: string[]): Promise<ServedFile
   return undefined;
 }
 
-/** At most this many of an agent's conversations are looked in for a name alone. */
-const MAX_GENERATED_DIRS = 400;
+/** At most this many folders are looked in for a name alone. */
+const MAX_GENERATED_DIRS = 1500;
+/** A conversation keeps its images right in its folder, or a few folders below. */
+const MAX_GENERATED_DEPTH = 3;
 
 /**
- * The folders where a name alone may be: each generated folder, then the folders right in
- * it (one per conversation), the most recently changed first.
+ * The folders where a name alone may be: each generated folder, then the folders in it (one
+ * per conversation) and those below, level by level, the most recently changed first.
  */
 async function generatedDirs(generated: string[]): Promise<string[]> {
-  const dirs: string[] = [];
-  const subs: { dir: string; at: number }[] = [];
-  for (const root of generated) {
-    dirs.push(root);
-    let entries;
-    try {
-      entries = await readdir(root, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const dir = path.join(root, entry.name);
+  const dirs = [...generated];
+  let level = generated;
+  for (let depth = 1; depth <= MAX_GENERATED_DEPTH && level.length; depth++) {
+    const subs: { dir: string; at: number }[] = [];
+    for (const parent of level) {
+      let entries;
       try {
-        subs.push({ dir, at: (await stat(dir)).mtimeMs });
+        entries = await readdir(parent, { withFileTypes: true });
       } catch {
-        // gone since
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const dir = path.join(parent, entry.name);
+        try {
+          subs.push({ dir, at: (await stat(dir)).mtimeMs });
+        } catch {
+          // gone since
+        }
       }
     }
+    subs.sort((a, b) => b.at - a.at);
+    level = subs.slice(0, MAX_GENERATED_DIRS - dirs.length).map((s) => s.dir);
+    dirs.push(...level);
   }
-  subs.sort((a, b) => b.at - a.at);
-  return [...dirs, ...subs.slice(0, MAX_GENERATED_DIRS).map((s) => s.dir)];
+  return dirs;
 }

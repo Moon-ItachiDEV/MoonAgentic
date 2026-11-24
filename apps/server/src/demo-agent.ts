@@ -325,12 +325,49 @@ const app = acp
         status: "in_progress",
       });
       await delay(Number(process.env.MOONAGENTIC_DEMO_IMAGE_MS ?? 2500));
-      const made = path.join(os.homedir(), ".gemini", "antigravity", "brain", sessionId);
+      // Started from the command line, as the app does: `antigravity-cli`, not `antigravity`.
+      const made = path.join(os.homedir(), ".gemini", "antigravity-cli", "brain", sessionId);
       mkdirSync(made, { recursive: true });
       const name = `lune_${Date.now()}.png`;
       writeFileSync(path.join(made, name), DEMO_PNG);
       await update({ sessionUpdate: "tool_call_update", toolCallId: "image", status: "completed" });
       await say(`Voici l'image de la lune.\n\n[${name}](${name})`, "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
+
+    // As Codex does: the image is told in the tool's result only (its address, `savedPath`),
+    // and the answer says « Voici l'image » without naming any file.
+    if (ask.includes("peins une image")) {
+      await update({
+        sessionUpdate: "tool_call",
+        toolCallId: "ig_1",
+        title: "Image generation",
+        kind: "other",
+        status: "in_progress",
+      });
+      await delay(Number(process.env.MOONAGENTIC_DEMO_IMAGE_MS ?? 2500));
+      const made = path.join(os.homedir(), ".codex", "generated_images", sessionId);
+      mkdirSync(made, { recursive: true });
+      const savedPath = path.join(made, `ig_${Date.now()}.png`);
+      writeFileSync(savedPath, DEMO_PNG);
+      await update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: "ig_1",
+        status: "completed",
+        content: [
+          {
+            type: "content",
+            content: {
+              type: "image",
+              data: DEMO_PNG.toString("base64"),
+              mimeType: "image/png",
+              uri: savedPath,
+            },
+          },
+        ],
+        rawOutput: { status: "completed", savedPath },
+      });
+      await say("Voici la lune au-dessus des toits.", "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
 

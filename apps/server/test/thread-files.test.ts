@@ -8,7 +8,7 @@ import type { ServerMessage } from "@moonagentic/protocol";
 import { Agents } from "../src/agents.ts";
 import { Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
-import { generatedFolders, refPath, resolveThreadFile } from "../src/thread-files.ts";
+import { generatedFolders, madeImages, refPath, resolveThreadFile } from "../src/thread-files.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -47,6 +47,29 @@ describe("refPath", () => {
     ]) {
       expect(refPath(web)).toBeUndefined();
     }
+  });
+});
+
+describe("madeImages", () => {
+  it("reads the image a tool's result says it saved, as Codex's image generation does", () => {
+    const saved = "C:\\Users\\BreezyHomeCinéma\\.codex\\generated_images\\019a\\ig_1.png";
+    const image = { type: "content", content: { type: "image", data: "AA", uri: saved } };
+    const link = { type: "content", content: { type: "resource_link", name: saved, uri: saved } };
+    expect(madeImages([image], { savedPath: saved })).toEqual([saved]);
+    expect(madeImages([link], undefined)).toEqual([saved]);
+    expect(madeImages(undefined, { savedPath: saved })).toEqual([saved]);
+    // Not what is no image, nor an address of the web, nor a result that says nothing.
+    expect(
+      madeImages(
+        [
+          { type: "content", content: { type: "text", text: saved } },
+          { type: "content", content: { type: "resource_link", uri: "C:\\a\\notes.md" } },
+          { type: "content", content: { type: "image", data: "AA", uri: "https://x.test/a.png" } },
+          { type: "diff", path: "a.png", newText: "" },
+        ],
+        { savedPath: null },
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -134,6 +157,40 @@ describe("resolveThreadFile", () => {
 
   it("knows where agents keep what they generate", () => {
     expect(generatedFolders("/h")).toContain(path.join("/h", ".gemini", "antigravity", "brain"));
+  });
+
+  it("finds the image Antigravity made from the app, kept apart from the desktop one's", async () => {
+    // The app runs Antigravity as `agy`, whose conversations are in `antigravity-cli`, not in
+    // `antigravity`; the home folder has an accent, as on the computer where it was missed.
+    const home = path.join(tempDir(), "BreezyHomeCinéma");
+    const folder = path.join(home, "MoonAgentic", "Discussions");
+    const conversation = path.join(home, ".gemini", "antigravity-cli", "brain", "1795544700000");
+    mkdirSync(folder, { recursive: true });
+    mkdirSync(conversation, { recursive: true });
+    mkdirSync(path.join(home, ".gemini", "antigravity", "brain"), { recursive: true });
+    const name = "naruto_sasuke_mcdonalds_1795544736202.jpg";
+    writeFileSync(path.join(conversation, name), PNG);
+
+    expect(await resolveThreadFile(name, folder, [folder], generatedFolders(home))).toMatchObject({
+      name,
+      type: "image/jpeg",
+    });
+  });
+
+  it("finds an image named alone a few folders below the conversation's", async () => {
+    const root = tempDir();
+    const folder = path.join(root, "discussions");
+    const brain = path.join(root, "brain");
+    mkdirSync(folder, { recursive: true });
+    mkdirSync(path.join(brain, "conv-1", "artifacts", "images"), { recursive: true });
+    mkdirSync(path.join(brain, "conv-1", "a", "b", "c"), { recursive: true });
+    writeFileSync(path.join(brain, "conv-1", "artifacts", "images", "chat_1.png"), PNG);
+    writeFileSync(path.join(brain, "conv-1", "a", "b", "c", "trop_loin.png"), PNG);
+
+    expect(await resolveThreadFile("chat_1.png", folder, [folder], [brain])).toMatchObject({
+      name: "chat_1.png",
+    });
+    expect(await resolveThreadFile("trop_loin.png", folder, [folder], [brain])).toBeUndefined();
   });
 });
 
@@ -227,6 +284,30 @@ describe("file.open", { timeout: 40_000 }, () => {
     expect(await hub.artifactLinks.resolve(ticket, link.name)).toBeUndefined();
     hub.locks.unlock(projectId, "123456");
     expect(await hub.artifactLinks.resolve(ticket, link.name)).toBeDefined();
+  });
+
+  it("keeps the image a tool says it made, and serves it though no answer names it", async () => {
+    // Codex: « Voici la lune » and nothing else; the file is told in the tool's result only.
+    const { hub, store, home, projectId } = await hubWithImage();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Stp peins une image de la lune",
+    });
+    await hub.whenIdle(threadId);
+    const items = store.listItems(threadId);
+    const answer = items.find((i) => i.kind === "agent")!;
+    expect(answer.kind === "agent" && answer.text).not.toMatch(/\.png/);
+    const tool = items.find((i): i is Extract<typeof i, { kind: "tool" }> => i.kind === "tool")!;
+    expect(tool.images).toHaveLength(1);
+    const made = tool.images![0]!;
+    expect(made.startsWith(path.join(home, ".codex", "generated_images"))).toBe(true);
+    expect(await ask(hub, threadId, made)).toMatchObject({ type: "fileLink", mime: "image/png" });
+    // Another image beside it, which no tool of the thread made, stays out of reach.
+    const other = path.join(path.dirname(made), "autre.png");
+    writeFileSync(other, PNG);
+    await expect(ask(hub, threadId, other)).rejects.toThrow(/ne nomme ce fichier/);
   });
 
   it("serves only a file one of the thread's answers names", async () => {

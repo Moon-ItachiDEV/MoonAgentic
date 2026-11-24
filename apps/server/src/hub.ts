@@ -1,7 +1,7 @@
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import type { AgentProcessRef, DiagnosticsMonitor } from "./diagnostics.ts";
-import { generatedFolders, resolveThreadFile } from "./thread-files.ts";
+import { generatedFolders, madeImages, resolveThreadFile } from "./thread-files.ts";
 import { COMPUTER_ACTOR, ProjectLocks } from "./locks.ts";
 import {
   linkClaude,
@@ -1261,12 +1261,13 @@ export class Hub {
       }
       case "file.open": {
         const thread = this.requireThread(message.threadId);
-        // Only a file one of its answers names: the folders where agents keep what they
-        // generate are shared by every project, a locked one's too.
+        // Only a file one of its answers names, or one of its tools says it made: the folders
+        // where agents keep what they generate are shared by every project, a locked one's too.
         const draft = this.drafts.get(thread.id)?.item;
         const named =
           (draft?.kind === "agent" && draft.text.includes(message.ref)) ||
-          this.store.answerHolds(thread.id, message.ref);
+          this.store.answerHolds(thread.id, message.ref) ||
+          this.store.toolMade(thread.id, message.ref);
         if (!named) throw new Error("Aucune réponse de ce fil ne nomme ce fichier.");
         const folder = this.folderOf(thread.projectId, thread.id);
         const project = this.store.getProject(thread.projectId);
@@ -3987,6 +3988,9 @@ export class Hub {
     const existing = this.store.getItem(threadId, id) as ToolItem | undefined;
     const content = update.content ? toolContent(update.content) : undefined;
     const questions = toolQuestions(update.rawInput) ?? existing?.questions;
+    const images = [
+      ...new Set([...(existing?.images ?? []), ...madeImages(update.content, update.rawOutput)]),
+    ];
     // A new call joins the step of the agent's plan it is on.
     if (!existing && update.title) {
       const planId = `plan:${this.turnIds.get(threadId) ?? "late"}`;
@@ -4001,6 +4005,7 @@ export class Hub {
       toolKind: update.kind ?? existing?.toolKind ?? "other",
       status: update.status ?? existing?.status ?? "pending",
       content: content ?? existing?.content ?? [],
+      ...(images.length ? { images } : {}),
       ...(questions ? { questions } : {}),
       // A question the agent holds its turn on keeps what the form asked and its answer.
       ...(existing?.form
