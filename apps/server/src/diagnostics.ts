@@ -406,7 +406,7 @@ export class DiagnosticsMonitor {
     const sampleMs = options.sampleIntervalMs ?? SAMPLE_INTERVAL_MS;
     if (sampleMs > 0) {
       this.sampleTimer = setInterval(() => {
-        void this.periodicCheck();
+        void this.tick();
       }, sampleMs);
       this.sampleTimer.unref();
     }
@@ -445,9 +445,7 @@ export class DiagnosticsMonitor {
   onActivityChanged(): void {
     if (this.closed) return;
     const running = this.options.getRunningTurns();
-    const agents = this.options.getAgents().length;
-    const active = Math.max(running, agents);
-    if (active < 2 && active <= this.loggedMaxConcurrency) return;
+    if (running < 2 || running <= this.loggedMaxConcurrency) return;
     if (this.activityTimer) return;
     this.activityTimer = setTimeout(() => {
       this.activityTimer = undefined;
@@ -459,7 +457,7 @@ export class DiagnosticsMonitor {
 
   private async captureActivityPeak(): Promise<void> {
     const sample = await this.sampleNow();
-    const concurrency = Math.max(sample.runningTurns, sample.liveAgents);
+    const concurrency = sample.runningTurns;
     const at = sample.at;
     const highRam =
       sample.sysUsedRatio >= HIGH_RAM_RATIO || sample.sysFreeBytes < LOW_FREE_RAM_BYTES;
@@ -476,27 +474,28 @@ export class DiagnosticsMonitor {
     }
   }
 
-  private async periodicCheck(): Promise<void> {
+  /** Periodic lightweight check; spawns an OS process scan only when a log or alert is due. */
+  async tick(): Promise<void> {
     if (this.closed) return;
     const { total, free } = this.memInfo();
     const usedRatio = total > 0 ? Math.max(0, (total - free) / total) : 0;
     const highRam = usedRatio >= HIGH_RAM_RATIO || free < LOW_FREE_RAM_BYTES;
-    const liveAgents = this.options.getAgents().length;
     const runningTurns = this.options.getRunningTurns();
-    const active = liveAgents > 0 || runningTurns > 0;
+    const working = runningTurns > 0;
     const at = this.now();
 
-    // Completely idle with comfortable RAM: zero process scans, zero log spam.
-    if (!active && !highRam) return;
+    // Idle agents (waiting in the pool with no running turn) never trigger PowerShell/ps scans.
+    if (!working && !highRam) return;
 
     const needsHighRamLog = highRam && at - this.lastHighRamLogAt >= HIGH_RAM_LOG_INTERVAL_MS;
-    const needsActiveLog = active && at - this.lastActiveLogAt >= ACTIVE_LOG_INTERVAL_MS;
-    const concurrency = Math.max(runningTurns, liveAgents);
-    const isNewPeak = concurrency >= 2 && concurrency > this.loggedMaxConcurrency;
+    const needsActiveLog = working && at - this.lastActiveLogAt >= ACTIVE_LOG_INTERVAL_MS;
+    const isNewPeak = runningTurns >= 2 && runningTurns > this.loggedMaxConcurrency;
 
     if (!needsHighRamLog && !needsActiveLog && !isNewPeak) {
-      // Still sample quietly while active so peaks stay accurate without flooding logs.
-      if (active) await this.sampleNow();
+      // Track new RAM peaks in memory without spawning any child process.
+      if (usedRatio > (this.peakRam?.sysUsedRatio ?? -1)) {
+        await this.sampleNow({ skipProcessScan: true });
+      }
       return;
     }
 
@@ -506,7 +505,7 @@ export class DiagnosticsMonitor {
       this.lastActiveLogAt = sample.at;
       this.log(formatSampleLine(sample, "[perf] ALERTE RAM"));
     } else if (isNewPeak) {
-      this.loggedMaxConcurrency = concurrency;
+      this.loggedMaxConcurrency = runningTurns;
       this.lastActiveLogAt = sample.at;
       this.log(formatSampleLine(sample, "[perf] pic multi-agents"));
     } else if (needsActiveLog) {
@@ -525,7 +524,10 @@ export class DiagnosticsMonitor {
   }
 
   /** Collects a live performance & multi-agent memory sample and updates session peaks. */
-  async sampleNow(options?: { forceProcessScan?: boolean }): Promise<PerfSample> {
+  async sampleNow(options?: {
+    forceProcessScan?: boolean;
+    skipProcessScan?: boolean;
+  }): Promise<PerfSample> {
     const at = this.now();
     const { total, free } = this.memInfo();
     const sysTotalBytes = Math.max(0, total);
@@ -537,7 +539,9 @@ export class DiagnosticsMonitor {
     const runningTurns = this.options.getRunningTurns();
     const startingAgents = this.options.getStartingAgents();
 
-    const needsProcessScan = options?.forceProcessScan || refs.some((r) => r.pid !== undefined);
+    const needsProcessScan =
+      !options?.skipProcessScan &&
+      (options?.forceProcessScan || refs.some((r) => r.pid !== undefined));
     const processes = needsProcessScan ? await this.scanProcessesOnce() : [];
 
     const agents: AgentMemSummary[] = refs.map((ref) => {

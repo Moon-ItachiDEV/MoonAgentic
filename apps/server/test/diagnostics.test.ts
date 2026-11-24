@@ -270,6 +270,71 @@ describe("DiagnosticsMonitor", () => {
     }
     expect(monitor.recordClientError({ source: "window", message: "err-11" }, "pc")).toBe(false);
   });
+
+  it("never spawns OS process scans while agents are idle or between 5-minute active logs", async () => {
+    const { dataDir, logDir, worktreesDir } = tempDirs();
+    let now = new Date("2026-04-15T15:00:00").getTime();
+    let scans = 0;
+    let running = 0;
+    let free = 10 * 1024 ** 3;
+    const total = 16 * 1024 ** 3;
+    const logs: string[] = [];
+
+    const monitor = new DiagnosticsMonitor({
+      dataDir,
+      logDir,
+      worktreesDir,
+      getAgents: () => [{ agentId: "claude", pid: 1234, running: running > 0 }],
+      getRunningTurns: () => running,
+      getStartingAgents: () => 0,
+      hasLockedProjects: () => false,
+      sampleProcesses: async () => {
+        scans += 1;
+        return [{ pid: 1234, ppid: 1, bytes: 200 * 1024 ** 2 }];
+      },
+      now: () => now,
+      memInfo: () => ({ total, free }),
+      serverMem: () => ({ rss: 100 * 1024 ** 2, heapUsed: 40 * 1024 ** 2 }),
+      log: (l) => logs.push(l),
+      error: () => undefined,
+      sampleIntervalMs: 0,
+      lagCheckMs: 0,
+    });
+    cleanups.push(() => monitor.stop());
+
+    // Open idle agent (runningTurns = 0): zero process scans across multiple minutes.
+    await monitor.tick();
+    now += 60_000;
+    await monitor.tick();
+    now += 5 * 60_000;
+    await monitor.tick();
+    expect(scans).toBe(0);
+    expect(logs).toHaveLength(0);
+
+    // Active agent (runningTurns = 1): scans once on the first active log, then skips minutes 1-4.
+    running = 1;
+    await monitor.tick();
+    expect(scans).toBe(1);
+    expect(logs).toHaveLength(1);
+
+    now += 60_000;
+    free = 8 * 1024 ** 3; // RAM rises (still < 80%): peak tracked in memory with 0 process scans.
+    await monitor.tick();
+    expect(scans).toBe(1);
+
+    // At +5 min, scans and logs again.
+    now += 4 * 60_000;
+    await monitor.tick();
+    expect(scans).toBe(2);
+    expect(logs).toHaveLength(2);
+
+    // High RAM (>= 80%): immediately triggers a scan and ALERTE RAM log.
+    now += 60_000;
+    free = 2 * 1024 ** 3;
+    await monitor.tick();
+    expect(scans).toBe(3);
+    expect(logs.at(-1)).toContain("[perf] ALERTE RAM");
+  });
 });
 
 describe("diagnostics HTTP endpoints", () => {

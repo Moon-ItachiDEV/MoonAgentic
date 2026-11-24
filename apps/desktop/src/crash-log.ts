@@ -14,7 +14,11 @@ const pad2 = (n: number) => String(n).padStart(2, "0");
 const dayOf = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 const timeOf = (d: Date) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 
-/** Strips tokens, tickets, Bearer headers, GitHub tokens and API keys before logging. */
+/**
+ * Strips tokens, tickets, Bearer headers, GitHub tokens and API keys before logging.
+ * Kept self-contained so `@moonagentic/desktop` stays dependency-free inside `app.asar`;
+ * mirrors `redact()` in `apps/server/src/supervisor.ts`.
+ */
 export const redactDesktopLine = (line: string): string =>
   line
     .replace(/(token|ticket)=[\w-]+/gi, "$1=…")

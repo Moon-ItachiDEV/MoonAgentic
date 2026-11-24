@@ -39,13 +39,9 @@ const dataDir = path.resolve(
 );
 const logDir = path.join(dataDir, "logs");
 const crashLog = new DesktopCrashLog(logDir);
-process.on("uncaughtException", (error) => {
-  crashLog.write(`[main] uncaughtException : ${formatDesktopError(error)}`);
-  console.error("Erreur fatale (app de bureau) :", error);
-});
-process.on("unhandledRejection", (reason) => {
-  crashLog.write(`[main] unhandledRejection : ${formatDesktopError(reason)}`);
-  console.error("Promesse rejetée (app de bureau) :", reason);
+// Observe uncaught exceptions and unhandled rejections without swallowing Electron's own handling.
+process.on("uncaughtExceptionMonitor", (error, origin) => {
+  crashLog.write(`[main] ${origin} : ${formatDesktopError(error)}`);
 });
 const settingsFile = path.join(app.getPath("userData"), "settings.json");
 const settings = readSettings(settingsFile);
