@@ -1035,4 +1035,28 @@ describe("composer", () => {
       .toBe("3");
     await page.close();
   });
+  it("lists the conversations started outside a project under « Récents », not as a project", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    await page.locator("nav").getByRole("button", { name: "Nouvelle discussion" }).click();
+    await pickAgent(page, /Agent de démo/);
+    await page.keyboard.press("Escape");
+    await composer(page).fill("Une question hors projet");
+    await composer(page).press("Enter");
+    await page.waitForURL(/\/t\//);
+
+    const side = page.locator(".side-scroll");
+    // « Discussions » holds it, but is no project of the user's: no line of its own…
+    await side.getByRole("button", { name: "Une question hors projet" }).first().waitFor();
+    expect(await side.locator(".thr-row.proj", { hasText: "Discussions" }).count()).toBe(0);
+    // …the conversation is under « Récents ».
+    const headings = await side.locator(".sec-h").allTextContents();
+    const rows = await side.locator(".sec-h, .thr-row").allTextContents();
+    expect(headings).toContain("Récents");
+    expect(rows.indexOf("Récents")).toBeLessThan(
+      rows.findIndex((r) => r.includes("Une question hors projet")),
+    );
+    await shot(page, "c23-discussions-recents");
+    await page.close();
+  });
 });

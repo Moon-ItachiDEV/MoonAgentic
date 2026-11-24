@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { pinnedFirst, waitingCount } from "../project-threads.ts";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 import { readPref, writePref } from "../prefs.ts";
-import { RECENT, recentAlwaysShown } from "../recent.ts";
+import { recentAlwaysShown } from "../recent.ts";
 import {
   childrenOf as membersOf,
   conversationsByProject,
@@ -184,13 +184,21 @@ export function Sidebar(props: {
     setFoldedActive({ lead: activeLead, keys: next });
     if (unfolded.has(key)) toggle(key);
   };
+  // « Discussions » holds the conversations started outside any project: not a project of the
+  // user's, so it is not listed with them and its threads go under « Récents ».
+  const discussionsId = state.projects.find(isDiscussions)?.id;
+  const codeProjects = state.projects.filter((p) => p.id !== discussionsId);
   // Opening a thread unfolds its project once, even when multi-project defaults it folded.
   const activeProject = active?.projectId;
   useEffect(() => {
     setFoldedActive((prev) =>
       prev.keys.size === 0 ? prev : { lead: activeLead, keys: new Set() },
     );
-    if (activeProject && !projectOpen(folds[activeProject], state.projects.length === 1)) {
+    if (
+      activeProject &&
+      activeProject !== discussionsId &&
+      !projectOpen(folds[activeProject], codeProjects.length === 1)
+    ) {
       setFold(activeProject, true);
     }
     // Only when the open thread changes, not on every fold.
@@ -198,12 +206,23 @@ export function Sidebar(props: {
   }, [activeProject, activeLead]);
   const known = new Set(state.projects.map((p) => p.id));
   const pinned = [...byProject.values()].flat().filter((t) => t.pinned);
-  // Across projects, only when there are several; a thread whose project is gone too.
-  const recent = [...byProject.values()]
+  // Across projects, only when there are several; a thread whose project is gone too, and
+  // every conversation of « Discussions », which has no line of its own.
+  const recentAll = [...byProject.values()]
     .flat()
-    .filter((t) => !t.pinned && (state.projects.length > 1 || !known.has(t.projectId)))
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, RECENT);
+    .filter(
+      (t) =>
+        !t.pinned &&
+        (codeProjects.length > 1 || !known.has(t.projectId) || t.projectId === discussionsId),
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const moreRecent = unfolded.has("more:recent");
+  const { always: recentShown, foldable: recentFoldable } = recentAlwaysShown(
+    recentAll,
+    members,
+    props.activeThreadId,
+  );
+  const recent = moreRecent ? recentAll : recentShown;
 
   // A team on one line, its members folded under it unless asked or one of them is open.
   const tree = (t: Thread, prefix: string) => {
@@ -290,7 +309,7 @@ export function Sidebar(props: {
   const project = (p: State["projects"][number]) => {
     // Pinned ones too: « Épinglés » is a shortcut, the project still holds them.
     const all = byProject.get(p.id) ?? [];
-    const open = projectOpen(folds[p.id], state.projects.length === 1);
+    const open = projectOpen(folds[p.id], codeProjects.length === 1);
     const { always, foldable } = recentAlwaysShown(all, members, props.activeThreadId);
     const more = unfolded.has(`more:${p.id}`);
     const count = byProject.get(p.id)?.length ?? 0;
@@ -536,7 +555,7 @@ export function Sidebar(props: {
       </nav>
       <div className="side-scroll">
         {/* No projects, no section: « Nouveau projet » above stays the way in. */}
-        {state.projects.length > 0 && (
+        {codeProjects.length > 0 && (
           <button
             className={`sec-h fold${projectsOpen ? "" : " shut"}`}
             aria-expanded={projectsOpen}
@@ -549,11 +568,16 @@ export function Sidebar(props: {
             <IconChevron size={13} />
           </button>
         )}
-        {(projectsOpen ? pinnedFirst(state.projects) : []).flatMap(project)}
+        {(projectsOpen ? pinnedFirst(codeProjects) : []).flatMap(project)}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
         {pinned.flatMap((t) => tree(t, "pin:"))}
         {recent.length > 0 && <div className="sec-h">Récents</div>}
         {recent.flatMap((t) => tree(t, "recent:"))}
+        {recentFoldable > 0 && (
+          <button className="more" aria-expanded={moreRecent} onClick={() => toggle("more:recent")}>
+            {moreRecent ? "Voir moins" : `Voir plus (${recentFoldable})`}
+          </button>
+        )}
         <SidePullRequests threads={state.threads} onOpenThread={props.onOpenThread} />
       </div>
       {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}
@@ -575,6 +599,11 @@ export function Sidebar(props: {
       </div>
     </aside>
   );
+}
+
+/** The project « Discussions » the server makes for conversations outside any project. */
+function isDiscussions(p: { name: string; path: string }): boolean {
+  return p.name === "Discussions" && p.path.split(/[\\/]/).pop() === "Discussions";
 }
 
 /**
