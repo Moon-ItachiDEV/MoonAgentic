@@ -1,16 +1,22 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import type { ServerMessage } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  agyCliServers,
+  agyHubServers,
+  agyLogPort,
   askCodex,
   claudeReading,
+  parseAntigravityQuota,
   parseClaudeUsage,
   parseCodexLimits,
   probeClaude,
   type QuotaReader,
   Quotas,
+  readAntigravityQuota,
   readClaudeQuota,
   readCodexQuota,
   toTime,
@@ -340,6 +346,278 @@ readline.createInterface({ input: process.stdin }).once("line", (line) => {
       transient: true,
       note: expect.stringMatching(/à temps/),
     });
+  });
+});
+
+describe("Antigravity's quotas", () => {
+  // What agy 1.5.15 really answered on a Google AI Ultra account (2026-11-24).
+  const summary = {
+    response: {
+      groups: [
+        {
+          displayName: "Gemini Models",
+          description:
+            "Models within this group: Gemini 4 Neon, Gemini 4 Carbon, Orchestrator (Neon), Gemini 3.8 Flash",
+          buckets: [
+            {
+              bucketId: "gemini-weekly",
+              displayName: "Weekly Limit Remaining",
+              window: "weekly",
+              remainingFraction: 0.95480776,
+              resetTime: "2026-11-30T20:03:15Z",
+            },
+            {
+              bucketId: "gemini-5h",
+              displayName: "Five Hour Limit Remaining",
+              window: "5h",
+              remainingFraction: 0.860996,
+              resetTime: "2026-11-24T01:03:15Z",
+            },
+          ],
+        },
+        {
+          displayName: "Claude and GPT models",
+          description: "Models within this group: Claude Opus 5.5, Claude Sonnet 5.5, GPT-OSS 120B",
+          buckets: [
+            { bucketId: "3p-weekly", window: "weekly", remainingFraction: 1 },
+            { bucketId: "3p-5h", window: "5h", remainingFraction: 1 },
+          ],
+        },
+      ],
+    },
+  };
+  const status = {
+    userStatus: {
+      planStatus: { planInfo: { planName: "Pro" } },
+      userTier: { id: "g1-ultra-tier", name: "Google AI Ultra" },
+    },
+  };
+
+  /** A stand-in for Antigravity's local server, which wants `token` back when it has one. */
+  const fakeServer = async (token: string, answer: unknown = summary) => {
+    const asked: string[] = [];
+    const server: Server = createServer((req, res) => {
+      asked.push(req.url ?? "");
+      res.setHeader("Content-Type", "application/json");
+      if (req.headers["x-codeium-csrf-token"] !== token) {
+        res.statusCode = 401;
+        res.end(JSON.stringify({ code: "unauthenticated", message: "missing CSRF token" }));
+        return;
+      }
+      res.end(JSON.stringify(req.url?.endsWith("/GetUserStatus") ? status : answer));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+    return { port, asked, close: () => new Promise((resolve) => server.close(resolve)) };
+  };
+  const hubDir = (home: string) => {
+    const dir = path.join(home, ".gemini", "antigravity", "daemon");
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  };
+  const logDir = (home: string) => {
+    const dir = path.join(home, ".gemini", "antigravity-cli", "log");
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  };
+  const logLines = (https: number, http: number) =>
+    `I1124 server.go:1] Language server listening on random port at ${https} for HTTPS (gRPC)\n` +
+    `I1124 server.go:2] Language server listening on random port at ${http} for HTTP\n`;
+
+  it("reads each group's 5-hour and weekly windows from the share left", () => {
+    const reading = parseAntigravityQuota(summary, status);
+    expect(reading.state).toBe("ok");
+    expect(reading.plan).toBe("Google AI Ultra");
+    expect(reading.windows).toEqual([
+      {
+        label: "Session de 5 h, Gemini",
+        short: "5 h Gemini",
+        model: "Gemini",
+        models: ["Gemini 4 Neon", "Gemini 4 Carbon", "Orchestrator (Neon)", "Gemini 3.8 Flash"],
+        usedPercent: 13.9,
+        resetsAt: Date.parse("2026-11-24T01:03:15Z"),
+      },
+      {
+        label: "Semaine, Gemini",
+        short: "semaine Gemini",
+        model: "Gemini",
+        models: ["Gemini 4 Neon", "Gemini 4 Carbon", "Orchestrator (Neon)", "Gemini 3.8 Flash"],
+        usedPercent: 4.5,
+        resetsAt: Date.parse("2026-11-30T20:03:15Z"),
+      },
+      {
+        label: "Session de 5 h, Claude et GPT",
+        short: "5 h Claude et GPT",
+        model: "Claude et GPT",
+        models: ["Claude Opus 5.5", "Claude Sonnet 5.5", "GPT-OSS 120B"],
+        usedPercent: 0,
+      },
+      {
+        label: "Semaine, Claude et GPT",
+        short: "semaine Claude et GPT",
+        model: "Claude et GPT",
+        models: ["Claude Opus 5.5", "Claude Sonnet 5.5", "GPT-OSS 120B"],
+        usedPercent: 0,
+      },
+    ]);
+  });
+
+  it("says so when no figure comes back, and never invents one", () => {
+    expect(parseAntigravityQuota({ response: { groups: [] } }).state).toBe("unreadable");
+    expect(parseAntigravityQuota(undefined).state).toBe("unreadable");
+    const odd = parseAntigravityQuota({
+      groups: [{ displayName: "Gemini Models", buckets: [{ window: "5h" }, null, "x"] }],
+    });
+    expect(odd.state).toBe("unreadable");
+    // Without the plan's answer the figures still count.
+    expect(parseAntigravityQuota(summary).plan).toBeUndefined();
+    expect(parseAntigravityQuota(summary).state).toBe("ok");
+  });
+
+  it("finds the plain-HTTP port in agy's log", () => {
+    expect(agyLogPort(logLines(51000, 51001))).toBe(51001);
+    expect(agyLogPort("nothing here")).toBeUndefined();
+    expect(agyLogPort("listening on random port at 51000 for HTTPS (gRPC)")).toBeUndefined();
+  });
+
+  it("asks the desktop app's running server with its token, skipping dead ones", async () => {
+    const home = tmp();
+    const server = await fakeServer("secret-token");
+    try {
+      const dir = hubDir(home);
+      // Left behind by a server that stopped: its process is gone.
+      writeFileSync(
+        path.join(dir, "hub_1.json"),
+        JSON.stringify({ pid: 2 ** 30, httpPort: 1, csrfToken: "old" }),
+      );
+      writeFileSync(path.join(dir, "hub_2.json"), "{ not json");
+      writeFileSync(
+        path.join(dir, `hub_${server.port}.json`),
+        JSON.stringify({ pid: process.pid, httpPort: server.port, csrfToken: "secret-token" }),
+      );
+      expect(await agyHubServers(home)).toEqual([{ port: server.port, csrf: "secret-token" }]);
+      const reading = await readAntigravityQuota({ home, agy: null });
+      expect(reading.state).toBe("ok");
+      expect(reading.plan).toBe("Google AI Ultra");
+      expect(reading.windows).toHaveLength(4);
+      expect(server.asked).toEqual([
+        "/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary",
+        "/exa.language_server_pb.LanguageServerService/GetUserStatus",
+      ]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("asks a running agy's own server, found through its log", async () => {
+    const home = tmp();
+    const server = await fakeServer("");
+    try {
+      const dir = logDir(home);
+      writeFileSync(path.join(dir, `acp-server-2026-11-24-${2 ** 30}.log`), logLines(1, 2));
+      writeFileSync(
+        path.join(dir, `acp-server-2026-11-24-${process.pid}.log`),
+        logLines(server.port + 1, server.port),
+      );
+      expect(await agyCliServers(home)).toEqual([{ port: server.port, csrf: "" }]);
+      expect((await readAntigravityQuota({ home, agy: null })).state).toBe("ok");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("starts agy when nothing runs, asks, and stops it", async () => {
+    const home = tmp();
+    const dir = logDir(home);
+    const pidFile = path.join(home, "agy.pid");
+    const script = path.join(home, "fake-agy.mjs");
+    writeFileSync(
+      script,
+      `import { createServer } from "node:http";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
+if (process.argv[2] !== "acp") process.exit(2);
+const server = createServer((req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.end(JSON.stringify(req.url.endsWith("/GetUserStatus") ? {} : ${JSON.stringify(summary)}));
+});
+process.stdin.once("data", () => {
+  server.listen(0, "127.0.0.1", () => {
+    const port = server.address().port;
+    writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));
+    writeFileSync(
+      path.join(${JSON.stringify(dir)}, "acp-server-2026-11-24-" + process.pid + ".log"),
+      "Language server listening on random port at " + port + " for HTTP\\n",
+    );
+  });
+});
+`,
+    );
+    const reading = await readAntigravityQuota({
+      home,
+      agy: { command: process.execPath, args: [script] },
+    });
+    expect(reading.state).toBe("ok");
+    expect(reading.windows.map((w) => w.short)).toContain("semaine Gemini");
+    const pid = Number(readFileSync(pidFile, "utf8"));
+    // Stopped once asked: nothing of agy lives on.
+    await expect
+      .poll(() => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(false);
+  });
+
+  it("says why when agy is missing, refuses or never opens its server", async () => {
+    const home = tmp();
+    const missing = await readAntigravityQuota({ home, agy: null });
+    expect(missing).toMatchObject({ state: "unreadable" });
+    expect(missing.note).toContain("agy introuvable");
+    expect(missing.transient).toBeFalsy();
+
+    const silent = path.join(home, "silent.mjs");
+    writeFileSync(silent, "setTimeout(() => {}, 60_000);");
+    const late = await readAntigravityQuota({
+      home,
+      agy: { command: process.execPath, args: [silent] },
+      startTimeoutMs: 400,
+    });
+    expect(late).toMatchObject({ state: "unreadable", transient: true });
+    expect(late.note).toContain("à temps");
+
+    const crashing = path.join(home, "crash.mjs");
+    writeFileSync(crashing, `console.error("fatal boom"); process.exit(1);`);
+    const crashed = await readAntigravityQuota({
+      home,
+      agy: { command: process.execPath, args: [crashing] },
+    });
+    expect(crashed.note).toContain("fatal boom");
+
+    // A server that wants a token we do not have: told as not signed in, not as figures.
+    const server = await fakeServer("wanted");
+    try {
+      writeFileSync(
+        path.join(logDir(home), `acp-server-x-${process.pid}.log`),
+        logLines(1, server.port),
+      );
+      const refused = await readAntigravityQuota({ home, agy: null });
+      expect(refused.state).toBe("unreadable");
+      expect(refused.note).toContain("missing CSRF token");
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("stops when the read is cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const reading = await readAntigravityQuota({ home: tmp(), agy: null }, controller.signal);
+    expect(reading).toMatchObject({ state: "unreadable", transient: true });
   });
 });
 

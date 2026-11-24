@@ -20,29 +20,36 @@ const modelWords = (text: string) =>
 /**
  * Whether a window limits the model in use. A window of one model (« Opus », « Fable 5.2 »)
  * counts only when the model's id or name holds all its words, in order: « Fable 5.2 » is not
- * « Fable 5.3 », and a leading « Claude » names no model on its own.
+ * « Fable 5.3 », and a leading « Claude » names no model on its own. A window of a group of
+ * models counts for each of them.
  */
 export function limitsModel(window: QuotaWindow, model?: (string | undefined)[]): boolean {
-  if (!window.model) return true;
-  const words = modelWords(window.model);
-  if (words[0] === "claude") words.shift();
-  if (!words.length) return false;
-  const wanted = ` ${words.join(" ")} `;
-  return !!model?.some((m) => !!m && ` ${modelWords(m).join(" ")} `.includes(wanted));
+  if (!window.model && !window.models?.length) return true;
+  const names = window.models?.length ? window.models : [window.model!];
+  return names.some((name) => {
+    const words = modelWords(name);
+    if (words[0] === "claude") words.shift();
+    if (!words.length) return false;
+    const wanted = ` ${words.join(" ")} `;
+    return !!model?.some((m) => !!m && ` ${modelWords(m).join(" ")} `.includes(wanted));
+  });
 }
 
 /**
  * The window closest to its limit, the one that stops the agent first. A window of one model
- * counts only for that model: without one, only the agent's own windows count.
+ * counts only for that model: without one, only the agent's own windows count. An agent whose
+ * every window is a model's (Antigravity) has no window of its own: where no model is in use,
+ * its fullest one stands for it.
  */
 export function tightest(
   quota: AgentQuota | undefined,
   model?: (string | undefined)[],
 ): QuotaWindow | undefined {
   if (!quota || quota.state !== "ok") return undefined;
+  const any = model === undefined && quota.windows.every((w) => !limitsModel(w));
   let worst: QuotaWindow | undefined;
   for (const w of quota.windows) {
-    if (!limitsModel(w, model)) continue;
+    if (!any && !limitsModel(w, model)) continue;
     if (!worst || w.usedPercent > worst.usedPercent) worst = w;
   }
   return worst;

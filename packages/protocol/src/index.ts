@@ -954,6 +954,11 @@ export interface QuotaWindow {
    * stops that model only, not the agent.
    */
   model?: string;
+  /**
+   * When the window limits a group of models (« Gemini 4 Neon », « Gemini 4 Carbon »…), their
+   * names as the agent gives them: `model` then names the group (« Gemini »).
+   */
+  models?: string[];
 }
 
 /**
