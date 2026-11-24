@@ -47,6 +47,7 @@ import {
 import { StateGlyph } from "./StateGlyph.tsx";
 import { Mascot } from "./Mascot.tsx";
 import { mascotExpression } from "../mascot.ts";
+import { speakerName } from "../speaker.ts";
 import type { GlyphKind } from "../glyphs.ts";
 
 /** The working line's verb, when the agent's name stands before it. */
@@ -446,7 +447,8 @@ function Conversation({
               <StateGlyph kind={lastGlyph} size={18} />
             )}
             <span className="shimmer">
-              {agent?.name ?? "L'agent"} {WORKING_VERB[lastGlyph] ?? "travaille…"}
+              {agent ? speakerName(agent, thread) : "L'agent"}{" "}
+              {WORKING_VERB[lastGlyph] ?? "travaille…"}
             </span>
           </div>
         )}
@@ -610,7 +612,7 @@ const FeedItem = memo(function FeedItem({
           {showBy && (
             <div className="by">
               <AgentBadge agent={agent} small />
-              {agent?.name ?? "Agent retiré"}
+              {speakerName(agent, thread)}
             </div>
           )}
           {/* The team card shows the plan; its raw JSON is for the server only. */}
