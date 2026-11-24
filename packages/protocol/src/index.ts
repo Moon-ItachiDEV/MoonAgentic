@@ -1281,6 +1281,19 @@ export type ServerMessage =
    * the token, for the files of that thread's folder alone, and only for some minutes.
    */
   | { type: "artifactLink"; requestId: string; url: string; expiresAt: number }
+  /**
+   * Where a file an answer names can be seen for a while, in the same way as an artifact:
+   * an image the agent made, a PDF, a page.
+   */
+  | {
+      type: "fileLink";
+      requestId: string;
+      url: string;
+      name: string;
+      mime: string;
+      size: number;
+      expiresAt: number;
+    }
   /** What deleting merged branches did: those deleted, and those kept with why. */
   | {
       type: "branchesDeleted";
@@ -1925,6 +1938,16 @@ export const ClientMessage = z.discriminatedUnion("type", [
     requestId: id,
     threadId: id,
     path: z.string().min(1).max(4096),
+  }),
+  /**
+   * Asks for an address to see a file an answer of this thread names, as the agent wrote it
+   * (a path of the computer, `file:///…`, or relative to the thread's folder); see `fileLink`.
+   */
+  z.object({
+    type: z.literal("file.open"),
+    requestId: id,
+    threadId: id,
+    ref: z.string().min(1).max(4096),
   }),
   /** Lists the project repository's `moon/*` branches; see `projectBranches`. */
   z.object({ type: z.literal("project.branches"), requestId: id, projectId: id }),

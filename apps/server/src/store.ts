@@ -700,6 +700,18 @@ export class Store {
     this.sql(`UPDATE threads SET acp_session_id = ? WHERE id = ?`).run(sessionId, threadId);
   }
 
+  /** Whether an answer of the thread, as it is written down, holds this text. */
+  answerHolds(threadId: string, text: string): boolean {
+    // Looked for as JSON writes it, then checked in the answer itself.
+    const rows = this.sql(
+      `SELECT data FROM items WHERE thread_id = ? AND instr(data, ?) > 0 ORDER BY seq DESC`,
+    ).all(threadId, JSON.stringify(text).slice(1, -1)) as { data: string }[];
+    return rows.some((r) => {
+      const item = JSON.parse(r.data) as Item;
+      return item.kind === "agent" && item.text.includes(text);
+    });
+  }
+
   listItems(threadId: string): Item[] {
     const rows = this.sql(`SELECT data FROM items WHERE thread_id = ? ORDER BY seq`).all(
       threadId,

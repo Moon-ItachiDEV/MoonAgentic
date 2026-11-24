@@ -1,5 +1,6 @@
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
+import { generatedFolders, resolveThreadFile } from "./thread-files.ts";
 import { COMPUTER_ACTOR, ProjectLocks } from "./locks.ts";
 import {
   linkClaude,
@@ -370,13 +371,21 @@ export class Hub {
   /** The project of each thread looked at while some are locked: a thread never moves. */
   private readonly threadProjects = new Map<string, string>();
   /** The addresses artifacts are shown from, each for one thread's folder. */
-  readonly artifactLinks = new ArtifactLinks((id) => {
-    const thread = this.store.getThread(id);
-    // A locked project's files are not shown either, even from an address given before.
-    return thread && !thread.archived && !this.locks.isLocked(thread.projectId)
-      ? thread.workspace
-      : undefined;
-  });
+  readonly artifactLinks = new ArtifactLinks(
+    (id) => {
+      const thread = this.store.getThread(id);
+      // A locked project's files are not shown either, even from an address given before.
+      return thread && !thread.archived && !this.locks.isLocked(thread.projectId)
+        ? thread.workspace
+        : undefined;
+    },
+    Date.now,
+    // The files its answers name stay to be seen in a resolved thread, which is read again.
+    (id) => {
+      const thread = this.store.getThread(id);
+      return !!thread && !this.locks.isLocked(thread.projectId);
+    },
+  );
   /**
    * Threads busy with their branch or their agent (a push, a step back, a hand-off), with
    * what to answer a message or another such step meanwhile.
@@ -1241,6 +1250,45 @@ export class Hub {
           type: "artifactLink",
           requestId: message.requestId,
           url: artifactUrl(ticket, message.path),
+          expiresAt,
+        });
+        return;
+      }
+      case "file.open": {
+        const thread = this.requireThread(message.threadId);
+        // Only a file one of its answers names: the folders where agents keep what they
+        // generate are shared by every project, a locked one's too.
+        const draft = this.drafts.get(thread.id)?.item;
+        const named =
+          (draft?.kind === "agent" && draft.text.includes(message.ref)) ||
+          this.store.answerHolds(thread.id, message.ref);
+        if (!named) throw new Error("Aucune réponse de ce fil ne nomme ce fichier.");
+        const folder = this.folderOf(thread.projectId, thread.id);
+        const project = this.store.getProject(thread.projectId);
+        const roots = [
+          folder,
+          ...(project ? [project.path] : []),
+          ...(thread.workspace?.path ? [thread.workspace.path] : []),
+          ...generatedFolders(this.homeDir),
+        ];
+        const found = await resolveThreadFile(message.ref, folder, roots);
+        if (!found) {
+          throw new Error(
+            "Ce fichier ne peut pas être ouvert d'ici : il n'existe plus, n'est pas une image, un PDF ou une page, ou n'est pas dans les dossiers de ce fil.",
+          );
+        }
+        const { ticket, expiresAt } = this.artifactLinks.issueFile(
+          thread.id,
+          found.file,
+          client.deviceId,
+        );
+        client.send({
+          type: "fileLink",
+          requestId: message.requestId,
+          url: artifactUrl(ticket, found.name),
+          name: found.name,
+          mime: found.type,
+          size: found.size,
           expiresAt,
         });
         return;

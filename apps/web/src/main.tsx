@@ -26,6 +26,7 @@ import "./queue.css";
 import "./goal.css";
 import "./planner-run.css";
 import "./images.css";
+import "./local-files.css";
 import "./mcp-scope.css";
 import "./overview.css";
 import "./quotas.css";
