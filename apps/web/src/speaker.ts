@@ -1,4 +1,5 @@
 import type { AgentInfo, Thread } from "@moonagentic/protocol";
+import { modelLabel } from "./model-label.ts";
 
 /**
  * The name shown above an agent's answer and on its working line: the model that answers
@@ -14,5 +15,8 @@ export function speakerName(
   if (!agent) return "Agent retiré";
   const model = agent.id === thread.agentId ? (thread.model ?? agent.defaultModel) : undefined;
   if (!model) return agent.name;
-  return agent.models?.find((m) => m.id === model)?.name ?? model;
+  const choice = agent.models?.find((m) => m.id === model);
+  if (!choice) return model;
+  const label = modelLabel(choice);
+  return label === "Par défaut" ? agent.name : label.replace(/\s*\(par défaut\)$/, "");
 }

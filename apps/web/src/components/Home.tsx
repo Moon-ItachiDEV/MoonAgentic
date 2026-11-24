@@ -1,5 +1,6 @@
 import type { Project, Thread } from "@moonagentic/protocol";
 import type { State } from "../connection.ts";
+import { isDiscussionsProject } from "../default-models.ts";
 import { mcpCount } from "../mcp-scope.ts";
 import { MoonMark } from "./MoonMark.tsx";
 import { Overview } from "./Overview.tsx";
@@ -27,6 +28,8 @@ export function Home({
   };
 }) {
   const available = state.agents.filter((a) => a.available).length;
+  const hasCodeProject = state.projects.some((p) => !isDiscussionsProject(p));
+  const shownProject = project && !isDiscussionsProject(project) ? project : undefined;
   // Those a thread started here is given: for every project, or for this one.
   const mcp = mcpCount(state.mcpServers, project?.id);
   const withOverview = !!overview && state.ready && state.threads.length > 0;
@@ -37,10 +40,12 @@ export function Home({
         <h1 className="greet">{greeting(new Date().getHours())}</h1>
         {state.ready && (
           <div className="greet-sub">
-            {project ? (
-              <span title={project.path}>{project.name}</span>
-            ) : (
+            {shownProject ? (
+              <span title={shownProject.path}>{shownProject.name}</span>
+            ) : !hasCodeProject ? (
               <button onClick={onNewProject}>Crée ton premier projet</button>
+            ) : (
+              <span>Hors projet</span>
             )}
             <span className="sep" />
             <span>

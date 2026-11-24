@@ -13,6 +13,7 @@ import {
   type RouteKind,
 } from "@moonagentic/protocol";
 import { parseRouteValue, routeChoices, routeValue } from "../route-choices.ts";
+import { modelNameOf } from "../model-label.ts";
 import { KIND_LABEL } from "../project-threads.ts";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
@@ -642,7 +643,7 @@ export function SettingsPage(props: {
                 <div className="set-chips">
                   {(props.favorites[a.id] ?? []).map((m) => (
                     <span key={m} className="set-chip">
-                      {a.models?.find((x) => x.id === m)?.name ?? m}
+                      {modelNameOf(a.models, m)}
                       <button
                         aria-label={`Retirer ${m} des favoris`}
                         onClick={() =>
@@ -674,7 +675,7 @@ export function SettingsPage(props: {
     case "coordinator": {
       const named = (m: TeamMember) => {
         const agent = props.agents.find((a) => a.id === m.agentId);
-        const model = m.model && (agent?.models?.find((x) => x.id === m.model)?.name ?? m.model);
+        const model = modelNameOf(agent?.models, m.model);
         return `${agent?.name ?? m.agentId}${model ? ` · ${model}` : ""}`;
       };
       const team = props.coordinator.team;

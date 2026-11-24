@@ -1,6 +1,12 @@
 import type { AgentInfo } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
-import { coordinatorDefault, findModel, looseDefault } from "./default-models.ts";
+import {
+  coordinatorDefault,
+  findModel,
+  isDiscussionsProject,
+  isLooseHome,
+  looseDefault,
+} from "./default-models.ts";
 
 const agent = (id: string, extra: Partial<AgentInfo> = {}): AgentInfo =>
   ({ id, name: id, short: id.slice(0, 2), available: true, ...extra }) as AgentInfo;
@@ -43,5 +49,31 @@ describe("default models", () => {
     expect(looseDefault([claude, { ...agy, available: false }])).toBeUndefined();
     expect(looseDefault([claude, { ...agy, modelsError: "agy est parti" }])).toBeUndefined();
     expect(findModel([agent("antigravity")], () => true)).toBeUndefined();
+  });
+
+  it("recognizes Discussions and treats home without a code project as loose mode", () => {
+    expect(isDiscussionsProject({ name: "Discussions" })).toBe(true);
+    expect(isDiscussionsProject({ name: "MoonAgentic" })).toBe(false);
+    expect(isDiscussionsProject(undefined)).toBe(false);
+
+    // Home with only Discussions or no project starts on Hydrogen immediately.
+    expect(isLooseHome({ routeName: "home", loose: false, project: undefined })).toBe(true);
+    expect(isLooseHome({ routeName: "home", loose: false, project: { name: "Discussions" } })).toBe(
+      true,
+    );
+    // Home with a code project stays on the user's pick unless « Nouvelle discussion » was asked.
+    expect(isLooseHome({ routeName: "home", loose: false, project: { name: "MoonAgentic" } })).toBe(
+      false,
+    );
+    expect(isLooseHome({ routeName: "home", loose: true, project: { name: "MoonAgentic" } })).toBe(
+      true,
+    );
+    // Outside home (project page or thread), loose mode does not apply.
+    expect(
+      isLooseHome({ routeName: "project", loose: false, project: { name: "Discussions" } }),
+    ).toBe(false);
+    expect(
+      isLooseHome({ routeName: "thread", loose: true, project: { name: "Discussions" } }),
+    ).toBe(false);
   });
 });
