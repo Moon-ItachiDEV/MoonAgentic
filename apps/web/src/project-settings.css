@@ -1,0 +1,387 @@
+/* A project's icon and tint, and its settings: instructions, commands and skills. */
+:root {
+  --pc-moon: #3a55d6;
+  --pc-sky: #1f7fbf;
+  --pc-mint: #17866a;
+  --pc-sun: #a5650b;
+  --pc-coral: #c4502f;
+  --pc-rose: #c23c72;
+  --pc-violet: #7a4fd6;
+  --pc-slate: #5b6170;
+}
+:root[data-theme="dark"] {
+  --pc-moon: #8399ff;
+  --pc-sky: #5cb2ec;
+  --pc-mint: #4fc7a2;
+  --pc-sun: #e2a740;
+  --pc-coral: #f0845f;
+  --pc-rose: #f07aa8;
+  --pc-violet: #a88bf0;
+  --pc-slate: #a3a8b6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pc-moon: #8399ff;
+    --pc-sky: #5cb2ec;
+    --pc-mint: #4fc7a2;
+    --pc-sun: #e2a740;
+    --pc-coral: #f0845f;
+    --pc-rose: #f07aa8;
+    --pc-violet: #a88bf0;
+    --pc-slate: #a3a8b6;
+  }
+}
+.pc-moon {
+  --pc: var(--pc-moon);
+}
+.pc-sky {
+  --pc: var(--pc-sky);
+}
+.pc-mint {
+  --pc: var(--pc-mint);
+}
+.pc-sun {
+  --pc: var(--pc-sun);
+}
+.pc-coral {
+  --pc: var(--pc-coral);
+}
+.pc-rose {
+  --pc: var(--pc-rose);
+}
+.pc-violet {
+  --pc: var(--pc-violet);
+}
+.pc-slate {
+  --pc: var(--pc-slate);
+}
+
+/* The icon: an emoji or letters on a soft tile of its tint. */
+.pj-ico {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--pc, var(--muted)) 14%, transparent);
+  color: var(--pc, var(--fg));
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.pj-fold {
+  display: inline-flex;
+  color: var(--pc);
+}
+.pp-title .pj-ico,
+.pp-title .pj-fold {
+  vertical-align: -3px;
+  margin-right: 10px;
+  border-radius: 8px;
+}
+
+.dialog.ps {
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+}
+.ps-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.ps-head h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The tabs: the two-sided track of « Nouveau projet », with four sides. */
+.ps-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--sunken);
+}
+.ps-tabs button {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border-radius: 9px;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ps-tabs button:hover:not([aria-selected="true"]) {
+  color: var(--fg);
+}
+.ps-tabs button[aria-selected="true"] {
+  background: var(--seg-on);
+  color: var(--fg);
+  box-shadow:
+    0 0 0 0.5px rgba(24, 24, 40, 0.06),
+    0 1px 2px rgba(24, 24, 40, 0.08),
+    0 2px 6px -2px rgba(24, 24, 40, 0.1);
+  font-weight: 500;
+}
+.ps-body,
+.ps-edit {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.dialog .ps-quiet,
+.ps-quiet {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.dialog .ps-note {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--warnbg);
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ps-note .mono,
+.ps-list .mono {
+  font: 12px var(--mono);
+  overflow-wrap: anywhere;
+}
+.ps-err {
+  color: var(--err-tx);
+  font-size: 12px;
+}
+.ps-ok {
+  color: var(--ok-tx);
+  font-size: 13px;
+}
+
+.ps-preview {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: var(--card);
+  font-size: 16px;
+  font-weight: 600;
+  min-width: 0;
+}
+.ps-preview > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ps-field {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ps-icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ps-icons input {
+  width: 96px;
+  height: 36px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: var(--sunken);
+  padding: 0 10px;
+  color: var(--fg);
+  font-size: 14px;
+  outline: none;
+}
+.ps-icons input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.ps-pick {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--card);
+  font-size: 17px;
+  line-height: 1;
+}
+.ps-pick:hover {
+  background: var(--hover);
+}
+.ps-pick[aria-pressed="true"] {
+  box-shadow: 0 0 0 4px var(--accent-soft);
+  background: var(--accbg);
+}
+.ps-link {
+  justify-self: start;
+  color: var(--accent);
+  font-size: 13px;
+}
+.ps-link:hover {
+  text-decoration: underline;
+}
+.ps-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ps-color {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--pc);
+  transition: transform 0.15s var(--ease);
+}
+.ps-color:hover {
+  transform: scale(1.08);
+}
+.ps-color[aria-checked="true"] {
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 4px var(--pc);
+}
+
+.ps-text {
+  width: 100%;
+  min-height: 220px;
+  max-height: 50dvh;
+  resize: vertical;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: var(--sunken);
+  padding: 10px 12px;
+  color: var(--fg);
+  font: 13px/1.55 var(--mono);
+  outline: none;
+}
+.ps-text:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 4px var(--accent-soft);
+}
+.ps-edit .ps-text {
+  min-height: 160px;
+}
+.ps-edit small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.ps-edit .ps-err {
+  color: var(--err-tx);
+}
+.ps-acts {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.ps-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--card);
+}
+.ps-line > div {
+  flex: 1;
+  min-width: 0;
+}
+.ps-line b {
+  font-size: 14px;
+  font-weight: 500;
+}
+.dialog .ps-line p {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ps-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--okbg);
+  color: var(--ok-tx);
+  font-size: 12px;
+  font-weight: 500;
+}
+.ps-tag::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.ps-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--card);
+  display: grid;
+  gap: 2px;
+}
+.ps-list li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  min-width: 0;
+}
+.ps-list li:hover {
+  background: var(--hover);
+}
+.ps-list li > div {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.ps-list b {
+  font-size: 14px;
+  font-weight: 500;
+}
+.ps-list b.mono {
+  font: 500 13px var(--mono);
+}
+.dialog .ps-list p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ps-list small {
+  color: var(--faint);
+}
+.btn.quiet.ps-del {
+  color: var(--err-tx);
+}
+
+@media (max-width: 640px) {
+  .ps-tabs button,
+  .ps-pick,
+  .ps-icons input {
+    height: 44px;
+  }
+  .ps-pick {
+    width: 44px;
+  }
+  .ps-list li {
+    flex-wrap: wrap;
+  }
+}

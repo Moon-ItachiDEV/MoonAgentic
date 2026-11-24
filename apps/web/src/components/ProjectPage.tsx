@@ -27,6 +27,8 @@ import {
 import { AgentBadge } from "./AgentBadge.tsx";
 import { BranchCleanup } from "./BranchCleanup.tsx";
 import { IconChevron, IconPlus } from "./icons.tsx";
+import { ProjectIcon } from "./ProjectIcon.tsx";
+import { ProjectSettings } from "./ProjectSettings.tsx";
 import { PrChip } from "./PullRequestStatus.tsx";
 import { ThreadMenu } from "./ThreadMenu.tsx";
 
@@ -89,6 +91,7 @@ export function ProjectPage(props: {
   };
   const [folds, setFolds] = useState(readFolds);
   const [cleaning, setCleaning] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   /** Beside the coordinator: the threads, or what the coordinator works with. */
   const [tab, setTab] = useState<"threads" | "context">("threads");
   const context = !!props.panel && tab === "context" && !!props.coordinator;
@@ -127,7 +130,12 @@ export function ProjectPage(props: {
                   </button>
                 </div>
               ) : (
-                <h1 className="pp-title">{props.project.name}</h1>
+                <h1 className="pp-title">
+                  {(props.project.icon || props.project.color) && (
+                    <ProjectIcon project={props.project} size={22} />
+                  )}
+                  {props.project.name}
+                </h1>
               )
             ) : (
               <input
@@ -171,6 +179,7 @@ export function ProjectPage(props: {
                     }),
                 },
                 { label: "Renommer", run: () => setRenaming(props.project.name) },
+                { label: "Réglages du projet…", run: () => setSetupOpen(true) },
                 // Only where this device notifies at all: nothing to cut otherwise.
                 ...(notificationsOn()
                   ? [
@@ -415,6 +424,7 @@ export function ProjectPage(props: {
         })}
       </div>
       {cleaning && <BranchCleanup project={props.project} onClose={() => setCleaning(false)} />}
+      {setupOpen && <ProjectSettings project={props.project} onClose={() => setSetupOpen(false)} />}
     </div>
   );
 }

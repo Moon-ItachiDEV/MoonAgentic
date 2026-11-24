@@ -4,6 +4,7 @@ import { useQuotas } from "../use-quotas.ts";
 import { connection, type State } from "../connection.ts";
 import { useEffect, useRef, useState } from "react";
 import { pinnedFirst, waitingCount } from "../project-threads.ts";
+import { ProjectIcon } from "./ProjectIcon.tsx";
 import { readPref, writePref } from "../prefs.ts";
 import { RECENT, recentAlwaysShown } from "../recent.ts";
 import {
@@ -305,7 +306,7 @@ export function Sidebar(props: {
           aria-label={`${open ? "Replier" : "Déplier"} le projet ${p.name}`}
           onClick={() => setFold(p.id, !open)}
         >
-          <IconFolder />
+          <ProjectIcon project={p} />
           <IconChevron size={11} />
         </button>
         <button

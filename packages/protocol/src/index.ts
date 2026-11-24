@@ -219,6 +219,63 @@ export interface Project {
    * the code is given. Its agents keep working.
    */
   locked?: boolean;
+  /** Shown in place of the folder: an emoji or one or two letters, set in its settings. */
+  icon?: string;
+  /** The tint of its icon, among {@link PROJECT_COLORS}. */
+  color?: ProjectColor;
+}
+
+/** The tints a project's icon can take; the web app gives each its shade in both themes. */
+export const PROJECT_COLORS = [
+  "moon",
+  "sky",
+  "mint",
+  "sun",
+  "coral",
+  "rose",
+  "violet",
+  "slate",
+] as const;
+export type ProjectColor = (typeof PROJECT_COLORS)[number];
+/** At most this many characters for a project's icon: an emoji with its modifiers fits. */
+export const MAX_PROJECT_ICON = 16;
+/** At most this many bytes for a setup file edited from the app (AGENTS.md, a skill…). */
+export const MAX_SETUP_FILE = 256 * 1024;
+
+/** A skill kept in the project, with its text, for its settings. */
+export interface ProjectSkill {
+  name: string;
+  description: string;
+  /** Its `SKILL.md`, relative to the project. */
+  path: string;
+  /** What follows its front matter. */
+  body: string;
+}
+
+/**
+ * What a project gives its agents, read from its folder for its settings: the shared
+ * instructions (`AGENTS.md`), whether Claude Code reads them too, its commands and skills.
+ */
+export interface ProjectSetup {
+  /** `AGENTS.md` at the project's root; empty while there is none. */
+  rules: {
+    text: string;
+    exists: boolean;
+    /** Over {@link MAX_SETUP_FILE}: shown nowhere and not written from the app. */
+    tooBig?: true;
+  };
+  /**
+   * `CLAUDE.md`, which Claude Code reads in place of `AGENTS.md`: missing, importing
+   * `AGENTS.md` (or a link to it), or a separate file.
+   */
+  claude: "missing" | "imports" | "separate";
+  commands: ProjectCommand[];
+  skills: ProjectSkill[];
+  /**
+   * Those of these files git sees as changed and not yet committed, in a git project: a
+   * thread on its own branch starts from the last commit, so it does not see them yet.
+   */
+  uncommitted?: string[];
 }
 
 /** A thread's own branch, checked out in a separate folder (a git worktree). */
@@ -1066,6 +1123,7 @@ export type ServerMessage =
   | { type: "questions"; questions: PendingQuestion[] }
   | { type: "mcpServers"; servers: McpServerInfo[]; error?: string }
   | { type: "project"; project: Project }
+  | { type: "projectSetup"; requestId: string; projectId: string; setup: ProjectSetup }
   | { type: "thread"; thread: Thread }
   /** The thread was deleted, its timeline with it. */
   | { type: "threadRemoved"; threadId: string }
@@ -1239,6 +1297,30 @@ export type ServerMessage =
   | { type: "error"; requestId?: string; message: string };
 
 const id = z.string().min(1).max(200);
+/** How many bytes a text takes in UTF-8. */
+export function utf8Bytes(text: string): number {
+  let bytes = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0)!;
+    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+}
+/** A setup file's text, within {@link MAX_SETUP_FILE} bytes once in UTF-8. */
+const setupText = z
+  .string()
+  .max(MAX_SETUP_FILE)
+  .refine((t) => utf8Bytes(t) <= MAX_SETUP_FILE, "Texte trop long.");
+/** A command's or a skill's name: lower case, digits, `-` and `_`, as a file name too. */
+const setupName = z
+  .string()
+  .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "Un nom en minuscules, chiffres, - ou _.");
+/** A description: one line. */
+const setupLine = z
+  .string()
+  .trim()
+  .max(500)
+  .regex(/^[^\r\n]*$/, "Une seule ligne.");
 /** An item's number in its timeline, or a count of changes. */
 const seq = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const text = z.string().min(1).max(200_000);
@@ -1615,6 +1697,68 @@ export const ClientMessage = z.discriminatedUnion("type", [
     name: z.string().trim().min(1).max(120),
   }),
   z.object({ type: z.literal("project.setPinned"), projectId: id, pinned: z.boolean() }),
+  /** Its icon and tint in MoonAgentic; null puts back the folder, or the usual tint. */
+  z.object({
+    type: z.literal("project.setLook"),
+    projectId: id,
+    icon: z
+      .string()
+      .trim()
+      .min(1)
+      .max(MAX_PROJECT_ICON)
+      // One glyph or a few letters: no spaces, no control characters.
+      .regex(/^[^\s\p{Cc}]+$/u)
+      .nullable(),
+    color: z.enum(PROJECT_COLORS).nullable(),
+  }),
+  /** What the project gives its agents, read from its folder: answered with projectSetup. */
+  z.object({ type: z.literal("project.setup"), requestId: id, projectId: id }),
+  /** Writes `AGENTS.md` at the project's root. */
+  z.object({
+    type: z.literal("project.saveRules"),
+    requestId: id,
+    projectId: id,
+    text: setupText,
+  }),
+  /** Has Claude Code read `AGENTS.md` too: `CLAUDE.md` imports it, made if need be. */
+  z.object({ type: z.literal("project.linkClaude"), requestId: id, projectId: id }),
+  /** Writes a `/` command, `.moonagentic/commands/<name>.md`; `previous`: its old name. */
+  z.object({
+    type: z.literal("project.saveCommand"),
+    requestId: id,
+    projectId: id,
+    name: setupName,
+    previous: setupName.optional(),
+    description: setupLine,
+    template: setupText.refine((t) => t.trim().length > 0),
+  }),
+  z.object({
+    type: z.literal("project.removeCommand"),
+    requestId: id,
+    projectId: id,
+    name: setupName,
+  }),
+  /**
+   * Writes a skill: the one at `path` when given (one of the project's), else a new one in
+   * `.agents/skills/<name>/SKILL.md`.
+   */
+  z.object({
+    type: z.literal("project.saveSkill"),
+    requestId: id,
+    projectId: id,
+    path: z.string().max(300).optional(),
+    // As agents name them; a new one also needs a lower-case name, its folder's.
+    name: z.string().regex(/^[A-Za-z0-9][\w.-]{0,63}$/, "Un nom sans espace."),
+    description: setupLine.refine((d) => d.length > 0, "Décris-la en une ligne."),
+    body: setupText,
+  }),
+  /** Removes a project skill's `SKILL.md`; its folder goes too when nothing else is in it. */
+  z.object({
+    type: z.literal("project.removeSkill"),
+    requestId: id,
+    projectId: id,
+    path: z.string().max(300),
+  }),
   /** Sets the code projects are locked with, or changes it: then the current one is needed. */
   z.object({
     type: z.literal("lock.setPin"),
