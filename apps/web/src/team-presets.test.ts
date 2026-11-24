@@ -7,6 +7,7 @@ import {
   presetMembers,
   suggestedPresets,
   teamPresets,
+  setRole,
   withRoles,
 } from "./team-presets.ts";
 
@@ -125,5 +126,57 @@ describe("the user's teams", () => {
         agents,
       ),
     ).toBe("Chef : Claude Opus 5.5 · Codeurs : Claude Sonnet 5.5");
+  });
+});
+
+describe("teams kept whatever happens to the agents", () => {
+  const agents = [
+    agent("claude", ["Claude Opus 5.5", "Claude Sonnet 5.5"]),
+    agent("gemini", ["Gemini 4 Neon"], false),
+  ];
+  const saved: TeamPreset = {
+    id: "mine",
+    label: "La mienne",
+    roles: {
+      lead: { agentId: "claude", model: "claude opus 5.5" },
+      coder: { agentId: "claude", model: "claude sonnet 5.5" },
+      reviewer: { agentId: "gemini", model: "gemini 4 neon" },
+    },
+  };
+
+  it("falls back on the suggested teams when the list kept is empty", () => {
+    expect(teamPresets([], agents).length).toBe(4);
+    expect(defaultTeam(agents, [])).toBeDefined();
+  });
+
+  it("finds a lead and coders even for a team kept with nobody there", () => {
+    const old = { ...saved, roles: { lead: null, coder: null } } as unknown as TeamPreset;
+    expect(presetMembers(old, agents).lead).toEqual({
+      agentId: "claude",
+      model: "claude opus 5.5",
+    });
+    expect(defaultTeam(agents, [old])).toBeDefined();
+  });
+
+  it("changes one role and keeps the others as saved, even one whose agent is away", () => {
+    const [next] = setRole([saved], "mine", "tester", {
+      agentId: "claude",
+      model: "claude opus 5.5",
+    });
+    // Gemini is not ready now: its place as reviewer is kept for when it is.
+    expect(next!.roles).toEqual({
+      ...saved.roles,
+      tester: { agentId: "claude", model: "claude opus 5.5" },
+    });
+    expect(setRole([saved], "mine", "reviewer", undefined)[0]!.roles.reviewer).toBeNull();
+    // Nobody for the lead is never written: it falls back on the first agent ready.
+    expect("lead" in setRole([saved], "mine", "lead", undefined)[0]!.roles).toBe(false);
+  });
+
+  it("never writes nobody for the lead or the coders", () => {
+    const roles = withRoles([saved], "mine", { tester: undefined })[0]!.roles;
+    expect(roles.tester).toBeNull();
+    expect("lead" in roles).toBe(false);
+    expect("coder" in roles).toBe(false);
   });
 });

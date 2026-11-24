@@ -39,10 +39,35 @@ export function withRoles(
     p.id === id
       ? {
           ...p,
-          roles: Object.fromEntries(TEAM_ROLES.map((role) => [role, roles[role] ?? null])),
+          roles: Object.fromEntries(
+            TEAM_ROLES.flatMap((role): [TeamRole, TeamMember | null][] => {
+              const member = roles[role];
+              if (member) return [[role, member]];
+              // The lead and the coders are never nobody: left out, they fall back.
+              return OPTIONAL_ROLES.has(role) ? [[role, null]] : [];
+            }),
+          ),
         }
       : p,
   );
+}
+
+/**
+ * The teams with one role of one team changed, the others as saved: one whose agent is
+ * away for now keeps its place for when it is back.
+ */
+export function setRole(
+  presets: TeamPreset[],
+  id: string,
+  role: TeamRole,
+  member: TeamMember | undefined,
+): TeamPreset[] {
+  return presets.map((p) => {
+    if (p.id !== id) return p;
+    const { [role]: _old, ...others } = p.roles;
+    if (member) return { ...p, roles: { ...others, [role]: member } };
+    return { ...p, roles: OPTIONAL_ROLES.has(role) ? { ...others, [role]: null } : others };
+  });
 }
 
 /** A new team at the end of the list, on these roles, under a name not taken yet. */

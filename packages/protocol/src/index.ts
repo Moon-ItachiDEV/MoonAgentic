@@ -1091,7 +1091,13 @@ export interface Defaults {
 export interface TeamPreset {
   id: string;
   label: string;
-  roles: Partial<Record<TeamRole, TeamMember | null>>;
+  roles: {
+    lead?: TeamMember;
+    coder?: TeamMember;
+    reviewer?: TeamMember | null;
+    tester?: TeamMember | null;
+    merger?: TeamMember | null;
+  };
 }
 /** At most this many saved teams. */
 export const MAX_TEAM_PRESETS = 12;
@@ -1747,8 +1753,9 @@ export const ClientMessage = z.discriminatedUnion("type", [
           label: z.string().trim().min(1).max(40),
           roles: z
             .object({
-              lead: teamMember.nullable().optional(),
-              coder: teamMember.nullable().optional(),
+              // Never nobody: left out, they fall back on the first agent ready.
+              lead: teamMember.optional(),
+              coder: teamMember.optional(),
               reviewer: teamMember.nullable().optional(),
               tester: teamMember.nullable().optional(),
               merger: teamMember.nullable().optional(),
@@ -1756,6 +1763,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
             .strict(),
         }),
       )
+      .min(1)
       .max(MAX_TEAM_PRESETS)
       .refine((list) => new Set(list.map((p) => p.id)).size === list.length, "Ids en double.")
       .nullable(),

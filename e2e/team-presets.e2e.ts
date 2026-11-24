@@ -122,10 +122,13 @@ describe("settings kept for every device", () => {
     await expect
       .poll(names, { timeout: 30_000 })
       .toEqual(["Rapide", "Qualité max", "Neon relit et teste"]);
+    // Renamed, then a click elsewhere at once: the new name is not lost to the click.
+    const third = one.getByRole("textbox", { name: "Nom de l'équipe Neon relit et teste" });
+    await third.fill("Neon partout");
     await one.getByRole("button", { name: "Nouvelle équipe" }).click();
     await expect
       .poll(names, { timeout: 30_000 })
-      .toEqual(["Rapide", "Qualité max", "Neon relit et teste", "Équipe 4"]);
+      .toEqual(["Rapide", "Qualité max", "Neon partout", "Équipe 4"]);
     if (shots) await one.screenshot({ path: path.join(shots, "equipes.png"), fullPage: true });
 
     // Another window, as another device, finds the same teams.
@@ -140,7 +143,7 @@ describe("settings kept for every device", () => {
             .evaluateAll((inputs) => inputs.map((i) => (i as HTMLInputElement).value)),
         { timeout: 30_000 },
       )
-      .toEqual(["Rapide", "Qualité max", "Neon relit et teste", "Équipe 4"]);
+      .toEqual(["Rapide", "Qualité max", "Neon partout", "Équipe 4"]);
     if (shots) await two.screenshot({ path: path.join(shots, "equipes-telephone.png") });
 
     await one.getByRole("button", { name: "Revenir aux suggestions" }).click();

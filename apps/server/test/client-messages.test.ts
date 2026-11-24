@@ -35,3 +35,19 @@ describe("settings kept by the server", () => {
     ).toBe(false);
   });
 });
+
+describe("teams that always have a lead and coders", () => {
+  const team = { id: "a", label: "Équipe", roles: { lead: { agentId: "claude" } } };
+  it("refuses an empty list, and a lead or coders set to nobody", () => {
+    expect(ok({ type: "teamPresets.set", presets: [] })).toBe(false);
+    expect(ok({ type: "teamPresets.set", presets: [{ ...team, roles: { lead: null } }] })).toBe(
+      false,
+    );
+    expect(ok({ type: "teamPresets.set", presets: [{ ...team, roles: { coder: null } }] })).toBe(
+      false,
+    );
+    expect(ok({ type: "teamPresets.set", presets: [{ ...team, roles: { tester: null } }] })).toBe(
+      true,
+    );
+  });
+});

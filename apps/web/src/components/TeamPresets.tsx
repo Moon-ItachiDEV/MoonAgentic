@@ -1,15 +1,15 @@
 import type { AgentInfo, TeamPreset } from "@moonagentic/protocol";
 import { MAX_TEAM_PRESETS } from "@moonagentic/protocol";
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
 import {
   addPreset,
   OPTIONAL_ROLES,
   presetMembers,
   ROLE_LABEL,
+  setRole,
   TEAM_ROLES,
   teamPresets,
-  withRoles,
 } from "../team-presets.ts";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 import { ModelSelect } from "./ModelSelect.tsx";
@@ -19,14 +19,35 @@ import { ModelSelect } from "./ModelSelect.tsx";
  * the server for every device. The suggested ones stand until the user changes one.
  */
 export function TeamPresets(props: { agents: AgentInfo[]; projectId: string | undefined }) {
-  const saved = useSyncExternalStore(connection.subscribe, () => connection.getState().teamPresets);
+  const kept = useSyncExternalStore(connection.subscribe, () => connection.getState().teamPresets);
+  // What this window just sent, until the server sends it back: a click right after leaving
+  // a name (renamed on blur) builds on the new name, not on the list from before.
+  const [sent, setSent] = useState<{ presets: TeamPreset[] | null; over: typeof kept }>();
+  const saved = sent && sent.over === kept ? sent.presets : kept;
   const presets = teamPresets(saved ?? undefined, props.agents);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   // The name being typed, by team, until it is left.
   const [naming, setNaming] = useState<Record<string, string>>({});
   const keep = (next: TeamPreset[] | null) => {
+    setSent({ presets: next, over: kept });
     connection.send({ type: "teamPresets.set", presets: next });
   };
+
+  // The suggested teams need each agent's models: asked for once, as /equipe does, or the
+  // first change would keep teams made before the models were known.
+  const asked = useRef(new Set<string>());
+  useEffect(() => {
+    for (const agent of props.agents) {
+      if (!agent.available || agent.models || agent.modelsError) continue;
+      if (asked.current.has(agent.id)) continue;
+      asked.current.add(agent.id);
+      connection.send({
+        type: "agent.discover",
+        agentId: agent.id,
+        ...(props.projectId ? { projectId: props.projectId } : {}),
+      });
+    }
+  }, [props.agents, props.projectId]);
 
   return (
     <>
@@ -98,9 +119,9 @@ export function TeamPresets(props: { agents: AgentInfo[]; projectId: string | un
                   value={members[role]}
                   {...(OPTIONAL_ROLES.has(role) ? { none: "Personne" } : {})}
                   {...(props.projectId ? { projectId: props.projectId } : {})}
-                  onChange={(pick) =>
-                    keep(withRoles(presets, preset.id, { ...members, [role]: pick }))
-                  }
+                  // Only this role changes: the others stay as saved, even one whose
+                  // agent is away for now.
+                  onChange={(pick) => keep(setRole(presets, preset.id, role, pick))}
                 />
               </div>
             ))}

@@ -78,7 +78,7 @@ export function suggestedPresets(agents: AgentInfo[]): TeamPreset[] {
 
 /** The user's teams once saved, else the suggested ones. */
 export function teamPresets(saved: TeamPreset[] | undefined, agents: AgentInfo[]): TeamPreset[] {
-  return saved ?? suggestedPresets(agents);
+  return saved?.length ? saved : suggestedPresets(agents);
 }
 
 /** An agent that can take a role: ready, and able to give its models. */
@@ -97,7 +97,9 @@ export function presetMembers(
   const members: Partial<Record<TeamRole, TeamMember>> = {};
   for (const role of TEAM_ROLES) {
     const chosen = preset.roles[role];
-    if (chosen === null) continue;
+    const needed = role === "lead" || role === "coder";
+    // Nobody, on purpose, only for a role the team can do without.
+    if (chosen === null && !needed) continue;
     const agent = chosen && usable.find((a) => a.id === chosen.agentId);
     if (chosen && agent) {
       const known = !agent.models || agent.models.some((m) => m.id === chosen.model);
@@ -111,7 +113,7 @@ export function presetMembers(
       };
       continue;
     }
-    if (role === "lead" || role === "coder") {
+    if (needed) {
       const first = pickMember(agents, []);
       if (first) members[role] = first;
     }
