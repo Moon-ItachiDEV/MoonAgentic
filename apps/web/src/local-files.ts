@@ -50,15 +50,59 @@ function allTokens(tokens: Token[], into: Token[] = []): Token[] {
   return into;
 }
 
+const sameFile = (a: string, b: string) => refName(a).toLowerCase() === refName(b).toLowerCase();
+
+/** The text of a line that is only words, or nothing when it holds more than that. */
+function plainText(tokens: Token[]): string | undefined {
+  let text = "";
+  for (const t of tokens) {
+    if (t.type === "text" && !(t as Tokens.Text).tokens) text += (t as Tokens.Text).text;
+    else if (t.type === "br") text += " ";
+    else return undefined;
+  }
+  return text.trim();
+}
+
+/**
+ * An agent that shows its image often adds « Fichier enregistré : » and a link to the same
+ * file under it. The image is there already, so that line is only noise: a paragraph that
+ * holds nothing but a short label and a link to an image the answer shows is left out.
+ */
+function dropLinksToShownImages(all: Token[], images: Tokens.Image[]): void {
+  const shown = images.map(writtenRef);
+  for (const token of all) {
+    if (token.type !== "paragraph") continue;
+    const inline = (token as Tokens.Paragraph).tokens;
+    const links = inline.filter((t): t is Tokens.Link => t.type === "link");
+    if (links.length !== 1) continue;
+    const link = links[0]!;
+    const ref = writtenRef(link);
+    // Its text names the file, as the agent wrote it: not a sentence the link is part of.
+    const named = link.text.trim() === ref || sameFile(link.text, ref);
+    if (!isLocalRef(ref) || !isImageRef(ref) || !named) continue;
+    if (!shown.some((image) => sameFile(image, ref))) continue;
+    const rest = plainText(inline.filter((t) => t !== link));
+    if (rest === undefined || (rest !== "" && !/^.{1,40}:$/.test(rest))) continue;
+    const gone = token as unknown as Record<string, unknown>;
+    for (const key of Object.keys(gone)) delete gone[key];
+    Object.assign(gone, { type: "space", raw: "" });
+  }
+}
+
 /** Marks the links and images of an answer that name local files, to be shown from the server. */
 export const localFiles: MarkedExtension = {
   hooks: {
     // An agent that generated an image often only links to it (« [naruto.jpg](naruto.jpg) »):
     // the image is shown in its place, as it would be had it written `![…](…)`. When the
-    // answer shows an image already, its links stay links.
+    // answer shows an image already, its links stay links, but a line that only repeats the
+    // image's file under it is left out.
     processAllTokens(tokens) {
       const all = allTokens(tokens);
-      if (all.some((t) => t.type === "image")) return tokens;
+      const images = all.filter((t): t is Tokens.Image => t.type === "image");
+      if (images.length) {
+        dropLinksToShownImages(all, images);
+        return tokens;
+      }
       for (const token of all) {
         if (token.type !== "link") continue;
         const link = token as Tokens.Link;
