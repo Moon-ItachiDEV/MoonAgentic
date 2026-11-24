@@ -473,6 +473,16 @@ const app = acp
       await say(said ? `Compris : ${said}.` : "Pas de réponse.", "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
+    if (ask.trim() === "/crash") {
+      // As an agent whose process is shut down in the middle of a turn: what it said so far
+      // stays, then its connection closes.
+      await say("Je commence le travail…", "agent_message_chunk");
+      setTimeout(() => {
+        process.stderr.write("ACP connection closed\n");
+        process.exit(1);
+      }, 50);
+      return new Promise<never>(() => undefined);
+    }
     if (ask.trim() === "/question") {
       // As Antigravity asks: a tool call left unfinished, the question as text, and the
       // turn ends; the answer is the next message.

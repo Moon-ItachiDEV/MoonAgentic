@@ -1,4 +1,6 @@
 import type {
+  Defaults,
+  TeamPreset,
   AgentQuota,
   CoordinatorSettings,
   AgentInfo,
@@ -59,6 +61,10 @@ export interface State {
   lockPin: boolean;
   /** True when connected as a paired device rather than the computer itself. */
   pairedDevice: boolean;
+  /** The defaults for a new thread kept by the server; null until set on any device. */
+  defaults: Defaults | null;
+  /** The teams set up in the settings; null while the suggested ones stand. */
+  teamPresets: TeamPreset[] | null;
   items: Record<string, Item[]>;
   /** What part of each of those timelines is held. */
   held: Record<string, Held>;
@@ -88,6 +94,8 @@ export function reduce(state: State, message: ServerMessage): State {
         ...message.snapshot,
         lockPin: message.snapshot.lockPin ?? false,
         pairedDevice: message.snapshot.pairedDevice ?? false,
+        defaults: message.snapshot.defaults ?? null,
+        teamPresets: message.snapshot.teamPresets ?? null,
         mcpSecretsError: message.snapshot.mcpSecretsError ?? null,
         items: keep(state.items),
         held: keep(state.held),
@@ -98,6 +106,10 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, agents: message.agents };
     case "favorites":
       return { ...state, favorites: message.favorites };
+    case "defaults":
+      return { ...state, defaults: message.defaults };
+    case "teamPresets":
+      return { ...state, teamPresets: message.presets };
     case "coordinatorSettings":
       return { ...state, coordinator: message.settings };
     case "requests":
@@ -299,6 +311,8 @@ export const initialState: State = {
   quotas: [],
   lockPin: false,
   pairedDevice: false,
+  defaults: null,
+  teamPresets: null,
   items: {},
   held: {},
   reviews: {},

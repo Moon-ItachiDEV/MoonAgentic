@@ -30,7 +30,7 @@ import {
   resolveSubmission,
   triggerAt,
 } from "../commands.ts";
-import { onFillComposer } from "../composer-fill.ts";
+import { onFillComposer, onOpenComposerPicker } from "../composer-fill.ts";
 import {
   type Dictation,
   type Heard,
@@ -44,6 +44,7 @@ import { useImageDrafts } from "../use-image-drafts.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { looseDefault } from "../default-models.ts";
 import type { ModelPick } from "./ModelSelect.tsx";
+import { setDefault, useDefaults } from "../defaults.ts";
 import { quotaWarning, roomiest, tightest } from "../quotas.ts";
 import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
@@ -151,10 +152,8 @@ export function Composer(props: {
   const [loosePick, setLoosePick] = useState<ModelPick>();
   // Back in a project or a thread, the pick made outside one is forgotten.
   if (loosePick && (!props.loose || thread)) setLoosePick(undefined);
-  const [newMode, setNewMode] = useState<PermissionMode>(() =>
-    readPref("permissionMode") === "full" ? "full" : "supervised",
-  );
-  const [isolated, setIsolated] = useState(() => readPref("isolated") !== "false");
+  // A new thread starts as the defaults say, the same on every device.
+  const { permissionMode: newMode, isolated } = useDefaults();
   const input = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const [modelPicks, setModelPicks] = useState<Record<string, string>>({});
@@ -308,6 +307,16 @@ export function Composer(props: {
         setText(value);
         if (files.length) images.add(files);
         input.current?.focus();
+      }),
+    [thread?.id],
+  );
+  // « Changer de modèle » on a stopped agent's card: the same picker, opened from there.
+  useEffect(
+    () =>
+      onOpenComposerPicker((threadId) => {
+        if (threadId !== thread?.id) return;
+        closeMenus("picker");
+        setMenu(true);
       }),
     [thread?.id],
   );
@@ -744,8 +753,7 @@ export function Composer(props: {
         permissionMode: next,
       });
     else {
-      setNewMode(next);
-      writePref("permissionMode", next);
+      setDefault({ permissionMode: next });
     }
   };
 
@@ -1300,8 +1308,7 @@ export function Composer(props: {
               isolated: {
                 on: isolated,
                 onPick: (on: boolean) => {
-                  setIsolated(on);
-                  writePref("isolated", String(on));
+                  setDefault({ isolated: on });
                 },
               },
             }

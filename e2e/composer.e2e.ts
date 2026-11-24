@@ -116,6 +116,14 @@ const inProject = (page: Page, name: string) =>
   expect.poll(() => page.locator(".tray").first().textContent()).toContain(name);
 
 const options = (page: Page) => page.locator("#composer-suggest [role=option]");
+/**
+ * Back to « Demande d'abord » for a new thread: the defaults are the server's, so a test
+ * before may have left them on full access.
+ */
+async function supervised(page: Page) {
+  await page.getByRole("button", { name: /Mode d'accès/ }).click();
+  await page.getByRole("menuitemradio", { name: /Demande d'abord/ }).click();
+}
 
 describe("composer", () => {
   it("offers commands, files and skills, sends them, pins the thread and finds it again", async () => {
@@ -245,6 +253,7 @@ describe("composer", () => {
     // A supervised turn waits for the user, who answers from À traiter.
     await pickAgent(page, /Agent de démo/);
     await page.keyboard.press("Escape");
+    await supervised(page);
     await composer(page).fill("Corrige la réponse");
     await composer(page).press("Enter");
     const inbox = page.getByRole("button", { name: /À traiter/ });
@@ -535,6 +544,7 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Fil", exact: true }).click();
     await pickAgent(page, /Agent de démo/);
     await page.keyboard.press("Escape");
+    await supervised(page);
     await composer(page).fill("Dis bonjour");
     await composer(page).press("Enter");
     // The new thread opens by itself, then back to the project.
