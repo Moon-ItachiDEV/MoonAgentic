@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { open, readdir, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentQuota, QuotaWindow, ServerMessage } from "@moonagentic/protocol";
-import { findOnPath } from "./agents.ts";
+import { agyPlaces, findCommand, findOnPath } from "./agents.ts";
 import { killTree, spawnPlan } from "./spawn.ts";
 
 /** What a reader finds: the quota without the agent's id and the time, which are added here. */
@@ -551,12 +552,392 @@ export async function readCodexQuota(
 
 // ---------------------------------------------------------------------------------------
 
+// Antigravity: the figures behind its own « /usage », asked of Antigravity's local server.
+// Both the desktop app and `agy acp` run that server on this computer only (127.0.0.1); it
+// answers `RetrieveUserQuotaSummary` with what each group of models has left. A server that
+// already runs is asked first: nothing is started. Otherwise `agy acp` is started for a few
+// seconds, without any prompt, so asking costs nothing. None of this is documented by Google:
+// when it changes, the card says so.
+
+const AGY_SERVICE = "/exa.language_server_pb.LanguageServerService/";
+const AGY_REQUEST_TIMEOUT_MS = 5_000;
+/** How long `agy acp` gets to open its local server. */
+const AGY_START_TIMEOUT_MS = 12_000;
+/** How long the answer to `initialize` is waited for before asking for the sessions anyway. */
+const AGY_HELLO_GRACE_MS = 2_000;
+const AGY_LOG_HEAD_BYTES = 64 * 1024;
+const AGY_MAX_LOGS = 6;
+
+/** One of Antigravity's local servers: its plain-HTTP port on 127.0.0.1, and its token. */
+export interface AgyServer {
+  port: number;
+  /** The desktop app's server wants this token back; `agy acp`'s own server wants none. */
+  csrf: string;
+}
+
+const pidAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+};
+
+const validPort = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value > 0 && value < 65_536;
+
+/**
+ * The desktop app's servers that still run: each writes `hub_<port>.json` in
+ * `~/.gemini/antigravity/daemon`, and leaves it there when it stops.
+ */
+export async function agyHubServers(home = os.homedir()): Promise<AgyServer[]> {
+  const dir = path.join(home, ".gemini", "antigravity", "daemon");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const servers: AgyServer[] = [];
+  for (const name of names) {
+    if (!/^hub_\d+\.json$/.test(name)) continue;
+    try {
+      const hub = JSON.parse(await readFile(path.join(dir, name), "utf8")) as {
+        pid?: unknown;
+        httpPort?: unknown;
+        csrfToken?: unknown;
+      };
+      if (typeof hub.pid !== "number" || !pidAlive(hub.pid) || !validPort(hub.httpPort)) continue;
+      servers.push({
+        port: hub.httpPort,
+        csrf: typeof hub.csrfToken === "string" ? hub.csrfToken : "",
+      });
+    } catch {
+      // half-written or not ours
+    }
+  }
+  return servers;
+}
+
+/** The plain-HTTP port `agy` says it listens on, in its log; exported for tests. */
+export function agyLogPort(log: string): number | undefined {
+  const found = [...log.matchAll(/listening on random port at (\d+) for HTTP(?!S)/g)].at(-1);
+  const port = found ? Number(found[1]) : undefined;
+  return validPort(port) ? port : undefined;
+}
+
+/**
+ * The servers of the `agy` processes that still run, newest first: each logs its ports in
+ * `~/.gemini/antigravity-cli/log/<name>-<pid>.log`. `since` keeps only logs written after it,
+ * and `pid` the one of that process.
+ */
+export async function agyCliServers(
+  home = os.homedir(),
+  only: { since?: number; pid?: number } = {},
+): Promise<AgyServer[]> {
+  const dir = path.join(home, ".gemini", "antigravity-cli", "log");
+  const names = await readdir(dir).catch(() => [] as string[]);
+  const logs: { file: string; at: number }[] = [];
+  for (const name of names) {
+    const pid = Number(/-(\d+)\.log$/.exec(name)?.[1]);
+    if (!Number.isInteger(pid) || pid <= 0 || !pidAlive(pid)) continue;
+    if (only.pid !== undefined && pid !== only.pid) continue;
+    const file = path.join(dir, name);
+    const info = await stat(file).catch(() => undefined);
+    if (!info?.isFile()) continue;
+    if (only.since !== undefined && info.mtimeMs < only.since) continue;
+    logs.push({ file, at: info.mtimeMs });
+  }
+  logs.sort((a, b) => b.at - a.at);
+  const servers: AgyServer[] = [];
+  for (const { file } of logs.slice(0, AGY_MAX_LOGS)) {
+    const handle = await open(file, "r").catch(() => undefined);
+    if (!handle) continue;
+    try {
+      // The ports are logged as the server starts: the head of the file is enough.
+      const { buffer, bytesRead } = await handle.read(Buffer.alloc(AGY_LOG_HEAD_BYTES), 0);
+      const port = agyLogPort(buffer.subarray(0, bytesRead).toString("utf8"));
+      if (port !== undefined && !servers.some((s) => s.port === port))
+        servers.push({ port, csrf: "" });
+    } catch {
+      // unreadable log: the next one
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  }
+  return servers;
+}
+
+/** Asks one of Antigravity's local servers a question; throws with its own words on a refusal. */
+export async function askAgy(
+  server: AgyServer,
+  method: string,
+  body: object,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  const timeout = AbortSignal.timeout(AGY_REQUEST_TIMEOUT_MS);
+  const response = await fetch(`http://127.0.0.1:${server.port}${AGY_SERVICE}${method}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Connect-Protocol-Version": "1",
+      "X-Codeium-Csrf-Token": server.csrf,
+    },
+    body: JSON.stringify(body),
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+  });
+  const text = await response.text();
+  let answer: unknown;
+  try {
+    answer = JSON.parse(text);
+  } catch {
+    answer = undefined;
+  }
+  if (!response.ok) {
+    const why = (answer as { message?: unknown } | undefined)?.message;
+    throw new Error(typeof why === "string" && why ? why : `HTTP ${response.status}`);
+  }
+  if (!answer || typeof answer !== "object") throw new Error("réponse illisible");
+  return answer;
+}
+
+/** « Gemini Models » gives « Gemini », « Claude and GPT models » gives « Claude et GPT ». */
+const agyGroupName = (displayName: string) =>
+  displayName
+    .replace(/\s*models?\s*$/i, "")
+    .replace(/\s+and\s+/gi, " et ")
+    .trim();
+
+/**
+ * Reads the answers to `RetrieveUserQuotaSummary` and `GetUserStatus`: each group of models
+ * has its own 5-hour and weekly windows, given as the share left. Exported for tests.
+ */
+export function parseAntigravityQuota(summary: unknown, status?: unknown): QuotaReading {
+  const root = (summary ?? {}) as { response?: unknown; groups?: unknown };
+  const holder = (root.response ?? root) as { groups?: unknown };
+  const groups = Array.isArray(holder?.groups) ? (holder.groups as Record<string, unknown>[]) : [];
+  const windows: QuotaWindow[] = [];
+  for (const group of groups) {
+    if (!group || typeof group !== "object") continue;
+    const name = typeof group.displayName === "string" ? agyGroupName(group.displayName) : "";
+    const listed =
+      typeof group.description === "string"
+        ? (/models within this group\s*:\s*(.+)$/i.exec(group.description)?.[1] ?? "")
+        : "";
+    const models = (listed ? listed.split(",") : name.split(/\s+et\s+|,/))
+      .map((model) => model.trim().replace(/\.$/, ""))
+      .filter(Boolean);
+    const found: (QuotaWindow & { order: number })[] = [];
+    for (const bucket of Array.isArray(group.buckets) ? group.buckets : []) {
+      const b = (bucket ?? {}) as Record<string, unknown>;
+      const left = b.remainingFraction;
+      if (typeof left !== "number" || !Number.isFinite(left)) continue;
+      const kind = typeof b.window === "string" ? b.window.toLowerCase() : "";
+      const own = typeof b.displayName === "string" && b.displayName ? b.displayName : kind;
+      const names =
+        kind === "5h"
+          ? { label: "Session de 5 h", short: "5 h", order: 0 }
+          : kind === "weekly"
+            ? { label: "Semaine", short: "semaine", order: 1 }
+            : { label: own || "Limite", short: (own || "limite").toLowerCase(), order: 2 };
+      const resetsAt = toTime(b.resetTime);
+      found.push({
+        label: name ? `${names.label}, ${name}` : names.label,
+        short: name ? `${names.short} ${name}` : names.short,
+        ...(name ? { model: name } : {}),
+        ...(name && models.length ? { models } : {}),
+        usedPercent: clampPercent((1 - Math.min(1, left)) * 100),
+        ...(resetsAt ? { resetsAt } : {}),
+        order: names.order,
+      });
+    }
+    found.sort((a, b) => a.order - b.order);
+    for (const { order: _order, ...window } of found) {
+      if (!windows.some((w) => w.label === window.label)) windows.push(window);
+    }
+  }
+  if (!windows.length) return unreadable("Antigravity n'a renvoyé aucune limite pour ce compte.");
+  const user = ((status ?? {}) as { userStatus?: Record<string, unknown> }).userStatus;
+  const tier = (user?.userTier as { name?: unknown } | undefined)?.name;
+  const planName = (
+    (user?.planStatus as { planInfo?: { planName?: unknown } } | undefined)?.planInfo ?? {}
+  ).planName;
+  const plan =
+    typeof tier === "string" && tier.trim()
+      ? tier.trim()
+      : typeof planName === "string" && planName.trim()
+        ? `Antigravity ${planName.trim()}`
+        : undefined;
+  return { state: "ok", ...(plan ? { plan } : {}), windows, extras: [] };
+}
+
+/** The `agy` command: on the PATH, or where Google's installer leaves it. */
+export function findAgy(): { command: string; args: string[] } | undefined {
+  const found =
+    findOnPath("agy") ??
+    agyPlaces()
+      .map((place) => findCommand(place))
+      .find(Boolean);
+  return found ? { command: found, args: [] } : undefined;
+}
+
+/**
+ * Starts `agy acp` and waits for the local server it opens. No session is created and no
+ * prompt is sent. `stop` ends agy and everything it started (its MCP servers).
+ */
+export async function startAgyServer(
+  agy: { command: string; args: string[] },
+  home = os.homedir(),
+  signal?: AbortSignal,
+  timeoutMs = AGY_START_TIMEOUT_MS,
+): Promise<{ server: AgyServer; stop: () => Promise<void> }> {
+  if (signal?.aborted) throw new TransientError("Lecture annulée.");
+  const startedAt = Date.now();
+  const plan = spawnPlan(agy.command, [...agy.args, "acp"]);
+  const child = spawn(plan.command, plan.args, {
+    cwd: home,
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+    detached: process.platform !== "win32",
+    ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  });
+  let failure: Error | undefined;
+  let exited = false;
+  let stderr = "";
+  child.on("error", (error) => {
+    failure = error;
+    exited = true;
+  });
+  child.on("exit", () => {
+    exited = true;
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk: string) => {
+    stderr = (stderr + chunk).slice(-MAX_STDERR_CHARS);
+  });
+  child.stdin.on("error", () => {});
+  const stop = () => (exited ? Promise.resolve() : killTree(child, "SIGKILL"));
+  const write = (message: object) => child.stdin.write(`${JSON.stringify(message)}\n`);
+  // agy opens its server on the first question about sessions, not on the hello. Listing
+  // them is the one that leaves nothing behind: `session/new` would save an empty conversation.
+  let listed = false;
+  const list = () => {
+    if (listed || exited) return;
+    listed = true;
+    write({ jsonrpc: "2.0", id: 1, method: "session/list", params: {} });
+  };
+  let buffer = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    if (listed) return;
+    buffer += chunk;
+    let end: number;
+    while ((end = buffer.indexOf("\n")) !== -1) {
+      const line = buffer.slice(0, end);
+      buffer = buffer.slice(end + 1);
+      try {
+        const message = JSON.parse(line) as { id?: unknown; method?: unknown };
+        if (message.id === 0 && message.method === undefined) list();
+      } catch {
+        // not an answer
+      }
+    }
+  });
+  write({
+    jsonrpc: "2.0",
+    id: 0,
+    method: "initialize",
+    params: {
+      protocolVersion: 1,
+      clientCapabilities: {},
+      clientInfo: { name: "MoonAgentic", version: "0.0.0" },
+    },
+  });
+  // Should the hello's answer be missed, the question is asked anyway.
+  const anyway = setTimeout(list, AGY_HELLO_GRACE_MS);
+  try {
+    while (Date.now() - startedAt < timeoutMs) {
+      if (signal?.aborted) throw new TransientError("Lecture annulée.");
+      if (failure) throw failure;
+      if (exited) {
+        const detail = lastNonEmptyLine(stderr);
+        throw new TransientError(
+          detail ? `agy s'est arrêté sans répondre : ${detail}` : "agy s'est arrêté sans répondre.",
+        );
+      }
+      // Its own log first; one written since the start otherwise (agy behind a launcher).
+      const [server] = child.pid !== undefined ? await agyCliServers(home, { pid: child.pid }) : [];
+      const [other] = server ? [] : await agyCliServers(home, { since: startedAt - 2_000 });
+      const ready = server ?? other;
+      if (ready) return { server: ready, stop };
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    throw new TransientError("agy n'a pas ouvert son serveur local à temps.");
+  } catch (error) {
+    await stop();
+    throw error;
+  } finally {
+    clearTimeout(anyway);
+  }
+}
+
+const AGY_METADATA = { metadata: { ideName: "antigravity", extensionName: "antigravity" } };
+
+export async function readAntigravityQuota(
+  options: {
+    home?: string;
+    /** The `agy` command; `null` when it must not be started. */
+    agy?: { command: string; args: string[] } | null;
+    startTimeoutMs?: number;
+  } = {},
+  signal?: AbortSignal,
+): Promise<QuotaReading> {
+  if (signal?.aborted) return unreadable("Lecture annulée.", { transient: true });
+  const home = options.home ?? os.homedir();
+  const read = async (server: AgyServer): Promise<QuotaReading> => {
+    const summary = await askAgy(server, "RetrieveUserQuotaSummary", {}, signal);
+    // The plan's name is a bonus: the figures count without it.
+    const status = await askAgy(server, "GetUserStatus", AGY_METADATA, signal).catch(
+      () => undefined,
+    );
+    return parseAntigravityQuota(summary, status);
+  };
+  let why = "";
+  try {
+    // A server that already runs: the desktop app's, or an `agy` at work in a thread.
+    for (const server of [...(await agyHubServers(home)), ...(await agyCliServers(home))]) {
+      if (signal?.aborted) return unreadable("Lecture annulée.", { transient: true });
+      try {
+        return await read(server);
+      } catch (error) {
+        why = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
+      }
+    }
+    const agy = options.agy === undefined ? findAgy() : options.agy;
+    if (!agy) {
+      return unreadable(
+        why
+          ? `Antigravity n'a pas donné ses limites : ${why}`
+          : "Commande agy introuvable : installe Antigravity CLI ou ouvre Antigravity pour lire ses limites.",
+        { transient: !!why },
+      );
+    }
+    const started = await startAgyServer(agy, home, signal, options.startTimeoutMs);
+    try {
+      return await read(started.server);
+    } finally {
+      await started.stop();
+    }
+  } catch (error) {
+    if (signal?.aborted) return unreadable("Lecture annulée.", { transient: true });
+    const message = error instanceof Error ? (error.message.split("\n")[0] ?? "") : String(error);
+    // agy's server refuses when nobody is signed in.
+    if (/unauthenticated|not (logged|signed) in|sign.?in required|login required/i.test(message))
+      return unreadable("Antigravity n'est pas connecté : lance « agy » pour te connecter.");
+    return unreadable(`Antigravity n'a pas donné ses limites : ${message}`, { transient: true });
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+
 /** The agents whose figures cannot be read, and why, in words for the user. */
 const FIXED: Record<string, QuotaReading> = {
-  antigravity: unreadable(
-    "Antigravity n'affiche ses limites que dans son terminal (« /usage » dans agy) : MoonAgentic ne sait pas encore les lire.",
-    { fixed: true },
-  ),
   cursor: unreadable("Cursor ne donne pas ses compteurs en dehors de son site.", {
     link: "https://cursor.com/settings",
     fixed: true,
@@ -588,6 +969,7 @@ export function defaultReaders(options: { demo: boolean }): Record<string, Quota
   const readers: Record<string, QuotaReader> = {
     claude: (signal) => readClaudeQuota(undefined, signal),
     codex: (signal) => readCodexQuota(undefined, undefined, signal),
+    antigravity: (signal) => readAntigravityQuota(undefined, signal),
   };
   for (const [id, reading] of Object.entries(FIXED)) readers[id] = () => Promise.resolve(reading);
   if (options.demo) {

@@ -60,6 +60,39 @@ describe("quotas", () => {
     });
   });
 
+  it("counts a window of a group of models for each of them, and shows the fullest without a model", () => {
+    const group = (short: string, models: string[], usedPercent: number) => ({
+      label: short,
+      short,
+      model: short.split(" ").at(-1)!,
+      models,
+      usedPercent,
+    });
+    const agy: AgentQuota = {
+      agentId: "antigravity",
+      state: "ok",
+      extras: [],
+      windows: [
+        group("5 h Gemini", ["Gemini 4 Neon", "Orchestrator (Neon)"], 14),
+        group("semaine Gemini", ["Gemini 4 Neon", "Orchestrator (Neon)"], 86),
+        group("semaine Claude et GPT", ["Claude Opus 5.5", "GPT-OSS 120B"], 100),
+      ],
+    };
+    expect(limitsModel(agy.windows[0]!, ["gemini-4-neon"])).toBe(true);
+    expect(limitsModel(agy.windows[0]!, ["x", "Claude Opus 5.5"])).toBe(false);
+    expect(limitsModel(agy.windows[2]!, ["claude-opus-5-5"])).toBe(true);
+    expect(tightest(agy, ["gemini-4-neon", "Gemini 4 Neon"])?.short).toBe("semaine Gemini");
+    expect(tightest(agy, ["opus", "Claude Opus 5.5"])?.short).toBe("semaine Claude et GPT");
+    // An unknown model is limited by no group: no figure is borrowed from another.
+    expect(tightest(agy, ["mystery"])).toBeUndefined();
+    // No model in sight (side bar, agent menu): the fullest window stands for the agent.
+    expect(tightest(agy)?.short).toBe("semaine Claude et GPT");
+    expect(quotaWarning(agy, "Antigravity", Date.now(), ["Gemini 4 Neon"])).toMatchObject({
+      level: "warn",
+      key: expect.stringContaining("semaine Gemini"),
+    });
+  });
+
   it("warns from 80 % and says full from 100 %", () => {
     expect([79.9, 80, 99, 100, 120].map(quotaLevel)).toEqual([
       "ok",
