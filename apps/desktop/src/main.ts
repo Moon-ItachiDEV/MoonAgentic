@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import {
   app,
   BrowserWindow,
+  ipcMain,
+  type IpcMainEvent,
   Menu,
   type MenuItemConstructorOptions,
   Notification,
@@ -15,6 +17,7 @@ import {
   shell,
   Tray,
 } from "electron";
+import { readNotice } from "./notices.ts";
 import { ServerProcess, type ServerState } from "./server-process.ts";
 import { readSettings, writeSettings } from "./settings.ts";
 import { adoptLoginShellPath } from "./shell-path.ts";
@@ -108,6 +111,7 @@ function createWindow(show: boolean): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(here, "preload.js"),
       // Hidden by the tray icon, the page still follows its agents and notifies.
       backgroundThrottling: false,
     },
@@ -147,6 +151,43 @@ function createWindow(show: boolean): void {
 
 /** What the interface asks for: notifications, the microphone for dictation, the clipboard. */
 const ALLOWED = new Set(["notifications", "media", "clipboard-sanitized-write", "clipboard-read"]);
+
+/** Shown notices, kept by tag: one replaces the last, and a click still reaches its handler. */
+const notices = new Map<string, Notification>();
+
+/** Only the interface asks: its window's main frame, not a status page nor another site. */
+const fromInterface = (event: IpcMainEvent) =>
+  !!window &&
+  event.senderFrame === window.webContents.mainFrame &&
+  isServerPage(event.senderFrame.url);
+
+ipcMain.on("moonagentic.notice.show", (event, value: unknown) => {
+  const notice = readNotice(value);
+  if (!notice || !fromInterface(event) || !Notification.isSupported()) return;
+  notices.get(notice.tag)?.close();
+  const shown = new Notification({
+    title: notice.title,
+    body: notice.body,
+    icon: path.join(assets, "icon.png"),
+  });
+  notices.set(notice.tag, shown);
+  const forget = () => {
+    if (notices.get(notice.tag) === shown) notices.delete(notice.tag);
+  };
+  shown.on("click", () => {
+    forget();
+    showWindow();
+    if (notice.threadId) window?.webContents.send("moonagentic.open", notice.threadId);
+  });
+  shown.on("close", forget);
+  shown.show();
+});
+
+ipcMain.on("moonagentic.notice.close", (event, tag: unknown) => {
+  if (typeof tag !== "string" || !fromInterface(event)) return;
+  notices.get(tag)?.close();
+  notices.delete(tag);
+});
 
 function showStatus(state: ServerState): void {
   if (!window || appLoaded) return;

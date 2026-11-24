@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { keyBytes, mutedProjects, pushSupport } from "./push-device.ts";
+import { keyBytes, mutedProjects, pushError, pushSupport } from "./push-device.ts";
 
 let stored: Map<string, string>;
 beforeEach(() => {
@@ -42,5 +42,23 @@ describe("web push on this device", () => {
     vi.stubGlobal("navigator", { serviceWorker: {} });
     vi.stubGlobal("window", { isSecureContext: true, PushManager: class {} });
     expect(pushSupport()).toBe("ok");
+  });
+
+  it("leaves the desktop app out: its window shows them itself, with no push service", () => {
+    vi.stubGlobal("window", { isSecureContext: true, PushManager: class {} });
+    vi.stubGlobal("navigator", { serviceWorker: {} });
+    vi.stubGlobal("moonDesktop", { notify() {}, close() {}, onOpen() {} });
+    expect(pushSupport()).toBe("desktop");
+  });
+
+  it("says in French why the browser's push service refused", () => {
+    const failed = new DOMException(
+      "Registration failed - push service not available",
+      "AbortError",
+    );
+    expect(pushError(failed).message).toContain("Le service push de ce navigateur ne répond pas");
+    expect(pushError(new DOMException("x", "NotAllowedError")).message).toContain("refusées");
+    const other = new Error("Abonnement push incomplet.");
+    expect(pushError(other)).toBe(other);
   });
 });
