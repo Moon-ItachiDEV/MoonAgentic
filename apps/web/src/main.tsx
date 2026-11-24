@@ -30,6 +30,7 @@ import "./mcp-scope.css";
 import "./overview.css";
 import "./quotas.css";
 import "./quiet.css";
+import "./stopped.css";
 import "./offline.css";
 import "./project.css";
 import "./phone.css";

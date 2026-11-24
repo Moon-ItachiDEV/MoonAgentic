@@ -1,5 +1,7 @@
 import {
   AGENT_SILENCE_STOP_MS,
+  AGENT_STOPPED,
+  agentStopped,
   threadGroup,
   type AgentInfo,
   type Item,
@@ -18,7 +20,7 @@ import {
 } from "react";
 import { messageTokens } from "../commands.ts";
 import { imageBlob } from "../attachments.ts";
-import { fillComposer } from "../composer-fill.ts";
+import { fillComposer, openComposerPicker } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { openQuestion as askedQuestion } from "../decision.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
@@ -459,7 +461,10 @@ function Conversation({
             threadId={thread.id}
           />
         )}
-        {thread.status === "error" && thread.error && (
+        {thread.status === "error" && thread.error && agentStopped(thread.error) && (
+          <StoppedNotice key={thread.id} thread={thread} name={agent?.name ?? "L'agent"} />
+        )}
+        {thread.status === "error" && thread.error && !agentStopped(thread.error) && (
           <div className={mascot ? "failed with-mascot" : "failed"} role="alert">
             {mascot && agent && (
               <Mascot mascot={mascot} expression="error" name={agent.name} still />
@@ -470,6 +475,59 @@ function Conversation({
             </span>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Its agent went away in the middle of a turn (shut down, crashed, connection lost): said
+ * plainly, with what it takes to go on. What it did stays above; « Reprendre » starts a new
+ * session with the model the thread has now, which « Changer de modèle » can change first.
+ */
+function StoppedNotice({ thread, name }: { thread: Thread; name: string }) {
+  const [sent, setSent] = useState(false);
+  // The detail is what the agent or its connection said, for whoever wants to know.
+  const detail = (thread.error ?? "")
+    .split("\n")
+    .filter((line, i) => !(i === 0 && line.startsWith(AGENT_STOPPED)))
+    .join("\n")
+    .trim();
+  const waiting = thread.queue?.length ?? 0;
+  return (
+    <div className="stopped" role="alert">
+      <div className="stopped-tx">
+        <b>{name} s'est arrêté</b>
+        <span>
+          Ce qu'il a déjà fait reste dans le fil.{" "}
+          {waiting
+            ? `Reprendre envoie ${waiting > 1 ? "les messages en file" : "le message en file"}.`
+            : "Reprends quand tu veux, avec ce modèle ou un autre."}
+        </span>
+        {detail && (
+          <details>
+            <summary>Détail</summary>
+            <code>{detail}</code>
+          </details>
+        )}
+      </div>
+      <div className="stopped-act">
+        <button className="btn sm quiet" onClick={() => openComposerPicker(thread.id)}>
+          Changer de modèle
+        </button>
+        <button
+          className="btn sm pri"
+          disabled={sent}
+          onClick={() => {
+            // Once: the card goes when the turn starts. Refused (busy for a moment), it can
+            // be pressed again.
+            setSent(true);
+            setTimeout(() => setSent(false), 3000);
+            connection.send({ type: "thread.resume", threadId: thread.id });
+          }}
+        >
+          Reprendre
+        </button>
       </div>
     </div>
   );

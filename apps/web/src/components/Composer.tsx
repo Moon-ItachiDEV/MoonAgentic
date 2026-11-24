@@ -30,7 +30,7 @@ import {
   resolveSubmission,
   triggerAt,
 } from "../commands.ts";
-import { onFillComposer } from "../composer-fill.ts";
+import { onFillComposer, onOpenComposerPicker } from "../composer-fill.ts";
 import {
   type Dictation,
   type Heard,
@@ -285,6 +285,16 @@ export function Composer(props: {
         setText(value);
         if (files.length) images.add(files);
         input.current?.focus();
+      }),
+    [thread?.id],
+  );
+  // « Changer de modèle » on a stopped agent's card: the same picker, opened from there.
+  useEffect(
+    () =>
+      onOpenComposerPicker((threadId) => {
+        if (threadId !== thread?.id) return;
+        closeMenus("picker");
+        setMenu(true);
       }),
     [thread?.id],
   );

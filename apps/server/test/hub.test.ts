@@ -3,8 +3,11 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from "node:os";
 import path from "node:path";
 import {
+  AGENT_STOPPED,
+  agentStopped,
   GOAL_MORE_TURNS,
   GOAL_TURNS,
+  RESUME_TEXT,
   type Item,
   type ServerMessage,
   type Thread,
@@ -465,6 +468,84 @@ describe("Hub with the demo agent", () => {
     expect(replies.some((t) => t.includes("« Un » (modèle rapide)"))).toBe(true);
     expect(replies.some((t) => t.includes("« Deux » (modèle precis)"))).toBe(true);
     expect(store.getThread(threadId)?.model).toBe("precis");
+  });
+
+  it("says plainly that the agent stopped mid-turn, and keeps what it did", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "/crash",
+    });
+    await hub.whenIdle(threadId);
+
+    const thread = store.getThread(threadId)!;
+    expect(thread.status).toBe("error");
+    expect(thread.error?.split("\n")[0]).toBe(AGENT_STOPPED);
+    expect(agentStopped(thread.error)).toBe(true);
+    // The technical reason is kept under the plain words.
+    expect(thread.error).toContain("connection closed");
+    const said = store.listItems(threadId).filter((i) => i.kind === "agent");
+    expect(said.map((i) => ("text" in i ? i.text : ""))).toContain("Je commence le travail…");
+  });
+
+  it("lets the model change after a stop, and « Reprendre » goes on with it", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      model: "rapide",
+      text: "/crash",
+    });
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)?.status).toBe("error");
+
+    // The agent is gone: the model is still the thread's to change.
+    await hub.setModel(threadId, "precis");
+    expect(store.getThread(threadId)?.model).toBe("precis");
+    await hub.handle(new TestClient(), { type: "thread.resume", threadId });
+    await hub.whenIdle(threadId);
+
+    const after = store.getThread(threadId)!;
+    expect(after.status).toBe("idle");
+    expect(after.error).toBeUndefined();
+    const items = store.listItems(threadId);
+    expect(items.filter((i) => i.kind === "user").map((i) => ("text" in i ? i.text : ""))).toEqual([
+      "/crash",
+      RESUME_TEXT,
+    ]);
+    // Earlier work stays, and a new session answers with the model picked after the stop.
+    const replies = items.filter((i) => i.kind === "agent").map((i) => ("text" in i ? i.text : ""));
+    expect(replies[0]).toBe("Je commence le travail…");
+    expect(replies.length).toBeGreaterThan(1);
+    expect(after.model).toBe("precis");
+  });
+
+  it("« Reprendre » sends what waited first, and is refused while the agent works", async () => {
+    const { hub, store, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "/crash",
+    });
+    expect(() => hub.resume(threadId)).toThrow("L'agent travaille encore");
+    hub.queueMessage(threadId, "Ensuite, lance les tests");
+    await hub.whenIdle(threadId);
+    // An error holds the user's messages back: they look at it first.
+    expect(store.getThread(threadId)?.queue).toHaveLength(1);
+
+    hub.resume(threadId);
+    await hub.whenIdle(threadId);
+    const users = store.listItems(threadId).filter((i) => i.kind === "user");
+    expect(users.map((i) => ("text" in i ? i.text : ""))).toEqual([
+      "/crash",
+      "Ensuite, lance les tests",
+    ]);
+    expect(store.getThread(threadId)?.queue).toBeUndefined();
+    expect(store.getThread(threadId)?.status).toBe("idle");
   });
 
   it("keeps a model picked while the thread's agent was stopped, despite the session replay", async () => {
