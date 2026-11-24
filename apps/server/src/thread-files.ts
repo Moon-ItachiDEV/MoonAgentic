@@ -44,7 +44,7 @@ export function refPath(ref: string): string | undefined {
     }
   }
   // An address of the web is not a file of this computer, nor is a network share.
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]+:/.test(raw) && !/^[a-zA-Z]:[\\/]/.test(raw)) return undefined;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) && !/^[a-zA-Z]:[\\/]/.test(raw)) return undefined;
   if (raw.startsWith("//") || raw.startsWith("\\\\")) return undefined;
   // What follows a `?` or a `#` is not part of the file's name.
   raw = raw.replace(/[?#].*$/, "");

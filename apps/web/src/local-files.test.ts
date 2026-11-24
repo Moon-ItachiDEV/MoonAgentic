@@ -33,10 +33,16 @@ describe("local files in answers", () => {
       "C:\\Users\\alexa\\.gemini\\brain\\p_1.jpg",
     );
     expect(writtenRef({ raw: '[a](<C:\\a b\\c.png> "titre")', href: "x" })).toBe("C:\\a b\\c.png");
-    // Without a backslash, Markdown's own reading is kept: its entities, its escapes.
-    expect(writtenRef({ raw: "[a](images/a&amp;b.png)", href: "images/a&b.png" })).toBe(
-      "images/a&b.png",
+    // Accents and spaces as written, not as Markdown encodes them.
+    expect(
+      writtenRef({ raw: "![a](<C:/mon dossier/é.png>)", href: "C:/mon%20dossier/%C3%A9.png" }),
+    ).toBe("C:/mon dossier/é.png");
+    // A link around an image: each has its own address, the last of its text.
+    expect(writtenRef({ raw: "[![alt](C:\\a\\b.png)](C:\\a\\c.png)", href: "x" })).toBe(
+      "C:\\a\\c.png",
     );
+    // A reference link has none in its text: Markdown's reading is kept.
+    expect(writtenRef({ raw: "[a][1]", href: "images/a.png" })).toBe("images/a.png");
   });
 
   it("marks the images and links that name local files, and those only", () => {
@@ -45,6 +51,7 @@ describe("local files in answers", () => {
         "![Pingouin](C:\\Users\\alexa\\.gemini\\antigravity\\brain\\c1\\pingouin_mange_1795.jpg)",
         "[pingouin_mange.jpg](file:///C:/Users/alexa/Mon%20Projet/pingouin_mange.jpg)",
         "[le site](https://example.com) ![logo](https://example.com/logo.png)",
+        "[![Agrandir](C:\\a\\b.png)](C:\\a\\b.png)",
       ].join("\n\n"),
       { async: false },
     );
@@ -54,6 +61,8 @@ describe("local files in answers", () => {
       "file:///C:/Users/alexa/Mon%20Projet/pingouin_mange.jpg",
       undefined,
       undefined,
+      "C:\\a\\b.png",
+      "C:\\a\\b.png",
     ]);
   });
 

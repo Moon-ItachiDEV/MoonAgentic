@@ -14,6 +14,8 @@ export function FileViewer(props: { threadId: string; fileRef: string; onClose: 
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     let current = true;
+    setLink(undefined);
+    setError(undefined);
     fileLink(props.threadId, props.fileRef).then(
       (found) => current && setLink(found),
       (e: unknown) => current && setError(e instanceof Error ? e.message : String(e)),

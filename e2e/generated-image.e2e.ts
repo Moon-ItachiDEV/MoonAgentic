@@ -37,12 +37,19 @@ beforeAll(async () => {
   git("config", "commit.gpgsign", "false");
   git("add", "-A");
   git("commit", "-q", "-m", "init");
+  url = await startServer("0");
+  browser = await chromium.launch();
+});
+
+/** The server on this port, with the same data: it gives the address it serves. */
+function startServer(port: string): Promise<string> {
+  const home = path.join(dir, "home");
   server = spawn(
     process.execPath,
-    ["apps/server/src/bin.ts", "--demo", "--port", "0", "--data-dir", path.join(dir, "data")],
+    ["apps/server/src/bin.ts", "--demo", "--port", port, "--data-dir", path.join(dir, "data")],
     { cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home }, stdio: "pipe" },
   );
-  url = await new Promise<string>((resolve, reject) => {
+  return new Promise<string>((resolve, reject) => {
     let out = "";
     server.stdout?.on("data", (chunk: Buffer) => {
       out += chunk.toString();
@@ -52,16 +59,19 @@ beforeAll(async () => {
     server.stderr?.on("data", (chunk: Buffer) => process.stderr.write(chunk));
     server.once("exit", (code) => reject(new Error(`Le serveur s'est arrêté (code ${code}).`)));
   });
-  browser = await chromium.launch();
-});
+}
 
-afterAll(async () => {
-  await browser?.close();
+async function stopServer() {
   if (server && server.exitCode === null) {
     const exited = new Promise((resolve) => server.once("exit", resolve));
     server.kill("SIGTERM");
     await exited;
   }
+}
+
+afterAll(async () => {
+  await browser?.close();
+  await stopServer();
   if (dir) {
     try {
       rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -155,5 +165,31 @@ describe("generated image", () => {
       await page.screenshot({ path: path.join(shots, "image-telephone-agrandie.png") });
     }
     await context.close();
+  });
+
+  it("shows again once the server has started again", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    await page.goto(new URL(threadPath, url).href);
+    const image = page.locator(".md img.md-img");
+    await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(480);
+    const before = await image.getAttribute("src");
+
+    // Started again: the addresses it gave are gone with it.
+    await stopServer();
+    await startServer(new URL(url).port);
+    expect(await page.evaluate((src) => fetch(src!).then((r) => r.status), before)).toBe(404);
+
+    // The thread shown again asks for a new address once the app is connected again.
+    await expect
+      .poll(() => page.getByRole("combobox", { name: "Message" }).isEnabled(), { timeout: 20_000 })
+      .toBe(true);
+    await page.getByRole("button", { name: "Artefacts", exact: true }).click();
+    await page.waitForURL(/\/artefacts$/);
+    await page.goBack();
+    await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(480);
+    expect(await image.getAttribute("src")).not.toBe(before);
+    expect(await page.locator(".md-img-gone").count()).toBe(0);
+    await page.close();
   });
 });

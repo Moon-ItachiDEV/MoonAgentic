@@ -1203,6 +1203,13 @@ export class Hub {
       }
       case "file.open": {
         const thread = this.requireThread(message.threadId);
+        // Only a file one of its answers names: the folders where agents keep what they
+        // generate are shared by every project, a locked one's too.
+        const draft = this.drafts.get(thread.id)?.item;
+        const named =
+          (draft?.kind === "agent" && draft.text.includes(message.ref)) ||
+          this.store.answerHolds(thread.id, message.ref);
+        if (!named) throw new Error("Aucune réponse de ce fil ne nomme ce fichier.");
         const folder = this.folderOf(thread.projectId, thread.id);
         const project = this.store.getProject(thread.projectId);
         const roots = [

@@ -23,14 +23,17 @@ export function isLocalRef(ref: string): boolean {
 }
 
 /**
- * The address as the agent wrote it. Markdown takes a backslash before some characters as an
- * escape, which a Windows path is full of (`\.gemini`): its own text keeps them.
+ * The address exactly as the agent wrote it, which the server finds again in its answer.
+ * Markdown would change it: a backslash before some characters is an escape, which a Windows
+ * path is full of (`\.gemini`), and accents and spaces are encoded.
  */
 export function writtenRef(token: { raw: string; href: string }): string {
+  // The last address of its text: a link around an image has the image's before its own.
   const written =
-    /\]\(\s*(?:<([^>\n]*)>|([^\s<>]+?))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)$/.exec(token.raw);
-  const ref = written?.[1] ?? written?.[2];
-  return ref && ref.includes("\\") ? ref : token.href;
+    /\]\(\s*(?:<([^>\n]*)>|([^\s<>()[\]]+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\s*\)$/.exec(
+      token.raw,
+    );
+  return written?.[1] ?? written?.[2] ?? token.href;
 }
 
 /** Marks the links and images of an answer that name local files, to be shown from the server. */
@@ -95,7 +98,10 @@ export function fileLink(threadId: string, ref: string, now = Date.now()): Promi
   const entry = kept.get(key);
   if (entry && fresh(entry, now)) return entry.read;
   const next: Kept = {
-    read: connection.ask({ type: "file.open", requestId: newId(), threadId, ref }),
+    // Asked once the app is connected: a thread shown while it connects again waits for it.
+    read: whenOpen().then(() =>
+      connection.ask({ type: "file.open", requestId: newId(), threadId, ref }),
+    ),
   };
   next.read.then(
     (link) => void (next.link = link),
@@ -107,11 +113,34 @@ export function fileLink(threadId: string, ref: string, now = Date.now()): Promi
   return next.read;
 }
 
-/** Forgets every address: another token, or a project locked. */
+/** Forgets the address of one file, which no longer served it. */
+export function forgetFileLink(threadId: string, ref: string): void {
+  kept.delete(keyOf(threadId, ref));
+}
+
+/**
+ * Forgets every address. The server gives them for as long as it runs: once the connection is
+ * lost, it may have started again without them, or with another token.
+ */
 export function forgetFileLinks(): void {
   kept.clear();
 }
 
+/** Resolves once the app is connected to the server. */
+function whenOpen(): Promise<void> {
+  if (connection.getState().status === "open") return Promise.resolve();
+  return new Promise((resolve) => {
+    const stop = connection.subscribe(() => {
+      if (connection.getState().status !== "open") return;
+      stop();
+      resolve();
+    });
+  });
+}
+
+let wasOpen = false;
 connection.subscribe(() => {
-  if (connection.getState().status === "unauthorized") forgetFileLinks();
+  const open = connection.getState().status === "open";
+  if (wasOpen && !open) forgetFileLinks();
+  wasOpen = open;
 });

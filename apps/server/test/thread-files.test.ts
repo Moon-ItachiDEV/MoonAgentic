@@ -42,6 +42,8 @@ describe("refPath", () => {
       "\\\\serveur\\partage\\a.png",
       "",
       "a\0b.png",
+      // A drive with no folder after it: relative to whatever folder that drive is in.
+      "C:foo.png",
     ]) {
       expect(refPath(web)).toBeUndefined();
     }
@@ -107,11 +109,23 @@ describe("resolveThreadFile", () => {
 });
 
 describe("file.open", { timeout: 40_000 }, () => {
-  async function hubWithThread() {
+  /** A thread whose demo agent generated an image, as Antigravity does, in `home`. */
+  async function hubWithImage() {
     const root = tempDir();
     const repo = path.join(root, "repo");
     const home = path.join(root, "home");
     mkdirSync(repo, { recursive: true });
+    mkdirSync(home, { recursive: true });
+    // The agent keeps what it generates in the home folder it is started with.
+    const before = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    cleanups.push(() => {
+      for (const [key, value] of Object.entries(before)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    });
     const store = new Store(path.join(root, "state.sqlite"));
     const hub = new Hub(store, new Agents({ demo: true }), {
       homeDir: home,
@@ -126,78 +140,87 @@ describe("file.open", { timeout: 40_000 }, () => {
       projectId,
       agentId: "demo",
       permissionMode: "full",
-      text: "Génère une image",
+      text: "Stp génère une image d'un pingouin",
     });
     await hub.whenIdle(threadId);
-    return { root, repo, home, hub, projectId, threadId };
+    const answer = store
+      .listItems(threadId)
+      .find((i): i is Extract<typeof i, { kind: "agent" }> => i.kind === "agent")!.text;
+    // The image as a path, the copy and the original as file addresses.
+    const [image, copy, original] = [...answer.matchAll(/\]\(([^)]+)\)/g)].map((m) => m[1]!);
+    return {
+      root,
+      repo,
+      home,
+      hub,
+      store,
+      projectId,
+      threadId,
+      image: image!,
+      copy: copy!,
+      original: original!,
+    };
   }
 
-  it("gives an address for an image the agent made, which serves that file alone", async () => {
-    const { repo, home, hub, projectId, threadId } = await hubWithThread();
-    const brain = path.join(home, ".gemini", "antigravity", "brain", "conv");
-    mkdirSync(brain, { recursive: true });
-    const made = path.join(brain, "pingouin_mange_1795.jpg");
-    writeFileSync(made, PNG);
-    writeFileSync(path.join(repo, "pingouin_mange.jpg"), PNG);
-
+  const ask = async (hub: Hub, threadId: string, ref: string) => {
     const replies: ServerMessage[] = [];
-    const client = { send: (m: ServerMessage) => void replies.push(m) };
-    await hub.handle(client as never, {
+    await hub.handle({ send: (m: ServerMessage) => void replies.push(m) } as never, {
       type: "file.open",
-      requestId: "f1",
+      requestId: "f",
       threadId,
-      ref: pathToFileURL(made).href,
+      ref,
     });
-    const link = replies.at(-1) as Extract<ServerMessage, { type: "fileLink" }>;
-    expect(link).toMatchObject({
-      type: "fileLink",
-      requestId: "f1",
-      name: "pingouin_mange_1795.jpg",
-      mime: "image/jpeg",
-      size: PNG.length,
-    });
-    expect(link.url).toMatch(/^\/api\/artifacts\/[\w-]{43}\/pingouin_mange_1795\.jpg$/);
+    return replies.at(-1) as Extract<ServerMessage, { type: "fileLink" }>;
+  };
+
+  it("gives an address for an image the agent made, which serves that file alone", async () => {
+    const { hub, projectId, threadId, image, copy, original } = await hubWithImage();
+    expect(image).toMatch(/pingouin_\d+\.png$/);
+
+    const link = await ask(hub, threadId, image);
+    expect(link).toMatchObject({ type: "fileLink", mime: "image/png", name: path.basename(image) });
+    expect(link.url).toMatch(/^\/api\/artifacts\/[\w-]{43}\/pingouin_\d+\.png$/);
     const ticket = link.url.split("/")[3]!;
-    expect(await hub.artifactLinks.resolve(ticket, "pingouin_mange_1795.jpg")).toMatchObject({
-      type: "image/jpeg",
+    expect(await hub.artifactLinks.resolve(ticket, link.name)).toMatchObject({
+      type: "image/png",
     });
     // The address is for that file, not for its folder.
-    expect(await hub.artifactLinks.resolve(ticket, "autre.jpg")).toBeUndefined();
+    expect(await hub.artifactLinks.resolve(ticket, "autre.png")).toBeUndefined();
+    // Asked again, the same address is given while it has time left; by a file address too.
+    expect((await ask(hub, threadId, image)).url).toBe(link.url);
+    expect((await ask(hub, threadId, original)).url).toBe(link.url);
+    // The copy in the project, as the agent names it.
+    expect(await ask(hub, threadId, copy)).toMatchObject({ name: "pingouin.png" });
 
-    // Asked again, the same address is given while it has time left.
-    await hub.handle(client as never, {
-      type: "file.open",
-      requestId: "f2",
-      threadId,
-      ref: made,
-    });
-    expect((replies.at(-1) as { url: string }).url).toBe(link.url);
-
-    // One in the project, as the agent names it.
-    await hub.handle(client as never, {
-      type: "file.open",
-      requestId: "f3",
-      threadId,
-      ref: "pingouin_mange.jpg",
-    });
-    expect(replies.at(-1)).toMatchObject({ type: "fileLink", name: "pingouin_mange.jpg" });
-
-    // Nothing outside the thread's folders and the agents' own.
-    writeFileSync(path.join(home, "photo.png"), PNG);
-    await expect(
-      hub.handle(client as never, {
-        type: "file.open",
-        requestId: "f4",
-        threadId,
-        ref: path.join(home, "photo.png"),
-      }),
-    ).rejects.toThrow(/ne peut pas être ouvert/);
-
-    // Nor anything of a locked project, even from an address given before.
+    // Nothing of a locked project, even from an address given before.
     hub.locks.setPin("123456");
     hub.locks.lock(projectId);
-    expect(await hub.artifactLinks.resolve(ticket, "pingouin_mange_1795.jpg")).toBeUndefined();
+    expect(await hub.artifactLinks.resolve(ticket, link.name)).toBeUndefined();
     hub.locks.unlock(projectId, "123456");
-    expect(await hub.artifactLinks.resolve(ticket, "pingouin_mange_1795.jpg")).toBeDefined();
+    expect(await hub.artifactLinks.resolve(ticket, link.name)).toBeDefined();
+  });
+
+  it("serves only a file one of the thread's answers names", async () => {
+    const { hub, store, home, repo, projectId, threadId, image } = await hubWithImage();
+    // Another image in the agents' shared folder, and one in the project: no answer names them.
+    const other = path.join(path.dirname(image), "autre_projet.png");
+    writeFileSync(other, PNG);
+    writeFileSync(path.join(repo, "photo.png"), PNG);
+    writeFileSync(path.join(home, "photo.png"), PNG);
+    for (const ref of [other, "photo.png", path.join(home, "photo.png")]) {
+      await expect(ask(hub, threadId, ref), ref).rejects.toThrow(/ne nomme ce fichier/);
+    }
+    // A thread of another project cannot have it either, though the folder is shared.
+    const elsewhere = hub.createProject("autre", tempDir());
+    const otherThread = hub.createThread({
+      projectId: elsewhere,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Bonjour",
+    });
+    await hub.whenIdle(otherThread);
+    await expect(ask(hub, otherThread, image)).rejects.toThrow(/ne nomme ce fichier/);
+    expect(store.answerHolds(threadId, image)).toBe(true);
+    expect(projectId).not.toBe(elsewhere);
   });
 });

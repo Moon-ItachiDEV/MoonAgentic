@@ -10,7 +10,14 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { fileLink, knownLink, localFiles, markedRef, refName } from "../local-files.ts";
+import {
+  fileLink,
+  forgetFileLink,
+  knownLink,
+  localFiles,
+  markedRef,
+  refName,
+} from "../local-files.ts";
 import { prStates } from "../pr-states.ts";
 import { pullRequestUrl } from "../pull-request.ts";
 import { FileViewer } from "./FileViewer.tsx";
@@ -70,18 +77,25 @@ export const Markdown = memo(function Markdown({
         gone();
         continue;
       }
-      img.onerror = gone;
+      const ask = () =>
+        fileLink(threadId, ref).then((link) => {
+          if (!current || !img.isConnected) return;
+          img.classList.remove("waiting");
+          img.src = link.url;
+        }, gone);
+      // An address that no longer serves it, the server having started again: asked anew once.
+      img.onerror = () => {
+        img.onerror = gone;
+        forgetFileLink(threadId, ref);
+        void ask();
+      };
       const known = knownLink(threadId, ref);
       if (known) {
         img.src = known.url;
         continue;
       }
       img.classList.add("waiting");
-      fileLink(threadId, ref).then((link) => {
-        if (!current || !img.isConnected) return;
-        img.classList.remove("waiting");
-        img.src = link.url;
-      }, gone);
+      void ask();
     }
     return () => {
       current = false;
