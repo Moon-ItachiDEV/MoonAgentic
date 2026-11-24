@@ -368,6 +368,19 @@ export const AGENT_QUIET_MS = 10 * 60_000;
 /** An agent's turn with no sign of progress for this long is stopped. */
 export const AGENT_SILENCE_STOP_MS = 30 * 60_000;
 
+/**
+ * The first line of a thread's error when its agent's process went away in the middle of a
+ * turn (shut down, crashed, connection lost). What it did so far stays in the thread, which
+ * « Reprendre » takes up again with a new agent session.
+ */
+export const AGENT_STOPPED = "L'agent s'est arrêté avant la fin de sa réponse.";
+/** What « Reprendre » asks the agent, after a stop. */
+export const RESUME_TEXT = "Tu as été interrompu : reprends là où tu t'es arrêté.";
+
+/** True for a thread error that says its agent stopped, as said now or by an older server. */
+export const agentStopped = (error: string | undefined): boolean =>
+  !!error && (error.startsWith(AGENT_STOPPED) || /^ACP connection closed\b/i.test(error));
+
 /** How many turns a goal gets when none is said, and at most. */
 export const GOAL_TURNS = 10;
 export const MAX_GOAL_TURNS = 50;
@@ -1403,6 +1416,11 @@ export const ClientMessage = z.discriminatedUnion("type", [
     .object({ type: z.literal("thread.send"), threadId: id, text: messageText, attachments })
     .refine(saysSomething),
   z.object({ type: z.literal("thread.cancel"), threadId: id }),
+  /**
+   * Takes a thread up again after its agent stopped: what waits goes first, else the agent
+   * is asked to go on where it was. A new agent session starts with the thread's model.
+   */
+  z.object({ type: z.literal("thread.resume"), threadId: id }),
   /**
    * Keeps a message for after the turn under way. Sent at once instead when the thread
    * is free and nothing waits before it.

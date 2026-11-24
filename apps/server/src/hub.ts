@@ -8,11 +8,13 @@ import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 import {
+  AGENT_STOPPED,
   DEFAULT_MAX_TURNS,
   GOAL_MORE_TURNS,
   GOAL_TURNS,
   MAX_QUEUED_MESSAGES,
   PR_WATCH_TRIES,
+  RESUME_TEXT,
   threadPullRequest,
 } from "@moonagentic/protocol";
 import type {
@@ -144,6 +146,15 @@ const TEXT_FLUSH_MS = 250;
  */
 const INDEX_STRETCH_MS = 20;
 const INDEX_PAUSE_MS = 50;
+
+/** How the ACP connection says the agent's process went away. */
+const CONNECTION_CLOSED = /\bconnection closed\b/i;
+
+/** A thread's error when its agent stopped mid-turn: plain words first, the detail after. */
+const stoppedError = (detail: string): string => {
+  const rest = detail.trim();
+  return rest ? `${AGENT_STOPPED}\n${rest}` : AGENT_STOPPED;
+};
 
 const titleFrom = (text: string, images = 0) => {
   const line = text.trim().split("\n")[0] ?? "";
@@ -930,6 +941,9 @@ export class Hub {
       }
       case "thread.cancel":
         await this.cancel(message.threadId);
+        return;
+      case "thread.resume":
+        this.resume(message.threadId);
         return;
       case "item.get": {
         this.requireThread(message.threadId);
@@ -1827,6 +1841,18 @@ export class Hub {
   }
 
   /**
+   * Takes a thread up again after its agent stopped. The agent is gone, so the next turn
+   * starts a new session, with the thread's model as it is now: the user may have picked
+   * another one meanwhile. What waits goes first; else the agent is asked to go on.
+   */
+  resume(threadId: string): void {
+    const thread = this.requireLiveThread(threadId);
+    if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
+    if (thread.queue?.length && this.sendNextQueued(threadId)) return;
+    this.sendByUser(threadId, RESUME_TEXT);
+  }
+
+  /**
    * Keeps a message for after the turn under way: the user's, or one the project's
    * coordinator leaves. With the thread free and nothing waiting before it, it is sent at
    * once: its turn ended while it was being written.
@@ -2354,6 +2380,11 @@ export class Hub {
       await change();
       return false;
     } catch (error) {
+      // An agent that went away takes the change with it: the next one starts with it.
+      if (CONNECTION_CLOSED.test(describe(error))) {
+        await this.pool.stop(threadId);
+        return true;
+      }
       if (!(error instanceof SettingTimeout)) throw error;
       console.warn(`Fil ${threadId} : ${error.message} L'agent est arrêté.`);
       await this.pool.stop(threadId);
@@ -3220,8 +3251,16 @@ export class Hub {
         return;
       }
       // An agent that crashed already left its own reason, which beats "connection closed".
+      const said = describe(error);
+      // An agent whose connection closed is of no more use, even if its process lingers:
+      // it goes, so a change of model and the next message start a new one.
+      if (CONNECTION_CLOSED.test(said)) await this.pool.stop(thread.id).catch(() => undefined);
       if (this.store.getThread(thread.id)?.status !== "error") {
-        this.updateThread(thread.id, { status: "error", error: describe(error) });
+        // Its process went away mid-turn: said plainly, with the technical detail under it.
+        this.updateThread(thread.id, {
+          status: "error",
+          error: CONNECTION_CLOSED.test(said) ? stoppedError(said) : said,
+        });
       }
     }
   }
@@ -3429,7 +3468,7 @@ export class Hub {
           this.pool.exited(thread.id);
           this.settlePermissions(thread.id);
           if (reason && this.turns.has(thread.id)) {
-            this.updateThread(thread.id, { status: "error", error: reason });
+            this.updateThread(thread.id, { status: "error", error: stoppedError(reason) });
           }
         },
         onConfig: ({ model, settings }) => {
