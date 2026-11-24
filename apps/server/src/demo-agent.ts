@@ -3,7 +3,10 @@
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+import zlib from "node:zlib";
 import { createInterface } from "node:readline";
 import { Readable, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
@@ -73,6 +76,40 @@ async function callMoonAgentic(sessionId: string, name: string, args: unknown): 
 
 /** The folder each session works in. */
 const cwds = new Map<string, string>();
+/** The demo's generated image: 480 by 320 pixels, a sky over the ice, drawn as a PNG. */
+const DEMO_PNG = (() => {
+  const [width, height] = [480, 320];
+  const rows = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0; y < height; y++) {
+    const ice = y > height * 0.62;
+    for (let x = 0; x < width; x++) {
+      const at = y * (width * 3 + 1) + 1 + x * 3;
+      const t = y / height;
+      rows[at] = ice ? 225 : Math.round(40 + 120 * t);
+      rows[at + 1] = ice ? 238 : Math.round(80 + 110 * t);
+      rows[at + 2] = ice ? 248 : Math.round(190 + 50 * t);
+    }
+  }
+  const chunk = (type: string, data: Buffer) => {
+    const size = Buffer.alloc(4);
+    size.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, "ascii"), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(zlib.crc32(body));
+    return Buffer.concat([size, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8; // 8 bits per channel
+  header[9] = 2; // red, green, blue
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", zlib.deflateSync(rows)),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+})();
 
 /** A file of 1,200 lines: a result too large to travel with the timeline. */
 const BIG_FILE = Array.from(
@@ -276,6 +313,24 @@ const app = acp
     };
 
     if (ask.includes("boom")) throw new Error("Le démo a planté exprès.");
+
+    // As Antigravity does: the image made in its own folder, a copy in the project, and an
+    // answer that names both as paths of the computer.
+    if (ask.includes("génère une image")) {
+      const made = path.join(os.homedir(), ".gemini", "antigravity", "brain", sessionId);
+      mkdirSync(made, { recursive: true });
+      const original = path.join(made, `pingouin_${Date.now()}.png`);
+      writeFileSync(original, DEMO_PNG);
+      const cwd = cwds.get(sessionId);
+      if (cwd) writeFileSync(path.join(cwd, "pingouin.png"), DEMO_PNG);
+      await say(
+        `Voici l'image :\n\n![Pingouin qui mange](${original})\n\n` +
+          `- [pingouin.png](${pathToFileURL(path.join(cwd ?? made, "pingouin.png")).href})\n` +
+          `- Copie d'origine : [${path.basename(original)}](${pathToFileURL(original).href})`,
+        "agent_message_chunk",
+      );
+      return { stopReason: "end_turn" };
+    }
 
     // A goal over several turns: reached on the turn its text names (« atteint au tour 3 »),
     // blocked when it says it cannot be done alone, else one more step each turn.

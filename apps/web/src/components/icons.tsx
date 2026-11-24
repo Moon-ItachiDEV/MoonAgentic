@@ -494,3 +494,9 @@ export const IconUsers = ({ size = 16 }: P) => (
     <path d="M15.5 5.2a3 3 0 0 1 0 5.6M17.5 14.2A5.5 5.5 0 0 1 20.5 19" />
   </svg>
 );
+/** An arrow down onto a line: to keep a file on the device. */
+export const IconDownload = ({ size = 16 }: P) => (
+  <svg {...fine(size)}>
+    <path d="M8 2.5v7.5M4.75 7 8 10.25 11.25 7M3 13.5h10" />
+  </svg>
+);
