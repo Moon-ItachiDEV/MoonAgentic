@@ -42,6 +42,8 @@ import { connection, newId } from "../connection.ts";
 import { carriesFiles, IMAGE_ACCEPT, pastedImages } from "../images.ts";
 import { useImageDrafts } from "../use-image-drafts.ts";
 import { readPref, writePref } from "../prefs.ts";
+import { looseDefault } from "../default-models.ts";
+import type { ModelPick } from "./ModelSelect.tsx";
 import { setDefault, useDefaults } from "../defaults.ts";
 import { speakerName } from "../speaker.ts";
 import { quotaWarning, roomiest, tightest } from "../quotas.ts";
@@ -94,6 +96,11 @@ export function Composer(props: {
    * on the home page goes somewhere. Answers its id.
    */
   onNeedProject?: () => Promise<string>;
+  /**
+   * A new conversation outside any project: a question or a web search. It starts on the
+   * model made for that (Gemini 4 Hydrogen) and a pick made here is not kept for the next one.
+   */
+  loose?: boolean;
   /** The projects a new conversation can start in, picked from the tray under the box. */
   projects?: Project[];
   onPickProject?: (id: string) => void;
@@ -142,6 +149,10 @@ export function Composer(props: {
   }>();
   const [busy, setBusy] = useState(false);
   const [pickedAgentId, setPickedAgentId] = useState(() => readPref("agent"));
+  /** The agent and model picked in a conversation outside any project, for it only. */
+  const [loosePick, setLoosePick] = useState<ModelPick>();
+  // Back in a project or a thread, the pick made outside one is forgotten.
+  if (loosePick && (!props.loose || thread)) setLoosePick(undefined);
   // A new thread starts as the defaults say, the same on every device.
   const { permissionMode: newMode, isolated } = useDefaults();
   const input = useRef<HTMLTextAreaElement>(null);
@@ -180,8 +191,11 @@ export function Composer(props: {
   /** Files are being dragged over the page: the composer shows it takes them. */
   const [dropping, setDropping] = useState(false);
 
+  const looseOn = !thread && props.loose ? (loosePick ?? looseDefault(agents)) : undefined;
+  const looseAgent = looseOn && agents.find((a) => a.id === looseOn.agentId && a.available);
   const agentId =
     thread?.agentId ??
+    looseAgent?.id ??
     (agents.find((a) => a.id === pickedAgentId && a.available) ?? agents.find((a) => a.available))
       ?.id;
   const agent = agents.find((a) => a.id === agentId);
@@ -190,8 +204,12 @@ export function Composer(props: {
   // A thread handed to another agent has no model until that agent starts: its default.
   const model = thread
     ? (thread.model ?? agent?.defaultModel)
-    : ((agent?.models?.some((m) => m.id === pickedModel) ? pickedModel : agent?.defaultModel) ??
-      undefined);
+    : looseAgent
+      ? looseAgent.models?.some((m) => m.id === looseOn?.model)
+        ? looseOn?.model
+        : looseAgent.defaultModel
+      : ((agent?.models?.some((m) => m.id === pickedModel) ? pickedModel : agent?.defaultModel) ??
+        undefined);
   const modelName = agent?.models?.find((m) => m.id === model)?.name ?? model;
   const agentSettings = agentSettingsFor(agent, model);
   const settings = Object.fromEntries(
@@ -226,6 +244,10 @@ export function Composer(props: {
     if (thread) {
       if (id !== thread.agentId)
         connection.send({ type: "thread.switchAgent", threadId: thread.id, agentId: id });
+      return;
+    }
+    if (props.loose) {
+      setLoosePick({ agentId: id });
       return;
     }
     setPickedAgentId(id);
@@ -324,11 +346,25 @@ export function Composer(props: {
       });
     return needing.current;
   };
+  // Outside a project, the models are asked in another project's folder: « Discussions »
+  // is only made for « + » or the first message.
+  const looseFolder = props.loose ? props.projects?.[0] : undefined;
+  // Outside a project, Hydrogen is only found once Antigravity has given its models.
+  const looseAsked = useRef(false);
+  useEffect(() => {
+    // Before « Discussions » is made, any project's folder will do to ask for the list.
+    const folder = project ?? looseFolder;
+    if (!props.loose || thread || !folder || looseAsked.current) return;
+    const agy = agents.find((a) => a.id === "antigravity");
+    if (!agy?.available || agy.models || agy.modelsError) return;
+    looseAsked.current = true;
+    connection.send({ type: "agent.discover", agentId: agy.id, projectId: folder.id });
+  }, [props.loose, thread, project, looseFolder, agents]);
   // Opening the agent's menu or « + » also needs a folder: models and files are asked there.
   useEffect(() => {
-    if (!project && (pickerOpen || plusOpen)) void needProject();
+    if (!project && (plusOpen || (pickerOpen && !looseFolder))) void needProject();
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, pickerOpen, plusOpen]);
+  }, [project, pickerOpen, plusOpen, looseFolder]);
 
   const startVoice = () => {
     if (!canDictate || voiceRef.current) return;
@@ -1166,7 +1202,7 @@ export function Composer(props: {
                 agent={agent}
                 model={model}
                 favorites={props.favorites}
-                projectId={project?.id}
+                projectId={(project ?? looseFolder)?.id}
                 inThread={!!thread}
                 agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
                 settings={settings}
@@ -1201,6 +1237,8 @@ export function Composer(props: {
                       threadId: thread.id,
                       agentId: id,
                     });
+                  } else if (props.loose) {
+                    setLoosePick({ agentId: id, ...(model ? { model } : {}) });
                   } else {
                     setPickedAgentId(id);
                     writePref("agent", id);
@@ -1216,6 +1254,7 @@ export function Composer(props: {
                 onPickModel={(id, stay) => {
                   if (thread)
                     connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
+                  else if (agent && props.loose) setLoosePick({ agentId: agent.id, model: id });
                   else if (agent) {
                     setModelPicks((p) => ({ ...p, [agent.id]: id }));
                     writePref(`model.${agent.id}`, id);
