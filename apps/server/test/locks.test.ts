@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ServerMessage } from "@moonagentic/protocol";
@@ -703,5 +703,59 @@ describe("a locked project on the wire", () => {
       windowsHide: true,
     });
     expect(refs).toContain(secretBranch);
+  });
+});
+
+describe("a project's settings", () => {
+  it("keeps its icon and tint for every window, and puts the folder back", async () => {
+    const { hub, client, open } = setup();
+    const other = new TestClient();
+    hub.connect(other);
+    await hub.handle(client, {
+      type: "project.setLook",
+      projectId: open,
+      icon: "🚀",
+      color: "mint",
+    });
+    expect(other.last("project").project).toMatchObject({ id: open, icon: "🚀", color: "mint" });
+    other.messages.length = 0;
+    hub.connect(other);
+    expect(other.last("snapshot").snapshot.projects.find((p) => p.id === open)).toMatchObject({
+      icon: "🚀",
+      color: "mint",
+    });
+    await hub.handle(client, { type: "project.setLook", projectId: open, icon: null, color: null });
+    const plain = other.last("project").project;
+    expect(plain.icon).toBeUndefined();
+    expect(plain.color).toBeUndefined();
+  });
+
+  it("writes its AGENTS.md from the app, but nothing of a locked project", async () => {
+    const { dir, hub, client, secret, open } = setup();
+    await hub.handle(client, {
+      type: "project.saveRules",
+      requestId: "w1",
+      projectId: open,
+      text: "Règles partagées",
+    });
+    expect(client.last("projectSetup")).toMatchObject({
+      requestId: "w1",
+      projectId: open,
+      setup: { rules: { text: "Règles partagées", exists: true }, claude: "missing" },
+    });
+    await hub.handle(client, { type: "lock.setPin", requestId: "r1", pin: "123456" });
+    await hub.handle(client, { type: "lock.project", requestId: "r2", projectId: secret });
+    await expect(
+      hub.handle(client, { type: "project.setup", requestId: "s1", projectId: secret }),
+    ).rejects.toThrow(/verrouillé/);
+    await expect(
+      hub.handle(client, {
+        type: "project.saveRules",
+        requestId: "w2",
+        projectId: secret,
+        text: "Non",
+      }),
+    ).rejects.toThrow(/verrouillé/);
+    expect(existsSync(path.join(dir, "secret", "AGENTS.md"))).toBe(false);
   });
 });

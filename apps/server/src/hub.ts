@@ -1,6 +1,15 @@
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import { COMPUTER_ACTOR, ProjectLocks } from "./locks.ts";
+import {
+  linkClaude,
+  readSetup,
+  removeCommand,
+  removeSkill,
+  saveCommand,
+  saveRules,
+  saveSkill,
+} from "./project-setup.ts";
 import { Push, type PushSend } from "./push.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
@@ -196,6 +205,9 @@ export interface HubOptions {
 
 /** The setting that lists the projects kept at the top. */
 const PINNED_PROJECTS = "pinnedProjects";
+/** Each project's icon and tint, as set in its settings. */
+const PROJECT_LOOKS = "projectLooks";
+type ProjectLook = Pick<Project, "icon" | "color">;
 
 /** The level a coordinator starts on, as agents name it. */
 const LOW_EFFORT = /^(low|bas)$/i;
@@ -968,6 +980,66 @@ export class Hub {
           .filter((p) => p !== project.id && this.store.getProject(p));
         this.store.setSetting(PINNED_PROJECTS, message.pinned ? [...others, project.id] : others);
         this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
+      case "project.setLook": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        const looks = Object.fromEntries(
+          Object.entries(this.store.getSetting<Record<string, ProjectLook>>(PROJECT_LOOKS, {}))
+            // Projects removed since are dropped on the way.
+            .filter(([p]) => p !== project.id && this.store.getProject(p)),
+        );
+        const look: ProjectLook = {
+          ...(message.icon ? { icon: message.icon } : {}),
+          ...(message.color ? { color: message.color } : {}),
+        };
+        this.store.setSetting(
+          PROJECT_LOOKS,
+          look.icon || look.color ? { ...looks, [project.id]: look } : looks,
+        );
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
+      case "project.setup":
+      case "project.saveRules":
+      case "project.linkClaude":
+      case "project.saveCommand":
+      case "project.removeCommand":
+      case "project.saveSkill":
+      case "project.removeSkill": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        if (this.locks.isLocked(project.id)) {
+          throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+        }
+        const dir = project.path;
+        switch (message.type) {
+          case "project.saveRules":
+            saveRules(dir, message.text);
+            break;
+          case "project.linkClaude":
+            linkClaude(dir);
+            break;
+          case "project.saveCommand":
+            saveCommand(dir, message);
+            break;
+          case "project.removeCommand":
+            removeCommand(dir, message.name);
+            break;
+          case "project.saveSkill":
+            saveSkill(dir, message);
+            break;
+          case "project.removeSkill":
+            removeSkill(dir, message.path);
+            break;
+        }
+        client.send({
+          type: "projectSetup",
+          requestId: message.requestId,
+          projectId: project.id,
+          setup: await readSetup(dir, !!this.withGit(project).git),
+        });
         return;
       }
       case "lock.setPin":
@@ -3178,12 +3250,15 @@ export class Hub {
     }
     const pinned = this.store.getSetting<string[]>(PINNED_PROJECTS, []).includes(project.id);
     const locked = this.locks.isLocked(project.id);
-    return git || pinned || locked
+    const look = this.store.getSetting<Record<string, ProjectLook>>(PROJECT_LOOKS, {})[project.id];
+    return git || pinned || locked || look
       ? {
           ...project,
           ...(git ? { git } : {}),
           ...(pinned ? { pinned } : {}),
           ...(locked ? { locked } : {}),
+          ...(look?.icon ? { icon: look.icon } : {}),
+          ...(look?.color ? { color: look.color } : {}),
         }
       : project;
   }
