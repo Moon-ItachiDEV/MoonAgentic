@@ -12,6 +12,7 @@ import {
   promptLinks,
   resolveInside,
   searchFiles,
+  walk,
 } from "../src/files.ts";
 
 const cleanups: (() => void)[] = [];
@@ -40,6 +41,25 @@ describe("project files for @", () => {
       "node_modules/x/index.js": "",
     });
     expect((await listFiles(dir)).sort()).toEqual(["README.md", "src/app.ts"]);
+  });
+
+  it("walks a big folder without git while the server keeps answering", async () => {
+    const files: Record<string, string> = {};
+    for (let d = 0; d < 60; d++) for (let f = 0; f < 5; f++) files[`d${d}/f${f}.txt`] = "";
+    const dir = folder(files);
+    let turns = 0;
+    let walking = true;
+    const tick = () => {
+      if (!walking) return;
+      turns++;
+      setImmediate(tick);
+    };
+    setImmediate(tick);
+    const found = await walk(dir);
+    walking = false;
+    expect(found).toHaveLength(300);
+    // Read in one go, the folders would let no other work through until the end.
+    expect(turns).toBeGreaterThan(10);
   });
 
   it("ranks the file's own name before the rest of its path", () => {

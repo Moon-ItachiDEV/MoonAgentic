@@ -275,6 +275,31 @@ export async function forkPoint(repoDir: string, branch: string): Promise<string
   return (await git(repoDir, ["merge-base", branch, "HEAD"])).trim();
 }
 
+/**
+ * The repository a folder is a worktree of, or undefined when it is none: no `.git` of its
+ * own, or a repository git no longer finds. A folder inside another repository is not taken
+ * for a worktree of it.
+ */
+export async function worktreeRepo(worktree: string): Promise<string | undefined> {
+  if (!existsSync(path.join(worktree, ".git"))) return undefined;
+  try {
+    const [top, common] = (
+      await git(worktree, [
+        "rev-parse",
+        "--path-format=absolute",
+        "--show-toplevel",
+        "--git-common-dir",
+      ])
+    )
+      .trim()
+      .split(/\r?\n/);
+    if (!top || !common || !samePath(top, worktree)) return undefined;
+    return path.basename(common) === ".git" ? path.dirname(common) : common;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Removes the worktree's folder; its branch and commits stay in the repository. */
 export function removeWorktree(repoDir: string, worktree: string): Promise<void> {
   return oneAtATime(repoDir, () => dropWorktree(repoDir, worktree));

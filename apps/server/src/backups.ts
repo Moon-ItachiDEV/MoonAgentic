@@ -19,12 +19,12 @@ const dayOf = (time: number) => {
  * Makes one copy of the database a day in `dir`, the first as the server starts, and keeps
  * the last `keep`. Only its owner reads it; MCP secrets live apart from the database.
  */
-export function backupNow(
+export async function backupNow(
   store: Pick<Store, "backup">,
   dir: string,
   now = Date.now(),
   keep = BACKUPS_KEPT,
-): string | undefined {
+): Promise<string | undefined> {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const file = path.join(dir, `state-${dayOf(now)}.sqlite`);
   if (existsSync(file)) return undefined;
@@ -32,7 +32,7 @@ export function backupNow(
   // the day's name.
   const partial = `${file}.tmp`;
   rmSync(partial, { force: true });
-  store.backup(partial);
+  await store.backup(partial);
   if (process.platform !== "win32") chmodSync(partial, 0o600);
   renameSync(partial, file);
   const copies = readdirSync(dir)
@@ -43,18 +43,30 @@ export function backupNow(
   return file;
 }
 
-/** Copies the database now if today has no copy yet, then once a day while it runs. */
-export function dailyBackups(store: Pick<Store, "backup">, dir: string): { stop(): void } {
+/**
+ * Copies the database now if today has no copy yet, then once a day while it runs. `stop`
+ * waits for a copy under way, so the database is never closed in the middle of one.
+ */
+export function dailyBackups(store: Pick<Store, "backup">, dir: string): { stop(): Promise<void> } {
+  let running: Promise<void> | undefined;
   const run = () => {
-    try {
-      const file = backupNow(store, dir);
-      if (file) console.log(`Sauvegarde de la base : ${file}`);
-    } catch (error) {
-      console.error("Sauvegarde de la base impossible :", error);
-    }
+    // A copy still going (a slow disk) is not started a second time.
+    running ??= backupNow(store, dir)
+      .then((file) => {
+        if (file) console.log(`Sauvegarde de la base : ${file}`);
+      })
+      .catch((error: unknown) => console.error("Sauvegarde de la base impossible :", error))
+      .finally(() => {
+        running = undefined;
+      });
   };
   run();
   const timer = setInterval(run, CHECK_MS);
   timer.unref();
-  return { stop: () => clearInterval(timer) };
+  return {
+    stop: async () => {
+      clearInterval(timer);
+      await running;
+    },
+  };
 }

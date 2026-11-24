@@ -1,11 +1,16 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { appendFileSync, fstatSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { appendFileSync, fstatSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { ALREADY_RUNNING } from "./instance.ts";
 
 /** Days of log files kept. */
 export const LOG_DAYS = 14;
+/**
+ * The most one day's file holds: an agent or an error repeating in a loop all night would
+ * otherwise fill the disk. Past it, the day's lines are dropped, saying so once.
+ */
+export const MAX_LOG_DAY_BYTES = 50 * 1024 * 1024;
 const LOG_FILE = /^moonagentic-(\d{4}-\d{2}-\d{2})\.log$/;
 /** Crashes closer together than this count as a run of them, each waiting longer. */
 const CRASH_WINDOW_MS = 10 * 60_000;
@@ -102,16 +107,24 @@ export function createLineBuffer(onLine: (line: string) => void): {
 export const restartDelay = (crashes: number) =>
   Math.min(MAX_RESTART_DELAY_MS, 1_000 * 2 ** Math.max(0, crashes - 1));
 
-/** One file a day in `dir`, the oldest deleted past `days`; a line that cannot be written is lost. */
+/**
+ * One file a day in `dir`, the oldest deleted past `days`, each at most `maxBytes`; a line
+ * that cannot be written is lost.
+ */
 export class DailyLog {
   private readonly dir: string;
   private readonly days: number;
+  private readonly maxBytes: number;
   private day = "";
   private pruneDue = false;
+  /** What today's file holds, counted from its size when the day began here. */
+  private bytes = 0;
+  private full = false;
 
-  constructor(dir: string, days = LOG_DAYS) {
+  constructor(dir: string, days = LOG_DAYS, maxBytes = MAX_LOG_DAY_BYTES) {
     this.dir = dir;
     this.days = days;
+    this.maxBytes = maxBytes;
   }
 
   /** The file today's lines go to. */
@@ -124,10 +137,15 @@ export class DailyLog {
       if (dayOf(now) !== this.day) this.rotate(now);
       const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
       if (!lines.length) return;
+      if (this.full) return;
       const stamp = timeOf(now);
-      appendFileSync(this.file(now), lines.map((l) => `${stamp} ${redact(l)}\n`).join(""), {
-        mode: 0o600,
-      });
+      let chunk = lines.map((l) => `${stamp} ${redact(l)}\n`).join("");
+      if (this.bytes + Buffer.byteLength(chunk) > this.maxBytes) {
+        this.full = true;
+        chunk = `${stamp} Journal plein pour aujourd'hui : la suite reprend demain.\n`;
+      }
+      appendFileSync(this.file(now), chunk, { mode: 0o600 });
+      this.bytes += Buffer.byteLength(chunk);
       // Once today's file exists, so that it counts among the days kept.
       if (this.pruneDue) this.prune();
     } catch {
@@ -139,6 +157,13 @@ export class DailyLog {
     this.day = dayOf(now);
     mkdirSync(this.dir, { recursive: true, mode: 0o700 });
     this.pruneDue = true;
+    // A restart during the day carries on with what the file already holds.
+    try {
+      this.bytes = statSync(this.file(now)).size;
+    } catch {
+      this.bytes = 0;
+    }
+    this.full = this.bytes >= this.maxBytes;
   }
 
   private prune(): void {
