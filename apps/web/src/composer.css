@@ -692,13 +692,16 @@
 .cmp .plus-menu {
   --w: 272px;
 }
-/* The model sheet opens above the agent's chip, edge-aligned with it. */
-.cmp .ag-wrap .menu.mpick {
-  left: auto;
-  right: -4px;
-  bottom: calc(100% + 6px);
-  width: 320px;
-  transform-origin: right bottom;
+/* The model sheet opens above the agent's chip, edge-aligned with it. On a phone it stays the
+   sheet from the bottom of the screen: anchored there, a fixed menu would sit above the top. */
+@media (min-width: 861px) {
+  .cmp .ag-wrap .menu.mpick {
+    left: auto;
+    right: -4px;
+    bottom: calc(100% + 6px);
+    width: 320px;
+    transform-origin: right bottom;
+  }
 }
 /* The / @ $ lists sit on the text box. */
 .cmp .menu.suggest {

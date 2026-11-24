@@ -284,6 +284,47 @@ describe("composer", () => {
     await shot(page, "c6-mobile");
     await page.close();
   });
+  it("opens the model sheet inside a phone screen, with or without favorites", async () => {
+    const page = await browser.newPage({ viewport: { width: 390, height: 780 }, hasTouch: true });
+    await page.goto(url);
+    const sheet = page.getByRole("menu", { name: "Modèle" });
+    // Whole on the screen, and still there once the composer has finished opening: it used to
+    // flash by the composer, then sit above the top of the screen behind a grey veil.
+    const inside = async () => {
+      const box = await sheet.boundingBox();
+      return (
+        !!box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 390 && box.y + box.height <= 780
+      );
+    };
+    const openSheet = async () => {
+      // The composer folds back once the sheet closes: it opens again first.
+      await composer(page).click();
+      await page.locator(".agentchip").click();
+      await expect.poll(inside).toBe(true);
+      await page.waitForTimeout(600);
+      expect(await inside()).toBe(true);
+    };
+    await openSheet();
+    await shot(page, "c10-modele-mobile");
+    // With a favorite starred from « Tous », the wheel opens in the same place.
+    await sheet.getByRole("button", { name: "Tous" }).click();
+    await expect.poll(inside).toBe(true);
+    const star = sheet.getByRole("button", { name: "Ajouter aux favoris" }).first();
+    await star.waitFor({ timeout: 30_000 });
+    await star.click();
+    await sheet.getByRole("button", { name: "Retirer des favoris" }).first().waitFor();
+    await sheet.getByRole("button", { name: "Retour" }).click();
+    await sheet.getByRole("listbox", { name: "Modèles favoris" }).waitFor();
+    expect(await inside()).toBe(true);
+    await sheet.getByRole("button", { name: "Fermer" }).click();
+    await expect.poll(() => sheet.count()).toBe(0);
+    await openSheet();
+    await shot(page, "c11-modele-mobile-favori");
+    // Taken off again, so the other tests keep the wheel they expect.
+    await sheet.getByRole("button", { name: "Tous" }).click();
+    await sheet.getByRole("button", { name: "Retirer des favoris" }).first().click();
+    await page.close();
+  });
   // The stand-in « gh » is a POSIX shell script that Windows cannot run (the server does not take
   // a .cmd as the GitHub CLI, on purpose). The canClone rule itself is covered by github.test.ts.
   it.skipIf(process.platform === "win32")(
