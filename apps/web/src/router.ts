@@ -8,6 +8,7 @@ export type SettingsSection =
   | "models"
   | "subscriptions"
   | "coordinator"
+  | "teams"
   | "mcp"
   | "remote";
 export const SETTINGS_SECTIONS: SettingsSection[] = [
@@ -18,6 +19,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   "models",
   "subscriptions",
   "coordinator",
+  "teams",
   "mcp",
   "remote",
 ];

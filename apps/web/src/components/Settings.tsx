@@ -25,7 +25,7 @@ import {
   showNotice,
 } from "../notifications.ts";
 import { lockSheet, toggleLock } from "../lock.ts";
-import { readPref, writePref } from "../prefs.ts";
+import { setDefault, useDefaults } from "../defaults.ts";
 import { disablePush, enablePush, pushOn, pushReached, pushSupport } from "../push.ts";
 import type { SettingsSection } from "../router.ts";
 import { mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
@@ -45,6 +45,7 @@ import {
   IconPlug,
   IconShield,
   IconStar,
+  IconUsers,
   IconWifi,
   IconX,
 } from "./icons.tsx";
@@ -52,6 +53,7 @@ import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { MascotSettings } from "./MascotSettings.tsx";
 import { RemoteAccess } from "./RemoteAccess.tsx";
 import { Subscriptions } from "./Subscriptions.tsx";
+import { TeamPresets } from "./TeamPresets.tsx";
 
 const SECTIONS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
   { id: "general", label: "Général", icon: <IconGear size={15} /> },
@@ -61,6 +63,7 @@ const SECTIONS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
   { id: "models", label: "Modèles", icon: <IconStar size={15} /> },
   { id: "subscriptions", label: "Abonnements", icon: <IconGauge size={15} /> },
   { id: "coordinator", label: "Coordinateur", icon: <IconBranch size={15} /> },
+  { id: "teams", label: "Équipes", icon: <IconUsers size={15} /> },
   { id: "mcp", label: "Serveurs MCP", icon: <IconPlug size={15} /> },
   { id: "remote", label: "Accès distant", icon: <IconWifi size={15} /> },
 ];
@@ -481,10 +484,8 @@ export function SettingsPage(props: {
   onOpenConnections: () => void;
   onOpenMcp: () => void;
 }) {
-  const [mode, setMode] = useState(() =>
-    readPref("permissionMode") === "full" ? "full" : "supervised",
-  );
-  const [isolated, setIsolated] = useState(() => readPref("isolated") !== "false");
+  // Kept by the server: the same on every device.
+  const { permissionMode: mode, isolated } = useDefaults();
   // The coordinator's menus: favorites only, until « Afficher tous les modèles ».
   const [allModels, setAllModels] = useState(false);
   const theme = useSyncExternalStore(subscribeTheme, readTheme);
@@ -536,10 +537,7 @@ export function SettingsPage(props: {
                   { id: "supervised", name: "Supervisé" },
                   { id: "full", name: "Accès complet" },
                 ]}
-                onPick={(value) => {
-                  setMode(value);
-                  writePref("permissionMode", value);
-                }}
+                onPick={(value) => setDefault({ permissionMode: value })}
               />
             </Row>
             <Row
@@ -549,10 +547,7 @@ export function SettingsPage(props: {
               <Toggle
                 label="Branche à part"
                 on={isolated}
-                onChange={(on) => {
-                  setIsolated(on);
-                  writePref("isolated", String(on));
-                }}
+                onChange={(on) => setDefault({ isolated: on })}
               />
             </Row>
             <NotificationsRow />
@@ -800,6 +795,9 @@ export function SettingsPage(props: {
           </button>
         </>
       );
+      break;
+    case "teams":
+      body = <TeamPresets agents={props.agents} projectId={props.projectId} />;
       break;
     case "remote":
       body = <RemoteAccess />;

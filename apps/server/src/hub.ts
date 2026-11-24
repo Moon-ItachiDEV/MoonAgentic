@@ -17,6 +17,8 @@ import {
 } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
+  Defaults,
+  TeamPreset,
   AgentSetting,
   ClientMessage,
   ImageRef,
@@ -89,7 +91,7 @@ import {
 } from "./files.ts";
 import { type BranchOwner, deleteMergedBranches, projectBranches } from "./branches.ts";
 import { AgentCatalog, agentCommands } from "./catalog.ts";
-import { Coordinators } from "./coordinator.ts";
+import { Coordinators, TEAM_PRESETS_SETTING } from "./coordinator.ts";
 import { historyBefore } from "./history.ts";
 import { cardText, Planner } from "./planner.ts";
 import { COORDINATOR_TOOLS } from "./coordinator-tools.ts";
@@ -196,6 +198,8 @@ export interface HubOptions {
 
 /** The setting that lists the projects kept at the top. */
 const PINNED_PROJECTS = "pinnedProjects";
+/** The user's defaults for a new thread, the same on every device. */
+const DEFAULTS = "defaults";
 
 /** The level a coordinator starts on, as agents name it. */
 const LOW_EFFORT = /^(low|bas)$/i;
@@ -546,6 +550,8 @@ export class Hub {
 
   snapshot(pairedDevice = false): Snapshot {
     const mcpSecretsError = this.catalog.mcpSecretsError();
+    const defaults = this.store.getSetting<Defaults | null>(DEFAULTS, null);
+    const presets = this.store.getSetting<TeamPreset[] | null>(TEAM_PRESETS_SETTING, null);
     return {
       coordinator: this.coordinators.coordinatorSettings(),
       favorites: this.catalog.favorites(),
@@ -561,6 +567,8 @@ export class Hub {
       schedules: this.scheduler.list(),
       ...(this.locks.hasPin() ? { lockPin: true } : {}),
       ...(pairedDevice ? { pairedDevice: true } : {}),
+      ...(defaults ? { defaults } : {}),
+      ...(presets ? { teamPresets: presets } : {}),
     };
   }
 
@@ -970,6 +978,20 @@ export class Hub {
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
+      case "defaults.set": {
+        const current = this.store.getSetting<Defaults | null>(DEFAULTS, null);
+        const defaults: Defaults = {
+          permissionMode: message.permissionMode ?? current?.permissionMode ?? "supervised",
+          isolated: message.isolated ?? current?.isolated ?? true,
+        };
+        this.store.setSetting(DEFAULTS, defaults);
+        this.broadcast({ type: "defaults", defaults });
+        return;
+      }
+      case "teamPresets.set":
+        this.store.setSetting(TEAM_PRESETS_SETTING, message.presets);
+        this.broadcast({ type: "teamPresets", presets: message.presets });
+        return;
       case "lock.setPin":
         this.locks.setPin(message.pin, message.current, COMPUTER_ACTOR);
         this.sendSnapshots();

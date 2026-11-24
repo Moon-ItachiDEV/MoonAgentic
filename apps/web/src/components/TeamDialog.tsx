@@ -5,9 +5,9 @@ import type {
   Project,
   TeamMember,
 } from "@moonagentic/protocol";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
-import { pickMember, TEAM_PRESETS, type TeamRole } from "../team-presets.ts";
+import { presetMembers, type TeamRole, teamPresets, withRoles } from "../team-presets.ts";
 import { ModelSelect } from "./ModelSelect.tsx";
 
 function MemberPicker({
@@ -61,17 +61,24 @@ export function TeamDialog({
   onStarted: (leadId: string) => void;
 }) {
   const [task, setTask] = useState(initialTask);
-  const [presetId, setPresetId] = useState(TEAM_PRESETS[0]!.id);
-  const preset = TEAM_PRESETS.find((p) => p.id === presetId) ?? TEAM_PRESETS[0]!;
-  // Until the user picks, a role follows the preset and the agents as their models arrive;
+  // The user's teams from the settings, or the suggested ones until they set theirs up.
+  const saved = useSyncExternalStore(connection.subscribe, () => connection.getState().teamPresets);
+  const presets = teamPresets(saved ?? undefined, agents);
+  const [presetId, setPresetId] = useState(() => presets[0]?.id);
+  const preset = presets.find((p) => p.id === presetId) ?? presets[0];
+  const fromPreset = preset ? presetMembers(preset, agents) : {};
+  // Until the user picks, a role follows the team and the agents as their models arrive;
   // `null` once the user said nobody, and the team does without that role.
   const [choices, setChoices] = useState<Partial<Record<TeamRole, TeamMember | null>>>({});
   const member = (role: TeamRole) => {
     const chosen = choices[role];
-    return chosen === undefined ? pickMember(agents, preset.prefer[role]) : (chosen ?? undefined);
+    return chosen === undefined ? fromPreset[role] : (chosen ?? undefined);
   };
-  const choose = (role: TeamRole) => (m: TeamMember | undefined) =>
+  const [keptFor, setKeptFor] = useState<string>();
+  const choose = (role: TeamRole) => (m: TeamMember | undefined) => {
     setChoices((c) => ({ ...c, [role]: m ?? null }));
+    setKeptFor(undefined);
+  };
   const lead = member("lead");
   const coder = member("coder");
   const reviewer = member("reviewer");
@@ -158,23 +165,46 @@ export function TeamDialog({
         <div className="field">
           Équipe
           <div className="seg presets" role="radiogroup" aria-label="Équipe">
-            {TEAM_PRESETS.map((p) => (
+            {presets.map((p) => (
               <button
                 key={p.id}
                 type="button"
                 role="radio"
-                aria-checked={p.id === preset.id}
-                className={p.id === preset.id ? "on" : ""}
+                aria-checked={p.id === preset?.id}
+                className={p.id === preset?.id ? "on" : ""}
                 onClick={() => {
                   setPresetId(p.id);
                   setChoices({});
+                  setKeptFor(undefined);
                 }}
               >
                 {p.label}
               </button>
             ))}
           </div>
-          <small className="hint">{preset.hint}</small>
+          {preset && Object.keys(choices).length > 0 && keptFor !== preset.id && (
+            <button
+              type="button"
+              className="btn quiet sm team-keep"
+              onClick={() => {
+                // Kept for every device: the next /equipe and the coordinator start from it.
+                connection.send({
+                  type: "teamPresets.set",
+                  presets: withRoles(presets, preset.id, {
+                    lead,
+                    coder,
+                    reviewer,
+                    tester,
+                    merger,
+                  }),
+                });
+                setKeptFor(preset.id);
+              }}
+            >
+              Garder ces choix pour « {preset.label} »
+            </button>
+          )}
+          {preset && keptFor === preset.id && <small className="hint">Gardé.</small>}
         </div>
         <MemberPicker
           label="Chef"

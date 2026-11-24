@@ -705,3 +705,40 @@ describe("a locked project on the wire", () => {
     expect(refs).toContain(secretBranch);
   });
 });
+
+describe("what the server keeps for every device", () => {
+  it("keeps the defaults of a new thread, those not given staying as they were", async () => {
+    const { hub, client } = setup();
+    const other = new TestClient();
+    hub.connect(other);
+    expect(other.last("snapshot").snapshot.defaults).toBeUndefined();
+    await hub.handle(client, { type: "defaults.set", permissionMode: "full" });
+    expect(other.last("defaults").defaults).toEqual({ permissionMode: "full", isolated: true });
+    await hub.handle(client, { type: "defaults.set", isolated: false });
+    expect(other.last("defaults").defaults).toEqual({ permissionMode: "full", isolated: false });
+    const later = new TestClient();
+    hub.connect(later);
+    expect(later.last("snapshot").snapshot.defaults).toEqual({
+      permissionMode: "full",
+      isolated: false,
+    });
+  });
+
+  it("keeps the user's teams, and goes back to the suggested ones on null", async () => {
+    const { hub, client } = setup();
+    const other = new TestClient();
+    hub.connect(other);
+    const presets = [
+      { id: "mine", label: "La mienne", roles: { lead: { agentId: "demo" }, reviewer: null } },
+    ];
+    await hub.handle(client, { type: "teamPresets.set", presets });
+    expect(other.last("teamPresets").presets).toEqual(presets);
+    const later = new TestClient();
+    hub.connect(later);
+    expect(later.last("snapshot").snapshot.teamPresets).toEqual(presets);
+    await hub.handle(client, { type: "teamPresets.set", presets: null });
+    expect(other.last("teamPresets").presets).toBeNull();
+    hub.connect(later);
+    expect(later.last("snapshot").snapshot.teamPresets).toBeUndefined();
+  });
+});

@@ -42,6 +42,7 @@ import { connection, newId } from "../connection.ts";
 import { carriesFiles, IMAGE_ACCEPT, pastedImages } from "../images.ts";
 import { useImageDrafts } from "../use-image-drafts.ts";
 import { readPref, writePref } from "../prefs.ts";
+import { setDefault, useDefaults } from "../defaults.ts";
 import { quotaWarning, roomiest, tightest } from "../quotas.ts";
 import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
@@ -138,10 +139,8 @@ export function Composer(props: {
   }>();
   const [busy, setBusy] = useState(false);
   const [pickedAgentId, setPickedAgentId] = useState(() => readPref("agent"));
-  const [newMode, setNewMode] = useState<PermissionMode>(() =>
-    readPref("permissionMode") === "full" ? "full" : "supervised",
-  );
-  const [isolated, setIsolated] = useState(() => readPref("isolated") !== "false");
+  // A new thread starts as the defaults say, the same on every device.
+  const { permissionMode: newMode, isolated } = useDefaults();
   const input = useRef<HTMLTextAreaElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const [modelPicks, setModelPicks] = useState<Record<string, string>>({});
@@ -698,8 +697,7 @@ export function Composer(props: {
         permissionMode: next,
       });
     else {
-      setNewMode(next);
-      writePref("permissionMode", next);
+      setDefault({ permissionMode: next });
     }
   };
 
@@ -1251,8 +1249,7 @@ export function Composer(props: {
               isolated: {
                 on: isolated,
                 onPick: (on: boolean) => {
-                  setIsolated(on);
-                  writePref("isolated", String(on));
+                  setDefault({ isolated: on });
                 },
               },
             }

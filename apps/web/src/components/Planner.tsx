@@ -23,6 +23,7 @@ import {
   linkableThreads,
   planLabel,
 } from "../planner.ts";
+import { useDefaults } from "../defaults.ts";
 import { readPref, writePref } from "../prefs.ts";
 import type { PlannerView } from "../router.ts";
 import { IconClose, IconFolder, IconPlay } from "./icons.tsx";
@@ -698,10 +699,10 @@ function Launch({
   const [pick, setPick] = useState<ModelPick | undefined>(() => firstPick(agents, favorites));
   const agentId = pick?.agentId ?? "";
   const model = pick?.model ?? "";
-  const [mode, setMode] = useState<PermissionMode>(() =>
-    readPref("permissionMode") === "full" ? "full" : "supervised",
-  );
-  const [isolated, setIsolated] = useState(() => readPref("isolated") !== "false");
+  // Starts as the defaults say; a change here is for this card only.
+  const defaults = useDefaults();
+  const [mode, setMode] = useState<PermissionMode>(defaults.permissionMode);
+  const [isolated, setIsolated] = useState(defaults.isolated);
   const [busy, setBusy] = useState(false);
   // Asked for from the foot of a long card: it comes into sight.
   const form = useRef<HTMLFormElement>(null);

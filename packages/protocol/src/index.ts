@@ -2,7 +2,14 @@ import { z } from "zod";
 
 export type { PairedDevice, RemoteAccess, RemoteAddress } from "./remote.ts";
 export { type Notice, noticesFor, settledTags, waitingTag } from "./notices.ts";
-export { defaultTeam, pickMember, TEAM_PRESETS, type TeamPreset } from "./team-presets.ts";
+export {
+  defaultTeam,
+  pickMember,
+  presetMembers,
+  suggestedPresets,
+  TEAM_ROLES,
+  teamPresets,
+} from "./team-presets.ts";
 
 // Zod builds faster checks with `new Function` when it can, and tries it as soon as a
 // schema is made. The web app's content security policy forbids that, so it is turned off
@@ -966,7 +973,30 @@ export interface Snapshot {
   lockPin?: boolean;
   /** True when this connection belongs to a paired device rather than the computer itself. */
   pairedDevice?: boolean;
+  /** The user's default choices for a new thread, once set on any device. */
+  defaults?: Defaults;
+  /** The teams the user set up in the settings; none until edited once. */
+  teamPresets?: TeamPreset[];
 }
+
+/** What a new thread starts with unless chosen otherwise, kept by the server for every device. */
+export interface Defaults {
+  permissionMode: PermissionMode;
+  /** In a git project, each new thread works on its own branch. */
+  isolated: boolean;
+}
+
+/**
+ * A team under a name, as the user set it up: who takes each role. A role left out is taken
+ * by the first agent ready (lead and coders) or by nobody; `null` means nobody on purpose.
+ */
+export interface TeamPreset {
+  id: string;
+  label: string;
+  roles: Partial<Record<TeamRole, TeamMember | null>>;
+}
+/** At most this many saved teams. */
+export const MAX_TEAM_PRESETS = 12;
 
 /**
  * Where a screen is in a thread's timeline: the number of the first item it holds, and the
@@ -1025,6 +1055,8 @@ export type ServerMessage =
   | { type: "questions"; questions: PendingQuestion[] }
   | { type: "mcpServers"; servers: McpServerInfo[]; error?: string }
   | { type: "project"; project: Project }
+  | { type: "defaults"; defaults: Defaults }
+  | { type: "teamPresets"; presets: TeamPreset[] | null }
   | { type: "thread"; thread: Thread }
   /** The thread was deleted, its timeline with it. */
   | { type: "threadRemoved"; threadId: string }
@@ -1198,6 +1230,8 @@ export type ServerMessage =
   | { type: "error"; requestId?: string; message: string };
 
 const id = z.string().min(1).max(200);
+/** Who takes a role in a team: an agent, on one of its models or its own default. */
+const teamMember = z.object({ agentId: id, model: id.optional() }).strict();
 /** An item's number in its timeline, or a count of changes. */
 const seq = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 const text = z.string().min(1).max(200_000);
@@ -1542,6 +1576,35 @@ export const ClientMessage = z.discriminatedUnion("type", [
     name: z.string().trim().min(1).max(120),
   }),
   z.object({ type: z.literal("project.setPinned"), projectId: id, pinned: z.boolean() }),
+  /** Changes the defaults of every device: those not given stay. */
+  z.object({
+    type: z.literal("defaults.set"),
+    permissionMode: z.enum(["supervised", "full"]).optional(),
+    isolated: z.boolean().optional(),
+  }),
+  /** Keeps these teams, in this order; null goes back to the suggested ones. */
+  z.object({
+    type: z.literal("teamPresets.set"),
+    presets: z
+      .array(
+        z.object({
+          id: z.string().regex(/^[\w-]{1,40}$/),
+          label: z.string().trim().min(1).max(40),
+          roles: z
+            .object({
+              lead: teamMember.nullable().optional(),
+              coder: teamMember.nullable().optional(),
+              reviewer: teamMember.nullable().optional(),
+              tester: teamMember.nullable().optional(),
+              merger: teamMember.nullable().optional(),
+            })
+            .strict(),
+        }),
+      )
+      .max(MAX_TEAM_PRESETS)
+      .refine((list) => new Set(list.map((p) => p.id)).size === list.length, "Ids en double.")
+      .nullable(),
+  }),
   /** Sets the code projects are locked with, or changes it: then the current one is needed. */
   z.object({
     type: z.literal("lock.setPin"),
