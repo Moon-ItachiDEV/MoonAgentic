@@ -28,6 +28,7 @@ import {
 } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
+  FavoriteRef,
   Defaults,
   TeamPreset,
   AgentSetting,
@@ -631,6 +632,7 @@ export class Hub {
     return {
       coordinator: this.coordinators.coordinatorSettings(),
       favorites: this.catalog.favorites(),
+      favoriteOrder: this.catalog.favoriteOrder(),
       requests: this.pendingRequests(),
       questions: this.pendingQuestions(),
       mcpServers: this.catalog.mcpServerInfos(),
@@ -1406,6 +1408,9 @@ export class Hub {
         return;
       case "favorites.toggle":
         this.catalog.toggleFavorite(message.agentId, message.model, message.starred);
+        return;
+      case "favorites.reorder":
+        this.reorderFavorites(message.order);
         return;
       case "mcp.add": {
         const id = await this.catalog.addMcpServer(message.server);
@@ -3252,6 +3257,10 @@ export class Hub {
 
   setMascot(agentId: string, mascot: Mascot | null): void {
     this.catalog.setMascot(agentId, mascot);
+  }
+
+  reorderFavorites(order: FavoriteRef[]): void {
+    this.catalog.reorderFavorites(order);
   }
 
   toggleFavorite(agentId: string, model: string, starred: boolean): void {

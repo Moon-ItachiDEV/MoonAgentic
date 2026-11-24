@@ -6,13 +6,14 @@ import type {
   AgentInfo,
   AgentSetting,
   CustomAgentInput,
+  FavoriteRef,
   Favorites,
   Mascot,
   McpServerInfo,
   McpServerInput,
   ServerMessage,
 } from "@moonagentic/protocol";
-import { agentSettingsFor, DEFAULT_MASCOTS } from "@moonagentic/protocol";
+import { agentSettingsFor, DEFAULT_MASCOTS, orderedFavorites } from "@moonagentic/protocol";
 import type { Agents, CustomAgent } from "./agents.ts";
 import { mcpInfo, RESERVED_MCP_NAME, type McpServerRecord } from "./mcp.ts";
 import {
@@ -384,7 +385,35 @@ export class AgentCatalog {
     const next = current.filter((m) => m !== model);
     favorites[agentId] = starred ? [...next, model] : next;
     this.store.setSetting("favorites", favorites);
-    this.broadcast({ type: "favorites", favorites });
+    // A new favorite joins the end of the wheel; one taken out leaves the order.
+    const order = this.favoriteOrder().filter((r) => r.agentId !== agentId || r.model !== model);
+    this.store.setSetting(
+      "favoriteOrder",
+      orderedFavorites(favorites, starred ? [...order, { agentId, model }] : order),
+    );
+    this.broadcastFavorites();
+  }
+
+  /** The favorites in the user's order, every one of them once. */
+  favoriteOrder(): FavoriteRef[] {
+    return orderedFavorites(
+      this.favorites(),
+      this.store.getSetting<FavoriteRef[]>("favoriteOrder", []),
+    );
+  }
+
+  /** Puts the favorites in this order; favorites it leaves out keep their place after it. */
+  reorderFavorites(order: FavoriteRef[]): void {
+    this.store.setSetting("favoriteOrder", orderedFavorites(this.favorites(), order));
+    this.broadcastFavorites();
+  }
+
+  private broadcastFavorites(): void {
+    this.broadcast({
+      type: "favorites",
+      favorites: this.favorites(),
+      order: this.favoriteOrder(),
+    });
   }
 
   private rawMcpServers(): McpServerRecord[] {

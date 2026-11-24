@@ -866,6 +866,34 @@ export type ItemKind = Item["kind"];
 /** Favorite model ids per agent, shared by every device. */
 export type Favorites = Record<AgentId, string[]>;
 
+/** One favorite model, as placed in the user's order of the favorites wheel. */
+export interface FavoriteRef {
+  agentId: AgentId;
+  model: string;
+}
+
+/**
+ * Every favorite in the user's order: the ones the order names first, as it names them, then
+ * the ones it does not name yet (starred elsewhere, or saved before there was an order), agent
+ * by agent. Refs to a model that is no longer a favorite are left out.
+ */
+export function orderedFavorites(favorites: Favorites, order: FavoriteRef[] = []): FavoriteRef[] {
+  const seen = new Set<string>();
+  const out: FavoriteRef[] = [];
+  const add = (agentId: string, model: string) => {
+    const key = `${agentId}\u0000${model}`;
+    if (seen.has(key) || !Object.hasOwn(favorites, agentId)) return;
+    if (!(favorites[agentId] ?? []).includes(model)) return;
+    seen.add(key);
+    out.push({ agentId, model });
+  };
+  for (const ref of order) add(ref.agentId, ref.model);
+  for (const [agentId, models] of Object.entries(favorites)) {
+    for (const model of models) add(agentId, model);
+  }
+  return out;
+}
+
 export const SCHEDULE_REPEATS = ["once", "hourly", "daily", "weekdays", "weekly"] as const;
 export type ScheduleRepeat = (typeof SCHEDULE_REPEATS)[number];
 
@@ -1073,6 +1101,8 @@ export interface AgentQuota {
 export interface Snapshot {
   coordinator: CoordinatorSettings;
   favorites: Favorites;
+  /** The order of the favorites wheel, as the user set it (see `orderedFavorites`). */
+  favoriteOrder?: FavoriteRef[];
   requests: PendingRequest[];
   /** Questions agents hold their turn on, in every thread. */
   questions: PendingQuestion[];
@@ -1169,7 +1199,7 @@ export interface Artifact {
 export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
   | { type: "agents"; agents: AgentInfo[] }
-  | { type: "favorites"; favorites: Favorites }
+  | { type: "favorites"; favorites: Favorites; order?: FavoriteRef[] }
   | { type: "coordinatorSettings"; settings: CoordinatorSettings }
   /** Every permission request still waiting, after one is added or answered. */
   | { type: "requests"; requests: PendingRequest[] }
@@ -1946,6 +1976,11 @@ export const ClientMessage = z.discriminatedUnion("type", [
     agentId: id,
     model: id,
     starred: z.boolean(),
+  }),
+  /** Puts the favorites in this order: the wheel of the composer shows them so. */
+  z.object({
+    type: z.literal("favorites.reorder"),
+    order: z.array(z.object({ agentId: id, model: id }).strict()).max(500),
   }),
   /** Gives the agent its moon, or none (`null`): it then keeps its logo or letters. */
   z.object({
