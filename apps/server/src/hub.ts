@@ -1274,9 +1274,13 @@ export class Hub {
           folder,
           ...(project ? [project.path] : []),
           ...(thread.workspace?.path ? [thread.workspace.path] : []),
-          ...generatedFolders(this.homeDir),
         ];
-        const found = await resolveThreadFile(message.ref, folder, roots);
+        const found = await resolveThreadFile(
+          message.ref,
+          folder,
+          roots,
+          generatedFolders(this.homeDir),
+        );
         if (!found) {
           throw new Error(
             "Ce fichier ne peut pas être ouvert d'ici : il n'existe plus, n'est pas une image, un PDF ou une page, ou n'est pas dans les dossiers de ce fil.",

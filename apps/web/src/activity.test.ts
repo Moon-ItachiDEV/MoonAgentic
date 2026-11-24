@@ -5,6 +5,8 @@ import {
   activityGlyph,
   activityLabel,
   activitySteps,
+  imageInProgress,
+  isImageGeneration,
   isPlanModeSwitch,
 } from "./activity.ts";
 
@@ -148,5 +150,21 @@ describe("tests commands", () => {
       expect(activityLabel(tool("x", { toolKind: "execute", title }))).toBe("Lance les tests…");
     }
     expect(activityGlyph(tool("x", { toolKind: "execute", title: "pnpm build" }))).toBe("commande");
+  });
+});
+
+describe("image generation", () => {
+  it("knows a tool that makes an image, and while its image is not there yet", () => {
+    for (const title of ["generate_image", "Generate Image", "Générer une image", "image_gen"]) {
+      expect(isImageGeneration(tool("i", { title })), title).toBe(true);
+    }
+    for (const title of ["Lire images/plan.png", "view_file image.png", "`pnpm test`"]) {
+      expect(isImageGeneration(tool("i", { title })), title).toBe(false);
+    }
+    const running = { ...tool("i", { title: "generate_image" }), status: "in_progress" } as Item;
+    expect(activityLabel(running)).toBe("Crée l'image…");
+    expect(imageInProgress([thought("t"), running], [0, 1])).toBe(running);
+    const done = tool("i", { title: "generate_image", status: "completed" });
+    expect(imageInProgress([running, done], [0, 1])).toBeUndefined();
   });
 });

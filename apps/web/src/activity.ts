@@ -11,6 +11,29 @@ const PLAN_MODE = /^(?:run\s+)?(?:enter|exit)_plan_mode$/i;
 /** A command that runs tests: `pnpm test`, `vitest`, `pytest`, `jest`, `cargo test`… */
 export const TEST_CMD = /\b(?:test\w*|vitest|pytest|jest|rspec|mocha|playwright)\b/i;
 
+/**
+ * A tool that makes an image: Antigravity's `generate_image`, Codex's image generation, or
+ * the same said in words (« Générer une image »).
+ */
+const IMAGE_TOOL =
+  /\b(?:generate|create|draw|edit|make)[\s_-]?(?:an?\s+)?image|\bimage[\s_-]?gen|\bimagegen\b|\bg[ée]n[ée]r\w*\s+(?:une\s+|l['’]\s*|d['’]une\s+)?image|\bcr[ée]\w*\s+(?:une\s+|l['’]\s*)?image/i;
+
+export const isImageGeneration = (item: Item | undefined) =>
+  item?.kind === "tool" && IMAGE_TOOL.test(`${item.title} ${item.toolKind}`);
+
+/** The image tool of a stretch still at work, if one is: its image is not there yet. */
+export function imageInProgress(
+  items: Item[],
+  indices: number[],
+): Extract<Item, { kind: "tool" }> | undefined {
+  for (let k = indices.length - 1; k >= 0; k--) {
+    const item = items[indices[k]!];
+    if (item?.kind !== "tool" || !isImageGeneration(item)) continue;
+    return item.status === "pending" || item.status === "in_progress" ? item : undefined;
+  }
+  return undefined;
+}
+
 export const isPlanModeSwitch = (item: Item | undefined) =>
   item?.kind === "tool" && PLAN_MODE.test(item.title.trim());
 
@@ -66,6 +89,7 @@ export function activityLabel(item: Item | undefined): string {
     case "permission":
       return clip(item.title);
     case "tool": {
+      if (isImageGeneration(item)) return "Crée l'image…";
       const file = fileIn(item.title);
       switch (item.toolKind) {
         case "read":

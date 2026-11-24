@@ -10,6 +10,7 @@ import {
   type ToolContent,
 } from "@moonagentic/protocol";
 import {
+  Fragment,
   memo,
   type ReactNode,
   useCallback,
@@ -44,8 +45,10 @@ import {
   activityGlyph,
   activityLabel,
   activitySteps,
+  imageInProgress,
   isPlanModeSwitch,
 } from "../activity.ts";
+import { ImageDraft } from "./ImageDraft.tsx";
 import { StateGlyph } from "./StateGlyph.tsx";
 import { Mascot } from "./Mascot.tsx";
 import { mascotExpression } from "../mascot.ts";
@@ -412,17 +415,23 @@ function Conversation({
         <div ref={top} className="feed-top" />
         {blocks.map((block, b) => {
           if (block.kind === "detail") {
+            const live =
+              working && b === blocks.length - 1 && block.indices.some((i) => i > lastUser);
+            // The image being generated has its place in the thread, not only in the detail.
+            const drafting = live ? imageInProgress(items!, block.indices) : undefined;
             return (
-              <ActivityDetail
-                key={block.key}
-                items={items!}
-                indices={block.indices}
-                live={working && b === blocks.length - 1 && block.indices.some((i) => i > lastUser)}
-                revealed={!!reveal && block.indices.some((i) => items![i]?.id === reveal)}
-                onFold={() => setReveal(undefined)}
-                render={renderItem}
-                mascot={mascot && agent ? { mascot, name: agent.name } : undefined}
-              />
+              <Fragment key={block.key}>
+                <ActivityDetail
+                  items={items!}
+                  indices={block.indices}
+                  live={live}
+                  revealed={!!reveal && block.indices.some((i) => items![i]?.id === reveal)}
+                  onFold={() => setReveal(undefined)}
+                  render={renderItem}
+                  mascot={mascot && agent ? { mascot, name: agent.name } : undefined}
+                />
+                {drafting && <ImageDraft since={drafting.at} />}
+              </Fragment>
             );
           }
           if (!team) return renderItem(block.index);

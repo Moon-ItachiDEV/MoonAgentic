@@ -314,6 +314,26 @@ const app = acp
 
     if (ask.includes("boom")) throw new Error("Le démo a planté exprès.");
 
+    // As Hydrogen does out of any project: its tool at work for a while, the image made in its
+    // own folder, and an answer that only links to it by its name.
+    if (ask.includes("dessine une image")) {
+      await update({
+        sessionUpdate: "tool_call",
+        toolCallId: "image",
+        title: "generate_image",
+        kind: "other",
+        status: "in_progress",
+      });
+      await delay(Number(process.env.MOONAGENTIC_DEMO_IMAGE_MS ?? 2500));
+      const made = path.join(os.homedir(), ".gemini", "antigravity", "brain", sessionId);
+      mkdirSync(made, { recursive: true });
+      const name = `lune_${Date.now()}.png`;
+      writeFileSync(path.join(made, name), DEMO_PNG);
+      await update({ sessionUpdate: "tool_call_update", toolCallId: "image", status: "completed" });
+      await say(`Voici l'image de la lune.\n\n[${name}](${name})`, "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
+
     // As Antigravity does: the image made in its own folder, a copy in the project, and an
     // answer that names both as paths of the computer.
     if (ask.includes("génère une image")) {
