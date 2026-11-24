@@ -66,7 +66,9 @@ jobs:
 
   release:
     name: Release
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    # Windows is what the self-update needs: a Mac build that never gets a runner (it was
+    # cancelled after 15 min waiting, for v0.1.6) must not hold the Windows installer back.
+    if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
     needs: installer
     runs-on: ubuntu-latest
     steps:
@@ -78,7 +80,11 @@ jobs:
       # matches this list: an installer corrupted or swapped on the way is refused.
       - name: Fingerprint the installers
         working-directory: installers
-        run: sha256sum -- *.exe *.dmg > SHA256SUMS.txt && cat SHA256SUMS.txt
+        run: |
+          shopt -s nullglob
+          exe=(*.exe)
+          if [ ${#exe[@]} -eq 0 ]; then echo "Pas d'installeur Windows : rien à publier."; exit 1; fi
+          sha256sum -- *.exe *.dmg > SHA256SUMS.txt && cat SHA256SUMS.txt
       # The tag is pushed with git, or made on GitHub with « Draft a new release » (handy from a
       # phone): then the release already exists and the files are added to it instead.
       - name: Create the release with both installers
