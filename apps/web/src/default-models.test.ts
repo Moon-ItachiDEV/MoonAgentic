@@ -41,6 +41,7 @@ describe("default models", () => {
 
   it("finds nothing on an agent that cannot run or has no list yet", () => {
     expect(looseDefault([claude, { ...agy, available: false }])).toBeUndefined();
+    expect(looseDefault([claude, { ...agy, modelsError: "agy est parti" }])).toBeUndefined();
     expect(findModel([agent("antigravity")], () => true)).toBeUndefined();
   });
 });

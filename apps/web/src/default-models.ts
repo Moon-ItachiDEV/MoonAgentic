@@ -10,7 +10,7 @@ export function findModel(
   test: (text: string) => boolean,
 ): ModelPick | undefined {
   for (const agent of agents) {
-    if (!agent.available) continue;
+    if (!agent.available || agent.modelsError) continue;
     const model = agent.models?.find((m) => test(m.id) || test(m.name));
     if (model) return { agentId: agent.id, model: model.id };
   }

@@ -149,6 +149,8 @@ export function Composer(props: {
   const [pickedAgentId, setPickedAgentId] = useState(() => readPref("agent"));
   /** The agent and model picked in a conversation outside any project, for it only. */
   const [loosePick, setLoosePick] = useState<ModelPick>();
+  // Back in a project or a thread, the pick made outside one is forgotten.
+  if (loosePick && (!props.loose || thread)) setLoosePick(undefined);
   const [newMode, setNewMode] = useState<PermissionMode>(() =>
     readPref("permissionMode") === "full" ? "full" : "supervised",
   );
@@ -334,20 +336,25 @@ export function Composer(props: {
       });
     return needing.current;
   };
+  // Outside a project, the models are asked in another project's folder: « Discussions »
+  // is only made for « + » or the first message.
+  const looseFolder = props.loose ? props.projects?.[0] : undefined;
   // Outside a project, Hydrogen is only found once Antigravity has given its models.
   const looseAsked = useRef(false);
   useEffect(() => {
-    if (!props.loose || thread || !project || looseAsked.current) return;
+    // Before « Discussions » is made, any project's folder will do to ask for the list.
+    const folder = project ?? looseFolder;
+    if (!props.loose || thread || !folder || looseAsked.current) return;
     const agy = agents.find((a) => a.id === "antigravity");
     if (!agy?.available || agy.models || agy.modelsError) return;
     looseAsked.current = true;
-    connection.send({ type: "agent.discover", agentId: agy.id, projectId: project.id });
-  }, [props.loose, thread, project, agents]);
+    connection.send({ type: "agent.discover", agentId: agy.id, projectId: folder.id });
+  }, [props.loose, thread, project, looseFolder, agents]);
   // Opening the agent's menu or « + » also needs a folder: models and files are asked there.
   useEffect(() => {
-    if (!project && (pickerOpen || plusOpen)) void needProject();
+    if (!project && (plusOpen || (pickerOpen && !looseFolder))) void needProject();
     // oxlint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, pickerOpen, plusOpen]);
+  }, [project, pickerOpen, plusOpen, looseFolder]);
 
   const startVoice = () => {
     if (!canDictate || voiceRef.current) return;
@@ -1184,7 +1191,7 @@ export function Composer(props: {
                 agent={agent}
                 model={model}
                 favorites={props.favorites}
-                projectId={project?.id}
+                projectId={(project ?? looseFolder)?.id}
                 inThread={!!thread}
                 agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
                 settings={settings}

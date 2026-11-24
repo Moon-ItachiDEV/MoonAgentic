@@ -251,12 +251,14 @@ export function App() {
   const needLoose = () => connection.request({ type: "project.discussions", requestId: newId() });
   /** « Nouvelle discussion » from the top: outside any project. */
   const newLoose = () => {
-    setLoose(true);
     go({ name: "home" });
+    setLoose(true);
   };
+  // Any other way home (back, a deleted thread…) is the usual home, in the project last picked.
   const go = (next: Parameters<typeof navigate>[0]) => {
     setDrawer(false);
     setReviewOpen(false);
+    setLoose(false);
     navigate(next);
   };
   /** The phone's tabs, on the home page and on « Artefacts ». */
@@ -664,7 +666,7 @@ export function App() {
               className="ib"
               aria-label="Nouvelle discussion"
               title="Nouvelle discussion"
-              onClick={() => go({ name: "home" })}
+              onClick={newLoose}
             >
               <IconCompose size={17} />
             </button>
