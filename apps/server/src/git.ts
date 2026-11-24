@@ -301,7 +301,8 @@ export async function worktreeRepo(worktree: string): Promise<string | undefined
       .trim()
       .split(/\r?\n/);
     if (!top || !common || !samePath(top, worktree)) return undefined;
-    const repo = path.basename(common) === ".git" ? path.dirname(common) : common;
+    // Git gives `C:/…` on Windows: the system's own separators, as every other path here.
+    const repo = path.resolve(path.basename(common) === ".git" ? path.dirname(common) : common);
     return samePath(repo, worktree) ? undefined : repo;
   } catch {
     return undefined;

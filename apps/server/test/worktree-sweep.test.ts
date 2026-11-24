@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { worktreeRepo } from "../src/git.ts";
+import { samePath, worktreeRepo } from "../src/git.ts";
 import { orphanRef, sweepWorktrees } from "../src/worktree-sweep.ts";
 
 const dirs: string[] = [];
@@ -105,6 +105,8 @@ describe("worktree sweep", () => {
     const plain = path.join(repo, "data", "worktrees", "ffff6666");
     mkdirSync(plain, { recursive: true });
     expect(await worktreeRepo(plain)).toBeUndefined();
-    expect(await worktreeRepo(add("abcd0000"))).toBe(realpathSync.native(repo));
+    const found = await worktreeRepo(add("abcd0000"));
+    expect(found).toBe(path.resolve(found!));
+    expect(samePath(found!, repo)).toBe(true);
   });
 });
