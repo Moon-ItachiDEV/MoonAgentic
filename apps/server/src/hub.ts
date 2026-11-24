@@ -3467,7 +3467,7 @@ export class Hub {
           if (!owns()) return;
           this.pool.exited(thread.id);
           this.settlePermissions(thread.id);
-          if (reason && this.turns.has(thread.id)) {
+          if (reason && this.turns.has(thread.id) && !this.cancelled.has(thread.id)) {
             this.updateThread(thread.id, { status: "error", error: stoppedError(reason) });
           }
         },

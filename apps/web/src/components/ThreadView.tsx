@@ -460,7 +460,7 @@ function Conversation({
           />
         )}
         {thread.status === "error" && thread.error && agentStopped(thread.error) && (
-          <StoppedNotice thread={thread} name={agent?.name ?? "L'agent"} />
+          <StoppedNotice key={thread.id} thread={thread} name={agent?.name ?? "L'agent"} />
         )}
         {thread.status === "error" && thread.error && !agentStopped(thread.error) && (
           <div className={mascot ? "failed with-mascot" : "failed"} role="alert">
