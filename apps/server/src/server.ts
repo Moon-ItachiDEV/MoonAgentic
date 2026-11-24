@@ -106,11 +106,13 @@ const stop = async (code: number) => {
   if (stopping) return;
   stopping = true;
   setTimeout(() => process.exit(code), STOP_LIMIT_MS).unref();
+  // No new copy of the database starts while the server stops; one under way ends first.
+  const backupsDone = backups.stop();
   try {
     server.close();
     // Every agent is stopped, so none is left running unseen once the server is gone.
     await hub.close();
-    await backups.stop();
+    await backupsDone;
     store.close();
     lock.release();
   } catch (error) {

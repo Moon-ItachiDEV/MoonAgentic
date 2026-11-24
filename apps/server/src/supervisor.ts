@@ -137,7 +137,11 @@ export class DailyLog {
       if (dayOf(now) !== this.day) this.rotate(now);
       const lines = text.split(/\r?\n/).filter((l) => l.length > 0);
       if (!lines.length) return;
-      if (this.full) return;
+      if (this.full) {
+        // A restart on a day already full still deletes the oldest days.
+        if (this.pruneDue) this.prune();
+        return;
+      }
       const stamp = timeOf(now);
       let chunk = lines.map((l) => `${stamp} ${redact(l)}\n`).join("");
       if (this.bytes + Buffer.byteLength(chunk) > this.maxBytes) {

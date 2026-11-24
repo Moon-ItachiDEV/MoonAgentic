@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -281,7 +282,13 @@ export async function forkPoint(repoDir: string, branch: string): Promise<string
  * for a worktree of it.
  */
 export async function worktreeRepo(worktree: string): Promise<string | undefined> {
-  if (!existsSync(path.join(worktree, ".git"))) return undefined;
+  // A worktree git made has a `.git` file pointing at its repository; a `.git` folder is a
+  // repository of its own, which is nobody's worktree.
+  try {
+    if (!statSync(path.join(worktree, ".git")).isFile()) return undefined;
+  } catch {
+    return undefined;
+  }
   try {
     const [top, common] = (
       await git(worktree, [
@@ -294,7 +301,8 @@ export async function worktreeRepo(worktree: string): Promise<string | undefined
       .trim()
       .split(/\r?\n/);
     if (!top || !common || !samePath(top, worktree)) return undefined;
-    return path.basename(common) === ".git" ? path.dirname(common) : common;
+    const repo = path.basename(common) === ".git" ? path.dirname(common) : common;
+    return samePath(repo, worktree) ? undefined : repo;
   } catch {
     return undefined;
   }

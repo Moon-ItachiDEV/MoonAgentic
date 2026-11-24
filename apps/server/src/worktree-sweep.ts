@@ -1,8 +1,8 @@
 // Folders left in the worktrees folder that no thread holds any more: a review cut short by a
 // stop, a thread whose deletion was interrupted. Nothing in the app reaches them, yet each
 // is a whole copy of its project, so they would fill the disk of a server left on for months.
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { removeWorktree, saveCheckpoint, worktreeRepo } from "./git.ts";
 
@@ -64,7 +64,8 @@ export async function sweepWorktrees(
       } else {
         // No repository holds it (a folder cut short while being made, or a project
         // deleted from disk): there is nothing git could keep.
-        rmSync(folder, { recursive: true, force: true, maxRetries: 3 });
+        // Without blocking: an old project's copy can hold a whole node_modules.
+        await rm(folder, { recursive: true, force: true, maxRetries: 3 });
       }
       removed.push(entry.name);
     } catch (error) {

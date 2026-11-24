@@ -1,4 +1,12 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -115,6 +123,18 @@ describe("supervisor", () => {
     );
   });
 
+  it("still deletes the oldest days when it starts again on a day already full", () => {
+    const dir = tempDir();
+    for (const day of ["17", "18", "19"])
+      writeFileSync(path.join(dir, `moonagentic-2026-11-${day}.log`), "x\n");
+    writeFileSync(path.join(dir, "moonagentic-2026-11-20.log"), "y".repeat(300));
+    new DailyLog(dir, 2, 200).write("encore", new Date(2026, 10, 20, 9, 0, 0));
+    expect(readdirSync(dir).sort()).toEqual([
+      "moonagentic-2026-11-19.log",
+      "moonagentic-2026-11-20.log",
+    ]);
+  });
+
   it("starts the server again after a crash, and stops with it once it ends cleanly", async () => {
     const dir = tempDir();
     const script = path.join(dir, "server.mjs");
@@ -207,6 +227,24 @@ describe("daily backups", () => {
     const copy = new Store(path.join(backups, "state-2026-11-22.sqlite"));
     expect(copy.listProjects().map((p) => p.name)).toEqual(["Projet"]);
     copy.close();
+  });
+
+  it("leaves no half copy behind when a copy fails, nor one cut short on an earlier day", async () => {
+    const dir = tempDir();
+    const backups = path.join(dir, "backups");
+    mkdirSync(backups);
+    writeFileSync(path.join(backups, "state-2026-11-19.sqlite.tmp"), "moitié d'avant-hier");
+    // A disk that fills up in the middle of the copy.
+    const full = {
+      backup: async (file: string) => {
+        writeFileSync(file, "début de copie");
+        throw new Error("ENOSPC: no space left on device");
+      },
+    };
+    await expect(backupNow(full, backups, new Date(2026, 10, 21, 12).getTime())).rejects.toThrow(
+      "ENOSPC",
+    );
+    expect(readdirSync(backups)).toEqual([]);
   });
 
   it("writes with synchronous NORMAL, as WAL allows without risking the database", () => {

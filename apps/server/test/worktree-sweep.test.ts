@@ -89,6 +89,17 @@ describe("worktree sweep", () => {
     expect(existsSync(path.join(worktrees, "eeee5555"))).toBe(true);
   });
 
+  it("leaves in place a repository of its own put in the worktrees folder", async () => {
+    const { worktrees } = setup();
+    const own = path.join(worktrees, "1234abcd");
+    mkdirSync(own);
+    git(own, "init", "-q", "-b", "main");
+    writeFileSync(path.join(own, "notes.txt"), "à moi\n");
+    expect(await worktreeRepo(own)).toBeUndefined();
+    expect(await sweepWorktrees(worktrees, () => [], Date.now() + 2 * 60 * 60_000)).toEqual([]);
+    expect(existsSync(path.join(own, "notes.txt"))).toBe(true);
+  });
+
   it("never takes a plain folder inside another repository for one of its worktrees", async () => {
     const { repo, add } = setup();
     const plain = path.join(repo, "data", "worktrees", "ffff6666");

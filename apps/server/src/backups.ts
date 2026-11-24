@@ -7,6 +7,7 @@ export const BACKUPS_KEPT = 7;
 /** How often the day is looked at, so a copy is made soon after a sleep or midnight. */
 const CHECK_MS = 60 * 60_000;
 const BACKUP_FILE = /^state-(\d{4}-\d{2}-\d{2})\.sqlite$/;
+const PARTIAL_FILE = /^state-\d{4}-\d{2}-\d{2}\.sqlite\.tmp$/;
 
 /** The local day, as the copy of the database made that day is named. */
 const dayOf = (time: number) => {
@@ -26,15 +27,23 @@ export async function backupNow(
   keep = BACKUPS_KEPT,
 ): Promise<string | undefined> {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
+  // Copies cut short by a power cut, on this day or an earlier one, go first.
+  for (const name of readdirSync(dir).filter((n) => PARTIAL_FILE.test(n)))
+    rmSync(path.join(dir, name), { force: true });
   const file = path.join(dir, `state-${dayOf(now)}.sqlite`);
   if (existsSync(file)) return undefined;
   // Written beside, then renamed: a power cut in the middle never leaves half a copy under
   // the day's name.
   const partial = `${file}.tmp`;
-  rmSync(partial, { force: true });
-  await store.backup(partial);
-  if (process.platform !== "win32") chmodSync(partial, 0o600);
-  renameSync(partial, file);
+  try {
+    await store.backup(partial);
+    if (process.platform !== "win32") chmodSync(partial, 0o600);
+    renameSync(partial, file);
+  } catch (error) {
+    // A full disk: what was written of the copy goes, not to fill it further.
+    rmSync(partial, { force: true });
+    throw error;
+  }
   const copies = readdirSync(dir)
     .filter((name) => BACKUP_FILE.test(name))
     .sort()
