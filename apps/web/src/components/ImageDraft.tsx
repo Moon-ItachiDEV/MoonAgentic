@@ -18,7 +18,7 @@ export function ImageDraft({ since }: { since: number }) {
       : `${Math.floor(seconds / 60)} min ${`${seconds % 60}`.padStart(2, "0")}`;
   return (
     <div className="img-draft" role="status" aria-label="Création de l'image en cours">
-      <span className="img-draft-label shimmer">Esquisse en cours</span>
+      <span className="img-draft-label shimmer">Crée l'image…</span>
       <div className="img-draft-canvas" aria-hidden>
         <span className="img-draft-time">{elapsed}</span>
       </div>

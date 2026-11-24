@@ -209,7 +209,7 @@ describe("generated image", () => {
     // While the agent's image tool works: its place, the time spent, no made-up percentage.
     const draft = page.locator(".img-draft");
     await draft.waitFor();
-    expect(await draft.getByText("Esquisse en cours").count()).toBe(1);
+    expect(await draft.getByText("Crée l'image…").count()).toBe(1);
     expect(await draft.locator(".img-draft-time").textContent()).toMatch(/^\d+ s$/);
     if (shots) await page.screenshot({ path: path.join(shots, "image-esquisse.png") });
 

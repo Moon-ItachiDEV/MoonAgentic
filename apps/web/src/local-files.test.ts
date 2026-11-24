@@ -85,4 +85,30 @@ describe("local files in answers", () => {
     expect(both.match(/<img /g)).toHaveLength(1);
     expect(both).toContain('<a href="#moon-file:lune.png"');
   });
+
+  it("leaves out the line that only repeats a shown image's file", () => {
+    const html = (text: string) =>
+      new Marked(localFiles).parse(text, { async: false, breaks: true });
+    const path = "C:\\Users\\a\\.gemini\\antigravity-cli\\brain\\1\\naruto_1.jpg";
+    // « Fichier enregistré : » and the link under the image: the image says it all.
+    for (const repeated of [
+      "Fichier enregistré :\n[naruto_1.jpg](naruto_1.jpg)",
+      `Fichier enregistré : [naruto_1.jpg](<${path}>)`,
+      "[naruto_1.jpg](naruto_1.jpg)",
+    ]) {
+      const out = html(`Voici l'image :\n\n![Naruto](<${path}>)\n\n${repeated}`);
+      expect(out, repeated).not.toContain("<a");
+      expect(out, repeated).not.toContain("Fichier enregistré");
+      expect(out.match(/<img/g), repeated).toHaveLength(1);
+    }
+    // A link in a sentence, to another file, or when no image is shown, stays.
+    for (const kept of [
+      `![N](<${path}>)\n\nOuvre [naruto_1.jpg](naruto_1.jpg) pour la voir en grand.`,
+      `![N](<${path}>)\n\nFichier enregistré : [autre.jpg](autre.jpg)`,
+      `![N](<${path}>)\n\n[le rapport](rapport.pdf)`,
+    ]) {
+      expect(html(kept), kept).toContain("<a");
+    }
+    expect(html("Fichier enregistré :\n[naruto_1.jpg](naruto_1.jpg)")).toContain("<img");
+  });
 });
