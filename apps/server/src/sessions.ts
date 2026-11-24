@@ -24,6 +24,8 @@ export interface AgentPoolOptions {
  */
 export class AgentPool {
   private readonly sessions = new Map<string, Promise<AgentSession>>();
+  /** Already-started live sessions, kept in sync for read-only diagnostics without blocking. */
+  private readonly resolved = new Map<string, AgentSession>();
   /** Stops an agent that is still starting, by thread. */
   private readonly starting = new Map<string, AbortController>();
   /** Stops each idle agent when its time is up. */
@@ -59,6 +61,16 @@ export class AgentPool {
     return this.starting.has(threadId);
   }
 
+  /** How many agents are currently starting up. */
+  get startingCount(): number {
+    return this.starting.size;
+  }
+
+  /** Snapshot of already-started live sessions, for read-only diagnostics. */
+  liveSessions(): { threadId: string; session: AgentSession }[] {
+    return [...this.resolved.entries()].map(([threadId, session]) => ({ threadId, session }));
+  }
+
   /** How many agents run for threads right now, starting ones included. */
   get live(): number {
     // Those being paused still run until their process is gone.
@@ -87,9 +99,17 @@ export class AgentPool {
         if (this.starting.get(threadId) === stop) this.starting.delete(threadId);
       });
     this.sessions.set(threadId, started);
-    started.catch(() => {
-      if (owns()) this.sessions.delete(threadId);
-    });
+    started.then(
+      (session) => {
+        if (owns()) this.resolved.set(threadId, session);
+      },
+      () => {
+        if (owns()) {
+          this.sessions.delete(threadId);
+          this.resolved.delete(threadId);
+        }
+      },
+    );
     return started;
   }
 
@@ -101,6 +121,7 @@ export class AgentPool {
   /** The agent quit on its own: it leaves no timer or place in the queue. */
   exited(threadId: string): void {
     this.sessions.delete(threadId);
+    this.resolved.delete(threadId);
     this.clearIdle(threadId);
     this.lastUsed.delete(threadId);
   }
@@ -157,6 +178,7 @@ export class AgentPool {
     }
     // A message sent meanwhile is not refused: its agent starts once this one is gone.
     this.sessions.delete(threadId);
+    this.resolved.delete(threadId);
     this.lastUsed.delete(threadId);
     this.clearIdle(threadId);
     const steps = this.options.steps;
@@ -202,6 +224,7 @@ export class AgentPool {
     this.closed = true;
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
+    this.resolved.clear();
     await Promise.all([
       ...sessions.map((s) => s.then((session) => session.close()).catch(() => undefined)),
       // Those being paused are gone too.

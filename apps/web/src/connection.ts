@@ -447,6 +447,34 @@ export class Connection {
     return this.api<RemoteAccess>("/api/remote", "GET");
   }
 
+  /** Fetches a redacted crash & performance diagnostic report from the server. */
+  diagnostics(): Promise<{ text: string; generatedAt: number }> {
+    return this.api<{ text: string; generatedAt: number }>("/api/diagnostics", "GET");
+  }
+
+  /** Forwards a browser error to the server log, silently ignored if offline or unauthenticated. */
+  reportClientError(payload: {
+    source: string;
+    message: string;
+    stack?: string;
+    route?: string;
+  }): void {
+    if (!this.usableToken()) return;
+    try {
+      void fetch("/api/client-error", {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        keepalive: true,
+      }).catch(() => undefined);
+    } catch {
+      // Never throw from an error reporter.
+    }
+  }
+
   /**
    * Replaces the access token. The server then closes every connection, this one included:
    * this device comes back with the new token, the others need the new link.

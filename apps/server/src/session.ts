@@ -399,6 +399,8 @@ export class AgentSession {
   readonly promptCapabilities: acp.PromptCapabilities;
   /** The agent's name and version, as it gave them when it started. */
   readonly agentVersion: string | undefined;
+  /** The OS process id of the running agent, used for memory diagnostics. */
+  readonly pid: number | undefined;
   private readonly connection: acp.ClientConnection;
   private readonly kill: () => Promise<void>;
   private readonly state: SessionState;
@@ -418,12 +420,14 @@ export class AgentSession {
     cwd: string;
     promptCapabilities: acp.PromptCapabilities;
     agentVersion: string | undefined;
+    pid: number | undefined;
   }) {
     this.sessionId = options.sessionId;
     this.fresh = options.fresh;
     this.cwd = options.cwd;
     this.promptCapabilities = options.promptCapabilities;
     this.agentVersion = options.agentVersion;
+    this.pid = options.pid;
     this.connection = options.connection;
     this.kill = options.kill;
     this.state = options.state;
@@ -761,6 +765,7 @@ export class AgentSession {
         agentVersion: init.agentInfo
           ? `${init.agentInfo.title ?? init.agentInfo.name} ${init.agentInfo.version}`.trim()
           : undefined,
+        pid: child.pid,
       });
     };
 

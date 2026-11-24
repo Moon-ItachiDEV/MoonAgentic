@@ -34,12 +34,31 @@ const NETWORK_TIMEOUT_MS = 5 * 60_000;
  */
 export const LOCAL_TIMEOUT_MS = 2 * 60_000;
 
+/** Git calls slower than this are reported to performance diagnostics (subcommand only). */
+const SLOW_GIT_MS = 3_000;
+let slowGitListener: ((subcommand: string, ms: number) => void) | undefined;
+
+/** Registers a listener notified when a git command takes longer than SLOW_GIT_MS. */
+export function setSlowGitListener(
+  listener: ((subcommand: string, ms: number) => void) | undefined,
+): void {
+  slowGitListener = listener;
+}
+
+function gitSubcommand(args: string[]): string {
+  for (const arg of args) {
+    if (!arg.startsWith("-")) return arg.slice(0, 32);
+  }
+  return "git";
+}
+
 export function git(
   cwd: string,
   args: string[],
   env?: NodeJS.ProcessEnv,
   timeout = LOCAL_TIMEOUT_MS,
 ): Promise<string> {
+  const startedAt = Date.now();
   return new Promise((resolve, reject) => {
     execFile(
       "git",
@@ -53,6 +72,8 @@ export function git(
         windowsHide: true,
       },
       (error, stdout, stderr) => {
+        const elapsed = Date.now() - startedAt;
+        if (elapsed >= SLOW_GIT_MS) slowGitListener?.(gitSubcommand(args), elapsed);
         if (error?.killed && error.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
           reject(new Error("git n'a pas répondu à temps.", { cause: error }));
         else if (error) reject(new Error(stderr.trim() || error.message, { cause: error }));

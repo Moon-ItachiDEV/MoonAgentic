@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { reportUiError } from "../diagnostics.ts";
 
 export interface ErrorBoundaryProps {
   children: ReactNode;
@@ -31,6 +32,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error("Erreur d'affichage :", error, info.componentStack);
+    reportUiError("react", error, info.componentStack);
   }
 
   reload = (): void => {

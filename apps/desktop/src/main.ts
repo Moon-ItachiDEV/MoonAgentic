@@ -18,6 +18,7 @@ import {
   shell,
   Tray,
 } from "electron";
+import { DesktopCrashLog, formatDesktopError } from "./crash-log.ts";
 import { readNotice } from "./notices.ts";
 import { ServerProcess, type ServerState } from "./server-process.ts";
 import { readSettings, writeSettings } from "./settings.ts";
@@ -39,6 +40,11 @@ const dataDir = path.resolve(
   process.env.MOONAGENTIC_HOME ?? path.join(os.homedir(), ".moonagentic"),
 );
 const logDir = path.join(dataDir, "logs");
+const crashLog = new DesktopCrashLog(logDir);
+// Observe uncaught exceptions and unhandled rejections without swallowing Electron's own handling.
+process.on("uncaughtExceptionMonitor", (error, origin) => {
+  crashLog.write(`[main] ${origin} : ${formatDesktopError(error)}`);
+});
 const settingsFile = path.join(app.getPath("userData"), "settings.json");
 const settings = readSettings(settingsFile);
 
@@ -152,6 +158,7 @@ async function installUpdate(): Promise<void> {
 }
 
 function start(): void {
+  process.env.MOONAGENTIC_APP_VERSION = app.getVersion();
   app.setAppUserModelId(APP_ID);
   adoptLoginShellPath();
   applySleepSetting();
@@ -217,9 +224,10 @@ function createWindow(show: boolean): void {
   });
   // The server can go down between saying it is ready and the page loading: the status page
   // comes back, and the interface is loaded again once the server is ready.
-  contents.on("did-fail-load", (_event, code, _description, url, isMainFrame) => {
+  contents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
     // -3 is a load replaced by another one, not a failure.
     if (!isMainFrame || code === -3 || !isServerPage(url)) return;
+    crashLog.write(`[renderer] échec chargement (${code}) : ${description || "erreur inconnue"}`);
     appLoaded = false;
     if (server.state.kind === "ready") setTimeout(() => showStatus(server.state), 1_000);
     else showStatus(server.state);
@@ -397,6 +405,17 @@ function updateTray(): void {
   );
 }
 
+app.on("render-process-gone", (_event, _webContents, details) => {
+  crashLog.write(
+    `[renderer] processus arrêté : reason=${details.reason} exitCode=${details.exitCode}`,
+  );
+});
+app.on("child-process-gone", (_event, details) => {
+  if (details.reason === "clean-exit") return;
+  crashLog.write(
+    `[child] processus arrêté : type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`,
+  );
+});
 app.on("activate", () => showWindow());
 // The window only hides, so this comes only from quitting: nothing to do but quit.
 app.on("window-all-closed", () => undefined);
