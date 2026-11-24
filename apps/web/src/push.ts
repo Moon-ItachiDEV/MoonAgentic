@@ -4,7 +4,7 @@
 import { connection, newId } from "./connection.ts";
 import { notificationsOn, registration } from "./notifications.ts";
 import { readPref, writePref } from "./prefs.ts";
-import { keyBytes, mutedProjects, pushSupport } from "./push-device.ts";
+import { keyBytes, mutedProjects, pushError, pushSupport } from "./push-device.ts";
 
 export { pushSupport } from "./push-device.ts";
 
@@ -31,7 +31,11 @@ async function subscribe(): Promise<void> {
     await sub.unsubscribe();
     sub = null;
   }
-  sub ??= await manager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
+  sub ??= await manager
+    .subscribe({ userVisibleOnly: true, applicationServerKey: key })
+    .catch((e: unknown) => {
+      throw pushError(e);
+    });
   const json = sub.toJSON();
   const p256dh = json.keys?.p256dh;
   const auth = json.keys?.auth;
