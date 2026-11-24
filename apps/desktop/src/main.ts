@@ -155,8 +155,11 @@ const ALLOWED = new Set(["notifications", "media", "clipboard-sanitized-write", 
 /** Shown notices, kept by tag: one replaces the last, and a click still reaches its handler. */
 const notices = new Map<string, Notification>();
 
-/** Only the interface asks: not a status page, nor a page that navigated elsewhere. */
-const fromInterface = (event: IpcMainEvent) => isServerPage(event.senderFrame?.url ?? "");
+/** Only the interface asks: its window's main frame, not a status page nor another site. */
+const fromInterface = (event: IpcMainEvent) =>
+  !!window &&
+  event.senderFrame === window.webContents.mainFrame &&
+  isServerPage(event.senderFrame.url);
 
 ipcMain.on("moonagentic.notice.show", (event, value: unknown) => {
   const notice = readNotice(value);

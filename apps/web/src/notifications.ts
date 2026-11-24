@@ -116,7 +116,11 @@ const plain = new Map<string, Notification>();
 
 /** Takes back a notification that has nothing left to say, wherever it is shown. */
 async function closeNotice(tag: string): Promise<void> {
-  desktopShell()?.close(tag);
+  const desktop = desktopShell();
+  if (desktop) {
+    desktop.close(tag);
+    return;
+  }
   plain.get(tag)?.close();
   plain.delete(tag);
   try {
@@ -187,9 +191,11 @@ let started = false;
 export function startNotifications(): void {
   if (started) return;
   started = true;
-  if (notificationsOn()) void registration();
-  // A click on a notification of the desktop app brings its window back on that thread.
-  desktopShell()?.onOpen(openThread);
+  // A click on a notification of the desktop app brings its window back on that thread; the
+  // service worker serves only browsers.
+  const desktop = desktopShell();
+  if (desktop) desktop.onOpen(openThread);
+  else if (notificationsOn()) void registration();
   // A touch on a notification shown by the service worker comes back as a message.
   navigator.serviceWorker?.addEventListener("message", (event: MessageEvent) => {
     const data = event.data as { type?: string; threadId?: unknown } | null;
