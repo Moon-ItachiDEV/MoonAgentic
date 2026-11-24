@@ -42,6 +42,9 @@ export function ModelFavorites(props: { agents: AgentInfo[]; favorites: Favorite
   useEffect(() => setSent(null), [saved, favorites]);
   const shown = moving?.order ?? sent ?? order;
   const list = useRef<HTMLDivElement>(null);
+  // Stops listening to a drag still going when the page closes.
+  const unlisten = useRef<(() => void) | null>(null);
+  useEffect(() => () => unlisten.current?.(), []);
   const [query, setQuery] = useState("");
   // The check each agent had when « Lire ses modèles » was pressed: over once it has another.
   const [asked, setAsked] = useState<Record<string, number | null>>({});
@@ -82,16 +85,21 @@ export function ModelFavorites(props: { agents: AgentInfo[]; favorites: Favorite
       current = next;
       setMoving({ key: keyOf(ref), order: next });
     };
-    const drop = () => {
+    const stop = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", drop);
       window.removeEventListener("pointercancel", drop);
+      unlisten.current = null;
+    };
+    const drop = () => {
+      stop();
       if (current.some((r, i) => !same(r, shown[i]!))) reorder(current);
       setMoving(null);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", drop);
     window.addEventListener("pointercancel", drop);
+    unlisten.current = stop;
   };
 
   const nudge = (event: React.KeyboardEvent, ref: FavoriteRef) => {
@@ -119,6 +127,10 @@ export function ModelFavorites(props: { agents: AgentInfo[]; favorites: Favorite
   const suggestions = shown.length ? [] : favoriteSuggestions(agents, favorites);
   const ready = agents.filter((a) => a.available);
   const q = query.trim().toLowerCase();
+  const matches = (text: string) => !q || text.toLowerCase().includes(q);
+  const found = (agent: AgentInfo) =>
+    matches(agent.name) || !!agent.models?.some((m) => matches(modelLabel(m)) || matches(m.id));
+  const listed = ready.filter(found);
 
   return (
     <>
@@ -263,12 +275,13 @@ export function ModelFavorites(props: { agents: AgentInfo[]; favorites: Favorite
           {ready.length === 0 && (
             <p className="mf-none">Aucun agent prêt. Vérifie-les dans Réglages › Agents.</p>
           )}
-          {ready.map((agent) => {
+          {ready.length > 0 && listed.length === 0 && (
+            <p className="mf-none">Aucun modèle ne contient « {query.trim()} ».</p>
+          )}
+          {listed.map((agent) => {
             const models = agent.models;
-            const matches = (text: string) => !q || text.toLowerCase().includes(q);
             const agentHit = matches(agent.name);
             const rows = models?.filter((m) => agentHit || matches(modelLabel(m)) || matches(m.id));
-            if (q && !agentHit && !rows?.length) return null;
             return (
               <div key={agent.id} className="mf-grp">
                 <div className="mf-gh">

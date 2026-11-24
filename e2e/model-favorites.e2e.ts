@@ -126,6 +126,11 @@ describe("Réglages › Modèles", () => {
       .toEqual([starred[0], starred[2], starred[1]]);
     if (shots) await two.screenshot({ path: path.join(shots, "favoris-3-mobile.png") });
 
+    // A search that finds nothing says so.
+    await one.getByRole("searchbox", { name: "Rechercher un modèle" }).fill("zzz");
+    await one.getByText("Aucun modèle ne contient « zzz ».").waitFor();
+    await one.getByRole("searchbox", { name: "Rechercher un modèle" }).fill("");
+
     // Taken out from the list, it is a model like any other again.
     await one
       .getByRole("button", { name: /^Retirer .* des favoris$/ })
