@@ -8,8 +8,9 @@ import {
   type Thread,
   type ThreadGroup,
 } from "@moonagentic/protocol";
-import { useEffect, useState } from "react";
-import { firstPick, type ModelPick, ModelSelect } from "./ModelSelect.tsx";
+import { useEffect, useRef, useState } from "react";
+import { type ModelPick, ModelSelect } from "./ModelSelect.tsx";
+import { coordinatorDefault, findModel, isNeonOrchestrator } from "../default-models.ts";
 import { connection } from "../connection.ts";
 import { notificationsOn, projectMuted, setProjectMuted } from "../notifications.ts";
 import { syncPush } from "../push.ts";
@@ -79,7 +80,29 @@ export function ProjectPage(props: {
   const picked =
     coordPick && ready.some((a) => a.id === coordPick.agentId)
       ? coordPick
-      : firstPick(props.agents, favorites);
+      : coordinatorDefault(props.agents, favorites);
+  // The project's composer always speaks to its coordinator: with Antigravity's Neon
+  // orchestrator at hand, the coordinator starts by itself, without « Activer ».
+  const orchestrator = findModel(props.agents, isNeonOrchestrator);
+  const started = useRef<string | null>(null);
+  const start = props.onStartCoordinator;
+  useEffect(() => {
+    if (!start || !props.ready || !orchestrator || coordPick) return;
+    if (started.current === props.project.id) return;
+    started.current = props.project.id;
+    start(orchestrator).catch((error: unknown) =>
+      setCoordError(error instanceof Error ? error.message : String(error)),
+    );
+  }, [start, props.ready, orchestrator, coordPick, props.project.id]);
+  // Antigravity's models are only known once asked: asked once, while there is no coordinator.
+  const discovered = useRef<string | null>(null);
+  useEffect(() => {
+    if (!start || !props.ready || discovered.current === props.project.id) return;
+    const agy = props.agents.find((a) => a.id === "antigravity");
+    if (!agy?.available || agy.models || agy.modelsError) return;
+    discovered.current = props.project.id;
+    connection.send({ type: "agent.discover", agentId: agy.id, projectId: props.project.id });
+  }, [start, props.ready, props.agents, props.project.id]);
   // The name being typed, while the project is renamed in place.
   const [renaming, setRenaming] = useState<string | null>(null);
   const rename = () => {

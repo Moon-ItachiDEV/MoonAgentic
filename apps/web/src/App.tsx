@@ -106,6 +106,8 @@ export function App() {
   const [requestsOpen, setRequestsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pickedProjectId, setPickedProjectId] = useState(() => readPref("project"));
+  /** « Nouvelle discussion » outside any project: a question or a search, in « Discussions ». */
+  const [loose, setLoose] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const [teamTask, setTeamTask] = useState<string | null>(null);
@@ -185,10 +187,15 @@ export function App() {
     route.name === "project" ? state.projects.find((p) => p.id === route.projectId) : undefined;
   // A locked project is never the one new conversations start in.
   const openProjects = state.projects.filter((p) => !p.locked);
+  const looseHome = loose && route.name === "home";
+  const discussions = openProjects.find((p) => p.name === "Discussions");
+  // Outside a project, the conversation goes to « Discussions », made on the first message.
   const project =
     routeProject ??
-    openProjects.find((p) => p.id === (thread?.projectId ?? pickedProjectId)) ??
-    openProjects[0];
+    (looseHome
+      ? discussions
+      : (openProjects.find((p) => p.id === (thread?.projectId ?? pickedProjectId)) ??
+        openProjects[0]));
 
   // On a project's page, the conversation is its coordinator's, once it has one.
   const coordinator = routeProject ? coordinatorOf(state.threads, routeProject.id) : undefined;
@@ -221,6 +228,7 @@ export function App() {
     else if (project) lockOne(project);
   };
   const pickProject = (id: string) => {
+    setLoose(false);
     setPickedProjectId(id);
     writePref("project", id);
   };
@@ -239,6 +247,13 @@ export function App() {
     pickProject(id);
     return id;
   };
+  /** « Discussions », made if need be, for a conversation started outside any project. */
+  const needLoose = () => connection.request({ type: "project.discussions", requestId: newId() });
+  /** « Nouvelle discussion » from the top: outside any project. */
+  const newLoose = () => {
+    setLoose(true);
+    go({ name: "home" });
+  };
   const go = (next: Parameters<typeof navigate>[0]) => {
     setDrawer(false);
     setReviewOpen(false);
@@ -249,7 +264,7 @@ export function App() {
     <TabBar
       state={state}
       current={current}
-      onNew={() => go({ name: "home" })}
+      onNew={newLoose}
       onProjects={() => setDrawer(true)}
       onCode={(id) => {
         go({ name: "thread", threadId: id });
@@ -344,7 +359,7 @@ export function App() {
     {
       label: "Nouvelle discussion",
       icon: <IconCompose size={15} />,
-      run: () => go({ name: "home" }),
+      run: newLoose,
     },
     {
       label: "Nouveau projet",
@@ -440,7 +455,12 @@ export function App() {
           project={project}
           {...(placeholder ? { placeholder } : {})}
           onNewProject={() => setCreatingProject(true)}
-          {...(state.ready && !state.projects.length ? { onNeedProject: needDiscussions } : {})}
+          {...(state.ready && !t && looseHome && !discussions
+            ? { onNeedProject: needLoose }
+            : state.ready && !state.projects.length
+              ? { onNeedProject: needDiscussions }
+              : {})}
+          loose={!t && looseHome}
           projects={openProjects}
           onPickProject={pickProject}
           mcpServers={state.mcpServers}
@@ -525,7 +545,7 @@ export function App() {
           onArtifacts={route.name === "artifacts"}
           onOpenArtifacts={() => go({ name: "artifacts" })}
           onOpenSchedules={() => go({ name: "planner", view: "planifiees" })}
-          onNewThread={() => go({ name: "home" })}
+          onNewThread={newLoose}
           onNewProject={() => {
             setDrawer(false);
             setCreatingProject(true);
@@ -965,6 +985,8 @@ export function App() {
           route.name !== "artifacts" &&
           // A locked project's page has nothing to write to until the code is given.
           !routeProject?.locked &&
+          // A project's own composer speaks to its coordinator only: none until it has one.
+          !(routeProject && !coordinator) &&
           // Under the « Fils » tab the coordinator's conversation is out of sight: so is its composer.
           // A thread shown alone on a narrow screen brings its own.
           // Beside its threads, the coordinator's is under its own conversation.
