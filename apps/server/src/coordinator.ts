@@ -1,6 +1,12 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { DEFAULT_PARALLEL, defaultTeam, TEAM_PRESETS, threadGroup } from "@moonagentic/protocol";
+import {
+  DEFAULT_PARALLEL,
+  defaultTeam,
+  type TeamPreset,
+  teamPresets,
+  threadGroup,
+} from "@moonagentic/protocol";
 import type {
   CoordinatorSettings,
   Item,
@@ -73,6 +79,9 @@ export class CoordinatorRefused extends Error {
 }
 
 /** What coordinators need of the hub that runs the threads. */
+/** Where the teams the user set up in the settings are kept. */
+export const TEAM_PRESETS_SETTING = "teamPresets";
+
 export interface CoordinatorHost extends Pick<
   Hub,
   | "createThread"
@@ -231,8 +240,13 @@ export class Coordinators {
       Promise.all(unknown.map((a) => this.host.discover(a.id, projectId).catch(() => undefined))),
       new Promise((resolve) => setTimeout(resolve, PRESET_DISCOVERY_MS)),
     ]);
-    const members = defaultTeam(this.host.catalog.list());
+    const members = defaultTeam(this.host.catalog.list(), this.savedPresets());
     return members && { ...members, coders: 2, permissionMode };
+  }
+
+  /** The teams the user set up in the settings, if ever. */
+  private savedPresets(): TeamPreset[] | undefined {
+    return this.store.getSetting<TeamPreset[] | null>(TEAM_PRESETS_SETTING, null) ?? undefined;
   }
 
   /** Forgets every access given to a coordinator's bridge so far. */
@@ -568,7 +582,9 @@ export class Coordinators {
           ...(saved
             ? {}
             : {
-                team: `Équipe par défaut (« ${TEAM_PRESETS[0]!.label} ») : l'utilisateur n'en a pas encore réglé. Dis-le-lui en une phrase ; il pourra en choisir une autre avec /equipe.`,
+                team: `Équipe par défaut (« ${
+                  teamPresets(this.savedPresets(), this.host.catalog.list())[0]?.label ?? ""
+                } ») : l'utilisateur n'en a pas encore lancé lui-même. Dis-le-lui en une phrase ; il pourra en choisir une autre avec /equipe, ou régler ses équipes dans les Réglages.`,
               }),
         };
       }

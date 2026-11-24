@@ -486,3 +486,11 @@ export const IconMerge = ({ size = 15 }: P) => (
     <path d="M6 7.5v9M6 8c1 4 5 6 10 6" />
   </svg>
 );
+/** Two people: the teams. */
+export const IconUsers = ({ size = 16 }: P) => (
+  <svg {...base(size)}>
+    <circle cx="9" cy="8" r="3.2" />
+    <path d="M3.5 19a5.5 5.5 0 0 1 11 0" />
+    <path d="M15.5 5.2a3 3 0 0 1 0 5.6M17.5 14.2A5.5 5.5 0 0 1 20.5 19" />
+  </svg>
+);
