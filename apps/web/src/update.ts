@@ -14,7 +14,14 @@ export function isStale(page: string | undefined, served: unknown): boolean {
 const listeners = new Set<() => void>();
 let stale = false;
 
+/** Set once MoonAgentic was seen replacing itself: the new build loads without a tap. */
+let reloadWhenStale = false;
+
 function markStale() {
+  if (reloadWhenStale) {
+    location.reload();
+    return;
+  }
   if (stale) return;
   stale = true;
   for (const listener of listeners) listener();
@@ -44,6 +51,17 @@ async function check(page: string): Promise<void> {
   } finally {
     asking = false;
   }
+}
+
+/**
+ * After an update this screen watched being installed: asks now, and loads the new build as
+ * soon as the server serves it.
+ */
+export function expectNewBuild(): void {
+  if (stale) return location.reload();
+  reloadWhenStale = true;
+  const page = pageBuild();
+  if (page) void check(page);
 }
 
 /**

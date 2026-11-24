@@ -1,5 +1,6 @@
 // MoonAgentic's desktop shell: it runs the same server as `pnpm start` and shows the same
 // interface in a window, with an icon by the clock so that it keeps running once closed.
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -22,6 +23,7 @@ import { ServerProcess, type ServerState } from "./server-process.ts";
 import { readSettings, writeSettings } from "./settings.ts";
 import { adoptLoginShellPath } from "./shell-path.ts";
 import { stateLabel, statusPage } from "./status-page.ts";
+import { installerSpawn, Updater } from "./updater.ts";
 
 const APP_ID = "com.moonagentic.desktop";
 const PORT = Number(process.env.MOONAGENTIC_PORT ?? "4747");
@@ -61,10 +63,93 @@ const server = new ServerProcess({
   command: process.execPath,
   script: path.join(serverDir, "src", "bin.ts"),
   args: ["--port", String(PORT), "--data-dir", dataDir],
-  // Read at each start: on macOS, after the terminal's PATH is adopted.
-  env: () => ({ ...process.env, ELECTRON_RUN_AS_NODE: "1" }),
+  // Read at each start: on macOS, after the terminal's PATH is adopted. The server leaves
+  // updates to the app (it looks at no git clone).
+  env: () => ({ ...process.env, ELECTRON_RUN_AS_NODE: "1", MOONAGENTIC_DESKTOP: "1" }),
   onState: (state) => stateChanged(state),
+  onMessage: (message) => fromServer(message),
 });
+
+/** Only an installed app replaces itself: one run from the repository updates with git. */
+const canUpdate = app.isPackaged && (process.platform === "win32" || process.platform === "darwin");
+const updater = new Updater({
+  current: app.getVersion(),
+  platform: process.platform,
+  dir: path.join(app.getPath("userData"), "updates"),
+  onState: () => report(),
+});
+let installing = false;
+
+/** Tells the server where the app stands, for every device to see. */
+function report(): void {
+  server.send({
+    moon: "desktop",
+    desktop: {
+      platform: process.platform,
+      version: app.getVersion(),
+      packaged: canUpdate,
+      ...(loginItemSupported()
+        ? { openAtLogin: app.getLoginItemSettings(loginItemOptions()).openAtLogin }
+        : {}),
+      preventSleep: settings.preventSleep,
+      update: updater.state,
+    },
+  });
+}
+
+/** What the server asks, once the user did from one of their devices. */
+function fromServer(message: unknown): void {
+  if (!message || typeof message !== "object") return;
+  const m = message as { moon?: unknown; openAtLogin?: unknown; preventSleep?: unknown };
+  switch (m.moon) {
+    case "hello":
+      report();
+      return;
+    case "check":
+      if (canUpdate) void updater.check();
+      else report();
+      return;
+    case "install":
+      void installUpdate();
+      return;
+    case "settings":
+      if (typeof m.openAtLogin === "boolean" && loginItemSupported()) {
+        app.setLoginItemSettings({ openAtLogin: m.openAtLogin, ...loginItemOptions() });
+      }
+      if (typeof m.preventSleep === "boolean") setPreventSleep(m.preventSleep);
+      updateTray();
+      report();
+      return;
+  }
+}
+
+/**
+ * Replaces the app with the installer downloaded and checked. The server and its agents stop
+ * first: Windows keeps a running program's files locked, the installer could not write them.
+ * The installer runs silent, in the same folder, and starts MoonAgentic again once done.
+ */
+async function installUpdate(): Promise<void> {
+  const installer = updater.installer;
+  if (installing) return;
+  if (process.platform !== "win32" || !installer) {
+    updater.fail("Aucun installeur prêt sur cet ordinateur.");
+    return;
+  }
+  installing = true;
+  await server.stop();
+  const { file, args, options } = installerSpawn(installer, path.dirname(process.execPath));
+  const child = spawn(file, args, options);
+  child.once("error", (error) => {
+    installing = false;
+    updater.fail(`L'installeur n'a pas pu démarrer : ${error.message}`);
+    server.start();
+  });
+  child.once("spawn", () => {
+    child.unref();
+    quitting = true;
+    app.quit();
+  });
+}
 
 function start(): void {
   app.setAppUserModelId(APP_ID);
@@ -223,6 +308,12 @@ function stateChanged(state: ServerState): void {
   updateTray();
 }
 
+function setPreventSleep(on: boolean): void {
+  settings.preventSleep = on;
+  writeSettings(settingsFile, settings);
+  applySleepSetting();
+}
+
 function applySleepSetting(): void {
   if (settings.preventSleep && sleepBlocker === undefined) {
     sleepBlocker = powerSaveBlocker.start("prevent-app-suspension");
@@ -250,9 +341,11 @@ function createTray(): void {
 
 const loginItemOptions = () => (process.platform === "win32" ? { args: [HIDDEN_ARG] } : {});
 
+const loginItemSupported = () => process.platform === "win32" || process.platform === "darwin";
+
 /** Starting with the session, where Electron can set it up: Windows and macOS. */
 function loginItemMenu(): MenuItemConstructorOptions[] {
-  if (process.platform !== "win32" && process.platform !== "darwin") return [];
+  if (!loginItemSupported()) return [];
   return [
     {
       label: process.platform === "darwin" ? "Ouvrir à la connexion" : "Lancer avec Windows",
@@ -261,6 +354,7 @@ function loginItemMenu(): MenuItemConstructorOptions[] {
       click: (item) => {
         app.setLoginItemSettings({ openAtLogin: item.checked, ...loginItemOptions() });
         updateTray();
+        report();
       },
     },
   ];
@@ -290,9 +384,8 @@ function updateTray(): void {
         type: "checkbox",
         checked: settings.preventSleep,
         click: (item) => {
-          settings.preventSleep = item.checked;
-          writeSettings(settingsFile, settings);
-          applySleepSetting();
+          setPreventSleep(item.checked);
+          report();
         },
       },
       { type: "separator" },

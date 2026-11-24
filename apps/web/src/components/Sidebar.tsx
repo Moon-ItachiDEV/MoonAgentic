@@ -39,6 +39,7 @@ import {
 import { Wordmark } from "./MoonMark.tsx";
 import { Presence } from "./Presence.tsx";
 import { SidePullRequests } from "./SidePullRequests.tsx";
+import { AppUpdatePill } from "./AppUpdatePill.tsx";
 import { StateGlyph } from "./StateGlyph.tsx";
 import { type PlannerSignal, plannerSignal, plannerSignalText } from "../planner.ts";
 
@@ -608,6 +609,7 @@ export function Sidebar(props: {
       </div>
       {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}
       <SideQuotas agents={state.agents} onOpen={props.onOpenSubscriptions} />
+      <AppUpdatePill />
       <div className="side-foot">
         <button
           className="ib set-gear"

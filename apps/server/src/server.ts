@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Agents } from "./agents.ts";
+import { gitSource, type ShellChannel } from "./app-update.ts";
 import { serverArgs } from "./args.ts";
 import { dailyBackups } from "./backups.ts";
 import { preparePrivateDataDir } from "./data-dir.ts";
@@ -65,10 +66,29 @@ const github = new GithubAccount({
 setGithubAccount(github);
 void github.currentToken();
 const demo = !!(values.dev || values.demo);
+// The desktop app's channel goes through the supervisor, which passes its messages on; a
+// supervisor started from a terminal answers none, and the server goes without.
+const shell: ShellChannel | undefined = process.send
+  ? {
+      send: (message) => {
+        if (process.connected) process.send?.(message, undefined, undefined, () => undefined);
+      },
+      onMessage: (listener) => process.on("message", listener),
+    }
+  : undefined;
+// A clone started with `pnpm start` learns of new commits on `main`; the desktop app looks
+// for its own versions, and a development run for none.
+const appGit =
+  demo || process.env.MOONAGENTIC_DESKTOP
+    ? undefined
+    : gitSource(fileURLToPath(new URL("../../..", import.meta.url)));
 const hub = new Hub(store, new Agents({ demo }), {
   dataDir,
   worktreesDir: path.join(dataDir, "worktrees"),
   quotaReaders: defaultReaders({ demo }),
+  backupsDir: path.join(dataDir, "backups"),
+  ...(shell ? { shell } : {}),
+  ...(appGit ? { appGit } : {}),
 });
 // Images joined to a message that was never sent, left from an earlier run.
 hub.attachments.sweep();

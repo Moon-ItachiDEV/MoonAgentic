@@ -1,6 +1,15 @@
 import { z } from "zod";
 
 export type { PairedDevice, RemoteAccess, RemoteAddress } from "./remote.ts";
+export {
+  type AppInfo,
+  type AppKind,
+  type AppUpdate,
+  MAX_UPDATE_NOTES,
+  UPDATE_EVERY_MS,
+  type UpdateNote,
+} from "./app-update.ts";
+import type { AppInfo } from "./app-update.ts";
 export { type Notice, noticesFor, settledTags, waitingTag } from "./notices.ts";
 export {
   defaultTeam,
@@ -1123,6 +1132,8 @@ export interface Snapshot {
   defaults?: Defaults;
   /** The teams the user set up in the settings; none until edited once. */
   teamPresets?: TeamPreset[];
+  /** This MoonAgentic's version and what it knows of a newer one. */
+  app?: AppInfo;
 }
 
 /** What a new thread starts with unless chosen otherwise, kept by the server for every device. */
@@ -1208,6 +1219,8 @@ export type ServerMessage =
   | { type: "mcpServers"; servers: McpServerInfo[]; error?: string }
   | { type: "project"; project: Project }
   | { type: "defaults"; defaults: Defaults }
+  /** The app's version, settings or update changed. */
+  | { type: "app"; app: AppInfo }
   | { type: "teamPresets"; presets: TeamPreset[] | null }
   | { type: "projectSetup"; requestId: string; projectId: string; setup: ProjectSetup }
   | { type: "thread"; thread: Thread }
@@ -1932,6 +1945,20 @@ export const ClientMessage = z.discriminatedUnion("type", [
     type: z.literal("push.unsubscribe"),
     requestId: id,
     endpoint: z.string().max(2048),
+  }),
+  /** Looks for a newer version of MoonAgentic now. */
+  z.object({ type: z.literal("app.check") }),
+  /** Installs the version downloaded: once no thread is at work, or at once. */
+  z.object({ type: z.literal("app.install"), when: z.enum(["idle", "now"]) }),
+  /** Takes back an install that waits for the threads to finish. */
+  z.object({ type: z.literal("app.cancel") }),
+  /** Changes how the app looks for versions and runs; those not given stay. */
+  z.object({
+    type: z.literal("app.settings"),
+    checks: z.boolean().optional(),
+    notify: z.boolean().optional(),
+    openAtLogin: z.boolean().optional(),
+    preventSleep: z.boolean().optional(),
   }),
   /** Lists the artifacts of the threads' own branches; see `artifacts`. */
   z.object({ type: z.literal("artifacts.list"), requestId: id }),
