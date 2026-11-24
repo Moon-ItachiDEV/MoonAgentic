@@ -1,4 +1,5 @@
 import type { AgentInfo, Favorites } from "@moonagentic/protocol";
+import { modelNameOf } from "./model-label.ts";
 
 /** One line of a route menu: an agent with one of its models, or its default model. */
 export type RouteOption = { value: string; agentId: string; model?: string; label: string };
@@ -74,7 +75,7 @@ export function routeChoices(
 }
 
 function line(agent: AgentInfo, model?: string): RouteOption {
-  const name = model ? (agent.models?.find((m) => m.id === model)?.name ?? model) : undefined;
+  const name = modelNameOf(agent.models, model);
   return {
     value: routeValue(agent.id, model),
     agentId: agent.id,

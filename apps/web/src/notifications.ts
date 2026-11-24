@@ -2,6 +2,7 @@
 // thread starts waiting for the user or a team ends, while MoonAgentic stays open in a tab.
 import { type Notice, noticesFor, settledTags, type Thread } from "@moonagentic/protocol";
 import { connection } from "./connection.ts";
+import { desktopShell } from "./desktop.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { navigate } from "./router.ts";
 
@@ -12,13 +13,14 @@ import { navigate } from "./router.ts";
 export type NotificationSupport = "ok" | "insecure" | "unsupported";
 
 export function notificationSupport(): NotificationSupport {
+  if (desktopShell()) return "ok";
   if (!window.isSecureContext) return "insecure";
   return "Notification" in window ? "ok" : "unsupported";
 }
 
 /** What the browser says of this site: `granted`, `denied`, or `default` while not asked. */
 export const notificationPermission = (): NotificationPermission =>
-  notificationSupport() === "ok" ? Notification.permission : "denied";
+  desktopShell() ? "granted" : notificationSupport() === "ok" ? Notification.permission : "denied";
 
 /** True when the user turned them on here and the browser still allows them. */
 export const notificationsOn = () =>
@@ -48,6 +50,11 @@ export function registration(): Promise<ServiceWorkerRegistration | undefined> {
 /** Turns them on, if the browser allows it. Resolves with its answer. */
 export async function enableNotifications(): Promise<NotificationPermission> {
   if (notificationSupport() !== "ok") return "denied";
+  // The desktop app shows them through the system, which asks nothing of the page.
+  if (desktopShell()) {
+    writePref("notifications", "true");
+    return "granted";
+  }
   // Asked each time: a browser that already answered gives that answer back without a prompt.
   const permission = await Notification.requestPermission();
   if (permission === "granted") {
@@ -75,6 +82,16 @@ export async function showNotice(notice: Notice): Promise<boolean> {
     icon: "/icon-192.png",
     data: { threadId: notice.threadId },
   };
+  const desktop = desktopShell();
+  if (desktop) {
+    desktop.notify({
+      title: notice.title,
+      body: notice.body,
+      tag: notice.tag,
+      threadId: notice.threadId,
+    });
+    return true;
+  }
   try {
     const sw = await registration();
     if (sw) {
@@ -99,6 +116,11 @@ const plain = new Map<string, Notification>();
 
 /** Takes back a notification that has nothing left to say, wherever it is shown. */
 async function closeNotice(tag: string): Promise<void> {
+  const desktop = desktopShell();
+  if (desktop) {
+    desktop.close(tag);
+    return;
+  }
   plain.get(tag)?.close();
   plain.delete(tag);
   try {
@@ -144,7 +166,8 @@ function anotherTabInFront(): Promise<boolean> {
  */
 async function notify(notice: Notice): Promise<void> {
   // The server sends it through Web Push, which shows it even with the app closed.
-  if (readPref("notifications.push") === "true") return;
+  // The desktop app has no Web Push: its window, closed or not, shows them itself.
+  if (!desktopShell() && readPref("notifications.push") === "true") return;
   if (inFront() || (await anotherTabInFront())) return;
   if (!("locks" in navigator)) {
     await showNotice(notice);
@@ -168,7 +191,11 @@ let started = false;
 export function startNotifications(): void {
   if (started) return;
   started = true;
-  if (notificationsOn()) void registration();
+  // A click on a notification of the desktop app brings its window back on that thread; the
+  // service worker serves only browsers.
+  const desktop = desktopShell();
+  if (desktop) desktop.onOpen(openThread);
+  else if (notificationsOn()) void registration();
   // A touch on a notification shown by the service worker comes back as a message.
   navigator.serviceWorker?.addEventListener("message", (event: MessageEvent) => {
     const data = event.data as { type?: string; threadId?: unknown } | null;

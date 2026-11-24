@@ -13,6 +13,7 @@ import {
   type RouteKind,
 } from "@moonagentic/protocol";
 import { parseRouteValue, routeChoices, routeValue } from "../route-choices.ts";
+import { modelNameOf } from "../model-label.ts";
 import { KIND_LABEL } from "../project-threads.ts";
 import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
@@ -27,6 +28,8 @@ import {
 import { lockSheet, toggleLock } from "../lock.ts";
 import { setDefault, useDefaults } from "../defaults.ts";
 import { disablePush, enablePush, pushOn, pushReached, pushSupport } from "../push.ts";
+import type { PushSupport } from "../push-device.ts";
+import { desktopShell } from "../desktop.ts";
 import type { SettingsSection } from "../router.ts";
 import { mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
 import { matchSections } from "../settings-search.ts";
@@ -223,6 +226,18 @@ const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
  */
 function PushRow() {
   const support = pushSupport();
+  if (support === "desktop") {
+    return (
+      <Row
+        title="Même quand l'app est fermée"
+        text="Déjà le cas dans l'app de bureau : fermer la fenêtre la cache seulement, MoonAgentic continue près de l'horloge et t'avertit par les notifications du système. Seul « Quitter MoonAgentic » les arrête, avec tes agents. Pour ton téléphone, active-les dans ses propres réglages."
+      />
+    );
+  }
+  return <BrowserPushRow support={support} />;
+}
+
+function BrowserPushRow({ support }: { support: Exclude<PushSupport, "desktop"> }) {
   const [on, setOn] = useState(false);
   const [busy, setBusy] = useState(pushOn());
   const [error, setError] = useState<string | null>(null);
@@ -289,7 +304,9 @@ function NotificationsRow() {
         ? "Ce navigateur n'en propose pas. Sur iPhone, ajoute d'abord MoonAgentic à l'écran d'accueil."
         : permission === "denied"
           ? "Bloquées par le navigateur pour ce site : autorise-les dans ses réglages, puis réessaie."
-          : "Sur cet appareil, quand un fil attend ta réponse ou qu'une équipe termine ou échoue, sauf si tu as déjà MoonAgentic sous les yeux. Il faut qu'il reste ouvert dans un onglet, même en arrière-plan.";
+          : desktopShell()
+            ? "Sur cet ordinateur, par les notifications du système, quand un fil attend ta réponse ou qu'une équipe termine ou échoue, sauf si tu as déjà MoonAgentic sous les yeux."
+            : "Sur cet appareil, quand un fil attend ta réponse ou qu'une équipe termine ou échoue, sauf si tu as déjà MoonAgentic sous les yeux. Il faut qu'il reste ouvert dans un onglet, même en arrière-plan.";
   return (
     <>
       <Row title="Notifications" text={text}>
@@ -626,7 +643,7 @@ export function SettingsPage(props: {
                 <div className="set-chips">
                   {(props.favorites[a.id] ?? []).map((m) => (
                     <span key={m} className="set-chip">
-                      {a.models?.find((x) => x.id === m)?.name ?? m}
+                      {modelNameOf(a.models, m)}
                       <button
                         aria-label={`Retirer ${m} des favoris`}
                         onClick={() =>
@@ -658,7 +675,7 @@ export function SettingsPage(props: {
     case "coordinator": {
       const named = (m: TeamMember) => {
         const agent = props.agents.find((a) => a.id === m.agentId);
-        const model = m.model && (agent?.models?.find((x) => x.id === m.model)?.name ?? m.model);
+        const model = modelNameOf(agent?.models, m.model);
         return `${agent?.name ?? m.agentId}${model ? ` · ${model}` : ""}`;
       };
       const team = props.coordinator.team;

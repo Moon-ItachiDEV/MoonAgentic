@@ -1,4 +1,5 @@
 import type { AgentInfo, Favorites } from "@moonagentic/protocol";
+import { modelLabel, modelNameOf } from "./model-label.ts";
 
 /** One line of the model wheel: a favorite model of an agent, or the agent's default. */
 export type WheelEntry = { agent: AgentInfo; model: string | undefined; name: string };
@@ -19,12 +20,12 @@ export function wheelEntries(
       const known = agent.models?.find((m) => m.id === model);
       // A favorite the agent no longer offers is left out once the list is known.
       if (agent.models && !known) continue;
-      entries.push({ agent, model, name: known?.name ?? model });
+      entries.push({ agent, model, name: known ? modelLabel(known) : model });
     }
   }
   const { agent, model } = current;
   if (agent && !entries.some((e) => e.agent.id === agent.id && e.model === model)) {
-    const name = agent.models?.find((m) => m.id === model)?.name ?? model ?? "Modèle par défaut";
+    const name = modelNameOf(agent.models, model) ?? "Modèle par défaut";
     entries.unshift({ agent, model, name });
   }
   return entries;

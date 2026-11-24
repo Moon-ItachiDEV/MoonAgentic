@@ -14,6 +14,7 @@ import {
 export { pickMember, presetMembers, suggestedPresets, TEAM_ROLES, teamPresets };
 export type { TeamPreset, TeamRole };
 import { pickMember } from "@moonagentic/protocol";
+import { modelNameOf } from "./model-label.ts";
 
 export const ROLE_LABEL: Record<TeamRole, string> = {
   lead: "Chef",
@@ -90,7 +91,7 @@ export function presetLine(preset: TeamPreset, agents: AgentInfo[]): string {
     const m = members[role];
     if (!m) return [];
     const agent = agents.find((a) => a.id === m.agentId);
-    const model = m.model && (agent?.models?.find((x) => x.id === m.model)?.name ?? m.model);
+    const model = modelNameOf(agent?.models, m.model);
     return [`${ROLE_LABEL[role]} : ${model ?? agent?.name ?? m.agentId}`];
   }).join(" · ");
 }

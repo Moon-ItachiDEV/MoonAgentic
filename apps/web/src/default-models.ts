@@ -36,3 +36,19 @@ export const coordinatorDefault = (
  */
 export const looseDefault = (agents: AgentInfo[]): ModelPick | undefined =>
   findModel(agents, (t) => /hydrogen/i.test(t));
+
+/** True for the built-in « Discussions » folder that holds conversations outside any project. */
+export const isDiscussionsProject = (project: { name: string } | undefined): boolean =>
+  project?.name === "Discussions";
+
+/**
+ * True when the home composer is writing outside a code project (explicit « Nouvelle discussion »,
+ * no project yet, or inside « Discussions ») and should start on Hydrogen by default.
+ */
+export const isLooseHome = (options: {
+  routeName: string;
+  loose: boolean;
+  project: { name: string } | undefined;
+}): boolean =>
+  options.routeName === "home" &&
+  (options.loose || !options.project || isDiscussionsProject(options.project));

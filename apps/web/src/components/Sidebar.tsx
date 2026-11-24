@@ -4,6 +4,7 @@ import { useQuotas } from "../use-quotas.ts";
 import { connection, type State } from "../connection.ts";
 import { useEffect, useRef, useState } from "react";
 import { pinnedFirst, waitingCount } from "../project-threads.ts";
+import { isDiscussionsProject } from "../default-models.ts";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 import { readPref, writePref } from "../prefs.ts";
 import { recentAlwaysShown } from "../recent.ts";
@@ -186,7 +187,7 @@ export function Sidebar(props: {
   };
   // « Discussions » holds the conversations started outside any project: not a project of the
   // user's, so it is not listed with them and its threads go under « Récents ».
-  const discussionsId = state.projects.find(isDiscussions)?.id;
+  const discussionsId = state.projects.find(isDiscussionsProject)?.id;
   const codeProjects = state.projects.filter((p) => p.id !== discussionsId);
   // Opening a thread unfolds its project once, even when multi-project defaults it folded.
   const activeProject = active?.projectId;
@@ -599,11 +600,6 @@ export function Sidebar(props: {
       </div>
     </aside>
   );
-}
-
-/** The project « Discussions » the server makes for conversations outside any project. */
-function isDiscussions(p: { name: string; path: string }): boolean {
-  return p.name === "Discussions" && p.path.split(/[\\/]/).pop() === "Discussions";
 }
 
 /**

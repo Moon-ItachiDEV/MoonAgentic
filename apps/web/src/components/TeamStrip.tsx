@@ -1,6 +1,7 @@
 import type { AgentInfo, Team, TeamLanePhase, Thread } from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { modelNameOf } from "../model-label.ts";
 import { TeamTree } from "./TeamTree.tsx";
 
 const LEAD_LANE = -1;
@@ -95,7 +96,7 @@ export function teamLanes(
   ) => {
     if (!member) return role;
     const agent = agents.find((a) => a.id === member.agentId);
-    const model = agent?.models?.find((m) => m.id === member.model)?.name ?? member.model;
+    const model = modelNameOf(agent?.models, member.model);
     return [role, agent?.name ?? member.agentId, model].filter(Boolean).join(" · ");
   };
   const of = (thread: Thread | undefined) =>
