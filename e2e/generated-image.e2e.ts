@@ -231,4 +231,25 @@ describe("generated image", () => {
     expect(errors).toEqual([]);
     await page.close();
   });
+
+  it("is shown once made though the answer names no file, as Codex's is", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const errors: Error[] = [];
+    page.on("pageerror", (err) => errors.push(err));
+    await newThread(page, "Stp peins une image de la lune");
+
+    const draft = page.locator(".img-draft");
+    await draft.waitFor();
+    // « Voici la lune au-dessus des toits. »: the file is told in the tool's result only.
+    const image = page.locator(".made-imgs img.md-img");
+    await image.waitFor({ timeout: 15_000 });
+    await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(480);
+    expect(await image.getAttribute("src")).toMatch(/\/ig_\d+\.png$/);
+    await expect.poll(() => draft.count()).toBe(0);
+    await page.getByText("Voici la lune au-dessus des toits.").waitFor();
+    expect(await page.locator(".md-img-gone").count()).toBe(0);
+    if (shots) await page.screenshot({ path: path.join(shots, "image-outil-seul.png") });
+    expect(errors).toEqual([]);
+    await page.close();
+  });
 });

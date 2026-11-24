@@ -712,6 +712,17 @@ export class Store {
     });
   }
 
+  /** Whether a tool of this thread says it made this image, written exactly so. */
+  toolMade(threadId: string, ref: string): boolean {
+    const rows = this.sql(
+      `SELECT data FROM items WHERE thread_id = ? AND instr(data, ?) > 0 ORDER BY seq DESC`,
+    ).all(threadId, JSON.stringify(ref).slice(1, -1)) as { data: string }[];
+    return rows.some((r) => {
+      const item = JSON.parse(r.data) as Item;
+      return item.kind === "tool" && !!item.images?.includes(ref);
+    });
+  }
+
   listItems(threadId: string): Item[] {
     const rows = this.sql(`SELECT data FROM items WHERE thread_id = ? ORDER BY seq`).all(
       threadId,

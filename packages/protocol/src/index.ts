@@ -825,6 +825,11 @@ export type Item =
        * travel with the timeline, it is asked for with `item.get` when its line is opened.
        */
       omitted?: number;
+      /**
+       * The images the tool says it made, as paths of the computer: an agent such as Codex
+       * tells them in the tool's result only, and its answer may not name them.
+       */
+      images?: string[];
       /** What the tool asks the user, when it is a question. */
       questions?: ToolQuestion[];
       /**

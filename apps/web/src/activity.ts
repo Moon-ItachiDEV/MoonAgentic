@@ -1,6 +1,7 @@
 import type { Item } from "@moonagentic/protocol";
 import type { GlyphKind } from "./glyphs.ts";
 import type { FeedBlock } from "./team-feed.ts";
+import { refName } from "./local-files.ts";
 
 /**
  * Antigravity's own switches in and out of its plan mode: they change nothing the user
@@ -33,6 +34,38 @@ export function imageInProgress(
   }
   return undefined;
 }
+
+/**
+ * The images the tools of a stretch made that no answer of its turn names: shown in the
+ * thread where their sketch was, since the agent's answer does not show them (Codex only
+ * writes « Voici l'image »).
+ */
+export function unshownImages(items: Item[], indices: number[]): string[] {
+  const made = indices.flatMap((i) => {
+    const item = items[i];
+    return item?.kind === "tool" && item.status === "completed" ? (item.images ?? []) : [];
+  });
+  if (!made.length) return [];
+  let said = "";
+  for (
+    let i = indices[0]!;
+    i < items.length && (i === indices[0] || items[i]?.kind !== "user");
+    i++
+  ) {
+    const item = items[i]!;
+    if (item.kind === "agent") said += `${item.text}\n`;
+  }
+  // Told by its name, as a path or as an address, with its spaces and accents encoded or not.
+  const named = (ref: string) => {
+    const name = refName(ref);
+    return said.includes(name) || said.includes(encodeURI(name));
+  };
+  return [...new Set(made)].filter((ref) => !/[<>\n]/.test(ref) && !named(ref));
+}
+
+/** What shows them: each image as an answer would have written it. */
+export const imagesMarkdown = (refs: string[]) =>
+  refs.map((ref) => `![${refName(ref).replace(/[[\]\\]/g, "")}](<${ref}>)`).join("\n\n");
 
 export const isPlanModeSwitch = (item: Item | undefined) =>
   item?.kind === "tool" && PLAN_MODE.test(item.title.trim());

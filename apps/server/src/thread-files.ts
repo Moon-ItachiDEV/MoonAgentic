@@ -26,6 +26,28 @@ export function generatedFolders(home: string): string[] {
   ];
 }
 
+/**
+ * The images a tool's result says it made, as it wrote them. Codex's image generation gives
+ * the file it saved as the address of an image or of a link, and as `savedPath`; none of it
+ * is in the agent's answer, which often only says « Voici l'image ».
+ */
+export function madeImages(content: unknown, rawOutput: unknown): string[] {
+  const made: string[] = [];
+  const add = (ref: unknown) => {
+    if (typeof ref !== "string" || !ref.trim() || made.includes(ref)) return;
+    const file = refPath(ref);
+    if (file && servedType(file)?.startsWith("image/")) made.push(ref);
+  };
+  for (const part of Array.isArray(content) ? content : []) {
+    const inner = (part as { type?: unknown; content?: { type?: unknown; uri?: unknown } } | null)
+      ?.content;
+    if ((part as { type?: unknown }).type !== "content" || !inner) continue;
+    if (inner.type === "image" || inner.type === "resource_link") add(inner.uri);
+  }
+  add((rawOutput as { savedPath?: unknown } | null | undefined)?.savedPath);
+  return made;
+}
+
 /** The path a reference names, as written: absolute, or relative to the thread's folder. */
 export function refPath(ref: string): string | undefined {
   let raw = ref.trim();

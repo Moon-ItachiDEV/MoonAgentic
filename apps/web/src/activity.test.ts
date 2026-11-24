@@ -6,9 +6,13 @@ import {
   activityLabel,
   activitySteps,
   imageInProgress,
+  imagesMarkdown,
   isImageGeneration,
   isPlanModeSwitch,
+  unshownImages,
 } from "./activity.ts";
+import { Marked } from "marked";
+import { localFiles, markedRef } from "./local-files.ts";
 
 const user = (id: string): Item => ({ id, kind: "user", text: id, at: 0 });
 const agent = (id: string): Item => ({ id, kind: "agent", text: id, at: 0 });
@@ -166,5 +170,24 @@ describe("image generation", () => {
     expect(imageInProgress([thought("t"), running], [0, 1])).toBe(running);
     const done = tool("i", { title: "generate_image", status: "completed" });
     expect(imageInProgress([running, done], [0, 1])).toBeUndefined();
+  });
+
+  it("shows the image a tool made when no answer of the turn names it", () => {
+    // Codex: the file is in the tool's result only, the answer says « Voici Naruto ».
+    const saved = "C:\\Users\\BreezyHomeCinéma\\.codex\\generated_images\\019a\\ig_1.png";
+    const made = (status: "completed" | "in_progress") =>
+      ({ ...tool("i", { title: "Image generation" }), status, images: [saved] }) as Item;
+    const turn = [user("u"), made("completed"), agent("Voici Naruto sur les toits.")];
+    expect(unshownImages(turn, [1])).toEqual([saved]);
+    // Not while it is being made, nor when the answer shows or links it, nor for a later turn.
+    expect(unshownImages([user("u"), made("in_progress")], [1])).toEqual([]);
+    expect(unshownImages([user("u"), made("completed"), agent(`![a](${saved})`)], [1])).toEqual([]);
+    expect(
+      unshownImages([user("u"), made("completed"), agent("Voici."), user("v"), agent(saved)], [1]),
+    ).toEqual([saved]);
+    // Written as an answer would, it reaches the server exactly as the tool gave it.
+    const html = new Marked(localFiles).parse(imagesMarkdown([saved]), { async: false });
+    const href = /<img src="([^"]+)"/.exec(html)?.[1];
+    expect(markedRef(href!.replace(/&amp;/g, "&"))).toBe(saved);
   });
 });

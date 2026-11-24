@@ -8,7 +8,7 @@ import type { ServerMessage } from "@moonagentic/protocol";
 import { Agents } from "../src/agents.ts";
 import { Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
-import { generatedFolders, refPath, resolveThreadFile } from "../src/thread-files.ts";
+import { generatedFolders, madeImages, refPath, resolveThreadFile } from "../src/thread-files.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -47,6 +47,29 @@ describe("refPath", () => {
     ]) {
       expect(refPath(web)).toBeUndefined();
     }
+  });
+});
+
+describe("madeImages", () => {
+  it("reads the image a tool's result says it saved, as Codex's image generation does", () => {
+    const saved = "C:\\Users\\BreezyHomeCinéma\\.codex\\generated_images\\019a\\ig_1.png";
+    const image = { type: "content", content: { type: "image", data: "AA", uri: saved } };
+    const link = { type: "content", content: { type: "resource_link", name: saved, uri: saved } };
+    expect(madeImages([image], { savedPath: saved })).toEqual([saved]);
+    expect(madeImages([link], undefined)).toEqual([saved]);
+    expect(madeImages(undefined, { savedPath: saved })).toEqual([saved]);
+    // Not what is no image, nor an address of the web, nor a result that says nothing.
+    expect(
+      madeImages(
+        [
+          { type: "content", content: { type: "text", text: saved } },
+          { type: "content", content: { type: "resource_link", uri: "C:\\a\\notes.md" } },
+          { type: "content", content: { type: "image", data: "AA", uri: "https://x.test/a.png" } },
+          { type: "diff", path: "a.png", newText: "" },
+        ],
+        { savedPath: null },
+      ),
+    ).toEqual([]);
   });
 });
 
@@ -261,6 +284,30 @@ describe("file.open", { timeout: 40_000 }, () => {
     expect(await hub.artifactLinks.resolve(ticket, link.name)).toBeUndefined();
     hub.locks.unlock(projectId, "123456");
     expect(await hub.artifactLinks.resolve(ticket, link.name)).toBeDefined();
+  });
+
+  it("keeps the image a tool says it made, and serves it though no answer names it", async () => {
+    // Codex: « Voici la lune » and nothing else; the file is told in the tool's result only.
+    const { hub, store, home, projectId } = await hubWithImage();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Stp peins une image de la lune",
+    });
+    await hub.whenIdle(threadId);
+    const items = store.listItems(threadId);
+    const answer = items.find((i) => i.kind === "agent")!;
+    expect(answer.kind === "agent" && answer.text).not.toMatch(/\.png/);
+    const tool = items.find((i): i is Extract<typeof i, { kind: "tool" }> => i.kind === "tool")!;
+    expect(tool.images).toHaveLength(1);
+    const made = tool.images![0]!;
+    expect(made.startsWith(path.join(home, ".codex", "generated_images"))).toBe(true);
+    expect(await ask(hub, threadId, made)).toMatchObject({ type: "fileLink", mime: "image/png" });
+    // Another image beside it, which no tool of the thread made, stays out of reach.
+    const other = path.join(path.dirname(made), "autre.png");
+    writeFileSync(other, PNG);
+    await expect(ask(hub, threadId, other)).rejects.toThrow(/ne nomme ce fichier/);
   });
 
   it("serves only a file one of the thread's answers names", async () => {
