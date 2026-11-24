@@ -14,7 +14,7 @@ export const ARTIFACTS_PATH = "/api/artifacts";
 /** How long an address given to show an artifact works. */
 export const ARTIFACT_LINK_TTL_MS = 10 * 60_000;
 /** Addresses kept at once: the oldest stops working when more are asked for. */
-const MAX_LINKS = 100;
+const MAX_LINKS = 500;
 /** Past this many, the list stops at the newest. */
 export const MAX_ARTIFACTS = 300;
 /** Threads looked at, the most recently active first: each costs two git commands. */
@@ -139,18 +139,59 @@ export class ArtifactLinks {
   /** Each address, with the device it was given to (none for the computer itself). */
   private readonly links = new Map<
     string,
-    { threadId: string; deviceId?: string; expiresAt: number }
+    {
+      threadId: string;
+      deviceId?: string;
+      expiresAt: number;
+      /** For an address of one file an answer names: that file alone. */
+      file?: string;
+    }
   >();
   private readonly workspaceOf: (threadId: string) => Workspace | undefined;
   private readonly now: () => number;
+  /** Whether a thread's files may still be shown: it is there, and its project not locked. */
+  private readonly shown: (threadId: string) => boolean;
 
-  constructor(workspaceOf: (threadId: string) => Workspace | undefined, now = Date.now) {
+  constructor(
+    workspaceOf: (threadId: string) => Workspace | undefined,
+    now = Date.now,
+    shown: (threadId: string) => boolean = (id) => !!workspaceOf(id),
+  ) {
     this.workspaceOf = workspaceOf;
     this.now = now;
+    this.shown = shown;
   }
 
   /** A new address for the files of this thread's folder, given to that device. */
   issue(threadId: string, deviceId?: string): { ticket: string; expiresAt: number } {
+    return this.add({ threadId, ...(deviceId ? { deviceId } : {}) });
+  }
+
+  /**
+   * An address for one file an answer of this thread names, given to that device. One given
+   * before for the same file, with more than half its time left, is given again: a thread
+   * shown anew asks again for each of its images.
+   */
+  issueFile(
+    threadId: string,
+    file: string,
+    deviceId?: string,
+  ): { ticket: string; expiresAt: number } {
+    const now = this.now();
+    for (const [ticket, link] of this.links) {
+      if (
+        link.file === file &&
+        link.threadId === threadId &&
+        link.deviceId === deviceId &&
+        link.expiresAt - now > ARTIFACT_LINK_TTL_MS / 2
+      ) {
+        return { ticket, expiresAt: link.expiresAt };
+      }
+    }
+    return this.add({ threadId, file, ...(deviceId ? { deviceId } : {}) });
+  }
+
+  private add(link: { threadId: string; deviceId?: string; file?: string }) {
     const now = this.now();
     for (const [key, link] of this.links) if (link.expiresAt <= now) this.links.delete(key);
     while (this.links.size >= MAX_LINKS) {
@@ -160,7 +201,7 @@ export class ArtifactLinks {
     }
     const ticket = randomBytes(32).toString("base64url");
     const expiresAt = now + ARTIFACT_LINK_TTL_MS;
-    this.links.set(ticket, { threadId, ...(deviceId ? { deviceId } : {}), expiresAt });
+    this.links.set(ticket, { ...link, expiresAt });
     return { ticket, expiresAt };
   }
 
@@ -188,6 +229,18 @@ export class ArtifactLinks {
     }
     const type = servedType(file);
     if (!type) return undefined;
+    if (link.file) {
+      // Its own name only, while its thread may be shown.
+      if (file !== path.basename(link.file) || !this.shown(link.threadId)) return undefined;
+      try {
+        const found = await stat(link.file);
+        return found.isFile() && found.size <= MAX_SERVED_BYTES
+          ? { file: link.file, type, size: found.size }
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    }
     const real = await listedWorktreeFile(this.workspaceOf(link.threadId), file);
     if (!real) return undefined;
     try {

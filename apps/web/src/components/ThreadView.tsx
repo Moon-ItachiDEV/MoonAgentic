@@ -676,12 +676,13 @@ const FeedItem = memo(function FeedItem({
           {/* The team card shows the plan; its raw JSON is for the server only. */}
           {clamp ? (
             <Clamp>
-              <Answer text={item.text} live={live} />
+              <Answer text={item.text} live={live} threadId={thread.id} />
             </Clamp>
           ) : (
             <Answer
               text={thread.role === "lead" ? withoutTeamJson(item.text) : item.text}
               live={live}
+              threadId={thread.id}
             />
           )}
         </div>
@@ -709,8 +710,8 @@ const FeedItem = memo(function FeedItem({
 });
 
 /** An answer: while it is being written, its Markdown is worked out a few times a second. */
-function Answer({ text, live }: { text: string; live: boolean }) {
-  return <Markdown text={useLiveText(text, live)} />;
+function Answer({ text, live, threadId }: { text: string; live: boolean; threadId: string }) {
+  return <Markdown text={useLiveText(text, live)} threadId={threadId} />;
 }
 
 /**
