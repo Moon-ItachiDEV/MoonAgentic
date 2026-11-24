@@ -7,12 +7,15 @@ import { createPortal } from "react-dom";
 import {
   closeUpdateCard,
   formatSize,
+  type InstallWatch,
   installSteps,
+  lookFailure,
   openUpdateCard,
   PULL_COMMAND,
   readUpdateCard,
   subscribeUpdateCard,
   updateShown,
+  watchInstall,
   workingLine,
 } from "../app-update.ts";
 import { connection } from "../connection.ts";
@@ -302,8 +305,8 @@ function UpdateCard(props: { app: AppInfo; at: { top?: number; left?: number } }
   );
 }
 
-/** Seen installing on this screen: once the server is back, the new build is loaded. */
-let sawInstalling = false;
+/** What this screen saw of an install, kept while the host is drawn again. */
+let watch: InstallWatch = { saw: false, lost: false };
 
 /**
  * Mounted once: the card when opened, and the steps of an install over every screen, from
@@ -315,15 +318,16 @@ export function AppUpdateHost() {
   const app = state.app;
   const connected = state.status === "open";
   const installing = !!app?.update.phase;
-  if (app?.update.phase === "installing") sawInstalling = true;
-  const back = connected && !installing && sawInstalling;
+  const phase = app?.update.phase;
+  // Read during the drawing, kept after it: a drawing React throws away changes nothing.
+  const waitingBack = watchInstall(watch, phase, connected).watch.saw && !connected;
   useEffect(() => {
-    if (!back) return;
-    sawInstalling = false;
+    const next = watchInstall(watch, phase, connected);
+    watch = next.watch;
     // The server answers again: the page loads the version it now serves.
-    expectNewBuild();
-  }, [back]);
-  const overlay = app && (installing || (sawInstalling && !connected));
+    if (next.reload) expectNewBuild();
+  }, [phase, connected]);
+  const overlay = app && (installing || waitingBack);
   let card: ReactNode = null;
   if (overlay) {
     card = (
@@ -378,6 +382,7 @@ export function AppUpdateSettings(props: {
         : app.kind === "git"
           ? "Clone lancé avec pnpm start"
           : "Lancée pour le développement : elle ne se met pas à jour d'ici";
+  const failure = lookFailure(app);
   const checked = u.checkedAt ? ` · vérifiée ${seenAgo(u.checkedAt, Date.now())}` : "";
   return (
     <>
@@ -385,7 +390,12 @@ export function AppUpdateSettings(props: {
       <div className="set-card">
         <Row
           title={app.kind === "git" ? `Version ${app.version}` : `Version ${app.version}`}
-          text={`${where}${app.kind === "other" ? "" : checked}`}
+          text={
+            <>
+              {`${where}${app.kind === "other" ? "" : checked}`}
+              {failure && <span className="apu-look-err">{failure}</span>}
+            </>
+          }
         >
           {app.kind !== "other" && (
             <button

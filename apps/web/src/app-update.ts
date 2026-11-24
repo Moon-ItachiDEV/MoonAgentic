@@ -13,6 +13,17 @@ export function updateShown(app: AppInfo | null | undefined): app is AppInfo {
   return u.state === "failed" && !!u.version;
 }
 
+/**
+ * Why the last look found nothing, when it failed before any version was known: the pill
+ * does not show then, the settings still say it.
+ */
+export function lookFailure(app: AppInfo | null | undefined): string | undefined {
+  if (!app || app.kind === "other") return undefined;
+  const u = app.update;
+  if (u.state !== "failed" || u.version) return undefined;
+  return `Vérification impossible : ${u.error ?? "raison inconnue."}`;
+}
+
 /** The pill's words: what it is, and where it stands. */
 export function pillOf(app: AppInfo): {
   text: string;
@@ -111,6 +122,29 @@ export function updateNotice(
           ? "Télécharge-la pour remplacer l'app."
           : "À récupérer avec git pull.",
   };
+}
+
+/** What a screen saw of an install: begun, and the server gone meanwhile. */
+export interface InstallWatch {
+  saw: boolean;
+  lost: boolean;
+}
+
+/**
+ * Follows an install from one screen. From the copy of the database on (a phone on 4G can
+ * lose the server before the install itself begins), a screen that lost the server and
+ * hears it again loads the new build; one that never lost it (the copy failed, nothing was
+ * replaced) just forgets it.
+ */
+export function watchInstall(
+  was: InstallWatch,
+  phase: AppUpdate["phase"],
+  connected: boolean,
+): { watch: InstallWatch; reload: boolean } {
+  const saw = was.saw || !!phase;
+  const lost = saw && (was.lost || !connected);
+  if (saw && connected && !phase) return { watch: { saw: false, lost: false }, reload: lost };
+  return { watch: { saw, lost }, reload: false };
 }
 
 /** The command that brings a clone up to date, as the user runs it to start MoonAgentic. */

@@ -136,6 +136,25 @@ export const installerArgs = (installDir: string) => [
   `/D=${installDir}`,
 ];
 
+/**
+ * How the installer is spawned on Windows. Node would put `/D=` between quotes when the
+ * folder holds a space (« C:\Users\Prénom Nom\… »), and NSIS then ignores it: the command
+ * line is written as is. Only the installer's own path is quoted, so the installer still
+ * finds where its arguments start.
+ */
+export function installerSpawn(installer: string, installDir: string) {
+  return {
+    file: installer,
+    args: installerArgs(installDir),
+    options: {
+      argv0: `"${installer}"`,
+      windowsVerbatimArguments: true,
+      detached: true,
+      stdio: "ignore" as const,
+    },
+  };
+}
+
 async function sha256Of(file: string): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(file)) hash.update(chunk as Buffer);

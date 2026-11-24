@@ -23,7 +23,7 @@ import { ServerProcess, type ServerState } from "./server-process.ts";
 import { readSettings, writeSettings } from "./settings.ts";
 import { adoptLoginShellPath } from "./shell-path.ts";
 import { stateLabel, statusPage } from "./status-page.ts";
-import { installerArgs, Updater } from "./updater.ts";
+import { installerSpawn, Updater } from "./updater.ts";
 
 const APP_ID = "com.moonagentic.desktop";
 const PORT = Number(process.env.MOONAGENTIC_PORT ?? "4747");
@@ -137,10 +137,8 @@ async function installUpdate(): Promise<void> {
   }
   installing = true;
   await server.stop();
-  const child = spawn(installer, installerArgs(path.dirname(process.execPath)), {
-    detached: true,
-    stdio: "ignore",
-  });
+  const { file, args, options } = installerSpawn(installer, path.dirname(process.execPath));
+  const child = spawn(file, args, options);
   child.once("error", (error) => {
     installing = false;
     updater.fail(`L'installeur n'a pas pu démarrer : ${error.message}`);

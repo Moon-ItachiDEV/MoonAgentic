@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -6,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   installerArgs,
   installerOf,
+  installerSpawn,
   isNewer,
   parseNotes,
   readRelease,
@@ -124,6 +126,51 @@ describe("versions and notes", () => {
       "/D=C:\\Users\\moi\\AppData\\Local\\Programs\\MoonAgentic",
     ]);
   });
+});
+
+describe("starting the installer on Windows", () => {
+  it("writes the command line as is, the installer's own path between quotes", () => {
+    const run = installerSpawn("C:\\Users\\Prénom Nom\\setup.exe", "C:\\Programs\\MoonAgentic");
+    expect(run.options).toMatchObject({
+      argv0: '"C:\\Users\\Prénom Nom\\setup.exe"',
+      windowsVerbatimArguments: true,
+      detached: true,
+    });
+    expect(run.args.at(-1)).toBe("/D=C:\\Programs\\MoonAgentic");
+  });
+
+  // What the installer really receives: a program that reads its command line says it.
+  it.runIf(process.platform === "win32")(
+    "leaves /D= without quotes, with a space or an accent in the folder",
+    () => {
+      const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-args-"));
+      dirs.push(dir);
+      const script = path.join(dir, "args.js");
+      writeFileSync(script, "process.stdout.write(JSON.stringify(process.argv.slice(2)))");
+      const argsOf = (installDir: string) => {
+        const { options } = installerSpawn(process.execPath, installDir);
+        const out = spawnSync(process.execPath, [script, ...installerArgs(installDir)], {
+          argv0: options.argv0,
+          windowsVerbatimArguments: options.windowsVerbatimArguments,
+          encoding: "utf8",
+        });
+        return JSON.parse(out.stdout) as string[];
+      };
+      // The mini-PC's folder: an accent, no space. One argument, as it is.
+      expect(argsOf("C:\\Users\\BreezyHomeCinéma\\AppData\\Local\\Programs\\MoonAgentic")).toEqual([
+        "--updated",
+        "/S",
+        "--force-run",
+        "/D=C:\\Users\\BreezyHomeCinéma\\AppData\\Local\\Programs\\MoonAgentic",
+      ]);
+      // With a space, no quote is added: NSIS reads /D= to the end of the line, and Node,
+      // which splits on spaces, sees two pieces.
+      expect(argsOf("C:\\Users\\Prénom Nom\\MoonAgentic").slice(3)).toEqual([
+        "/D=C:\\Users\\Prénom",
+        "Nom\\MoonAgentic",
+      ]);
+    },
+  );
 });
 
 describe("Updater", () => {

@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   formatSize,
   installSteps,
+  lookFailure,
   pillOf,
   updateNotice,
   updateShown,
+  watchInstall,
   workingLine,
 } from "./app-update.ts";
 
@@ -117,5 +119,63 @@ describe("the notice of a version ready", () => {
     expect(updateNotice(a, "0.1.6")).toBeUndefined();
     expect(updateNotice({ ...a, notify: false }, null)).toBeUndefined();
     expect(updateNotice(app({ state: "downloading", version: "0.1.6" }), null)).toBeUndefined();
+  });
+});
+
+describe("an install seen from one screen", () => {
+  const follow = (steps: [AppUpdate["phase"], boolean][]) => {
+    let watch = { saw: false, lost: false };
+    const reloads: boolean[] = [];
+    for (const [phase, connected] of steps) {
+      const next = watchInstall(watch, phase, connected);
+      watch = next.watch;
+      reloads.push(next.reload);
+    }
+    return reloads;
+  };
+
+  it("loads the new build once the server is back", () => {
+    expect(
+      follow([
+        [undefined, true],
+        ["backup", true],
+        ["installing", true],
+        ["installing", false],
+        [undefined, true],
+      ]),
+    ).toEqual([false, false, false, false, true]);
+  });
+
+  it("also when the phone lost the server during the copy of the base", () => {
+    expect(
+      follow([
+        ["backup", true],
+        ["backup", false],
+        [undefined, true],
+      ]),
+    ).toEqual([false, false, true]);
+  });
+
+  it("forgets an install that never replaced anything", () => {
+    // The copy failed: the server never went away.
+    expect(
+      follow([
+        ["backup", true],
+        [undefined, true],
+        [undefined, false],
+        [undefined, true],
+      ]),
+    ).toEqual([false, false, false, false]);
+  });
+});
+
+describe("a look that failed before finding a version", () => {
+  it("is said in the settings", () => {
+    expect(lookFailure(app({ state: "failed", error: "GitHub a répondu 403." }))).toBe(
+      "Vérification impossible : GitHub a répondu 403.",
+    );
+    expect(lookFailure(app({ state: "failed", version: "0.1.6", error: "x" }))).toBeUndefined();
+    expect(lookFailure(app({ state: "none" }))).toBeUndefined();
+    expect(lookFailure(app({ state: "failed", error: "x" }, { kind: "other" }))).toBeUndefined();
   });
 });
