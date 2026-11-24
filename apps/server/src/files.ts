@@ -183,10 +183,23 @@ export function frontMatter(source: string): { fields: Record<string, string>; b
   const match = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(source);
   if (!match) return { fields: {}, body: source };
   const fields: Record<string, string> = {};
-  for (const line of (match[1] ?? "").split(/\r?\n/)) {
-    const field = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(line);
+  const lines = (match[1] ?? "").split(/\r?\n/);
+  for (let i = 0; i < lines.length; i += 1) {
+    const field = /^([A-Za-z][\w-]*):\s*(.*)$/.exec(lines[i]!);
     if (!field?.[1]) continue;
-    fields[field[1].toLowerCase()] = unquote((field[2] ?? "").trim());
+    let value = (field[2] ?? "").trim();
+    // A value on the lines set in under its key (`description: >` or `|`): one line of text.
+    if (/^[>|][-+]?$/.test(value)) {
+      const parts: string[] = [];
+      while (i + 1 < lines.length && (/^[ \t]/.test(lines[i + 1]!) || !lines[i + 1]!.trim())) {
+        i += 1;
+        if (lines[i]!.trim()) parts.push(lines[i]!.trim());
+      }
+      value = parts.join(" ");
+    } else {
+      value = unquote(value);
+    }
+    fields[field[1].toLowerCase()] = value;
   }
   return { fields, body: source.slice(match[0].length) };
 }

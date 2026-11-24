@@ -38,6 +38,9 @@ describe("project settings checks", () => {
     expect(skillProblem("revue.code", [found], undefined)).toMatch(/minuscules/);
     expect(skillProblem("revue-code", [found], undefined)).toBeUndefined();
     expect(skillProblem("Revue.Code", [found], found)).toBeUndefined();
+    // One found with a « : » keeps it; a new one cannot have one.
+    expect(skillProblem("design:review", [found], found)).toBeUndefined();
+    expect(skillProblem("design:review", [found], undefined)).toMatch(/minuscules/);
     expect(skillProblem("revue.code", [found], undefined)).not.toBeUndefined();
     const other = { ...found, name: "tests", path: ".agents/skills/tests/SKILL.md" };
     expect(skillProblem("TESTS", [found, other], found)).toMatch(/existe déjà/);

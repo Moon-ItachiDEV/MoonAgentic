@@ -114,11 +114,19 @@ function writeInside(dir: string, rel: string, text: string): void {
   }
 }
 
-/** A value as YAML reads it back the same: bare when plain, between double quotes otherwise. */
+/** Words YAML reads as a boolean or as null rather than as text, in any of its versions. */
+const YAML_WORDS = /^(?:true|false|yes|no|y|n|on|off|null|~)$/i;
+
+/**
+ * A value as YAML reads it back the same, as text: bare when plain, between double quotes
+ * otherwise, and always for what YAML would take for a boolean, null or a number.
+ */
 export function yamlValue(value: string): string {
-  return /^[\p{L}\p{N}][\p{L}\p{N} .,()'’/_-]*$/u.test(value) && !value.endsWith(" ")
-    ? value
-    : JSON.stringify(value);
+  const plain =
+    /^\p{L}[\p{L}\p{N} .,()'’/_-]*$/u.test(value) &&
+    !value.endsWith(" ") &&
+    !YAML_WORDS.test(value);
+  return plain ? value : JSON.stringify(value);
 }
 
 /**
@@ -133,9 +141,15 @@ export function withFrontMatter(
   const match = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(source);
   const lines = match ? (match[1] ?? "").split(/\r?\n/) : [];
   const set = new Set<string>();
+  // While on the lines of a value being replaced: those set in under its key, which a
+  // value written on several lines (`description: >`) has, go with it.
+  let replacing = false;
   const kept = lines.flatMap((line) => {
+    if (replacing && (/^[ \t]/.test(line) || !line.trim())) return [];
+    replacing = false;
     const key = /^([A-Za-z][\w-]*):/.exec(line)?.[1]?.toLowerCase();
     if (!key || !Object.hasOwn(fields, key)) return [line];
+    replacing = true;
     if (set.has(key)) return [];
     set.add(key);
     const value = fields[key];
