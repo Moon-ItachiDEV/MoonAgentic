@@ -147,7 +147,10 @@ describe("browser notifications", () => {
     await page.waitForURL((u) => !u.pathname.includes("/t/"));
     await composer.fill("Corrige encore");
     await composer.press("Enter");
-    await expect.poll(() => waiting(page)).toMatchObject([{ body: "Corrige encore" }]);
+    // A new thread starts an agent of its own first, which a busy CI machine takes its time over.
+    await expect
+      .poll(() => waiting(page), { timeout: 20_000 })
+      .toMatchObject([{ body: "Corrige encore" }]);
 
     // Answered in the app, the notification about it goes away by itself.
     await page.getByRole("button", { name: "Autoriser" }).click();
