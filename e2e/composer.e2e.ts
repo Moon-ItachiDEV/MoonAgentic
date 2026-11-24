@@ -367,7 +367,7 @@ describe("composer", () => {
     // In a conversation, the arrow goes back home, where the « Projets » tab opens the list.
     await page.setViewportSize({ width: 390, height: 780 });
     await page.getByRole("button", { name: "Retour", exact: true }).click();
-    await page.locator(".tabbar").getByRole("button", { name: "Projets" }).click();
+    await page.locator(".tabbar").getByRole("button", { name: "Projets", exact: true }).click();
     await more.click();
     // The sheet slides up: wait until it sits whole on the screen.
     await expect
@@ -396,7 +396,12 @@ describe("composer", () => {
       .getByRole("alertdialog", { name: "Retirer ce projet ?" })
       .getByRole("button", { name: "Retirer" })
       .click();
-    await page.getByText("Aucun projet pour l'instant.").waitFor();
+    // With no project left, the « Projets » section is not shown at all.
+    await expect
+      .poll(() =>
+        page.locator(".side-scroll").getByRole("button", { name: "Projets", exact: true }).count(),
+      )
+      .toBe(0);
     // The folder itself is left alone.
     expect(existsSync(path.join(project, "src/app.ts"))).toBe(true);
     await page.close();

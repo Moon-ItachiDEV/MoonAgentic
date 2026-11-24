@@ -535,19 +535,19 @@ export function Sidebar(props: {
         </button>
       </nav>
       <div className="side-scroll">
-        <button
-          className={`sec-h fold${projectsOpen ? "" : " shut"}`}
-          aria-expanded={projectsOpen}
-          onClick={() => {
-            setProjectsOpen(!projectsOpen);
-            writePref("projectsOpen", String(!projectsOpen));
-          }}
-        >
-          <span>Projets</span>
-          <IconChevron size={13} />
-        </button>
-        {projectsOpen && state.ready && state.projects.length === 0 && (
-          <div className="empty-note">Aucun projet pour l'instant.</div>
+        {/* No projects, no section: « Nouveau projet » above stays the way in. */}
+        {state.projects.length > 0 && (
+          <button
+            className={`sec-h fold${projectsOpen ? "" : " shut"}`}
+            aria-expanded={projectsOpen}
+            onClick={() => {
+              setProjectsOpen(!projectsOpen);
+              writePref("projectsOpen", String(!projectsOpen));
+            }}
+          >
+            <span>Projets</span>
+            <IconChevron size={13} />
+          </button>
         )}
         {(projectsOpen ? pinnedFirst(state.projects) : []).flatMap(project)}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
