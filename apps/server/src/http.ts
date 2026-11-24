@@ -13,6 +13,7 @@ import { AttachmentRefused } from "./attachments.ts";
 import { ARTIFACTS_PATH } from "./artifacts.ts";
 import { COORDINATOR_PATH } from "./coordinator-tools.ts";
 import { Devices } from "./devices.ts";
+import type { DiagnosticsMonitor } from "./diagnostics.ts";
 import { type Client, CoordinatorRefused, type Hub } from "./hub.ts";
 import { findRemoteAccess } from "./remote.ts";
 
@@ -37,6 +38,8 @@ export const TOKEN_RENEWED = 4001;
 export const DEVICE_REVOKED = 4003;
 /** A pairing request is a code and a device name: never large. */
 const MAX_PAIR_BODY = 4 * 1024;
+/** A browser error report is a short message and clipped stack: never large. */
+const MAX_CLIENT_ERROR_BODY = 8 * 1024;
 
 /** Who a request comes from: the computer's own token, or a paired device. */
 type Who = { owner: true } | { owner: false; deviceId: string };
@@ -417,8 +420,10 @@ export function createHttpServer(options: {
   rateLimit?: RateLimitOptions;
   /** The paired devices; kept in memory alone when not given. */
   devices?: Devices;
+  /** Runtime crash & performance diagnostics monitor. */
+  diagnostics?: DiagnosticsMonitor;
 }): Server {
-  const { hub, webDir } = options;
+  const { hub, webDir, diagnostics } = options;
   let token = options.token;
   const devices = options.devices ?? new Devices();
   const identify = (given: string | null): Who | undefined => {
@@ -661,6 +666,51 @@ export function createHttpServer(options: {
         (error: unknown) =>
           json(res, 500, { message: error instanceof Error ? error.message : String(error) }),
       );
+      return;
+    }
+    if (req.url === "/api/diagnostics") {
+      const who = authGate();
+      if (!who) return;
+      if (req.method !== "GET") {
+        res.writeHead(405).end();
+        return;
+      }
+      if (!diagnostics) {
+        return json(res, 503, { message: "Diagnostic indisponible sur ce serveur." });
+      }
+      diagnostics.buildReport().then(
+        (report) => {
+          if (!res.writableEnded) json(res, 200, report);
+        },
+        (error: unknown) => {
+          if (!res.writableEnded) {
+            json(res, 500, { message: error instanceof Error ? error.message : String(error) });
+          }
+        },
+      );
+      return;
+    }
+    if (req.url === "/api/client-error") {
+      const who = authGate();
+      if (!who) return;
+      if (req.method !== "POST") {
+        dropRest(req);
+        res.writeHead(405).end();
+        return;
+      }
+      if (!/^application\/json\s*(;|$)/i.test(req.headers["content-type"] ?? "")) {
+        dropRest(req);
+        return json(res, 415, { message: "Rapport d'erreur attendu en JSON." });
+      }
+      void readJson(req, MAX_CLIENT_ERROR_BODY).then((body) => {
+        if (diagnostics && body) {
+          const device = who.owner
+            ? "ordinateur"
+            : (devices.list().find((d) => d.id === who.deviceId)?.name ?? "appareil jumelé");
+          diagnostics.recordClientError(body, device);
+        }
+        if (!res.writableEnded) res.writeHead(204).end();
+      });
       return;
     }
     if (req.url === "/api/pair") {

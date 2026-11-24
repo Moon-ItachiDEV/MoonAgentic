@@ -1,5 +1,6 @@
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
+import type { AgentProcessRef, DiagnosticsMonitor } from "./diagnostics.ts";
 import { COMPUTER_ACTOR, ProjectLocks } from "./locks.ts";
 import {
   linkClaude,
@@ -393,6 +394,8 @@ export class Hub {
   private readonly pullRequests: () => PullRequests | undefined;
   /** The tool behind each call of a turn, by thread, for agents that name it. */
   private readonly toolNames = new Map<string, Map<string, string>>();
+  /** Optional runtime crash & performance monitor attached by the server. */
+  private diagnostics: DiagnosticsMonitor | undefined;
   /** The projects' coordinators. */
   readonly coordinators: Coordinators;
   /** Where this server answers a coordinator's bridge, once it listens. */
@@ -2290,6 +2293,7 @@ export class Hub {
     const turn = this.runTurn(thread, text, itemId, context, queued, images).finally(() => {
       const cancelled = this.cancelled.has(threadId);
       this.turns.delete(threadId);
+      this.diagnostics?.onActivityChanged();
       // What was said in this turn can be searched for without waiting on a search.
       this.indexSearchSoon();
       // A place is free for the first turn in line.
@@ -2362,6 +2366,7 @@ export class Hub {
       this.goOn(threadId, cancelled, failed, atOnce);
     });
     this.turns.set(threadId, turn);
+    this.diagnostics?.onActivityChanged();
   }
 
   /**
@@ -3584,6 +3589,7 @@ export class Hub {
       thread.kind === "coordinator"
         ? catalogMcp.filter((s) => s.name.trim().toLowerCase() !== RESERVED_MCP_NAME)
         : catalogMcp;
+    const startedAt = Date.now();
     const session = await AgentSession.start({
       launch: this.agents.launch(thread.agentId),
       cwd,
@@ -3602,6 +3608,15 @@ export class Hub {
           if (!owns()) return;
           this.pool.exited(thread.id);
           this.settlePermissions(thread.id);
+          if (reason && !this.closed && !this.cancelled.has(thread.id)) {
+            const summary = this.locks.isLocked(thread.projectId)
+              ? ""
+              : (reason.split(/\r?\n/)[0]?.trim().slice(0, 180) ?? "");
+            this.diagnostics?.recordSlow(
+              "agent-exit",
+              `${thread.agentId} arrêté : ${summary || "sortie imprévue"}`,
+            );
+          }
           if (reason && this.turns.has(thread.id) && !this.cancelled.has(thread.id)) {
             this.updateThread(thread.id, { status: "error", error: stoppedError(reason) });
           }
@@ -3620,6 +3635,14 @@ export class Hub {
         },
       },
     });
+    const startMs = Date.now() - startedAt;
+    if (startMs >= 5_000) {
+      this.diagnostics?.recordSlow(
+        "agent-start",
+        `démarrage lent ${thread.agentId} (${startMs} ms)`,
+        startMs,
+      );
+    }
     this.catalog.recordCheck(thread.agentId, { ok: true, version: session.agentVersion });
     try {
       this.catalog.learn(thread.agentId, session.model, session.settings, session.fresh);
@@ -3644,6 +3667,7 @@ export class Hub {
       throw error;
     }
     ready = true;
+    this.diagnostics?.onActivityChanged();
     return session;
   }
 
@@ -4091,6 +4115,43 @@ export class Hub {
   private sendToViewers(threadId: string, message: ServerMessage): void {
     for (const client of this.clients)
       if (client.openThreadIds?.has(threadId)) client.send(message);
+  }
+
+  /** Attaches the runtime crash & performance monitor created by the server. */
+  setDiagnostics(monitor: DiagnosticsMonitor | undefined): void {
+    this.diagnostics = monitor;
+  }
+
+  /** True when at least one project is locked via /lock. */
+  hasLockedProjects(): boolean {
+    return this.locks.any();
+  }
+
+  /** Number of active agent turns right now. */
+  get runningTurnCount(): number {
+    return this.turns.size;
+  }
+
+  /** Number of agent processes currently starting up. */
+  get startingAgentCount(): number {
+    return this.pool.startingCount;
+  }
+
+  /**
+   * Live agent processes for memory diagnostics: exposes only agent id, model, pid and running
+   * status — never project names, thread titles or file paths (/lock safe).
+   */
+  diagnosticAgents(): AgentProcessRef[] {
+    return this.pool.liveSessions().map(({ threadId, session }) => {
+      const thread = this.store.getThread(threadId);
+      const model = session.model?.current ?? thread?.model ?? undefined;
+      return {
+        agentId: thread?.agentId ?? "agent",
+        ...(model ? { model } : {}),
+        ...(session.pid !== undefined ? { pid: session.pid } : {}),
+        running: this.turns.has(threadId),
+      };
+    });
   }
 
   /** Tells every client how a sign-in to GitHub started from MoonAgentic ended. */

@@ -45,10 +45,12 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { AppFailed, ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { startUpdateBanner } from "./components/UpdateBanner.tsx";
+import { installGlobalErrorHandlers } from "./diagnostics.ts";
 import { startNotifications } from "./notifications.ts";
 import { startPush } from "./push.ts";
 import { applyTheme } from "./theme.ts";
 
+installGlobalErrorHandlers();
 applyTheme();
 startNotifications();
 startPush();

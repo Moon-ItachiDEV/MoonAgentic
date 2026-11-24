@@ -27,6 +27,7 @@ import {
 } from "../notifications.ts";
 import { lockSheet, toggleLock } from "../lock.ts";
 import { setDefault, useDefaults } from "../defaults.ts";
+import { copyDiagnosticText, downloadDiagnosticText } from "../diagnostics.ts";
 import { disablePush, enablePush, pushOn, pushReached, pushSupport } from "../push.ts";
 import type { PushSupport } from "../push-device.ts";
 import { desktopShell } from "../desktop.ts";
@@ -440,6 +441,79 @@ function LockCard(props: { projects: Project[]; lockPin: boolean }) {
   );
 }
 
+/** One-click redacted crash & multi-agent performance report export in Réglages › Général. */
+function DiagnosticsCard() {
+  const [busy, setBusy] = useState<"copy" | "download" | null>(null);
+  const [done, setDone] = useState<"copy" | "download" | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!done) return;
+    const timer = setTimeout(() => setDone(null), 2_500);
+    return () => clearTimeout(timer);
+  }, [done]);
+
+  const run = async (action: "copy" | "download") => {
+    setBusy(action);
+    setDone(null);
+    setError(null);
+    try {
+      const report = await connection.diagnostics();
+      if (action === "copy") {
+        const ok = await copyDiagnosticText(report.text);
+        if (!ok) {
+          downloadDiagnosticText(report.text, report.generatedAt);
+          setDone("download");
+          return;
+        }
+      } else {
+        downloadDiagnosticText(report.text, report.generatedAt);
+      }
+      setDone(action);
+    } catch (e: unknown) {
+      setError(reason(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <>
+      <h3 className="lk-h">Diagnostic</h3>
+      <div className="set-card">
+        <Row
+          title="Journaux et performances"
+          text={
+            error ??
+            "Mémoire globale et par agent (pics multi-agents), lenteurs et erreurs récentes, sans jetons ni secrets."
+          }
+        >
+          <div className="set-notif">
+            <button className="btn sm" disabled={busy !== null} onClick={() => void run("copy")}>
+              {busy === "copy"
+                ? "Préparation…"
+                : done === "copy"
+                  ? "Copié"
+                  : "Copier le diagnostic"}
+            </button>
+            <button
+              className="btn quiet sm"
+              disabled={busy !== null}
+              onClick={() => void run("download")}
+            >
+              {busy === "download"
+                ? "Préparation…"
+                : done === "download"
+                  ? "Téléchargé"
+                  : "Télécharger"}
+            </button>
+          </div>
+        </Row>
+      </div>
+    </>
+  );
+}
+
 /**
  * The single agent + model menu of one coordinator route: the favorites (or every model when
  * there are none), grouped by agent, with the chosen agent's badge beside it.
@@ -570,6 +644,7 @@ export function SettingsPage(props: {
             <NotificationsRow />
           </div>
           <LockCard projects={props.projects} lockPin={props.lockPin} />
+          <DiagnosticsCard />
         </>
       );
       break;

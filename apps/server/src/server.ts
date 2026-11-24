@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Agents } from "./agents.ts";
@@ -6,7 +6,9 @@ import { serverArgs } from "./args.ts";
 import { dailyBackups } from "./backups.ts";
 import { preparePrivateDataDir } from "./data-dir.ts";
 import { Devices } from "./devices.ts";
-import { createHttpServer, newToken } from "./http.ts";
+import { DiagnosticsMonitor } from "./diagnostics.ts";
+import { setSlowGitListener } from "./git.ts";
+import { buildId, createHttpServer, newToken } from "./http.ts";
 import { GithubAccount, setGithubAccount } from "./github-account.ts";
 import { systemVault } from "./github-vault.ts";
 import { Hub } from "./hub.ts";
@@ -20,6 +22,20 @@ import {
 } from "./instance.ts";
 import { defaultReaders } from "./quotas.ts";
 import { Store } from "./store.ts";
+
+function readAppVersion(webDir: string): string | undefined {
+  const fromEnv = process.env.MOONAGENTIC_APP_VERSION?.trim();
+  if (fromEnv) return fromEnv;
+  try {
+    const pkg = JSON.parse(
+      readFileSync(fileURLToPath(new URL("../../desktop/package.json", import.meta.url)), "utf8"),
+    ) as { version?: unknown };
+    if (typeof pkg.version === "string" && pkg.version.trim()) return pkg.version.trim();
+  } catch {
+    // Packaged or standalone layout without sibling desktop package.json.
+  }
+  return buildId(webDir) ?? undefined;
+}
 
 // The server itself; `bin.ts` runs it under a supervisor that restarts it after a crash.
 const values = serverArgs();
@@ -65,16 +81,32 @@ const github = new GithubAccount({
 setGithubAccount(github);
 void github.currentToken();
 const demo = !!(values.dev || values.demo);
+const worktreesDir = path.join(dataDir, "worktrees");
 const hub = new Hub(store, new Agents({ demo }), {
   dataDir,
-  worktreesDir: path.join(dataDir, "worktrees"),
+  worktreesDir,
   quotaReaders: defaultReaders({ demo }),
 });
+const diagnostics = new DiagnosticsMonitor({
+  dataDir,
+  logDir: path.join(dataDir, "logs"),
+  worktreesDir,
+  getAgents: () => hub.diagnosticAgents(),
+  getRunningTurns: () => hub.runningTurnCount,
+  getStartingAgents: () => hub.startingAgentCount,
+  hasLockedProjects: () => hub.hasLockedProjects(),
+  appVersion: readAppVersion(webDir),
+});
+hub.setDiagnostics(diagnostics);
+setSlowGitListener((subcommand, ms) =>
+  diagnostics.recordSlow("git", `git lent (${subcommand}, ${ms} ms)`, ms),
+);
 // Images joined to a message that was never sent, left from an earlier run.
 hub.attachments.sweep();
 const server = createHttpServer({
   hub,
   token,
+  diagnostics,
   // Each paired phone or tablet, with its own token, kept in the database.
   devices: new Devices(store),
   // Written whole beside the old one, then put in its place: a power cut keeps one of the two.
@@ -106,6 +138,8 @@ const stop = async (code: number) => {
   if (stopping) return;
   stopping = true;
   setTimeout(() => process.exit(code), STOP_LIMIT_MS).unref();
+  diagnostics.stop();
+  setSlowGitListener(undefined);
   // No new copy of the database starts while the server stops; one under way ends first.
   const backupsDone = backups.stop();
   try {
