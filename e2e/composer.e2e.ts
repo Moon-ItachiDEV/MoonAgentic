@@ -149,7 +149,7 @@ describe("composer", () => {
     await composer(page).press("Enter");
     expect(await composer(page).inputValue()).toBe("/deploy ");
     await composer(page).fill("");
-    await composer(page).fill("/rev");
+    await composer(page).fill("/revi");
     await composer(page).press("Enter");
     await expect.poll(() => composer(page).inputValue()).toContain("Relis les changements");
     // `/` opens the commands after a space in the middle of a message too, and the picked one

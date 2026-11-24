@@ -22,6 +22,7 @@ export type AppAction =
   | "archive"
   | "delete"
   | "team"
+  | "review"
   | "schedule"
   | "goal"
   | "lock";
@@ -109,6 +110,14 @@ export function composerCommands(options: {
     "Confier la tâche à une équipe : un chef découpe, des codeurs en parallèle",
     "team",
   );
+  app.push({
+    name: "revue",
+    description: "Faire relire une PR par 3 agents à la fois : OpenAI, Anthropic et Google",
+    source: "app",
+    by: "MoonAgentic",
+    action: "review",
+    hint: "n° de PR",
+  });
   add("planifier", "Lancer une tâche plus tard, une fois ou à intervalles réguliers", "schedule");
   add("goal", "Donner un objectif : l'agent enchaîne les tours jusqu'à l'atteindre", "goal");
   if (inThread) {

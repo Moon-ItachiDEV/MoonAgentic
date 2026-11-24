@@ -33,6 +33,7 @@ import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MessageImages } from "./MessageImages.tsx";
 import { TeamCard } from "./TeamCard.tsx";
+import { ReviewCard } from "./ReviewCard.tsx";
 import { TeamStrip } from "./TeamStrip.tsx";
 import { withoutTeamJson } from "../team-json.ts";
 import { isTeamThread, teamFeed } from "../team-feed.ts";
@@ -375,9 +376,20 @@ function Conversation({
             onOpenThread={onOpenThread}
           />
         )}
+        {thread.prReview && (
+          <ReviewCard
+            thread={thread}
+            review={thread.prReview}
+            threads={threads}
+            agents={agents}
+            onOpenThread={onOpenThread}
+          />
+        )}
         {lead && (
           <button className="team-parent" onClick={() => onOpenThread(lead.id)}>
-            Sous-tâche de l'équipe « {lead.title.replace(/^Équipe : /, "")} »
+            {lead.prReview
+              ? `Relecteur de la « ${lead.title} »`
+              : `Sous-tâche de l'équipe « ${lead.title.replace(/^Équipe : /, "")} »`}
           </button>
         )}
         {earlier > 0 && (

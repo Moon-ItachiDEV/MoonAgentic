@@ -513,6 +513,68 @@ const app = acp
       return answer("Le travail est fait, sans oubli.\n\nVERDICT : OK");
     }
     if (ask.startsWith("Je n'ai pas trouvé ton verdict")) return answer("**VERDICT : OK**");
+    // A reviewer of « /revue »: findings on the first file changed, a little different from
+    // one model to the other, so they are put together as common and single points.
+    if (ask.startsWith("Tu relis la pull request #")) {
+      if (ask.includes("sans constats")) return answer("La PR me paraît correcte.");
+      const file = /^--- (\S+) \(/m.exec(ask)?.[1] ?? "README.md";
+      const precise = models.get(sessionId) === "precis";
+      const findings = precise
+        ? [
+            {
+              severity: "majeur",
+              file,
+              line: 2,
+              title: "La nouvelle valeur n'est vérifiée par aucun test",
+              detail: "Ajoute un test qui lit la valeur changée.",
+            },
+            {
+              severity: "mineur",
+              file,
+              line: 40,
+              title: "Le message d'erreur ne dit pas quoi faire",
+            },
+          ]
+        : [
+            {
+              severity: "critique",
+              file,
+              line: 1,
+              title: "Aucun test ne couvre la valeur changée",
+              detail: "Une régression passerait inaperçue : couvre-la par un test.",
+            },
+          ];
+      return answer("J'ai relu la PR.\n\n```json\n" + JSON.stringify({ findings }) + "\n```");
+    }
+    // The confrontation: the fast model disputes what it did not find, the precise one agrees.
+    if (ask.startsWith("Les autres relecteurs ont fini.")) {
+      const precise = models.get(sessionId) === "precis";
+      const verdicts = [...ask.matchAll(/^(\d+)\. \[[^\]]+\] .*, relevé par (.*)$/gm)].map((m) => {
+        const mine = /\btoi\b/.test(m[2] ?? "");
+        return {
+          point: Number(m[1]),
+          verdict: precise || mine ? "accord" : "désaccord",
+          reason:
+            precise || mine ? "Je le vois aussi dans le code." : "Ce cas ne peut pas arriver ici.",
+        };
+      });
+      return answer(
+        "Mon avis sur chaque point.\n\n```json\n" + JSON.stringify({ verdicts }) + "\n```",
+      );
+    }
+    // As the judge, it finds each disputed point real, but minor.
+    if (ask.startsWith("Tu es l'arbitre")) {
+      const rulings = [...ask.matchAll(/^(\d+)\. \[/gm)].map((m) => ({
+        point: Number(m[1]),
+        verdict: "réel",
+        severity: "mineur",
+        reason: "Le cas arrive bien, mais sans gros impact.",
+      }));
+      return answer("J'ai tranché.\n\n```json\n" + JSON.stringify({ rulings }) + "\n```");
+    }
+    if (ask.startsWith("Je n'ai pas trouvé ton bloc de constats")) {
+      return answer('```json\n{"findings": []}\n```');
+    }
     // A team's merger cannot settle a conflict, but checks the pieces together.
     // It gives up on a conflict as an agent might: it aborts the merge.
     if (ask.startsWith("Tu fusionnes le travail d'une équipe")) {
