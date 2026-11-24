@@ -70,4 +70,19 @@ describe("local files in answers", () => {
     expect(refName("C:\\Users\\a\\pingouin.jpg")).toBe("pingouin.jpg");
     expect(refName("file:///C:/a/b.png?x=1")).toBe("b.png");
   });
+
+  it("shows an image an answer only links to, unless it shows one already", () => {
+    const parse = (text: string) =>
+      new Marked(localFiles).parse(text, { async: false, gfm: true }) as string;
+    const alone = parse("Voici l'image :\n\n[naruto_1795.jpg](naruto_1795.jpg)");
+    expect(alone).toContain('<img src="#moon-file:naruto_1795.jpg" alt="naruto_1795.jpg"');
+    expect(alone).not.toContain("<a ");
+    // Not a web image, nor a file that is no image.
+    expect(parse("[a.png](https://example.com/a.png)")).toContain("<a ");
+    expect(parse("[notes](notes.md)")).toContain("<a ");
+    // An answer that shows its image keeps its links as links.
+    const both = parse("![lune](C:/a/lune.png)\n\n- [lune.png](lune.png)");
+    expect(both.match(/<img /g)).toHaveLength(1);
+    expect(both).toContain('<a href="#moon-file:lune.png"');
+  });
 });

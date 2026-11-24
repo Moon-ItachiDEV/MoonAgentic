@@ -71,18 +71,22 @@ export const Markdown = memo(function Markdown({
         const note = document.createElement("span");
         note.className = "md-img-gone";
         note.textContent = `Image indisponible : ${img.alt || refName(ref)}`;
-        img.replaceWith(note);
+        (img.parentElement?.classList.contains("md-img-box") ? img.parentElement : img).replaceWith(
+          note,
+        );
       };
       if (!threadId) {
         gone();
         continue;
       }
+      boxed(img, ref);
       const ask = () =>
         fileLink(threadId, ref).then((link) => {
           if (!current || !img.isConnected) return;
           img.classList.remove("waiting");
           img.src = link.url;
         }, gone);
+      img.onload = () => prepareShare(threadId, ref, img.currentSrc || img.src);
       // An address that no longer serves it, the server having started again: asked anew once.
       img.onerror = () => {
         img.onerror = gone;
@@ -104,6 +108,13 @@ export const Markdown = memo(function Markdown({
   const [opened, setOpened] = useState<string>();
   const open = (event: MouseEvent | KeyboardEvent) => {
     const target = event.target instanceof Element ? event.target : null;
+    const keep = target?.closest<HTMLButtonElement>("button[data-keep]");
+    if (keep && threadId) {
+      if ("key" in event) return;
+      event.preventDefault();
+      void keepImage(threadId, keep.dataset.keep ?? "");
+      return;
+    }
     const local = target?.closest<HTMLElement>("[data-local]");
     if (!local || !threadId) return;
     if ("key" in event && event.key !== "Enter" && event.key !== " ") return;
@@ -125,6 +136,83 @@ export const Markdown = memo(function Markdown({
     </>
   );
 });
+
+const KEEP_ICON =
+  '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10V2.5M5 5.25 8 2.25l3 3M4.5 7.5H4a1.5 1.5 0 0 0-1.5 1.5v3.5A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5V9A1.5 1.5 0 0 0 12 7.5h-.5"/></svg>';
+
+/**
+ * Puts an answer's image in a box of its own with, over its corner, what keeps it: shared to
+ * Photos or another app on a phone, downloaded on a computer. Drawn here, once the answer is
+ * cleaned: nothing an answer writes becomes a button.
+ */
+function boxed(img: HTMLImageElement, ref: string) {
+  if (img.parentElement?.classList.contains("md-img-box")) return;
+  const box = document.createElement("span");
+  box.className = "md-img-box";
+  img.replaceWith(box);
+  box.append(img);
+  const keep = document.createElement("button");
+  keep.type = "button";
+  keep.className = "md-img-keep";
+  keep.dataset.keep = ref;
+  const label = canShareFiles() ? "Partager l'image" : "Télécharger l'image";
+  keep.setAttribute("aria-label", label);
+  keep.title = label;
+  keep.innerHTML = KEEP_ICON;
+  box.append(keep);
+}
+
+function canShareFiles(): boolean {
+  try {
+    return (
+      typeof navigator.canShare === "function" &&
+      navigator.canShare({ files: [new File([""], "x.png", { type: "image/png" })] })
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The images already read, ready to share: a share sheet opens only right after the tap. */
+const ready = new Map<string, File>();
+const readyKey = (threadId: string, ref: string) => `${threadId}\n${ref}`;
+
+/** Reads a shown image once more, from the page's cache, so the tap can share it at once. */
+function prepareShare(threadId: string, ref: string, url: string) {
+  const key = readyKey(threadId, ref);
+  if (ready.has(key) || !canShareFiles()) return;
+  const link = knownLink(threadId, ref);
+  if (!link) return;
+  void fetch(url)
+    .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+    .then((blob) => {
+      ready.set(key, new File([blob], link.name, { type: link.mime }));
+      while (ready.size > 20) ready.delete(ready.keys().next().value!);
+    })
+    .catch(() => undefined);
+}
+
+/** Shares an image to the device's apps (Photos on an iPhone), or downloads it. */
+async function keepImage(threadId: string, ref: string) {
+  const file = ready.get(readyKey(threadId, ref));
+  if (file && canShareFiles() && navigator.canShare({ files: [file] })) {
+    try {
+      await navigator.share({ files: [file] });
+      return;
+    } catch (e) {
+      // The user closed the share sheet: nothing more to do.
+      if (e instanceof DOMException && e.name === "AbortError") return;
+    }
+  }
+  const link = await fileLink(threadId, ref).catch(() => undefined);
+  if (!link) return;
+  const a = document.createElement("a");
+  a.href = link.url;
+  a.download = link.name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+}
 
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   // A file of the computer: shown and opened in the app, from an address the server gives.

@@ -47,7 +47,11 @@ function startServer(port: string): Promise<string> {
   server = spawn(
     process.execPath,
     ["apps/server/src/bin.ts", "--demo", "--port", port, "--data-dir", path.join(dir, "data")],
-    { cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home }, stdio: "pipe" },
+    {
+      cwd: root,
+      env: { ...process.env, HOME: home, USERPROFILE: home, MOONAGENTIC_DEMO_IMAGE_MS: "2500" },
+      stdio: "pipe",
+    },
   );
   return new Promise<string>((resolve, reject) => {
     let out = "";
@@ -81,7 +85,7 @@ afterAll(async () => {
   }
 });
 
-async function newThread(page: Page) {
+async function newThread(page: Page, ask = "Stp génère une image d'un pingouin") {
   await page.goto(url);
   await page.getByRole("button", { name: "Nouveau projet" }).first().click();
   await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
@@ -94,7 +98,7 @@ async function newThread(page: Page) {
   await page.getByRole("button", { name: "Options", exact: true }).click();
   await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
   await page.keyboard.press("Escape");
-  await composer.fill("Stp génère une image d'un pingouin");
+  await composer.fill(ask);
   await composer.press("Enter");
 }
 
@@ -190,6 +194,41 @@ describe("generated image", () => {
     await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(480);
     expect(await image.getAttribute("src")).not.toBe(before);
     expect(await page.locator(".md-img-gone").count()).toBe(0);
+    await page.close();
+  });
+
+  it("is drawn in its place while generated, then shown though linked by its name alone", async () => {
+    const page = await browser.newPage({
+      viewport: { width: 1280, height: 820 },
+      acceptDownloads: true,
+    });
+    const errors: Error[] = [];
+    page.on("pageerror", (err) => errors.push(err));
+    await newThread(page, "Stp dessine une image de la lune");
+
+    // While the agent's image tool works: its place, the time spent, no made-up percentage.
+    const draft = page.locator(".img-draft");
+    await draft.waitFor();
+    expect(await draft.getByText("Esquisse en cours").count()).toBe(1);
+    expect(await draft.locator(".img-draft-time").textContent()).toMatch(/^\d+ s$/);
+    if (shots) await page.screenshot({ path: path.join(shots, "image-esquisse.png") });
+
+    // « [lune_….png](lune_….png) »: a name alone, the file in Antigravity's own folder.
+    const image = page.locator(".md img.md-img");
+    await image.waitFor({ timeout: 15_000 });
+    await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(480);
+    expect(await image.getAttribute("src")).toMatch(/\/lune_\d+\.png$/);
+    await expect.poll(() => draft.count()).toBe(0);
+    expect(await page.locator(".md a.md-file").count()).toBe(0);
+
+    // Over its corner, what keeps it: a download on a computer.
+    const keep = page.getByRole("button", { name: /l'image$/ });
+    await keep.waitFor();
+    const download = page.waitForEvent("download");
+    await keep.click();
+    expect((await download).suggestedFilename()).toMatch(/^lune_\d+\.png$/);
+    if (shots) await page.screenshot({ path: path.join(shots, "image-nom-seul.png") });
+    expect(errors).toEqual([]);
     await page.close();
   });
 });

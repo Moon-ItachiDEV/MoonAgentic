@@ -103,6 +103,35 @@ describe("resolveThreadFile", () => {
     },
   );
 
+  it("finds an image named alone in the folder where the agent generated it", async () => {
+    // Hydrogen, out of any project: « [naruto_1795.jpg](naruto_1795.jpg) », the file being in
+    // Antigravity's own conversation folder.
+    const root = tempDir();
+    const folder = path.join(root, "discussions");
+    const brain = path.join(root, "brain");
+    mkdirSync(folder, { recursive: true });
+    mkdirSync(path.join(brain, "conv-ancienne"), { recursive: true });
+    mkdirSync(path.join(brain, "conv-2"), { recursive: true });
+    writeFileSync(path.join(brain, "conv-2", "naruto_1795.jpg"), PNG);
+    writeFileSync(path.join(brain, "conv-2", "notes.md"), "# notes");
+    writeFileSync(path.join(root, "dehors.png"), PNG);
+
+    expect(await resolveThreadFile("naruto_1795.jpg", folder, [folder], [brain])).toMatchObject({
+      name: "naruto_1795.jpg",
+      type: "image/jpeg",
+    });
+    // Not without the generated folders, nor what is not shown, nor out of them.
+    expect(await resolveThreadFile("naruto_1795.jpg", folder, [folder])).toBeUndefined();
+    for (const refused of ["notes.md", "../../dehors.png", "absent.jpg"]) {
+      expect(await resolveThreadFile(refused, folder, [folder], [brain]), refused).toBeUndefined();
+    }
+    // The thread's own file comes first.
+    writeFileSync(path.join(folder, "naruto_1795.jpg"), Buffer.concat([PNG, PNG]));
+    expect(await resolveThreadFile("naruto_1795.jpg", folder, [folder], [brain])).toMatchObject({
+      size: PNG.length * 2,
+    });
+  });
+
   it("knows where agents keep what they generate", () => {
     expect(generatedFolders("/h")).toContain(path.join("/h", ".gemini", "antigravity", "brain"));
   });

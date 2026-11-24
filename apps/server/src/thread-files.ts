@@ -4,7 +4,7 @@
 // Such a path is served only when it leads to a file of a kind that is shown (an image, a
 // PDF, a page…), inside the thread's own folders or where agents keep what they generate.
 import { realpathSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAX_SERVED_BYTES, servedType } from "./artifacts.ts";
@@ -75,12 +75,14 @@ export interface ServedFile {
 /**
  * The file a reference of a thread's answer leads to, when it can be served: of a kind that
  * is shown, no bigger than served files are, and inside one of `roots` once every link is
- * followed. A relative one is looked for in `folder`.
+ * followed. A relative one is looked for in `folder`, then in `generated` and the folders right
+ * in them: an agent names the image it made by its name alone.
  */
 export async function resolveThreadFile(
   ref: string,
   folder: string,
   roots: string[],
+  generated: string[] = [],
 ): Promise<ServedFile | undefined> {
   const written = refPath(ref);
   if (!written) return undefined;
@@ -91,12 +93,33 @@ export async function resolveThreadFile(
   } catch {
     // kept as written
   }
-  const insideRoots = roots.map(real).filter((r): r is string => !!r);
-  for (const candidate of new Set([written, decoded])) {
+  const insideRoots = [...roots, ...generated].map(real).filter((r): r is string => !!r);
+  const candidates = [...new Set([written, decoded])];
+  const tried: string[] = [];
+  for (const candidate of candidates) {
     if (!servedType(candidate)) continue;
-    const absolute = path.isAbsolute(candidate) || /^[a-zA-Z]:[\\/]/.test(candidate);
-    const found = real(absolute ? candidate : path.resolve(folder, candidate));
-    if (!found || !insideRoots.some((root) => isInside(root, found))) continue;
+    tried.push(isAbsolute(candidate) ? candidate : path.resolve(folder, candidate));
+  }
+  const served = await firstServed(tried, insideRoots);
+  if (served) return served;
+  // A name alone (« naruto_1795544736202.jpg »): the agent wrote it as it sits in the folder
+  // where it generates, Antigravity's conversation (`brain/<id>/`), not in the thread's own.
+  const relative = candidates.filter((c) => servedType(c) && !isAbsolute(c));
+  if (!relative.length || !generated.length) return undefined;
+  const elsewhere: string[] = [];
+  for (const dir of await generatedDirs(generated)) {
+    for (const c of relative) elsewhere.push(path.resolve(dir, c));
+  }
+  return firstServed(elsewhere, insideRoots);
+}
+
+const isAbsolute = (file: string) => path.isAbsolute(file) || /^[a-zA-Z]:[\\/]/.test(file);
+
+/** The first of `files` that can be served, once every link is followed. */
+async function firstServed(files: string[], roots: string[]): Promise<ServedFile | undefined> {
+  for (const candidate of files) {
+    const found = real(candidate);
+    if (!found || !roots.some((root) => isInside(root, found))) continue;
     // The kind is the real file's: a link named `.png` to something else is not an image.
     const type = servedType(found);
     if (!type) continue;
@@ -109,4 +132,36 @@ export async function resolveThreadFile(
     }
   }
   return undefined;
+}
+
+/** At most this many of an agent's conversations are looked in for a name alone. */
+const MAX_GENERATED_DIRS = 400;
+
+/**
+ * The folders where a name alone may be: each generated folder, then the folders right in
+ * it (one per conversation), the most recently changed first.
+ */
+async function generatedDirs(generated: string[]): Promise<string[]> {
+  const dirs: string[] = [];
+  const subs: { dir: string; at: number }[] = [];
+  for (const root of generated) {
+    dirs.push(root);
+    let entries;
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(root, entry.name);
+      try {
+        subs.push({ dir, at: (await stat(dir)).mtimeMs });
+      } catch {
+        // gone since
+      }
+    }
+  }
+  subs.sort((a, b) => b.at - a.at);
+  return [...dirs, ...subs.slice(0, MAX_GENERATED_DIRS).map((s) => s.dir)];
 }

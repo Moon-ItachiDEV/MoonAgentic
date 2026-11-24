@@ -3,7 +3,7 @@
 // such a path, and a phone or a tablet has no such file: the server gives a short-lived
 // address of its own for each, if the file is one it may show.
 import type { ServerMessage } from "@moonagentic/protocol";
-import type { MarkedExtension, Tokens } from "marked";
+import type { MarkedExtension, Token, Tokens } from "marked";
 import { connection, newId } from "./connection.ts";
 
 /** What an answer's local link or image is rewritten to, before it is cleaned. */
@@ -36,8 +36,49 @@ export function writtenRef(token: { raw: string; href: string }): string {
   return written?.[1] ?? written?.[2] ?? token.href;
 }
 
+/** Whether a file's name says it is an image the thread shows. */
+export const isImageRef = (ref: string) => /\.(png|jpe?g|gif|webp|avif|bmp)$/i.test(refName(ref));
+
+/** Every token of a parsed answer, those inside others included. */
+function allTokens(tokens: Token[], into: Token[] = []): Token[] {
+  for (const token of tokens) {
+    into.push(token);
+    const inner = token as { tokens?: Token[]; items?: Token[] };
+    if (inner.tokens) allTokens(inner.tokens, into);
+    if (inner.items) allTokens(inner.items, into);
+  }
+  return into;
+}
+
 /** Marks the links and images of an answer that name local files, to be shown from the server. */
 export const localFiles: MarkedExtension = {
+  hooks: {
+    // An agent that generated an image often only links to it (« [naruto.jpg](naruto.jpg) »):
+    // the image is shown in its place, as it would be had it written `![…](…)`. When the
+    // answer shows an image already, its links stay links.
+    processAllTokens(tokens) {
+      const all = allTokens(tokens);
+      if (all.some((t) => t.type === "image")) return tokens;
+      for (const token of all) {
+        if (token.type !== "link") continue;
+        const link = token as Tokens.Link;
+        const ref = writtenRef(link);
+        if (!isLocalRef(ref) || !isImageRef(ref)) continue;
+        const image: Tokens.Image = {
+          type: "image",
+          raw: link.raw,
+          href: link.href,
+          title: link.title ?? null,
+          text: link.text,
+          tokens: link.tokens,
+        };
+        for (const key of Object.keys(link))
+          delete (link as unknown as Record<string, unknown>)[key];
+        Object.assign(link, image);
+      }
+      return tokens;
+    },
+  },
   walkTokens(token) {
     if (token.type !== "image" && token.type !== "link") return;
     const link = token as Tokens.Image | Tokens.Link;
