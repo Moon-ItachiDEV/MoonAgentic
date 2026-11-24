@@ -135,6 +135,40 @@ describe("resolveThreadFile", () => {
   it("knows where agents keep what they generate", () => {
     expect(generatedFolders("/h")).toContain(path.join("/h", ".gemini", "antigravity", "brain"));
   });
+
+  it("finds the image Antigravity made from the app, kept apart from the desktop one's", async () => {
+    // The app runs Antigravity as `agy`, whose conversations are in `antigravity-cli`, not in
+    // `antigravity`; the home folder has an accent, as on the computer where it was missed.
+    const home = path.join(tempDir(), "BreezyHomeCinéma");
+    const folder = path.join(home, "MoonAgentic", "Discussions");
+    const conversation = path.join(home, ".gemini", "antigravity-cli", "brain", "1795544700000");
+    mkdirSync(folder, { recursive: true });
+    mkdirSync(conversation, { recursive: true });
+    mkdirSync(path.join(home, ".gemini", "antigravity", "brain"), { recursive: true });
+    const name = "naruto_sasuke_mcdonalds_1795544736202.jpg";
+    writeFileSync(path.join(conversation, name), PNG);
+
+    expect(await resolveThreadFile(name, folder, [folder], generatedFolders(home))).toMatchObject({
+      name,
+      type: "image/jpeg",
+    });
+  });
+
+  it("finds an image named alone a few folders below the conversation's", async () => {
+    const root = tempDir();
+    const folder = path.join(root, "discussions");
+    const brain = path.join(root, "brain");
+    mkdirSync(folder, { recursive: true });
+    mkdirSync(path.join(brain, "conv-1", "artifacts", "images"), { recursive: true });
+    mkdirSync(path.join(brain, "conv-1", "a", "b", "c"), { recursive: true });
+    writeFileSync(path.join(brain, "conv-1", "artifacts", "images", "chat_1.png"), PNG);
+    writeFileSync(path.join(brain, "conv-1", "a", "b", "c", "trop_loin.png"), PNG);
+
+    expect(await resolveThreadFile("chat_1.png", folder, [folder], [brain])).toMatchObject({
+      name: "chat_1.png",
+    });
+    expect(await resolveThreadFile("trop_loin.png", folder, [folder], [brain])).toBeUndefined();
+  });
 });
 
 describe("file.open", { timeout: 40_000 }, () => {
