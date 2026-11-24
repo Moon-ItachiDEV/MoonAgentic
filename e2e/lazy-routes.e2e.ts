@@ -146,7 +146,7 @@ describe("lazy-loaded routes", () => {
     await page.getByRole("button", { name: "Agents" }).click();
     await page.getByRole("heading", { name: "Agents" }).waitFor();
     await page.getByRole("button", { name: "Modèles" }).click();
-    await page.getByRole("heading", { name: "Modèles" }).waitFor();
+    await page.getByRole("heading", { name: "Modèles", exact: true }).waitFor();
     await page.getByRole("button", { name: "Serveurs MCP" }).click();
     await page.getByRole("heading", { name: "Serveurs MCP" }).waitFor();
 
