@@ -7,7 +7,7 @@ import { pinnedFirst, waitingCount } from "../project-threads.ts";
 import { isDiscussionsProject } from "../default-models.ts";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 import { readPref, writePref } from "../prefs.ts";
-import { RECENT, recentAlwaysShown } from "../recent.ts";
+import { recentAlwaysShown } from "../recent.ts";
 import {
   childrenOf as membersOf,
   conversationsByProject,
@@ -185,8 +185,14 @@ export function Sidebar(props: {
     setFoldedActive({ lead: activeLead, keys: next });
     if (unfolded.has(key)) toggle(key);
   };
-  const codeProjects = state.projects.filter((p) => !isDiscussionsProject(p));
-  const discussionsProject = state.projects.find(isDiscussionsProject);
+  // « Discussions » holds the conversations started outside any project: not a project of the
+  // user's, so it is not listed with them and its threads go under « Récents ».
+  const discussions = state.projects.find(isDiscussionsProject);
+  const discussionsId = discussions?.id;
+  // Its resolved ones have no project to sit under: they wait below « Récents ».
+  const discussionsResolved = archived.filter((t) => t.projectId === discussionsId);
+  const discussionsResolvedOpen = unfolded.has("resolved:discussions");
+  const codeProjects = state.projects.filter((p) => p.id !== discussionsId);
   // Opening a thread unfolds its project once, even when multi-project defaults it folded.
   const activeProject = active?.projectId;
   useEffect(() => {
@@ -195,7 +201,7 @@ export function Sidebar(props: {
     );
     if (
       activeProject &&
-      activeProject !== discussionsProject?.id &&
+      activeProject !== discussionsId &&
       !projectOpen(folds[activeProject], codeProjects.length === 1)
     ) {
       setFold(activeProject, true);
@@ -205,12 +211,23 @@ export function Sidebar(props: {
   }, [activeProject, activeLead]);
   const known = new Set(state.projects.map((p) => p.id));
   const pinned = [...byProject.values()].flat().filter((t) => t.pinned);
-  // Across projects, only when there are several; a thread whose project is gone too.
-  const recent = [...byProject.values()]
+  // Across projects, only when there are several; a thread whose project is gone too, and
+  // every conversation of « Discussions », which has no line of its own.
+  const recentAll = [...byProject.values()]
     .flat()
-    .filter((t) => !t.pinned && (codeProjects.length > 1 || !known.has(t.projectId)))
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, RECENT);
+    .filter(
+      (t) =>
+        !t.pinned &&
+        (codeProjects.length > 1 || !known.has(t.projectId) || t.projectId === discussionsId),
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const moreRecent = unfolded.has("more:recent");
+  const { always: recentShown, foldable: recentFoldable } = recentAlwaysShown(
+    recentAll,
+    members,
+    props.activeThreadId,
+  );
+  const recent = moreRecent ? recentAll : recentShown;
 
   // A team on one line, its members folded under it unless asked or one of them is open.
   const tree = (t: Thread, prefix: string) => {
@@ -542,77 +559,51 @@ export function Sidebar(props: {
         </button>
       </nav>
       <div className="side-scroll">
-        <button
-          className={`sec-h fold${projectsOpen ? "" : " shut"}`}
-          aria-expanded={projectsOpen}
-          onClick={() => {
-            setProjectsOpen(!projectsOpen);
-            writePref("projectsOpen", String(!projectsOpen));
-          }}
-        >
-          <span>Projets</span>
-          <IconChevron size={13} />
-        </button>
-        {projectsOpen && state.ready && codeProjects.length === 0 && (
-          <div className="empty-note">Aucun projet pour l'instant.</div>
+        {/* No projects, no section: « Nouveau projet » above stays the way in. */}
+        {codeProjects.length > 0 && (
+          <button
+            className={`sec-h fold${projectsOpen ? "" : " shut"}`}
+            aria-expanded={projectsOpen}
+            onClick={() => {
+              setProjectsOpen(!projectsOpen);
+              writePref("projectsOpen", String(!projectsOpen));
+            }}
+          >
+            <span>Projets</span>
+            <IconChevron size={13} />
+          </button>
         )}
         {(projectsOpen ? pinnedFirst(codeProjects) : []).flatMap(project)}
-        {discussionsProject &&
-          (() => {
-            const all = byProject.get(discussionsProject.id) ?? [];
-            const resolved = archived.filter((t) => t.projectId === discussionsProject.id);
-            if (!discussionsProject.locked && all.length === 0 && resolved.length === 0)
-              return null;
-            const { always, foldable } = recentAlwaysShown(all, members, props.activeThreadId);
-            const more = unfolded.has(`more:${discussionsProject.id}`);
-            const resolvedOpen = unfolded.has(`resolved:${discussionsProject.id}`);
-            return (
-              <>
-                <div className="sec-h">Discussions</div>
-                {discussionsProject.locked ? (
-                  <button
-                    className="more"
-                    onClick={() => props.onToggleLock(discussionsProject.id)}
-                  >
-                    <IconLock size={12} />
-                    Discussions verrouillées
-                  </button>
-                ) : (
-                  <>
-                    {(more ? all : always).flatMap((t) => tree(t, "disc:"))}
-                    {foldable > 0 && (
-                      <button
-                        className="more"
-                        aria-expanded={more}
-                        onClick={() => toggle(`more:${discussionsProject.id}`)}
-                      >
-                        {more ? "Voir moins" : `Voir plus (${foldable})`}
-                      </button>
-                    )}
-                    {resolved.length > 0 && (
-                      <>
-                        <button
-                          className={`more resolved${resolvedOpen ? " open" : ""}`}
-                          aria-expanded={resolvedOpen}
-                          onClick={() => toggle(`resolved:${discussionsProject.id}`)}
-                        >
-                          <IconArchive size={13} />
-                          Résolus ({resolved.length})
-                          <IconChevron size={11} />
-                        </button>
-                        {resolvedOpen &&
-                          resolved.map((t) => row(t, { key: `resolved:${t.id}`, child: true }))}
-                      </>
-                    )}
-                  </>
-                )}
-              </>
-            );
-          })()}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
         {pinned.flatMap((t) => tree(t, "pin:"))}
-        {recent.length > 0 && <div className="sec-h">Récents</div>}
+        {(recent.length > 0 || discussionsResolved.length > 0 || discussions?.locked) && (
+          <div className="sec-h">Récents</div>
+        )}
         {recent.flatMap((t) => tree(t, "recent:"))}
+        {recentFoldable > 0 && (
+          <button className="more" aria-expanded={moreRecent} onClick={() => toggle("more:recent")}>
+            {moreRecent ? "Voir moins" : `Voir plus (${recentFoldable})`}
+          </button>
+        )}
+        {discussions?.locked && (
+          <button className="more" onClick={() => props.onToggleLock(discussions.id)}>
+            <IconLock size={12} />
+            Discussions verrouillées
+          </button>
+        )}
+        {discussionsResolved.length > 0 && (
+          <button
+            className={`more resolved${discussionsResolvedOpen ? " open" : ""}`}
+            aria-expanded={discussionsResolvedOpen}
+            onClick={() => toggle("resolved:discussions")}
+          >
+            <IconArchive size={13} />
+            Résolus ({discussionsResolved.length})
+            <IconChevron size={11} />
+          </button>
+        )}
+        {discussionsResolvedOpen &&
+          discussionsResolved.map((t) => row(t, { key: `resolved:${t.id}`, child: true }))}
         <SidePullRequests threads={state.threads} onOpenThread={props.onOpenThread} />
       </div>
       {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}

@@ -54,6 +54,13 @@ describe("default models", () => {
   it("recognizes Discussions and treats home without a code project as loose mode", () => {
     expect(isDiscussionsProject({ name: "Discussions" })).toBe(true);
     expect(isDiscussionsProject({ name: "MoonAgentic" })).toBe(false);
+    // As the server makes it: in a folder of that name, a trailing separator or not.
+    expect(isDiscussionsProject({ name: "Discussions", path: "/home/a/Discussions" })).toBe(true);
+    expect(isDiscussionsProject({ name: "Discussions", path: "C:\\Users\\a\\Discussions\\" })).toBe(
+      true,
+    );
+    // A project of the user's that is only called so stays a project.
+    expect(isDiscussionsProject({ name: "Discussions", path: "/home/a/code/forum" })).toBe(false);
     expect(isDiscussionsProject(undefined)).toBe(false);
 
     // Home with only Discussions or no project starts on Hydrogen immediately.

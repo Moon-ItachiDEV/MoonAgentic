@@ -367,7 +367,7 @@ describe("composer", () => {
     // In a conversation, the arrow goes back home, where the « Projets » tab opens the list.
     await page.setViewportSize({ width: 390, height: 780 });
     await page.getByRole("button", { name: "Retour", exact: true }).click();
-    await page.locator(".tabbar").getByRole("button", { name: "Projets" }).click();
+    await page.locator(".tabbar").getByRole("button", { name: "Projets", exact: true }).click();
     await more.click();
     // The sheet slides up: wait until it sits whole on the screen.
     await expect
@@ -396,7 +396,12 @@ describe("composer", () => {
       .getByRole("alertdialog", { name: "Retirer ce projet ?" })
       .getByRole("button", { name: "Retirer" })
       .click();
-    await page.getByText("Aucun projet pour l'instant.").waitFor();
+    // With no project left, the « Projets » section is not shown at all.
+    await expect
+      .poll(() =>
+        page.locator(".side-scroll").getByRole("button", { name: "Projets", exact: true }).count(),
+      )
+      .toBe(0);
     // The folder itself is left alone.
     expect(existsSync(path.join(project, "src/app.ts"))).toBe(true);
     await page.close();
@@ -1028,6 +1033,40 @@ describe("composer", () => {
     await expect
       .poll(() => page.getByRole("slider", { name: /Effort/ }).getAttribute("aria-valuemax"))
       .toBe("3");
+    await page.close();
+  });
+  it("lists the conversations started outside a project under « Récents », not as a project", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    await page.locator("nav").getByRole("button", { name: "Nouvelle discussion" }).click();
+    await pickAgent(page, /Agent de démo/);
+    await page.keyboard.press("Escape");
+    await composer(page).fill("Une question hors projet");
+    await composer(page).press("Enter");
+    await page.waitForURL(/\/t\//);
+
+    const side = page.locator(".side-scroll");
+    // « Discussions » holds it, but is no project of the user's: no line of its own…
+    await side.getByRole("button", { name: "Une question hors projet" }).first().waitFor();
+    expect(await side.locator(".thr-row.proj", { hasText: "Discussions" }).count()).toBe(0);
+    // …the conversation is under « Récents ».
+    const headings = await side.locator(".sec-h").allTextContents();
+    const rows = await side.locator(".sec-h, .thr-row").allTextContents();
+    expect(headings).toContain("Récents");
+    expect(rows.indexOf("Récents")).toBeLessThan(
+      rows.findIndex((r) => r.includes("Une question hors projet")),
+    );
+    await shot(page, "c23-discussions-recents");
+
+    // Resolved, it has no project to sit under: « Résolus » below « Récents » keeps it.
+    // The demo agent waits for a yes to change a file: stopped first, so the turn is over.
+    await page.getByRole("button", { name: "Arrêter" }).click();
+    await expect.poll(() => page.getByRole("button", { name: "Arrêter" }).count()).toBe(0);
+    await page.getByRole("button", { name: "Actions du fil" }).click();
+    await page.getByRole("menuitem", { name: "Marquer résolu" }).click();
+    await page.getByText("Cette discussion est résolue.").waitFor();
+    await side.getByRole("button", { name: "Résolus (1)" }).click();
+    await side.getByRole("button", { name: "Une question hors projet" }).first().waitFor();
     await page.close();
   });
 });

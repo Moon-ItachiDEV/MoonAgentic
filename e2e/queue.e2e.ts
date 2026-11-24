@@ -107,8 +107,11 @@ describe("message queue", () => {
     await page.getByRole("button", { name: "Arrêter" }).waitFor();
     await expect
       .poll(() => composer.getAttribute("placeholder"))
-      // The model's name once the agent gave its models, its own name until then.
-      .toMatch(/^Ajouter une consigne pendant que (Démo rapide|Agent de démo) travaille…$/);
+      // Its own name until the agent gives its models, then the model: « Démo précis » is the
+      // demo agent's preferred one, « Démo rapide » what it says first.
+      .toMatch(
+        /^Ajouter une consigne pendant que (Démo précis|Démo rapide|Agent de démo) travaille…$/,
+      );
 
     // Written now, a message waits above the composer instead of being refused.
     await composer.fill("Ensuite, lance les tests");

@@ -37,9 +37,17 @@ export const coordinatorDefault = (
 export const looseDefault = (agents: AgentInfo[]): ModelPick | undefined =>
   findModel(agents, (t) => /hydrogen/i.test(t));
 
-/** True for the built-in « Discussions » folder that holds conversations outside any project. */
-export const isDiscussionsProject = (project: { name: string } | undefined): boolean =>
-  project?.name === "Discussions";
+/**
+ * True for the built-in « Discussions » folder that holds conversations outside any project:
+ * named so, in a folder named so (as the server makes it), so a project of the user's that is
+ * only called « Discussions » stays a project.
+ */
+export const isDiscussionsProject = (
+  project: { name: string; path?: string } | undefined,
+): boolean =>
+  project?.name === "Discussions" &&
+  (project.path === undefined ||
+    project.path.split(/[\\/]/).filter(Boolean).pop() === "Discussions");
 
 /**
  * True when the home composer is writing outside a code project (explicit « Nouvelle discussion »,
