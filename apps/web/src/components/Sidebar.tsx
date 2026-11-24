@@ -187,7 +187,11 @@ export function Sidebar(props: {
   };
   // « Discussions » holds the conversations started outside any project: not a project of the
   // user's, so it is not listed with them and its threads go under « Récents ».
-  const discussionsId = state.projects.find(isDiscussionsProject)?.id;
+  const discussions = state.projects.find(isDiscussionsProject);
+  const discussionsId = discussions?.id;
+  // Its resolved ones have no project to sit under: they wait below « Récents ».
+  const discussionsResolved = archived.filter((t) => t.projectId === discussionsId);
+  const discussionsResolvedOpen = unfolded.has("resolved:discussions");
   const codeProjects = state.projects.filter((p) => p.id !== discussionsId);
   // Opening a thread unfolds its project once, even when multi-project defaults it folded.
   const activeProject = active?.projectId;
@@ -572,13 +576,34 @@ export function Sidebar(props: {
         {(projectsOpen ? pinnedFirst(codeProjects) : []).flatMap(project)}
         {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
         {pinned.flatMap((t) => tree(t, "pin:"))}
-        {recent.length > 0 && <div className="sec-h">Récents</div>}
+        {(recent.length > 0 || discussionsResolved.length > 0 || discussions?.locked) && (
+          <div className="sec-h">Récents</div>
+        )}
         {recent.flatMap((t) => tree(t, "recent:"))}
         {recentFoldable > 0 && (
           <button className="more" aria-expanded={moreRecent} onClick={() => toggle("more:recent")}>
             {moreRecent ? "Voir moins" : `Voir plus (${recentFoldable})`}
           </button>
         )}
+        {discussions?.locked && (
+          <button className="more" onClick={() => props.onToggleLock(discussions.id)}>
+            <IconLock size={12} />
+            Discussions verrouillées
+          </button>
+        )}
+        {discussionsResolved.length > 0 && (
+          <button
+            className={`more resolved${discussionsResolvedOpen ? " open" : ""}`}
+            aria-expanded={discussionsResolvedOpen}
+            onClick={() => toggle("resolved:discussions")}
+          >
+            <IconArchive size={13} />
+            Résolus ({discussionsResolved.length})
+            <IconChevron size={11} />
+          </button>
+        )}
+        {discussionsResolvedOpen &&
+          discussionsResolved.map((t) => row(t, { key: `resolved:${t.id}`, child: true }))}
         <SidePullRequests threads={state.threads} onOpenThread={props.onOpenThread} />
       </div>
       {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}

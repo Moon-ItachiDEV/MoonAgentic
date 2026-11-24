@@ -1057,6 +1057,16 @@ describe("composer", () => {
       rows.findIndex((r) => r.includes("Une question hors projet")),
     );
     await shot(page, "c23-discussions-recents");
+
+    // Resolved, it has no project to sit under: « Résolus » below « Récents » keeps it.
+    // The demo agent waits for a yes to change a file: stopped first, so the turn is over.
+    await page.getByRole("button", { name: "Arrêter" }).click();
+    await expect.poll(() => page.getByRole("button", { name: "Arrêter" }).count()).toBe(0);
+    await page.getByRole("button", { name: "Actions du fil" }).click();
+    await page.getByRole("menuitem", { name: "Marquer résolu" }).click();
+    await page.getByText("Cette discussion est résolue.").waitFor();
+    await side.getByRole("button", { name: "Résolus (1)" }).click();
+    await side.getByRole("button", { name: "Une question hors projet" }).first().waitFor();
     await page.close();
   });
 });
