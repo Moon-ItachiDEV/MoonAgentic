@@ -1753,7 +1753,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     projectId: id,
     path: z.string().max(300).optional(),
     // As agents name them; a new one also needs a lower-case name, its folder's.
-    name: z.string().regex(/^[A-Za-z0-9][\w.-]{0,63}$/, "Un nom sans espace."),
+    name: z.string().regex(/^[A-Za-z0-9][\w.:-]{0,63}$/, "Un nom sans espace."),
     description: setupLine.refine((d) => d.length > 0, "Décris-la en une ligne."),
     body: setupText,
   }),

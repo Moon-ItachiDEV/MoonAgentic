@@ -455,7 +455,7 @@ function Conversation({
         {working && thread.quietSince && (
           <QuietNotice
             since={thread.quietSince}
-            name={agent?.name ?? "L'agent"}
+            name={agent ? speakerName(agent, thread) : "L'agent"}
             threadId={thread.id}
           />
         )}

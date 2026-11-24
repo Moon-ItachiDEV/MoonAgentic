@@ -5,7 +5,7 @@ import {
   type ProjectSetup,
   type ProjectSkill,
 } from "@moonagentic/protocol";
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import {
   claudeAction,
@@ -135,6 +135,12 @@ type Change = (message: SetupRequest) => Promise<void>;
 
 function LookTab({ project }: { project: Project }) {
   const [icon, setIcon] = useState(project.icon ?? "");
+  const field = useRef<HTMLInputElement>(null);
+  // Changed from another window: shown here too, unless the user is typing in the field,
+  // where the echo of what they typed a moment ago would undo what they type now.
+  useEffect(() => {
+    if (document.activeElement !== field.current) setIcon(project.icon ?? "");
+  }, [project.icon]);
   const problem = iconProblem(icon);
   const send = (next: { icon?: string | undefined; color?: ProjectColor | undefined }) =>
     connection.send({
@@ -159,6 +165,7 @@ function LookTab({ project }: { project: Project }) {
         <div className="ps-icons">
           <input
             id="ps-icon"
+            ref={field}
             value={icon}
             placeholder="🚀 ou AB"
             maxLength={16}
@@ -223,7 +230,8 @@ function RulesTab(props: { setup: ProjectSetup; projectId: string; change: Chang
     setDone(false);
     try {
       await props.change(message);
-      setDone(true);
+      // « Enregistré » is for AGENTS.md: linking CLAUDE.md shows « Relié » on its own line.
+      if (message.type === "project.saveRules") setDone(true);
     } catch (e) {
       setError(why(e));
     } finally {
@@ -362,6 +370,7 @@ function Editor(props: {
         Description{props.descriptionNeeded ? "" : " (facultative)"}
         <input
           value={draft.description}
+          maxLength={500}
           onChange={(e) => setDraft({ ...draft, description: oneLine(e.target.value) })}
         />
       </label>

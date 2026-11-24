@@ -42,6 +42,7 @@ import { connection, newId } from "../connection.ts";
 import { carriesFiles, IMAGE_ACCEPT, pastedImages } from "../images.ts";
 import { useImageDrafts } from "../use-image-drafts.ts";
 import { readPref, writePref } from "../prefs.ts";
+import { speakerName } from "../speaker.ts";
 import { quotaWarning, roomiest, tightest } from "../quotas.ts";
 import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
 import { AgentBadge } from "./AgentBadge.tsx";
@@ -776,6 +777,8 @@ export function Composer(props: {
     };
   }, [canTake]);
 
+  // The model that answers, as above its answers, rather than the program that runs it.
+  const speaker = agent && thread ? speakerName(agent, thread) : "l'agent";
   const placeholder = voice
     ? "Je t'écoute…"
     : props.placeholder
@@ -783,9 +786,9 @@ export function Composer(props: {
       : thread && running
         ? narrow
           ? "Ajouter une consigne…"
-          : `Ajouter une consigne pendant que ${agent?.name ?? "l'agent"} travaille…`
+          : `Ajouter une consigne pendant que ${speaker} travaille…`
         : thread
-          ? `Répondre à ${agent?.name ?? "l'agent"}…`
+          ? `Répondre à ${speaker}…`
           : narrow
             ? "Demande à tes agents…"
             : "Demande n'importe quoi à tes agents…";

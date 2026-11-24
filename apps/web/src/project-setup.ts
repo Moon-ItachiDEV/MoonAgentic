@@ -46,7 +46,7 @@ export function skillProblem(
   if (!name) return "Donne-lui un nom.";
   // A new one is named after its folder; one found in the project keeps its own.
   if (!editing && !NAME.test(name)) return "En minuscules, chiffres, - ou _, sans espace.";
-  if (editing && !/^[A-Za-z0-9][\w.-]{0,63}$/.test(name)) return "Un nom sans espace.";
+  if (editing && !/^[A-Za-z0-9][\w.:-]{0,63}$/.test(name)) return "Un nom sans espace.";
   const same = skills.find((s) => s.name.toLowerCase() === name.toLowerCase());
   if (same && same.path !== editing?.path) return `Une skill ${name} existe déjà.`;
   return undefined;

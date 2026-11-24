@@ -261,3 +261,40 @@ describe("what is not committed yet", () => {
     ]);
   });
 });
+
+describe("front matter written by hand", () => {
+  it("replaces a value written on several lines whole, and reads it as one line", () => {
+    const source =
+      "---\nname: revue\ndescription: >\n  Relire un diff\n  du plus grave au moins grave\nallowed-tools: Read\n---\nCorps\n";
+    expect(frontMatter(source).fields.description).toBe(
+      "Relire un diff du plus grave au moins grave",
+    );
+    expect(frontMatter(source).fields["allowed-tools"]).toBe("Read");
+    expect(withFrontMatter(source, { description: "Relire" }, "Corps")).toBe(
+      "---\nname: revue\ndescription: Relire\nallowed-tools: Read\n---\n\nCorps\n",
+    );
+  });
+
+  it("quotes what YAML would read as a boolean, null or a number", () => {
+    for (const value of ["true", "No", "null", "~", "123", "1.5", "0x1F", "on"]) {
+      expect(yamlValue(value)).toBe(JSON.stringify(value));
+    }
+    expect(yamlValue("Relire un diff")).toBe("Relire un diff");
+  });
+
+  it("saves a skill found with a « : » in its name, under the same name", () => {
+    const dir = folder({
+      ".claude/skills/review/SKILL.md": "---\nname: design:review\ndescription: x\n---\nA\n",
+    });
+    saveSkill(dir, {
+      path: ".claude/skills/review/SKILL.md",
+      name: "design:review",
+      description: "Relire le design",
+      body: "B",
+    });
+    expect(findSkills(dir, dir)[0]).toMatchObject({
+      name: "design:review",
+      description: "Relire le design",
+    });
+  });
+});
