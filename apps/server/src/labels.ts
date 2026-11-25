@@ -5,11 +5,12 @@
 /**
  * Characters that are not seen and change how a text reads. Those that reorder it: with one
  * (U+202E), a title written « Facture [U+202E]fdp.exe » reads « Facture exe.pdf », and a
- * command reads as another. Those that take no room, and control characters. The two joiners
- * that emoji and some scripts are written with (U+200C, U+200D) are not among them.
+ * command reads as another. Those that take no room, control characters, and the tags
+ * (U+E0000 to U+E007F), which are never drawn and can carry a whole text unseen. The two
+ * joiners that emoji and some scripts are written with (U+200C, U+200D) are not among them.
  */
 const UNSEEN =
-  /(?![\t\n\v\f\r])\p{Cc}|[\u00AD\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB]/gu;
+  /(?![\t\n\v\f\r])\p{Cc}|[\u00AD\u061C\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF\uFFF9-\uFFFB\u{E0000}-\u{E007F}]/gu;
 
 /** Line breaks and runs of spaces: a label is one line. */
 const BREAKS = /[\t\n\v\f\r \u2028\u2029]+/g;

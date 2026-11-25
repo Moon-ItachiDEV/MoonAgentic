@@ -82,25 +82,40 @@ const say = async (page: Page, text: string) => {
 };
 const keptToken = (page: Page) => page.evaluate(() => localStorage.getItem("moonagentic.token"));
 
+/** The app's own address written as raw HTML, each way a browser reads as "this server". */
+const APP_LINKS = [
+  ["Rafraîchir la session", "/#token=jeton-pose-par-l-agent"],
+  ["Reprendre où tu en étais", "?token=jeton-pose-par-l-agent"],
+  ["Appairer de nouveau", "/#pair=000000"],
+  ["Recharger", "http:/#token=jeton-pose-par-l-agent"],
+  ["Revenir à l'accueil", "APP/#token=jeton-pose-par-l-agent"],
+] as const;
+
 /**
  * What an agent can be told to write by a page or a file it read. The demo agent repeats its
  * message in its answer, then asks a permission: the answer is on screen with the request.
  */
-const HOSTILE = [
-  // The app's own classes: a veil over the whole screen that lets a tap through to what is
-  // under it, a dialog, a notice, each with what the app's code and styles know theirs by.
-  `<div class="presence closing"><div class="lk-scrim"><div class="lk-card"><h2>MoonAgentic se met à jour</h2><p>Touche l'écran pour continuer.</p></div></div></div>`,
-  `<div class="scrim"><div class="dialog" role="dialog" aria-modal="true" id="cf-title" name="body"><h2>Autoriser l'agent ?</h2></div></div>`,
-  `<div class="toast" data-state="open" tabindex="1">Mise à jour installée</div>`,
-  `<div class="offline" style="position:fixed;inset:0">Connexion perdue</div>`,
-  // What the browser itself lays over a page, and a drawing that leaves its frame.
-  `<dialog open>Session expirée</dialog>`,
-  `<svg width="20" height="20" overflow="visible"><rect x="-4000" y="-4000" width="8000" height="8000" fill="black"/></svg>`,
-  // A link to the app itself, which would give this device a token of the agent's choosing,
-  // and one drawn in a picture, which would take the app's own page elsewhere.
-  `[Ouvre ce lien pour rafraîchir](#token=jeton-pose-par-l-agent)`,
-  `<svg width="200" height="40"><a href="https://exemple.invalid/x"><text y="20">Reconnecte-toi</text></a></svg>`,
-].join("\n\n");
+const hostile = (app: string) =>
+  [
+    // The app's own classes: a veil over the whole screen that lets a tap through to what is
+    // under it, a dialog, a notice, each with what the app's code and styles know theirs by.
+    `<div class="presence closing"><div class="lk-scrim"><div class="lk-card"><h2>MoonAgentic se met à jour</h2><p>Touche l'écran pour continuer.</p></div></div></div>`,
+    `<div class="scrim"><div class="dialog" role="dialog" aria-modal="true" id="cf-title" name="body"><h2>Autoriser l'agent ?</h2></div></div>`,
+    `<div class="toast" data-state="open" tabindex="1">Mise à jour installée</div>`,
+    `<div class="offline" style="position:fixed;inset:0">Connexion perdue</div>`,
+    // What the browser itself lays over a page, and a drawing that leaves its frame.
+    `<dialog open>Session expirée</dialog>`,
+    `<svg width="20" height="20" overflow="visible"><rect x="-4000" y="-4000" width="8000" height="8000" fill="black"/></svg>`,
+    // Links to the app itself, which would give this device a token or a pairing code of the
+    // agent's choosing, each written another way, and one drawn in a picture, which would take
+    // the app's own page elsewhere.
+    ...APP_LINKS.map(([text, href]) => `<a href="${href.replace("APP", app)}">${text}</a>`),
+    `[Ouvre ce lien pour rafraîchir](#token=jeton-pose-par-l-agent)`,
+    `<svg width="200" height="40"><a href="https://exemple.invalid/x"><text y="20">Reconnecte-toi</text></a></svg>`,
+    // And what an honest answer links to: a page of another site, a letter to write.
+    `[La documentation](https://exemple.invalid/doc)`,
+    `<a href="mailto:equipe@exemple.invalid">Écrire à l'équipe</a>`,
+  ].join("\n\n");
 
 /** Where the pieces of the answers are, and what is under the pointer over the request. */
 const look = (page: Page) =>
@@ -144,8 +159,10 @@ const look = (page: Page) =>
         const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
         return !!top && row.contains(top);
       }),
-      tokenLinks: [...document.querySelectorAll(".md a[href]")].filter((a) =>
-        (a.getAttribute("href") ?? "").includes("token="),
+      // The links an answer keeps: those that lead out of the app, and no other.
+      links: [...document.querySelectorAll(".md a[href]")].map((a) => a.getAttribute("href")),
+      toApp: [...document.querySelectorAll<HTMLAnchorElement>(".md a[href]")].filter(
+        (a) => new URL(a.href).origin === location.origin,
       ).length,
       // Every link an answer keeps opens outside the app's own page.
       sameTab: [...document.querySelectorAll(".md a, .md area")].filter(
@@ -165,7 +182,8 @@ const CLEAN = {
   out: 0,
   corners: ["app", "app", "app", "app"],
   rows: [true, true, true],
-  tokenLinks: 0,
+  links: ["https://exemple.invalid/doc", "mailto:equipe@exemple.invalid"],
+  toApp: 0,
   sameTab: 0,
 };
 
@@ -184,7 +202,7 @@ describe("agent answers", () => {
     await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
     await page.keyboard.press("Escape");
 
-    await say(page, HOSTILE);
+    await say(page, hostile(new URL(url).origin));
     await card(page).getByRole("heading", { name: "Modifier src/app.ts" }).waitFor();
     await card(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
     thread = page.url();
@@ -196,10 +214,16 @@ describe("agent answers", () => {
     await answer.getByText("Touche l'écran pour continuer.").waitFor();
     await answer.getByText("Session expirée").waitFor();
     expect(await look(page)).toEqual(CLEAN);
-    // Its link into the page leads nowhere: the address stays what it was.
-    await answer.getByText("Ouvre ce lien pour rafraîchir").click();
+    // Its links to the app lead nowhere: the address stays what it was, and no page opens.
+    for (const text of ["Ouvre ce lien pour rafraîchir", ...APP_LINKS.map(([text]) => text)]) {
+      await answer.getByText(text).click();
+    }
     expect(page.url()).toBe(thread);
     expect(context.pages()).toHaveLength(1);
+    // The others open outside the app, as before.
+    const doc = answer.getByRole("link", { name: "La documentation" });
+    expect(await doc.getAttribute("target")).toBe("_blank");
+    expect(await doc.getAttribute("rel")).toBe("noopener noreferrer");
     await page.close();
   });
 

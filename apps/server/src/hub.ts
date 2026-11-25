@@ -4153,7 +4153,8 @@ export class Hub {
     signal?: AbortSignal,
   ): Promise<PermissionMode | null> {
     if (signal?.aborted) return Promise.resolve(null);
-    const preview = summaryOf(task, 80);
+    // The task is the coordinator's own words, and this is the request that opens the most.
+    const preview = summaryOf(plainLabel(task), 80);
     const id = `permission:${randomUUID()}`;
     this.putItem(coordinatorId, {
       id,

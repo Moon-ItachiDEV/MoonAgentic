@@ -434,7 +434,8 @@ describe("a project's coordinator", () => {
     // 1. Refusing cancels start_team without opening any team.
     const refusedReq = post(tokens[0]!, {
       tool: "start_team",
-      args: { task_key: "refuse", task: "Tâche refusée" },
+      // Written with a character that turns the end of the task around on screen.
+      args: { task_key: "refuse", task: "Tâche \u202Eeésufer\u202C" },
     });
     const askRefuse = () =>
       store
@@ -443,6 +444,10 @@ describe("a project's coordinator", () => {
           (i) => i.kind === "permission" && i.title.includes("accès complet") && i.outcome === null,
         );
     await soon(askRefuse).toBeTruthy();
+    // The request reads as the task is written: nothing in it reorders or hides.
+    expect(askRefuse()).toMatchObject({
+      title: "Lancer l'équipe en accès complet : Tâche eésufer",
+    });
     hub.respondToPermission(coordinatorId, askRefuse()!.id, "reject");
     expect((await refusedReq).status).toBe(400);
     expect(store.listThreads().some((t) => t.taskKey === "refuse")).toBe(false);

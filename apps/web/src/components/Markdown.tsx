@@ -223,8 +223,21 @@ async function keepImage(threadId: string, ref: string) {
   a.remove();
 }
 
-/** Whether a link only names a place in the page it is on, read as the browser reads it. */
-const inPage = (href: string) => [...href].find((c) => c > " ") === "#";
+/**
+ * Whether a link leads out of the app: to a page of another site, or to a letter to write.
+ * The address is read as the browser reads it, from the page it is on, so `#…`, `?…`, `/…`
+ * or `http:…` on the app's own server all count as the app itself.
+ */
+function leadsOut(href: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(href, document.baseURI);
+  } catch {
+    return false;
+  }
+  if (url.protocol === "mailto:") return true;
+  return (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin;
+}
 
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   // A file of the computer: shown and opened in the app, from an address the server gives.
@@ -259,10 +272,13 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     return;
   }
   if (node.tagName === "A") {
-    // A link into the page itself leads nowhere, an answer having no anchors: followed, it
-    // would only rewrite the app's own address, where a token or a pairing code is read.
-    if (inPage(node.getAttribute("href") ?? "")) {
+    // A link to the app itself leads nowhere, an answer having neither anchors nor pages of
+    // its own there: followed, it would open the app at an address of the answer's choosing,
+    // where a token or a pairing code is read.
+    if (!leadsOut(node.getAttribute("href") ?? "")) {
       node.removeAttribute("href");
+      node.removeAttribute("target");
+      node.removeAttribute("rel");
       return;
     }
     node.setAttribute("target", "_blank");

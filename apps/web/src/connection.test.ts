@@ -244,6 +244,21 @@ describe("Connection, opened from a link that carries a token", () => {
     expect(conn.getState().status).not.toBe("unauthorized");
   });
 
+  it("still tries what the tab was offered when the next address holds a token that cannot be sent", async () => {
+    // Such a token is no offer at all: it is taken out of the address, and takes nothing
+    // away from the one this tab was waiting on.
+    const { conn, saved, tried, tab } = await openFrom(
+      "http://127.0.0.1:4747/t/abc#token=%E2%80%AEjeton",
+      null,
+      "new-token",
+      "new-token",
+    );
+    expect(tried).toEqual(["new-token"]);
+    expect(saved).toEqual([["moonagentic.token", "new-token"]]);
+    expect(tab.size).toBe(0);
+    expect(conn.getState().status).not.toBe("unauthorized");
+  });
+
   it("remembers the link's token for its tab alone until the server answers", async () => {
     vi.useFakeTimers();
     FakeWebSocket.instances = [];

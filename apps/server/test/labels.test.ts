@@ -18,6 +18,8 @@ describe("plainLabel", () => {
     expect(plainLabel("Auto\u200Briser\u2060\uFEFF")).toBe("Autoriser");
     expect(plainLabel("rm\u0000 -rf\u0007 \u001B[31m/\u009B")).toBe("rm -rf [31m/");
     expect(plainLabel("soft\u00ADhyphen")).toBe("softhyphen");
+    // Tags are never drawn: a whole sentence can ride unseen in a title an agent then reads.
+    expect(plainLabel("Lire README.md\u{E0049}\u{E0067}\u{E006E}\u{E007F}")).toBe("Lire README.md");
   });
 
   it("makes one line of it", () => {
