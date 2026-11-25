@@ -1,6 +1,6 @@
 import type { AgentInfo, QuestionAnswer, Thread } from "@moonagentic/protocol";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { connection } from "../connection.ts";
+import { connection, newId } from "../connection.ts";
 import {
   answerText,
   cardKey,
@@ -44,6 +44,19 @@ interface Progress {
 }
 /** How long a request is too new for a key pressed outside the card to answer it. */
 const FRESH = 800;
+/**
+ * How long an answer the server is known to have gets for its request to leave the screen.
+ * A request still there after that was not taken: the card shows it again.
+ */
+const SETTLE_MS = 5_000;
+
+/** Whether an answer sent with this id still keeps its request off the card. */
+const answered = (sendId: string | undefined): boolean => {
+  if (!sendId) return false;
+  if (connection.waitsForConfirmation(sendId)) return true;
+  const at = connection.confirmedSince(sendId);
+  return at !== undefined && Date.now() - at < SETTLE_MS;
+};
 
 const fresh = (id: string): Progress => ({
   id,
@@ -69,9 +82,18 @@ export function DecisionCard(props: {
   agents: AgentInfo[];
   onOpenThread: (threadId: string, itemId: string) => void;
 }) {
-  // Answered here, a wait leaves at once, before the server says so: no second answer.
-  const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
-  const waits = props.waits.filter((w) => !sent.has(w.id));
+  // Answered here, a wait leaves at once, before the server says so: no second answer. Its
+  // answer may die with the connection: once the server has it, or it went again, a request
+  // still there comes back.
+  const [sent, setSent] = useState<ReadonlyMap<string, string>>(new Map());
+  const waits = props.waits.filter((w) => !answered(sent.get(w.id)));
+  const [, tick] = useState(0);
+  const settling = props.waits.some((w) => sent.has(w.id));
+  useEffect(() => {
+    if (!settling) return;
+    const timer = setInterval(() => tick((n) => n + 1), 1000);
+    return () => clearInterval(timer);
+  }, [settling]);
   const [current, setCurrent] = useState<string>();
   // « Plus tard » folds the requests that wait now: one that comes after opens the card again.
   const [later, setLater] = useState<ReadonlySet<string>>(new Set());
@@ -107,19 +129,27 @@ export function DecisionCard(props: {
   const previews = choices.some((c) => c.preview);
   const layout = !previews ? "rows" : narrow || choices.length > 4 ? "detail" : "tiles";
 
-  const done = (id: string) => setSent((s) => new Set(s).add(id));
+  const done = (id: string, sendId: string) => setSent((s) => new Map(s).set(id, sendId));
 
   /** Sends the whole answer of a question: every step's picks and words. */
   const answer = (w: Extract<Wait, { kind: "question" }>, answers: QuestionAnswer[]) => {
+    const sendId = newId();
     const ok =
       w.via === "form"
-        ? connection.send({ type: "question.respond", threadId: w.threadId, itemId: w.id, answers })
+        ? connection.send({
+            type: "question.respond",
+            threadId: w.threadId,
+            itemId: w.id,
+            answers,
+            sendId,
+          })
         : connection.send({
             type: "thread.send",
             threadId: w.threadId,
             text: answerText(w.questions, answers),
+            sendId,
           });
-    if (ok) done(w.id);
+    if (ok) done(w.id, sendId);
   };
 
   /** One question answered: the next one of the same wait, or the answer goes out. */
@@ -139,13 +169,15 @@ export function DecisionCard(props: {
       return;
     }
     if (wait.kind === "permission") {
+      const sendId = newId();
       const ok = connection.send({
         type: "permission.respond",
         threadId: wait.threadId,
         itemId: wait.id,
         optionId: choice.value,
+        sendId,
       });
-      if (ok) done(wait.id);
+      if (ok) done(wait.id, sendId);
     } else if (multi) {
       const on = p.picked.includes(choice.value);
       set({
@@ -164,14 +196,16 @@ export function DecisionCard(props: {
     if (!no) return;
     // The agent is still in its turn when it is refused: the server sends the words once
     // that turn is over.
+    const sendId = newId();
     const ok = connection.send({
       type: "permission.respond",
       threadId: wait.threadId,
       itemId: wait.id,
       optionId: no.optionId,
       followUp: text,
+      sendId,
     });
-    if (ok) done(wait.id);
+    if (ok) done(wait.id, sendId);
   };
 
   const confirm = () => {

@@ -40,6 +40,7 @@ import {
 } from "../dictation.ts";
 import { connection, newId } from "../connection.ts";
 import { carriesFiles, IMAGE_ACCEPT, pastedImages } from "../images.ts";
+import { readDraft, writeDraft } from "../drafts.ts";
 import { useImageDrafts } from "../use-image-drafts.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { looseDefault } from "../default-models.ts";
@@ -129,7 +130,12 @@ export function Composer(props: {
   onSchedule: (task: string) => void;
 }) {
   const { agents, thread, project } = props;
-  const [text, setText] = useState("");
+  // What was typed in this thread and not sent comes back with it.
+  const [text, setText] = useState(() => (thread ? readDraft(thread.id) : ""));
+  const draftOf = thread?.id;
+  useEffect(() => {
+    if (draftOf) writeDraft(draftOf, text);
+  }, [draftOf, text]);
   const [menu, setMenu] = useState(false);
   const [plusOpen, setPlusOpenNow] = useState(false);
   /** The sheet open from the « + » menu: the rest of what it offers, or where to work. */

@@ -353,6 +353,9 @@ function within(work: Promise<unknown>, ms: number): Promise<void> {
   });
 }
 
+/** How many of the user's last actions are known by their id, for one sent again. */
+const MAX_SENDS_KEPT = 5000;
+
 export class Hub {
   private readonly store: Store;
   private readonly agents: Agents;
@@ -949,6 +952,23 @@ export class Hub {
     }
   }
 
+  /**
+   * The user's actions a screen sent, by the id it gave them: one it sends again, its
+   * connection having died before it could tell whether this one got there, is done once.
+   */
+  private readonly sends = new Set<string>();
+
+  /** True when the action is one already done; else it is remembered, the oldest forgotten. */
+  private sentAgain(sendId: string): boolean {
+    if (this.sends.has(sendId)) return true;
+    this.sends.add(sendId);
+    if (this.sends.size > MAX_SENDS_KEPT) {
+      const oldest = this.sends.values().next().value;
+      if (oldest !== undefined) this.sends.delete(oldest);
+    }
+    return false;
+  }
+
   /** Does what a screen asks. A write the database refuses is said in the user's words. */
   async handle(client: Client, message: ClientMessage): Promise<void> {
     try {
@@ -965,6 +985,9 @@ export class Hub {
       throw new Error(ONLY_ON_COMPUTER);
     }
     if (this.refuseLocked(message)) return;
+    if ("sendId" in message && message.sendId !== undefined && this.sentAgain(message.sendId)) {
+      return;
+    }
     switch (message.type) {
       case "ping":
         client.send({ type: "pong" });

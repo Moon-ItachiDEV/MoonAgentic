@@ -56,6 +56,27 @@ export const PONG_TIMEOUT_MS = 8_000;
  * wait the usual time to find out.
  */
 export const WAKE_PONG_MS = 1_500;
+/**
+ * After an action of the user's, the server is pinged: an answer within this long says it got
+ * the action, since it answers in order. Without one the connection is dead, and the action
+ * goes again on the next one.
+ */
+export const CONFIRM_MS = 4_000;
+/** A ticket the server does not give within this long is asked for again. */
+export const TICKET_TIMEOUT_MS = 5_000;
+/** A connection that does not open within this long is given up for a new one. */
+export const OPEN_TIMEOUT_MS = 10_000;
+/** Said on the pairing screen of a device the computer took its access from. */
+export const DEVICE_REMOVED =
+  "Cet appareil a été retiré depuis l'ordinateur. Appaire-le à nouveau pour t'en servir.";
+/** Set on a device whose access was taken back, so that the reason survives a reload. */
+const REMOVED_KEY = "moonagentic.removed";
+/** Actions of the user's that are sent again when the connection died under them. */
+const KEPT_UNTIL_CONFIRMED = new Set(["thread.send", "permission.respond", "question.respond"]);
+/** At most this many actions wait to be sent again. */
+const MAX_UNCONFIRMED = 50;
+/** How long before it expires a ticket for the next connection is no longer used. */
+const SPARE_MARGIN_MS = 5000;
 /** Said when something the user did could not leave. */
 export const NOT_SENT =
   "Pas de connexion : ton action n'est pas partie. Réessaie une fois reconnecté.";
@@ -115,6 +136,33 @@ export function readTokens(): Tokens {
     // no storage for the tab: the offered token lives only in this page
   }
   return { offered: wellFormed(offered) ? offered : null, kept };
+}
+
+/** The token this device keeps now: another tab may have renewed it. */
+function storedToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** The token was taken from this device: it is forgotten, and why is remembered. */
+function forgetRemoved(): void {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.setItem(REMOVED_KEY, "1");
+  } catch {
+    // private mode: nothing was kept
+  }
+}
+
+function wasRemoved(): boolean {
+  try {
+    return localStorage.getItem(REMOVED_KEY) === "1";
+  } catch {
+    return false;
+  }
 }
 
 /** The server has answered for the token this tab was offered: it waits no more. */
@@ -254,6 +302,21 @@ export class Connection {
   private hurry = false;
   /** Incremented on each open attempt so superseded async ticket fetches never open a second socket. */
   private attempt = 0;
+  /** Calls off the ticket being asked for: the device came back, a new ask goes at once. */
+  private ticketAbort: AbortController | undefined;
+  /** The ticket for the next connection, given by the server on this one. */
+  private spare: { ticket: string; until: number } | undefined;
+  /**
+   * The user's actions sent and not yet known to have reached the server, oldest first: they
+   * go again, with the same `sendId`, on the next connection.
+   */
+  private unconfirmed: (ClientMessage & { sendId: string })[] = [];
+  /** Each ping on its way, oldest first, with the actions its answer confirms. */
+  private pings: string[][] = [];
+  /** Runs while a ping that confirms actions waits for its answer. */
+  private confirmTimer: ReturnType<typeof setTimeout> | undefined;
+  /** When each of the last actions was confirmed, by its `sendId`. */
+  private readonly confirmedAt = new Map<string, number>();
 
   constructor(options: ConnectionOptions = {}) {
     this.askTimeoutMs = options.askTimeoutMs ?? ASK_TIMEOUT_MS;
@@ -277,6 +340,7 @@ export class Connection {
         }
       });
     } else if (!this.usableToken()) {
+      if (wasRemoved()) this.pairError = DEVICE_REMOVED;
       this.state = { ...this.state, status: "unauthorized" };
     } else {
       void this.open();
@@ -291,7 +355,26 @@ export class Connection {
       document.addEventListener("visibilitychange", () => {
         if (document.visibilityState === "visible") wake();
       });
+      // Another tab renewed the token: this one goes on with it rather than ask to pair.
+      window.addEventListener("storage", (event) => {
+        if (event.key === TOKEN_KEY) this.tokenChanged(event.newValue);
+      });
     }
+  }
+
+  /** Takes the token another tab now keeps, and connects with it if this tab was refused. */
+  private tokenChanged(stored: string | null): boolean {
+    if (!wellFormed(stored) || stored === this.token) return false;
+    this.token = stored;
+    this.untried = null;
+    // Given for the token before: the server took it back with it.
+    this.spare = undefined;
+    if (this.state.status === "unauthorized") {
+      this.pairError = null;
+      this.set({ ...this.state, status: "connecting" });
+      void this.open();
+    }
+    return true;
   }
 
   private usableToken(): boolean {
@@ -305,6 +388,7 @@ export class Connection {
     forgetOffered();
     try {
       localStorage.setItem(TOKEN_KEY, token);
+      localStorage.removeItem(REMOVED_KEY);
     } catch {
       // private mode: the token lives only in this tab
     }
@@ -355,6 +439,10 @@ export class Connection {
       this.retryTimer = undefined;
       this.retry = 0;
       void this.open();
+    } else if (this.ticketAbort) {
+      // A ticket asked for on the network that was there before: asked again at once.
+      this.hurry = true;
+      this.ticketAbort.abort();
     }
   }
 
@@ -363,6 +451,7 @@ export class Connection {
     const socket = this.socket;
     if (socket?.readyState !== WebSocket.OPEN || this.pongTimer !== undefined) return;
     socket.send(JSON.stringify({ type: "ping" }));
+    this.pings.push([]);
     this.pongTimer = setTimeout(() => {
       this.pongTimer = undefined;
       // Back on the app: the user is looking, so the new connection does not wait either.
@@ -380,8 +469,68 @@ export class Connection {
   private stopHeartbeat(): void {
     clearInterval(this.pingTimer);
     clearTimeout(this.pongTimer);
+    clearTimeout(this.confirmTimer);
     this.pingTimer = undefined;
     this.pongTimer = undefined;
+    this.confirmTimer = undefined;
+    this.pings = [];
+  }
+
+  /**
+   * Pings after actions of the user's: the server answers pings in order, so the answer to
+   * this one says it got them. Without one in time the connection is dead: it is replaced,
+   * and they go again.
+   */
+  private confirm(socket: WebSocket): void {
+    const ids = this.unconfirmed.map((m) => m.sendId);
+    if (!ids.length) return;
+    socket.send(JSON.stringify({ type: "ping" }));
+    this.pings.push(ids);
+    if (this.confirmTimer !== undefined) return;
+    this.confirmTimer = setTimeout(() => {
+      this.confirmTimer = undefined;
+      if (this.socket !== socket) return;
+      this.hurry = true;
+      this.lost(socket, true);
+      try {
+        socket.close();
+      } catch {
+        // already gone
+      }
+    }, CONFIRM_MS);
+  }
+
+  /** The server answered the oldest ping on its way: what was sent before it got there. */
+  private ponged(): void {
+    const ids = this.pings.shift();
+    if (ids?.length) {
+      const done = new Set(ids);
+      this.unconfirmed = this.unconfirmed.filter((m) => !done.has(m.sendId));
+      const now = Date.now();
+      for (const id of ids) this.confirmedAt.set(id, now);
+      while (this.confirmedAt.size > MAX_UNCONFIRMED * 4) {
+        const oldest = this.confirmedAt.keys().next().value;
+        if (oldest === undefined) break;
+        this.confirmedAt.delete(oldest);
+      }
+    }
+    if (!this.pings.some((p) => p.length)) {
+      clearTimeout(this.confirmTimer);
+      this.confirmTimer = undefined;
+    }
+  }
+
+  /**
+   * Whether the server is known to have the action sent with this id: `undefined` while that
+   * is not known yet, else since when.
+   */
+  confirmedSince(sendId: string): number | undefined {
+    return this.confirmedAt.get(sendId);
+  }
+
+  /** Whether the action sent with this id waits to be known as received, or to go again. */
+  waitsForConfirmation(sendId: string): boolean {
+    return this.unconfirmed.some((m) => m.sendId === sendId);
   }
 
   subscribe = (listener: () => void) => {
@@ -577,45 +726,76 @@ export class Connection {
       }
       return false;
     }
+    if (KEPT_UNTIL_CONFIRMED.has(message.type)) {
+      const kept = { ...message, sendId: ("sendId" in message && message.sendId) || newId() };
+      this.socket.send(JSON.stringify(kept));
+      this.unconfirmed.push(kept as ClientMessage & { sendId: string });
+      if (this.unconfirmed.length > MAX_UNCONFIRMED) this.unconfirmed.shift();
+      this.confirm(this.socket);
+      return true;
+    }
     this.socket.send(JSON.stringify(message));
     return true;
   }
 
   private async open(): Promise<void> {
     const attempt = ++this.attempt;
-    let ticket: string | null = null;
-    try {
-      const response = await fetch("/api/ws-ticket", {
-        method: "POST",
-        headers: { authorization: `Bearer ${this.token ?? ""}` },
-      });
-      if (attempt !== this.attempt) return;
-      if (response.status === 401) {
-        if (this.renewal) {
-          await this.renewal;
-          if (attempt === this.attempt) void this.open();
+    // The ticket the server gave for this, if still good: no request goes before it.
+    const spare = this.spare;
+    this.spare = undefined;
+    let ticket: string | null = spare && spare.until > Date.now() ? spare.ticket : null;
+    if (!ticket) {
+      // A ticket asked for on a dead network may wait minutes: it is asked again before that.
+      const abort = new AbortController();
+      this.ticketAbort = abort;
+      // The browser sends it on a connection it keeps open, which may have died with the
+      // network: the next try takes another one, and the wait was already long enough.
+      const giveUp = setTimeout(() => {
+        this.hurry = true;
+        abort.abort();
+      }, TICKET_TIMEOUT_MS);
+      try {
+        const response = await fetch("/api/ws-ticket", {
+          method: "POST",
+          headers: { authorization: `Bearer ${this.token ?? ""}` },
+          signal: abort.signal,
+        });
+        if (attempt !== this.attempt) return;
+        if (response.status === 401) {
+          if (this.renewal) {
+            await this.renewal;
+            if (attempt === this.attempt) void this.open();
+            return;
+          }
+          // Another tab renewed the token meanwhile: this one goes on with it.
+          if (!this.untried && this.tokenChanged(storedToken())) {
+            void this.open();
+            return;
+          }
+          const refused = this.untried;
+          this.untried = null;
+          if (refused) forgetOffered();
+          if (refused && wellFormed(refused.kept)) {
+            // The link's token is not this server's: the device goes on with the one it kept.
+            this.token = refused.kept;
+            void this.open();
+            return;
+          }
+          this.set({ ...this.state, status: "unauthorized" });
           return;
         }
-        const refused = this.untried;
-        this.untried = null;
-        if (refused) forgetOffered();
-        if (refused && wellFormed(refused.kept)) {
-          // The link's token is not this server's: the device goes on with the one it kept.
-          this.token = refused.kept;
-          void this.open();
-          return;
+        if (response.ok) {
+          // Accepted: a token that came from the address is now the one this device keeps.
+          if (this.untried && this.token) this.keep(this.token);
+          const body = (await response.json().catch(() => null)) as { ticket?: unknown } | null;
+          if (typeof body?.ticket === "string" && body.ticket) ticket = body.ticket;
         }
-        this.set({ ...this.state, status: "unauthorized" });
-        return;
+      } catch {
+        // Network unreachable, or no answer in time: retry with backoff below.
+      } finally {
+        clearTimeout(giveUp);
+        if (this.ticketAbort === abort) this.ticketAbort = undefined;
       }
-      if (response.ok) {
-        // Accepted: a token that came from the address is now the one this device keeps.
-        if (this.untried && this.token) this.keep(this.token);
-        const body = (await response.json().catch(() => null)) as { ticket?: unknown } | null;
-        if (typeof body?.ticket === "string" && body.ticket) ticket = body.ticket;
-      }
-    } catch {
-      // Network unreachable: retry with backoff below.
     }
     if (attempt !== this.attempt) return;
     if (!ticket) {
@@ -629,7 +809,18 @@ export class Connection {
     const socket = new WebSocket(url);
     this.socket = socket;
     let opened = false;
+    // A connection asked for on a network that went away may never open, nor say so.
+    const notOpened = setTimeout(() => {
+      if (opened || this.socket !== socket) return;
+      this.lost(socket, false);
+      try {
+        socket.close();
+      } catch {
+        // already gone
+      }
+    }, OPEN_TIMEOUT_MS);
     socket.onopen = () => {
+      clearTimeout(notOpened);
       opened = true;
       this.retry = 0;
       // Connected: a pairing that failed earlier says nothing about a later loss of access.
@@ -647,6 +838,10 @@ export class Connection {
       if (this.pingMs > 0) this.pingTimer = setInterval(() => this.ping(), this.pingMs);
       for (const threadId of this.openThreadIds)
         socket.send(JSON.stringify(this.opening(threadId)));
+      // What the user did on the connection that died, unknown to have arrived, goes again:
+      // the server does each once, by its id.
+      for (const message of this.unconfirmed) socket.send(JSON.stringify(message));
+      this.confirm(socket);
     };
     socket.onmessage = (event) => {
       // A connection already given up on has nothing more to say.
@@ -663,6 +858,15 @@ export class Connection {
       // Any message is a sign of life.
       clearTimeout(this.pongTimer);
       this.pongTimer = undefined;
+      if (message.type === "pong") this.ponged();
+      if (message.type === "ws.ticket") {
+        // A little before the server stops taking it.
+        this.spare = {
+          ticket: message.ticket,
+          until: Date.now() + message.ttlMs - SPARE_MARGIN_MS,
+        };
+        return;
+      }
       const requestId = "requestId" in message ? message.requestId : undefined;
       if (requestId) {
         const pending = this.pending.get(requestId);
@@ -677,7 +881,10 @@ export class Connection {
       if (message.type === "append") this.setSoon(next);
       else this.set(next);
     };
-    socket.onclose = (event) => this.lost(socket, opened, event.code);
+    socket.onclose = (event) => {
+      clearTimeout(notOpened);
+      this.lost(socket, opened, event.code);
+    };
   }
 
   private scheduleRetry(): void {
@@ -702,6 +909,8 @@ export class Connection {
       p.reject(new Error("Connexion perdue."));
     }
     this.pending.clear();
+    // Access renewed or taken back: the ticket given on this connection went with it.
+    if (code === TOKEN_RENEWED || code === DEVICE_REVOKED) this.spare = undefined;
     this.set({ ...this.state, status: "closed" });
     const attempt = this.attempt;
     // A refused upgrade looks like any other failure; ask the server whether the token is the cause.
@@ -712,8 +921,14 @@ export class Connection {
     );
     void check.then((accepted) => {
       if (attempt !== this.attempt) return;
-      if (!accepted) return this.set({ ...this.state, status: "unauthorized" });
-      this.scheduleRetry();
+      if (accepted) return this.scheduleRetry();
+      // Renewed in another tab: this one goes on with the token it keeps now.
+      if (this.tokenChanged(storedToken())) return this.scheduleRetry();
+      if (code === DEVICE_REVOKED) {
+        forgetRemoved();
+        this.pairError = DEVICE_REMOVED;
+      }
+      this.set({ ...this.state, status: "unauthorized" });
     });
   }
 
@@ -721,6 +936,7 @@ export class Connection {
     try {
       const response = await fetch("/api/auth", {
         headers: { authorization: `Bearer ${this.token}` },
+        signal: AbortSignal.timeout(TICKET_TIMEOUT_MS),
       });
       return response.status !== 401;
     } catch {
