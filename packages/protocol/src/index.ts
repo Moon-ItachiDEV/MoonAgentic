@@ -1475,9 +1475,19 @@ export type ServerMessage =
   | { type: "done"; requestId: string }
   /** Answer to a `ping`: the connection is alive. */
   | { type: "pong" }
+  /**
+   * A single-use ticket for the connection that will replace this one, good for `ttlMs`:
+   * opening it again needs no request, which may go on a connection that died too.
+   */
+  | { type: "ws.ticket"; ticket: string; ttlMs: number }
   | { type: "error"; requestId?: string; message: string };
 
 const id = z.string().min(1).max(200);
+/**
+ * Names an action of the user's that a screen sends again when it cannot tell whether the
+ * server got it, a connection having died under it: the server does it once.
+ */
+const sendId = z.string().min(1).max(64);
 /** Who takes a role in a team: an agent, on one of its models or its own default. */
 const teamMember = z.object({ agentId: id, model: id.optional() }).strict();
 /** How many bytes a text takes in UTF-8. */
@@ -1670,7 +1680,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
   /** Marks every thread of the project as read. */
   z.object({ type: z.literal("project.markRead"), projectId: id }),
   z
-    .object({ type: z.literal("thread.send"), threadId: id, text: messageText, attachments })
+    .object({
+      type: z.literal("thread.send"),
+      threadId: id,
+      text: messageText,
+      attachments,
+      sendId: sendId.optional(),
+    })
     .refine(saysSomething),
   z.object({ type: z.literal("thread.cancel"), threadId: id }),
   /**
@@ -2238,6 +2254,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     itemId: id,
     optionId: id,
     followUp: z.string().trim().min(1).max(4000).optional(),
+    sendId: sendId.optional(),
   }),
   /** Answers a question the agent holds its turn on: one answer per question, in order. */
   z.object({
@@ -2253,6 +2270,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
       )
       .min(1)
       .max(8),
+    sendId: sendId.optional(),
   }),
 ]);
 export type ClientMessage = z.infer<typeof ClientMessage>;

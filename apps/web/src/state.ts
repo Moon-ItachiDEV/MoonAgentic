@@ -281,6 +281,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "fileLink":
     case "pushState":
     case "pong":
+    case "ws.ticket":
       return state;
   }
 }

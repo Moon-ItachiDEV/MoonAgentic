@@ -639,6 +639,33 @@ describe("the HTTP server", () => {
     here.close();
   });
 
+  // Audit of 2026-11-25, N25: a request for a ticket may go on a connection that died too.
+  it("gives each connection the single-use ticket of the one that replaces it", async () => {
+    const { origin, ticket } = await serve({ heartbeatMs: 200 });
+    const spares = (socket: WebSocket) => {
+      const given: { ticket: string; ttlMs: number }[] = [];
+      socket.on("message", (data) => {
+        const message = JSON.parse(String(data)) as { type: string; ticket: string; ttlMs: number };
+        if (message.type === "ws.ticket") given.push(message);
+      });
+      return given;
+    };
+    const first = new WebSocket(`ws://${origin}/ws?ticket=${await ticket()}`);
+    cleanups.push(() => first.terminate());
+    const given = spares(first);
+    await expect.poll(() => given.length).toBe(1);
+    expect(given[0]!.ttlMs).toBe(400);
+    // Renewed with each heartbeat, one at a time: the one before no longer opens.
+    await expect.poll(() => given.length).toBe(2);
+    expect(await socketStatus(`ws://${origin}/ws?ticket=${given[0]!.ticket}`)).toBe(401);
+    // Its connection gone, the last one still opens the next, once.
+    first.terminate();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const spare = given.at(-1)!.ticket;
+    expect(await socketOpens(`ws://${origin}/ws?ticket=${spare}`)).toBe(true);
+    expect(await socketStatus(`ws://${origin}/ws?ticket=${spare}`)).toBe(401);
+  });
+
   it("survives overlong paths without crashing and rejects non-GET/HEAD on static files and /api/build", async () => {
     const { origin, images } = await serve();
     const longPath = await fetch(`http://${origin}/${"a".repeat(350)}`);

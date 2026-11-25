@@ -2686,3 +2686,61 @@ describe("project « Discussions »", () => {
     expect(store.listProjects()).toHaveLength(2);
   });
 });
+
+// Audit of 2026-11-25, N25: a screen whose connection died sends the user's action again on
+// the next one, not knowing whether the first got there.
+describe("an action a screen sends again", () => {
+  it("is done once, from whichever connection it comes", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    const send = { type: "thread.send" as const, threadId, text: "Deux", sendId: "envoi-1" };
+    await hub.handle(client, send);
+    await hub.whenIdle(threadId);
+    const again = new TestClient();
+    hub.connect(again);
+    await hub.handle(again, send);
+    await hub.whenIdle(threadId);
+    const said = () =>
+      store
+        .listItems(threadId)
+        .filter((i) => i.kind === "user")
+        .map((i) => (i.kind === "user" ? i.text : ""));
+    expect(said()).toEqual(["Un", "Deux"]);
+    // Another action, said the same way, is another one.
+    await hub.handle(again, { ...send, sendId: "envoi-2" });
+    await hub.whenIdle(threadId);
+    expect(said()).toEqual(["Un", "Deux", "Deux"]);
+  });
+
+  it("answers a permission once", async () => {
+    const { hub, client, projectId } = setup();
+    const listed = client.next((m) => m.type === "requests" && m.requests.length > 0);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+    });
+    const message = await listed;
+    if (message.type !== "requests") throw new Error("unreachable");
+    const answer = {
+      type: "permission.respond" as const,
+      threadId,
+      itemId: message.requests[0]!.itemId,
+      optionId: "allow",
+      sendId: "reponse-1",
+    };
+    await hub.handle(client, answer);
+    await hub.whenIdle(threadId);
+    // Sent again after the item was answered: no error for the screen, nothing done.
+    const errors = client.messages.length;
+    await hub.handle(client, answer);
+    expect(client.messages.slice(errors).filter((m) => m.type === "error")).toEqual([]);
+  });
+});

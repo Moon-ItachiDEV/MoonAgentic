@@ -176,6 +176,12 @@ describe("Réglages → Accès distant", () => {
       await phone.goto(`${new URL(url).origin}/reglages/remote`);
 
       // Renewing the computer's token: the old one is refused, the phone stays connected.
+      // Another tab of the computer goes on with the new token rather than ask to pair.
+      const tab = await context.newPage();
+      await tab.goto(new URL(url).origin);
+      await expect
+        .poll(() => tab.getByRole("combobox", { name: "Message" }).isEnabled())
+        .toBe(true);
       await page.getByRole("button", { name: "Renouveler le jeton de cet ordinateur" }).click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Renouveler" }).click();
       await page.getByRole("alertdialog").waitFor({ state: "detached" });
@@ -188,14 +194,22 @@ describe("Réglages → Accès distant", () => {
       expect(await auth(renewed)).toBe(204);
       await phone.reload();
       await phone.getByText("Appairé", { exact: true }).waitFor();
+      await expect
+        .poll(() => tab.getByRole("combobox", { name: "Message" }).isEnabled())
+        .toBe(true);
+      expect(await tab.getByRole("heading", { name: "Appairer cet appareil" }).count()).toBe(0);
+      await tab.close();
 
-      // Revoked from the computer, the phone is asked to pair again.
+      // Revoked from the computer, the phone is asked to pair again, and told why.
       await revoke.click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Révoquer" }).click();
       await expect.poll(() => revoke.count()).toBe(0);
       await phone.getByRole("heading", { name: "Appairer cet appareil" }).waitFor();
       // The failed link from before is not shown as the reason.
       expect(await phone.getByText("il a expiré").count()).toBe(0);
+      await phone.getByText("Cet appareil a été retiré depuis l'ordinateur").waitFor();
+      await phone.reload();
+      await phone.getByText("Cet appareil a été retiré depuis l'ordinateur").waitFor();
 
       // A window still on the old link is shown the door too.
       const other = await (await browser.newContext()).newPage();
