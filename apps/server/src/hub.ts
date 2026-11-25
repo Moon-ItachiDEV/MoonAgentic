@@ -2,6 +2,7 @@ import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import type { AgentProcessRef, DiagnosticsMonitor } from "./diagnostics.ts";
 import { generatedFolders, madeImages, resolveThreadFile } from "./thread-files.ts";
+import { labelStart, plainLabel } from "./labels.ts";
 import { COMPUTER_ACTOR, ProjectLocks } from "./locks.ts";
 import {
   linkClaude,
@@ -82,12 +83,14 @@ import {
   deleteBranch,
   worktreeStart,
   branchName,
+  canonicalPath,
   dropCheckpoints,
   gitCommonDir,
   gitRootCommonDir,
   isGitRepo,
   isSameOrInside,
   pathsOverlap,
+  matchesCheckpoint,
   restoreCheckpoint,
   reviewChanges,
   samePath,
@@ -108,9 +111,9 @@ import {
 import { type BranchOwner, deleteMergedBranches, projectBranches } from "./branches.ts";
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { Coordinators, TEAM_PRESETS_SETTING } from "./coordinator.ts";
-import { historyBefore } from "./history.ts";
+import { historyBefore, projectMemoryContext } from "./history.ts";
 import { cardText, Planner } from "./planner.ts";
-import { COORDINATOR_TOOLS } from "./coordinator-tools.ts";
+import { COORDINATOR_TOOLS, THREAD_TOOLS } from "./coordinator-tools.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
 import { diffText, shipTarget, Teams, teamStatus } from "./team.ts";
@@ -174,8 +177,8 @@ const stoppedError = (detail: string): string => {
 };
 
 const titleFrom = (text: string, images = 0) => {
-  const line = text.trim().split("\n")[0] ?? "";
-  if (line.length > 60) return `${line.slice(0, 57).trimEnd()}…`;
+  const line = plainLabel(text.trim().split("\n")[0] ?? "");
+  if (line.length > 60) return `${labelStart(line, 57).trimEnd()}…`;
   // A message of images alone has no words to name the conversation with.
   return line || (images > 1 ? "Images" : images ? "Image" : "Nouvelle discussion");
 };
@@ -250,6 +253,9 @@ const LOW_EFFORT = /^(low|bas)$/i;
 const OWN_TOOL = new RegExp(
   `^(?:Run )?mcp_{1,2}moonagentic_{1,2}(?:${COORDINATOR_TOOLS.map((t) => t.name).join("|")})$`,
 );
+const OWN_THREAD_TOOL = new RegExp(
+  `^(?:Run )?mcp_{1,2}moonagentic_{1,2}(?:${THREAD_TOOLS.map((t) => t.name).join("|")})$`,
+);
 
 /** A known, open pull request is asked about again this often. */
 const PR_WATCH_MS = 60_000;
@@ -275,6 +281,24 @@ const checkpointRef = (threadId: string, itemId: string) =>
   `refs/moonagentic/${threadId}/${itemId.replace(/^user:/, "")}`;
 /** Keeps the files of an archived thread, uncommitted ones included, until it comes back. */
 const archiveRef = (threadId: string) => `refs/moonagentic/${threadId}/archive`;
+/** Where the files a step back takes away are kept, one ref for each step back. */
+const undoneRef = (threadId: string, at: number) => `refs/moonagentic/${threadId}/undone-${at}`;
+
+/** How a folder's name compares on this system: Windows does not tell `A` from `a`. */
+const folderKey = (name: string) => (process.platform === "win32" ? name.toLowerCase() : name);
+
+/**
+ * `find` asked once for each folder: many threads, and few ways their folders' place was
+ * ever written, so the disk is looked at a few times, not once a thread.
+ */
+function onceEach(find: (folder: string) => string): (folder: string) => string {
+  const known = new Map<string, string>();
+  return (folder) => {
+    let found = known.get(folder);
+    if (found === undefined) known.set(folder, (found = find(folder)));
+    return found;
+  };
+}
 
 /** The folder the agent works in: the worktree, or the project's folder inside it. */
 const workFolder = (workspace: Workspace) =>
@@ -563,6 +587,7 @@ export class Hub {
       broadcast: (m) => this.broadcast(m),
       checkAgent: (id) => void this.agents.launch(id),
       removing: (id) => this.removingProjects.has(id),
+      outsideProjects: (id) => this.isDiscussions(id),
       running: (id) => this.turns.has(id),
       leadContext: (id) => this.leadContext(id),
       updateThread: (id, patch) => this.updateThread(id, patch),
@@ -580,6 +605,8 @@ export class Hub {
       discover: (agentId, projectId) => this.discover(agentId, projectId),
       confirmTeamPermission: (coordinatorId, task, signal) =>
         this.confirmTeamPermission(coordinatorId, task, signal),
+      confirmMemoryWrite: (threadId, content, replace, signal) =>
+        this.confirmMemoryWrite(threadId, content, replace, signal),
     });
     store.recoverAfterRestart();
     // Messages the index does not have yet: all of them, the first time after an update.
@@ -630,13 +657,84 @@ export class Hub {
 
   /** The folders of the worktrees folder that a thread holds, archived ones included. */
   private heldWorktrees(): string[] {
+    const real = onceEach(canonicalPath);
     const held: string[] = [];
     for (const thread of this.store.listThreads()) {
-      const dir = thread.workspace?.path;
-      if (!dir || !this.isOurWorktree(dir)) continue;
-      held.push(path.relative(this.worktreesDir, dir).split(/[\\/]/)[0]!);
+      const name = thread.workspace && this.ourFolder(thread.workspace.path, real);
+      if (name) held.push(name);
     }
     return held;
+  }
+
+  /**
+   * The name of the folder of ours that `dir` is, or is in; undefined for any other folder.
+   * Ours are told by where they are on disk, not by how their path is written: the data
+   * folder reached through a link or a junction one day and by its own path the next is the
+   * same folder, and a thread's folder taken for nobody's would be swept away.
+   */
+  private ourFolder(
+    dir: string,
+    real: (folder: string) => string = canonicalPath,
+  ): string | undefined {
+    const within = (parent: string, child: string) => {
+      const inside = path.relative(parent, child);
+      return inside && !inside.startsWith("..") && !path.isAbsolute(inside)
+        ? inside.split(path.sep)[0]
+        : undefined;
+    };
+    return (
+      // A path made from this very folder's, as nearly all are: no look at the disk.
+      within(this.worktreesDir, dir) ??
+      // The folder that holds it is resolved, not the thread's own: it is named by its place.
+      within(real(this.worktreesDir), path.join(real(path.dirname(dir)), path.basename(dir)))
+    );
+  }
+
+  /**
+   * A folder and a branch of its own for a thread, named by the start of its id: short, to
+   * keep deep projects under Windows' path length limit. Two ids can start alike; a name
+   * that a thread holds, or that is on disk, is left to it and more of the id is taken, or
+   * the second thread would work in the first one's folder and take it along when deleted.
+   */
+  private ownWorkspace(title: string, id: string): { branch: string; path: string } {
+    const folders = new Set(this.heldWorktrees().map(folderKey));
+    const branches = new Set(this.store.listThreads().map((t) => t.workspace?.branch));
+    // The id's own groups, then all of it, which no other thread has.
+    const longer = [13, 18, 23, id.length];
+    const folder = [8, ...longer]
+      .map((length) => id.slice(0, length))
+      .find(
+        (name) => !folders.has(folderKey(name)) && !existsSync(path.join(this.worktreesDir, name)),
+      );
+    const branch = [6, ...longer]
+      .map((length) => branchName(title, id, length))
+      .find((name) => !branches.has(name));
+    if (!folder || !branch) throw new Error("Aucun dossier libre pour ce fil : réessaie.");
+    return { branch, path: path.join(this.worktreesDir, folder) };
+  }
+
+  /**
+   * The other threads that hold this folder too, oldest first: two ids that start alike once
+   * gave two threads one folder. It is the oldest one's, and nobody's to remove meanwhile.
+   */
+  private sharingFolder(threadId: string, dir: string): Thread[] {
+    const real = onceEach(canonicalPath);
+    const name = this.ourFolder(dir, real);
+    if (!name) return [];
+    return this.store
+      .listThreads()
+      .filter(
+        (t) =>
+          t.id !== threadId &&
+          !!t.workspace &&
+          folderKey(this.ourFolder(t.workspace.path, real) ?? "") === folderKey(name),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  }
+
+  /** Whether the folder is one of ours that only this thread holds: its own to remove. */
+  private ownFolder(threadId: string, dir: string): boolean {
+    return this.isOurWorktree(dir) && !this.sharingFolder(threadId, dir).length;
   }
 
   /** The agents, their models and checks, the MCP servers and the favorites. */
@@ -1138,6 +1236,7 @@ export class Hub {
       }
       case "project.setup":
       case "project.saveRules":
+      case "project.saveMemory":
       case "project.linkClaude":
       case "project.saveCommand":
       case "project.removeCommand":
@@ -1152,6 +1251,9 @@ export class Hub {
         switch (message.type) {
           case "project.saveRules":
             saveRules(dir, message.text);
+            break;
+          case "project.saveMemory":
+            this.store.setProjectMemory(project.id, message.text);
             break;
           case "project.linkClaude":
             linkClaude(dir);
@@ -1173,7 +1275,11 @@ export class Hub {
           type: "projectSetup",
           requestId: message.requestId,
           projectId: project.id,
-          setup: await readSetup(dir, !!this.withGit(project).git),
+          setup: await readSetup(
+            dir,
+            !!this.withGit(project).git,
+            this.store.getProjectMemory(project.id),
+          ),
         });
         return;
       }
@@ -1703,14 +1809,21 @@ export class Hub {
   }
 
   /**
+   * Whether the project is « Discussions »: its conversations have nothing in common but
+   * where they are kept, so they share no memory and do not read each other.
+   */
+  private isDiscussions(projectId: string): boolean {
+    const project = this.store.getProject(projectId);
+    return project?.name === "Discussions" && path.basename(project.path) === "Discussions";
+  }
+
+  /**
    * The project « Discussions », where conversations started without a project go: a folder
    * beside where projects are usually made, created the first time it is needed. One already made
    * is reused, wherever the next projects go.
    */
   discussionsProject(): string {
-    const made = this.store
-      .listProjects()
-      .find((p) => p.name === "Discussions" && path.basename(p.path) === "Discussions");
+    const made = this.store.listProjects().find((p) => this.isDiscussions(p.id));
     if (made && existsSync(made.path)) return made.id;
     const folder = path.join(defaultParent(this.store.listProjects(), this.homeDir), "Discussions");
     mkdirSync(folder, { recursive: true });
@@ -1755,8 +1868,7 @@ export class Hub {
     // The worktree itself is made when the agent first starts, so creating stays instant.
     const workspace =
       input.isolated && !input.worksIn && this.withGit(project).git
-        ? // A short folder name keeps deep projects under Windows' path length limit.
-          { branch: branchName(title, id), path: path.join(this.worktreesDir, id.slice(0, 8)) }
+        ? this.ownWorkspace(title, id)
         : undefined;
     const thread: Thread = {
       id,
@@ -1957,8 +2069,7 @@ export class Hub {
     // The folder starts at the pull request's last commit; its changes are counted from
     // where it leaves its base, so the review panel shows the pull request.
     const workspace: Workspace = {
-      branch: branchName(`revue-pr-${number}`, threadId),
-      path: path.join(this.worktreesDir, threadId.slice(0, 8)),
+      ...this.ownWorkspace(`revue-pr-${number}`, threadId),
       base: mergeBase,
       ...(start.subdir ? { subdir: start.subdir } : {}),
     };
@@ -1983,7 +2094,7 @@ export class Hub {
       prReview: {
         ...review,
         repo,
-        title: pr.title,
+        title: plainLabel(pr.title),
         url: pr.url,
         head,
         base: pr.base,
@@ -2941,6 +3052,15 @@ export class Hub {
     await this.exclusive(threadId, "Attends la fin du retour en arrière.", async () => {
       // The agent stops first, so nothing it started holds a file about to change (Windows).
       await this.forgetSession(threadId);
+      // What the step back takes away is kept first: the last turn's files and those put
+      // there by hand since are in no message's checkpoint. Without it, no step back.
+      try {
+        await saveCheckpoint(workspace.path, undoneRef(threadId, Date.now()));
+      } catch (error) {
+        throw new Error(
+          `Retour en arrière annulé : les fichiers actuels n'ont pas pu être gardés d'abord (${describe(error)}).`,
+        );
+      }
       // Files and messages go back together: written down first, a step back that a stop
       // cuts in half is finished when the server starts again.
       this.setPendingRestore(threadId, { itemId, tree });
@@ -3074,19 +3194,31 @@ export class Hub {
       }
       await this.releaseFolder(threadId);
       await this.forgetSession(threadId);
-      const workspace = thread.workspace;
-      if (workspace?.base && project && this.isOurWorktree(workspace.path)) {
-        if (existsSync(workspace.path)) {
-          // Written down before the folder goes: a stop in between loses nothing.
-          const archivedTree = await saveCheckpoint(workspace.path, archiveRef(threadId));
-          this.updateThread(threadId, { workspace: { ...workspace, archivedTree } });
-          try {
-            await removeWorktree(project.path, workspace.path);
-          } catch (error) {
-            // The folder stays in use: the thread stays out of the archive, its files as they are.
-            this.updateThread(threadId, { workspace });
-            throw error;
+      const workspace = this.store.getThread(threadId)?.workspace;
+      if (
+        workspace?.base &&
+        project &&
+        this.ownFolder(threadId, workspace.path) &&
+        existsSync(workspace.path)
+      ) {
+        // Written down before the folder goes: a stop in between loses nothing. The files
+        // git ignores one by one go with it (`.env.local`), as the folder is all they had.
+        // Not saved again after a removal cut short: what it left is not all the thread had.
+        const kept =
+          workspace.archivedTree ??
+          (await saveCheckpoint(workspace.path, archiveRef(threadId), true));
+        this.updateThread(threadId, { workspace: { ...workspace, archivedTree: kept } });
+        try {
+          await removeWorktree(project.path, workspace.path);
+        } catch (error) {
+          // The folder stays in use (Windows): the thread stays out of the archive, its files
+          // as they are if none went. Otherwise they are those of the checkpoint from now
+          // on, which stays written down and comes back with the thread's next step.
+          if (await matchesCheckpoint(workspace.path, kept, true).catch(() => false)) {
+            const { archivedTree: _whole, ...asItWas } = workspace;
+            this.updateThread(threadId, { workspace: asItWas });
           }
+          throw error;
         }
       }
       this.updateThread(threadId, { archived: true, status: "idle" });
@@ -3120,7 +3252,8 @@ export class Hub {
       const project = this.store.getProject(thread.projectId);
       const workspace = thread.workspace;
       if (workspace && project) {
-        if (this.isOurWorktree(workspace.path)) await removeWorktree(project.path, workspace.path);
+        if (this.ownFolder(threadId, workspace.path))
+          await removeWorktree(project.path, workspace.path);
         await dropRefs(project.path, `refs/moonagentic/${threadId}/`).catch(() => undefined);
       }
       this.setPendingRestore(threadId, undefined);
@@ -3177,8 +3310,7 @@ export class Hub {
 
   /** Only folders MoonAgentic made for a thread are ever removed. */
   private isOurWorktree(dir: string): boolean {
-    const inside = path.relative(this.worktreesDir, dir);
-    return !!inside && !inside.startsWith("..") && !path.isAbsolute(inside);
+    return this.ourFolder(dir) !== undefined;
   }
 
   /** Hands the thread to another agent between turns; it gets the conversation so far. */
@@ -3477,8 +3609,15 @@ export class Hub {
         this.updateThread(thread.id, { status: "idle" });
         return;
       }
-      // A new session knows nothing of the thread: after a hand-off, a step back, or when
-      // the agent could not resume its earlier session.
+      // A new session knows nothing of the project's shared memory or earlier thread messages:
+      // send the shared memory (when non-empty) and the prior conversation (after a hand-off,
+      // a step back, or when the agent could not resume its earlier session) once on turn 1.
+      // A conversation outside any project has no project to share a memory or threads with.
+      const shares = !this.isDiscussions(thread.projectId);
+      const memory =
+        !continuing && session.fresh && shares
+          ? projectMemoryContext(this.store.getProjectMemory(thread.projectId).text)
+          : undefined;
       const history =
         !continuing && session.fresh
           ? historyBefore(
@@ -3486,11 +3625,15 @@ export class Hub {
               itemId,
               this.catalog.name,
               (id) => this.attachments.find(thread.id, id)?.file,
+              this.coordinatorUrl && shares && !thread.parentId && thread.kind !== "coordinator"
+                ? { threadId: thread.id }
+                : undefined,
             )
           : undefined;
+      const preamble = [memory, history].filter(Boolean).join("\n\n") || undefined;
       const said = text.trim() || !images.length ? text : IMAGES_ONLY;
       const prompt = context ? `${context}\n\n${said}` : said;
-      const stopReason = await session.prompt(prompt, history, [
+      const stopReason = await session.prompt(prompt, preamble, [
         ...this.linksFor(session, text),
         ...this.attachments.blocks(thread.id, images, !!session.promptCapabilities.image),
       ]);
@@ -3640,8 +3783,33 @@ export class Hub {
       workspace = { ...workspace, ...start };
       this.updateThread(threadId, { workspace });
     }
+    // A folder two threads were given stays the first one's.
+    const [first] = this.sharingFolder(threadId, workspace.path);
+    const self = this.store.getThread(threadId);
+    if (
+      first &&
+      self &&
+      (first.createdAt - self.createdAt || first.id.localeCompare(self.id)) < 0
+    ) {
+      throw new Error(
+        `Le dossier de ce fil est celui du fil « ${first.title} », créé avant lui : ce fil ne peut pas y travailler sans toucher au sien. Reprends la tâche dans un nouveau fil.`,
+      );
+    }
     // Made, or made again when its folder went missing, from the branch and its commits.
-    await ensureWorktree(project.path, workspace.path, workspace.branch, workspace.base!);
+    try {
+      await ensureWorktree(project.path, workspace.path, workspace.branch, workspace.base!);
+    } catch (error) {
+      // What a removal cut short left of the folder (a file held open on Windows) is no
+      // worktree any more. All its files were saved for that removal and come back below:
+      // it is finished, and the folder made again. Any other folder stays as it is.
+      const cutShort =
+        workspace.archivedTree &&
+        existsSync(workspace.path) &&
+        this.ownFolder(threadId, workspace.path);
+      if (!cutShort) throw error;
+      await removeWorktree(project.path, workspace.path);
+      await ensureWorktree(project.path, workspace.path, workspace.branch, workspace.base!);
+    }
     if (workspace.archivedTree) {
       // Back from the archive: the files it had, uncommitted ones included.
       await restoreCheckpoint(workspace.path, workspace.archivedTree);
@@ -3709,10 +3877,9 @@ export class Hub {
     let ready = false;
     const coordinatorMcp = this.coordinators.coordinatorServer(thread);
     const catalogMcp = mcpServersFor(await this.catalog.mcpServers(), thread);
-    const userMcp =
-      thread.kind === "coordinator"
-        ? catalogMcp.filter((s) => s.name.trim().toLowerCase() !== RESERVED_MCP_NAME)
-        : catalogMcp;
+    const userMcp = coordinatorMcp.length
+      ? catalogMcp.filter((s) => s.name.trim().toLowerCase() !== RESERVED_MCP_NAME)
+      : catalogMcp;
     const startedAt = Date.now();
     const session = await AgentSession.start({
       launch: this.agents.launch(thread.agentId),
@@ -3730,6 +3897,7 @@ export class Hub {
         elicit: (request, signal) => this.requestForm(thread.id, request, signal),
         onExit: (reason) => {
           if (!owns()) return;
+          this.coordinators.dropCoordinatorAccess(thread.id);
           this.pool.exited(thread.id);
           this.settlePermissions(thread.id);
           if (reason && !this.closed && !this.cancelled.has(thread.id)) {
@@ -3995,17 +4163,19 @@ export class Hub {
     const images = [
       ...new Set([...(existing?.images ?? []), ...madeImages(update.content, update.rawOutput)]),
     ];
+    // The agent's own words for what it does, shown as they read.
+    const title = update.title ? plainLabel(update.title) : undefined;
     // A new call joins the step of the agent's plan it is on.
-    if (!existing && update.title) {
+    if (!existing && title) {
       const planId = `plan:${this.turnIds.get(threadId) ?? "late"}`;
       const plan = this.store.getItem(threadId, planId);
-      const entries = plan?.kind === "plan" ? noteTool(plan.entries, update.title) : undefined;
+      const entries = plan?.kind === "plan" ? noteTool(plan.entries, title) : undefined;
       if (plan?.kind === "plan" && entries) this.putItem(threadId, { ...plan, entries });
     }
     this.putItem(threadId, {
       id,
       kind: "tool",
-      title: update.title ?? existing?.title ?? "Outil",
+      title: title || existing?.title || "Outil",
       toolKind: update.kind ?? existing?.toolKind ?? "other",
       status: update.status ?? existing?.status ?? "pending",
       content: content ?? existing?.content ?? [],
@@ -4053,18 +4223,20 @@ export class Hub {
           ? REVIEWER_ALLOWED
           : undefined;
     const readOnlyDenied = !!allowed && !allowed.has(request.toolCall.kind ?? "");
-    // MoonAgentic's own tools are the coordinator's work, already limited by the server:
-    // asking the user before each one would make it useless.
+    // MoonAgentic's own tools are already limited by the server: asking the user before each
+    // one would make them useless. The server itself asks before a thread outside full access
+    // writes the shared memory (`confirmMemoryWrite`), whether its agent asked first or not:
+    // the agent's own request for it is let through here, so the user is asked once.
     this.noteToolName(threadId, request.toolCall);
     // An agent that does not name the tool is taken at its title, for a call of no known kind:
     // never a change of files nor a command.
     const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
+    const ownPattern = thread.kind === "coordinator" ? OWN_TOOL : OWN_THREAD_TOOL;
     const own =
-      thread.kind === "coordinator" &&
       !!this.coordinatorUrl &&
       (named !== undefined
-        ? OWN_TOOL.test(named)
-        : OWN_TOOL.test(request.toolCall.title ?? "") &&
+        ? ownPattern.test(named)
+        : ownPattern.test(request.toolCall.title ?? "") &&
           (!request.toolCall.kind || request.toolCall.kind === "other"));
     if ((thread.permissionMode === "full" && !readOnlyDenied) || own) {
       const allow =
@@ -4077,8 +4249,13 @@ export class Hub {
     this.putItem(threadId, {
       id,
       kind: "permission",
-      title: request.toolCall.title ?? "L'agent demande une autorisation",
-      options: request.options.map((o) => ({ optionId: o.optionId, name: o.name, kind: o.kind })),
+      // What the user decides by reads as it is written: no character in it reorders or hides.
+      title: plainLabel(request.toolCall.title ?? "") || "L'agent demande une autorisation",
+      options: request.options.map((o) => ({
+        optionId: o.optionId,
+        name: plainLabel(o.name),
+        kind: o.kind,
+      })),
       outcome: null,
       at: Date.now(),
     });
@@ -4149,7 +4326,11 @@ export class Hub {
     signal?: AbortSignal,
   ): Promise<PermissionMode | null> {
     if (signal?.aborted) return Promise.resolve(null);
-    const preview = summaryOf(task, 80);
+    // The task is the coordinator's own words, and this is the request that opens the most:
+    // its start is shown as it is written, signs and code included, and not a summary of it,
+    // which would leave out a block of code.
+    const said = plainLabel(task);
+    const preview = said.length > 80 ? `${labelStart(said, 79).trimEnd()}…` : said;
     const id = `permission:${randomUUID()}`;
     this.putItem(coordinatorId, {
       id,
@@ -4187,6 +4368,63 @@ export class Hub {
         resolve(null);
       };
       this.pendingPermissions.set(id, { threadId: coordinatorId, resolve: done });
+      this.broadcastRequests();
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  /**
+   * Asks the user before a thread outside full access writes the project's shared memory:
+   * every later session of the project starts with what is written there. Same card and
+   * « À traiter » queue as an agent's own requests.
+   */
+  private confirmMemoryWrite(
+    threadId: string,
+    content: string,
+    replace: boolean,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (signal?.aborted) return Promise.resolve(false);
+    // The words to be written, on one line, with nothing in them that is not seen.
+    const flat = content
+      .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const shown = [...flat];
+    const preview = shown.length > 80 ? `${shown.slice(0, 79).join("").trimEnd()}…` : flat;
+    const id = `permission:${randomUUID()}`;
+    this.putItem(threadId, {
+      id,
+      kind: "permission",
+      title: !preview
+        ? "Vider la mémoire du projet"
+        : replace
+          ? `Remplacer la mémoire du projet par : ${preview}`
+          : `Ajouter à la mémoire du projet : ${preview}`,
+      options: [
+        { optionId: "allow", name: "Autoriser", kind: "allow_once" },
+        { optionId: "reject", name: "Refuser", kind: "reject_once" },
+      ],
+      outcome: null,
+      at: Date.now(),
+    });
+    this.updateThread(threadId, { status: "waiting" });
+    this.admit();
+    return new Promise<boolean>((resolve) => {
+      const onAbort = () => {
+        this.settlePermission(id);
+        if (
+          this.store.getThread(threadId)?.status === "waiting" &&
+          ![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)
+        ) {
+          this.updateThread(threadId, { status: this.turns.has(threadId) ? "running" : "idle" });
+        }
+      };
+      const done = (response: acp.RequestPermissionResponse) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(response.outcome.outcome === "selected" && response.outcome.optionId === "allow");
+      };
+      this.pendingPermissions.set(id, { threadId, resolve: done });
       this.broadcastRequests();
       signal?.addEventListener("abort", onAbort, { once: true });
     });

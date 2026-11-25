@@ -196,6 +196,43 @@ describe("Hub with the demo agent", () => {
     await hub.whenIdle(threadId);
   });
 
+  it("shows a title, a tool call and a permission as they read: no character reorders or hides them", async () => {
+    const { hub, store, client, projectId } = setup();
+    const asked = client.next(isPermissionRequest);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "/trompeur",
+      // Shown as written, this title would read « Facture exe.pdf ».
+      title: "Facture \u202Efdp.exe\u202C",
+    });
+    client.openThreadIds = new Set([threadId]);
+    expect(store.getThread(threadId)?.title).toBe("Facture fdp.exe");
+
+    const request = await asked;
+    if (request.type !== "item" || request.item.kind !== "permission") {
+      throw new Error("unreachable");
+    }
+    // The demo wrote « hs.tixe-lruc » after a character that turns it around on screen, and
+    // « Refuser » backwards behind the same one: the user is shown what is really there.
+    expect(request.item.title).toBe("Lire le fichier hs.tixe-lruc README.md");
+    expect(request.item.options).toEqual([
+      { optionId: "allow", name: "Autoriser", kind: "allow_once" },
+      { optionId: "reject", name: "resufeR", kind: "reject_once" },
+    ]);
+    hub.respondToPermission(threadId, request.item.id, "reject");
+    await hub.whenIdle(threadId);
+
+    const items = store.listItems(threadId);
+    expect(items.find((i) => i.kind === "tool")).toMatchObject({
+      title: "Lire le fichier hs.tixe-lruc README.md",
+    });
+    // Nothing kept holds one of these characters, and the answer still names the right option.
+    expect(JSON.stringify(items)).not.toMatch(/[\u200B\u202A-\u202E\u2066-\u2069]/);
+    expect(lastTurnSaid(items)).toContain("Réponse reçue : reject.");
+  });
+
   it("streams a supervised turn, waits for permission, and persists the timeline", async () => {
     const { hub, store, client, projectId } = setup();
     const asked = client.next(isPermissionRequest);

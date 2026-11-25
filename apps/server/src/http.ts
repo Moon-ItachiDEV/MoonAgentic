@@ -27,7 +27,7 @@ const MAX_WS_TICKETS = 256;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
 const DEFAULT_MAX_AUTH_FAILURES = 20;
 const DEFAULT_MAX_API_REQUESTS = 240;
-const DEFAULT_MAX_COORDINATOR_REQUESTS = 120;
+const DEFAULT_MAX_COORDINATOR_REQUESTS = 240;
 const DEFAULT_MAX_WS_UPGRADES = 120;
 
 /** A fresh access token: long enough that it cannot be guessed. */
@@ -952,9 +952,13 @@ export function createHttpServer(options: {
     stream.once("open", () => {
       res.writeHead(200, {
         "content-type": TYPES[path.extname(file)] ?? "application/octet-stream",
+        // The page is never kept: an iPhone app on the home screen that kept an old one
+        // would ask for files a newer build no longer has.
         "cache-control": file.includes(`${path.sep}assets${path.sep}`)
           ? "public, max-age=31536000, immutable"
-          : "no-cache",
+          : path.extname(file) === ".html"
+            ? "no-store"
+            : "no-cache",
       });
       if (req.method === "HEAD") {
         stream.destroy();

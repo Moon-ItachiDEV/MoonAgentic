@@ -119,8 +119,8 @@ samp {
 .pmenu.rowm {
   position: fixed;
   z-index: 130;
-  left: min(var(--x), calc(100vw - 248px));
-  top: min(var(--y), calc(100vh - 230px));
+  left: max(8px, min(var(--x), calc(100vw - 248px)));
+  top: max(8px, min(var(--y), calc(100vh - 230px)));
   transform-origin: 0 0;
 }
 

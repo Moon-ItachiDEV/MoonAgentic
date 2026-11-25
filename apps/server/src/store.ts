@@ -1,19 +1,28 @@
 import { chmodSync } from "node:fs";
 import { backup, DatabaseSync, type StatementSync } from "node:sqlite";
-import type {
-  AgentSetting,
-  Item,
-  ModelChoice,
-  PermissionMode,
-  PlanTask,
-  Project,
-  Schedule,
-  SearchHit,
-  ActivityDay,
-  Thread,
-  ThreadStatus,
-  Workspace,
+import {
+  MAX_PROJECT_MEMORY,
+  utf8Bytes,
+  type ActivityDay,
+  type AgentSetting,
+  type Item,
+  type ModelChoice,
+  type PermissionMode,
+  type PlanTask,
+  type Project,
+  type Schedule,
+  type SearchHit,
+  type Thread,
+  type ThreadStatus,
+  type Workspace,
 } from "@moonagentic/protocol";
+
+export interface ProjectMemoryRecord {
+  text: string;
+  updatedAt?: number;
+}
+
+const PROJECT_MEMORY_PREFIX = "projectMemory:";
 
 export interface AgentModels {
   models: ModelChoice[];
@@ -523,6 +532,40 @@ export class Store {
     ).run(key, JSON.stringify(value));
   }
 
+  deleteSetting(key: string): void {
+    this.sql(`DELETE FROM settings WHERE key = ?`).run(key);
+  }
+
+  /** Shared memory notes for one project, across every agent and git worktree. */
+  getProjectMemory(projectId: string): ProjectMemoryRecord {
+    const saved = this.getSetting<ProjectMemoryRecord | null>(
+      `${PROJECT_MEMORY_PREFIX}${projectId}`,
+      null,
+    );
+    return saved && typeof saved.text === "string"
+      ? {
+          text: saved.text,
+          ...(typeof saved.updatedAt === "number" ? { updatedAt: saved.updatedAt } : {}),
+        }
+      : { text: "" };
+  }
+
+  /** Saves or clears (when empty) the shared memory notes for one project. */
+  setProjectMemory(projectId: string, text: string): ProjectMemoryRecord {
+    const normalized = text.replace(/\r\n/g, "\n").trim();
+    const key = `${PROJECT_MEMORY_PREFIX}${projectId}`;
+    if (!normalized) {
+      this.deleteSetting(key);
+      return { text: "" };
+    }
+    if (utf8Bytes(normalized) > MAX_PROJECT_MEMORY) {
+      throw new Error(`La mémoire du projet est trop longue (${MAX_PROJECT_MEMORY} octets max).`);
+    }
+    const record: ProjectMemoryRecord = { text: normalized, updatedAt: Date.now() };
+    this.setSetting(key, record);
+    return record;
+  }
+
   getAgentModels(agentId: string): AgentModels | undefined {
     const row = this.sql(`SELECT data FROM agent_models WHERE agent_id = ?`).get(agentId) as
       { data: string } | undefined;
@@ -891,6 +934,76 @@ export class Store {
   }
 
   /**
+   * Messages from the user or an agent inside one project's top-level threads that match all
+   * space-separated terms in `query`: the latest `perThread` of each of the `threads` threads
+   * that named them last. A thread that names them often takes no other thread's place.
+   * Coordinator and team sub-threads are excluded, and no other project is ever touched.
+   */
+  searchProjectItems(
+    projectId: string,
+    query: string,
+    threads = 10,
+    perThread = 3,
+    excludeThreadId?: string,
+  ): SearchHit[] {
+    const terms = [...new Set(fold(query).trim().split(/\s+/).filter(Boolean))].slice(0, 6);
+    if (!terms.length) return [];
+    this.indexSearch();
+    // Drive the trigram index with the longest term (most selective), then require every other term.
+    const ordered = [...terms].sort((a, b) => b.length - a.length);
+    const primary = ordered[0]!;
+    const rest = ordered.slice(1);
+    const pattern = `*${primary.replace(/[*?[]/g, (c) => `[${c}]`)}*`;
+    const extraClauses = rest.map(() => `AND instr(f.text, ?) > 0`).join("\n            ");
+    const excludeClause = excludeThreadId ? `AND t.id != ?` : "";
+    const params: (string | number)[] = [
+      pattern,
+      ...rest,
+      projectId,
+      ...(excludeThreadId ? [excludeThreadId] : []),
+      perThread,
+      threads * perThread,
+    ];
+    // Each match is numbered within its thread, the latest first, and only the first few of
+    // each thread are opened: at most `perThread` rows a thread, so `threads` threads fit.
+    const rows = this.sql(
+      `SELECT i.thread_id, i.id, i.data
+         FROM (
+           SELECT d.thread_id AS thread_id, d.item_id AS item_id, f.rowid AS n,
+                  ROW_NUMBER() OVER (PARTITION BY d.thread_id ORDER BY f.rowid DESC) AS nth,
+                  MAX(f.rowid) OVER (PARTITION BY d.thread_id) AS latest
+             FROM search_fts f
+             JOIN search_docs d ON d.n = f.rowid
+             JOIN threads t ON t.id = d.thread_id
+            WHERE f.text GLOB ?
+            ${extraClauses}
+              AND t.project_id = ?
+              ${excludeClause}
+              AND json_extract(t.extra, '$.parentId') IS NULL
+              AND COALESCE(json_extract(t.extra, '$.kind'), '') != 'coordinator'
+         ) hit
+         JOIN items i ON i.thread_id = hit.thread_id AND i.id = hit.item_id
+        WHERE hit.nth <= ?
+        ORDER BY hit.latest DESC, hit.n DESC
+        LIMIT ?`,
+    ).all(...params) as { thread_id: string; id: string; data: string }[];
+    const foldedQuery = fold(query).trim();
+    return rows.flatMap((row): SearchHit[] => {
+      const item = JSON.parse(row.data) as Item;
+      if (item.kind !== "user" && item.kind !== "agent") return [];
+      const focus = fold(item.text).includes(foldedQuery) ? query : primary;
+      return [
+        {
+          threadId: row.thread_id,
+          itemId: row.id,
+          kind: item.kind,
+          snippet: snippet(item.text, focus),
+        },
+      ];
+    });
+  }
+
+  /**
    * Messages from the user or an agent written on each day since `since`, counted by the day
    * they fall on once shifted by `offsetMs` (the client's time zone). A team's own briefs
    * are left out, as in search.
@@ -990,8 +1103,9 @@ export class Store {
     this.sql(`DELETE FROM threads WHERE id = ?`).run(id);
   }
 
-  /** Deletes the project, its threads and their timelines. */
+  /** Deletes the project, its threads, their timelines, and its shared memory. */
   deleteProject(id: string): void {
+    this.deleteSetting(`${PROJECT_MEMORY_PREFIX}${id}`);
     this.sql(`DELETE FROM projects WHERE id = ?`).run(id);
   }
 

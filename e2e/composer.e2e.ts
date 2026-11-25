@@ -127,7 +127,8 @@ describe("composer", () => {
     // The demo agent, not a real one that may be installed on this machine.
     await pickAgent(page);
     await composer(page).click();
-    await expect.poll(() => pill(page).textContent()).toContain("Agent de démo");
+    // Its pill names the agent until its models are read, then the model: its label says both.
+    await expect.poll(() => pill(page).getAttribute("aria-label")).toContain("Agent de démo");
 
     // `/` lists MoonAgentic's ready-made messages and the project's commands.
     await composer(page).fill("/dep");
@@ -250,8 +251,9 @@ describe("composer", () => {
     await composer(page).fill("Corrige la réponse");
     await composer(page).press("Enter");
     const inbox = pages(page).getByRole("button", { name: /^À traiter/ });
-    // The agent starts its process before it asks: more than the poll's usual second on CI.
-    await expect.poll(() => inbox.textContent(), { timeout: 15_000 }).toContain("1");
+    // The agent starts its process before it asks: long on a machine that runs every file of
+    // these checks at once.
+    await expect.poll(() => inbox.textContent(), { timeout: 30_000 }).toContain("1");
     await inbox.click();
     const requests = page.getByRole("region", { name: "À traiter" });
     await requests.getByText("Modifier src/app.ts").waitFor();
@@ -420,7 +422,15 @@ describe("composer", () => {
     await page.setViewportSize({ width: 390, height: 780 });
     await page.getByRole("button", { name: "Retour", exact: true }).click();
     await page.getByRole("button", { name: "Menu", exact: true }).click();
-    const at = (await line.boundingBox())!;
+    // The menu slides in: the line is pressed where it comes to rest.
+    let at = (await line.boundingBox())!;
+    await expect
+      .poll(async () => {
+        const before = at;
+        at = (await line.boundingBox())!;
+        return at.x >= 0 && at.x === before.x;
+      })
+      .toBe(true);
     const finger = {
       pointerType: "touch",
       bubbles: true,

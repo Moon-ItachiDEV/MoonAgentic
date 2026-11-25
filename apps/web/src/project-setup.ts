@@ -2,6 +2,7 @@
 // mistake shows under the field rather than as a refusal.
 import {
   MAX_PROJECT_ICON,
+  MAX_PROJECT_MEMORY,
   MAX_SETUP_FILE,
   type ProjectCommand,
   type ProjectSetup,
@@ -54,6 +55,9 @@ export function skillProblem(
 
 /** Whether a text fits in a setup file. */
 export const fits = (text: string) => utf8Bytes(text) <= MAX_SETUP_FILE;
+
+/** Whether a text fits in a project's shared memory. */
+export const memoryFits = (text: string) => utf8Bytes(text) <= MAX_PROJECT_MEMORY;
 
 /** A description: one line. */
 export const oneLine = (text: string) => text.replace(/[\r\n]+/g, " ");

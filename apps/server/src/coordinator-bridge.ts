@@ -6,14 +6,20 @@
 import { createInterface } from "node:readline";
 import {
   BRIDGE_BOOTSTRAP_ENV,
+  BRIDGE_MODE_ENV,
   BRIDGE_URL_ENV,
+  type BridgeMode,
   COORDINATOR_PATH,
-  COORDINATOR_TOOLS,
+  toolsForBridgeMode,
 } from "./coordinator-tools.ts";
 
 const url = process.env[BRIDGE_URL_ENV];
 const bootstrap = process.env[BRIDGE_BOOTSTRAP_ENV];
+const rawMode = process.env[BRIDGE_MODE_ENV];
 delete process.env[BRIDGE_BOOTSTRAP_ENV];
+delete process.env[BRIDGE_MODE_ENV];
+const mode: BridgeMode = rawMode === "thread" || rawMode === "readonly" ? rawMode : "coordinator";
+const tools = toolsForBridgeMode(mode);
 
 /** The token of this bridge alone, asked for once with what it was started with. */
 const access: Promise<string | undefined> =
@@ -40,7 +46,9 @@ const text = (value: string, isError = false) => ({
   ...(isError ? { isError: true } : {}),
 });
 
-const START_TEAM_TIMEOUT_MS = 15 * 60_000;
+/** Calls that may wait for the user's answer in MoonAgentic, and how long they are given. */
+const WAITS_FOR_USER = new Set(["start_team", "save_memory"]);
+const USER_ANSWER_TIMEOUT_MS = 15 * 60_000;
 
 async function call(tool: string, args: unknown, cancelled: AbortSignal) {
   const token = await access;
@@ -52,7 +60,7 @@ async function call(tool: string, args: unknown, cancelled: AbortSignal) {
       body: JSON.stringify({ tool, args: args ?? {} }),
       signal: AbortSignal.any([
         cancelled,
-        AbortSignal.timeout(tool === "start_team" ? START_TEAM_TIMEOUT_MS : 60_000),
+        AbortSignal.timeout(WAITS_FOR_USER.has(tool) ? USER_ANSWER_TIMEOUT_MS : 60_000),
       ]),
     });
     const body = (await response.json()) as { result?: unknown; error?: string };
@@ -104,11 +112,11 @@ lines.on("line", (line) => {
       reply(id, {});
       return;
     case "tools/list":
-      reply(id, { tools: COORDINATOR_TOOLS });
+      reply(id, { tools });
       return;
     case "tools/call": {
       const name = typeof params.name === "string" ? params.name : "";
-      if (!COORDINATOR_TOOLS.some((t) => t.name === name)) {
+      if (!tools.some((t) => t.name === name)) {
         refuse(id, -32602, `Outil inconnu : ${name}`);
         return;
       }

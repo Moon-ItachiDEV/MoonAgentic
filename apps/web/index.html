@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#111113" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#151515" media="(prefers-color-scheme: dark)" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <!-- Installed on an iPhone's home screen: its own icon, name and full screen. -->
@@ -14,9 +14,69 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>MoonAgentic</title>
+    <!-- Shown until the app replaces it: never a white page, even when its files fail. -->
+    <style>
+      .boot {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        text-align: center;
+        font:
+          15px/1.5 -apple-system,
+          system-ui,
+          sans-serif;
+        background: #fafafa;
+        color: #18181b;
+      }
+      @media (prefers-color-scheme: dark) {
+        .boot {
+          background: #151515;
+          color: #f3f3f3;
+        }
+      }
+      .boot-late {
+        display: grid;
+        gap: 10px;
+        justify-items: center;
+        visibility: hidden;
+        animation: boot-late 0s 10s forwards;
+      }
+      .boot.failed .boot-late {
+        visibility: visible;
+        animation: none;
+      }
+      @keyframes boot-late {
+        to {
+          visibility: visible;
+        }
+      }
+      .boot-late p {
+        margin: 0;
+      }
+      #boot-why {
+        font-size: 12px;
+        opacity: 0.6;
+        word-break: break-all;
+      }
+      .boot-late a {
+        color: inherit;
+        font-weight: 600;
+      }
+    </style>
+    <script src="/boot.js"></script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="boot" class="boot">
+        <div class="boot-late">
+          <p>MoonAgentic ne s'est pas chargé.</p>
+          <p id="boot-why"></p>
+          <a id="boot-reload" href="/">Recharger</a>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

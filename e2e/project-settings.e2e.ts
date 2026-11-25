@@ -101,6 +101,15 @@ describe("a project's settings", () => {
     expect(readFileSync(path.join(repo, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
     if (shots) await page.screenshot({ path: path.join(shots, "projet-consignes.png") });
 
+    // The shared memory is saved with the rest; it lives in MoonAgentic, not in the folder.
+    const memory = dialog.getByLabel("Mémoire partagée du projet");
+    await memory.fill("- Toujours lancer pnpm test avant une PR.");
+    await dialog.getByRole("button", { name: "Enregistrer" }).click();
+    await expect
+      .poll(() => dialog.getByRole("button", { name: "Enregistrer" }).isDisabled())
+      .toBe(true);
+    expect(existsSync(path.join(repo, ".moonagentic/memory.md"))).toBe(false);
+
     await dialog.getByRole("button", { name: /^\/ Commandes/ }).click();
     const commands = page.getByRole("dialog", { name: "Commandes" });
     await commands.getByRole("button", { name: "Nouvelle commande" }).click();

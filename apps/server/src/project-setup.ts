@@ -239,7 +239,11 @@ export async function uncommitted(dir: string): Promise<string[]> {
 }
 
 /** What the project gives its agents, as its settings show it. */
-export async function readSetup(dir: string, isGit: boolean): Promise<ProjectSetup> {
+export async function readSetup(
+  dir: string,
+  isGit: boolean,
+  memory: ProjectSetup["memory"] = { text: "" },
+): Promise<ProjectSetup> {
   let rules: ProjectSetup["rules"] = { text: "", exists: false };
   const file = resolveInside(dir, RULES_FILE);
   if (file) {
@@ -250,6 +254,7 @@ export async function readSetup(dir: string, isGit: boolean): Promise<ProjectSet
   return {
     rules,
     claude: claudeState(dir),
+    memory,
     commands: findProjectCommands(dir),
     skills: projectSkills(dir).map(({ file: _file, ...skill }) => skill),
     ...(pending?.length ? { uncommitted: pending } : {}),

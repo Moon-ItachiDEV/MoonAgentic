@@ -56,7 +56,7 @@ export async function sweepWorktrees(
       if (now - (await stat(folder)).mtimeMs < minAge) continue;
       const repo = await worktreeRepo(folder);
       if (repo) {
-        await saveCheckpoint(folder, orphanRef(entry.name, now));
+        await saveCheckpoint(folder, orphanRef(entry.name, now), true);
         await removeWorktree(repo, folder);
       } else if (repositoryLeft(folder)) {
         // Its repository is there but git did not answer for it: it is kept for next time.

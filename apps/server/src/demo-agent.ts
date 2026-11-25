@@ -131,6 +131,10 @@ const LONG_ANSWER = Array.from(
 ).join("");
 
 const CONTEXT_SIZE = 200_000;
+/** Characters that are not seen and change how a text reads, for « /trompeur ». */
+const RLO = "\u202E";
+const PDF = "\u202C";
+const ZWSP = "\u200B";
 
 const modeChoices = [
   { id: "agent", name: "Agent", description: "Lit et modifie le code" },
@@ -214,7 +218,7 @@ const app = acp
     cwds.set(sessionId, params.cwd);
     mcpNames.set(
       sessionId,
-      params.mcpServers.map((m) => m.name),
+      params.mcpServers.map((m) => m.name).filter((name) => name !== "moonagentic"),
     );
     mcpServers.set(sessionId, params.mcpServers);
     // Lists its commands right behind the reply naming the session, often in the same read.
@@ -299,9 +303,17 @@ const app = acp
             ? [`${decodeURIComponent(b.resource.uri.split("/").pop() ?? "")} (texte)`]
             : [],
     );
-    // The last block is the user's message; one before it carries the earlier conversation.
+    // The last block is the user's message; one before it carries project memory and/or earlier conversation.
     const ask = texts.at(-1) ?? "";
     const firstAsk = texts.length > 1 ? texts[0]?.match(/^Utilisateur : (.*)$/m)?.[1] : undefined;
+    const memoryLine =
+      texts.length > 1
+        ? texts[0]
+            ?.match(
+              /^Mémoire partagée du projet[^\n]*:\n\n([\s\S]*?)(?:\n\nTu reprends une conversation|$)/,
+            )?.[1]
+            ?.trim()
+        : undefined;
     const update = async (u: acp.SessionUpdate) => {
       if (pause) await delay(pause);
       await client.notify("session/update", { sessionId, update: u });
@@ -515,6 +527,58 @@ const app = acp
       );
       return { stopReason: "end_turn" };
     }
+    const searching = ask.trim().match(/(?:^|\n)\/cherche (.+)$/);
+    if (searching) {
+      const said = await callMoonAgentic(sessionId, "search_threads", { query: searching[1] });
+      await say(said, "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
+    if (/(?:^|\n)\/memoire$/.test(ask.trim())) {
+      const said = await callMoonAgentic(sessionId, "read_memory", {});
+      await say(said, "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
+    const noting = ask.trim().match(/(?:^|\n)\/note (.+)$/);
+    if (noting) {
+      const call = {
+        toolCallId: `save-mem-${randomUUID()}`,
+        title: "Run mcp_moonagentic_save_memory",
+        kind: "other" as const,
+      };
+      await update({ sessionUpdate: "tool_call", ...call, status: "pending" });
+      const permission: acp.RequestPermissionResponse = await client.request(
+        "session/request_permission",
+        {
+          sessionId,
+          toolCall: call,
+          options: [
+            { optionId: "allow", name: "Autoriser", kind: "allow_once" },
+            { optionId: "reject", name: "Refuser", kind: "reject_once" },
+          ],
+        } satisfies acp.RequestPermissionRequest,
+      );
+      if (permission.outcome.outcome === "cancelled") return { stopReason: "cancelled" };
+      if (permission.outcome.optionId !== "allow") {
+        await update({ sessionUpdate: "tool_call_update", ...call, status: "failed" });
+        await say("Refusé.", "agent_message_chunk");
+        return { stopReason: "end_turn" };
+      }
+      const said = await callMoonAgentic(sessionId, "save_memory", { content: noting[1] });
+      await update({ sessionUpdate: "tool_call_update", ...call, status: "completed" });
+      await say(said, "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
+    if (/(?:^|\n)\/mcp-outils$/.test(ask.trim())) {
+      const server = mcpServers.get(sessionId)?.find((m) => m.name === "moonagentic");
+      if (!server || !("command" in server)) {
+        await say("Aucun outil MoonAgentic dans cette session.", "agent_message_chunk");
+        return { stopReason: "end_turn" };
+      }
+      const askBridge = await bridgeOf(sessionId, server);
+      const listed = (await askBridge("tools/list", {})) as { tools?: { name: string }[] };
+      await say((listed.tools ?? []).map((t) => t.name).join(", "), "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
     if (ask.trim() === "/compact") {
       await say("Contexte compacté.", "agent_message_chunk");
       // Only the tokens this time, as some agents do.
@@ -594,6 +658,36 @@ const app = acp
         process.exit(1);
       }, 50);
       return new Promise<never>(() => undefined);
+    }
+    if (ask.trim() === "/trompeur") {
+      // As an agent told what to write by a page it read: a tool call and a permission whose
+      // words hold characters that reorder them or take no room, and read as something else.
+      const call = {
+        toolCallId: "read-odd",
+        title: `Lire le fichier ${RLO}hs.tixe-lruc${PDF} README.md\n`,
+        kind: "read" as const,
+        status: "pending" as const,
+      };
+      await update({ sessionUpdate: "tool_call", ...call });
+      const odd: acp.RequestPermissionResponse = await client.request(
+        "session/request_permission",
+        {
+          sessionId,
+          toolCall: call,
+          options: [
+            { optionId: "allow", name: `Auto${ZWSP}riser`, kind: "allow_once" },
+            { optionId: "reject", name: `${RLO}resufeR`, kind: "reject_once" },
+          ],
+        } satisfies acp.RequestPermissionRequest,
+      );
+      await update({
+        sessionUpdate: "tool_call_update",
+        toolCallId: call.toolCallId,
+        status: "completed",
+      });
+      const picked = odd.outcome.outcome === "selected" ? odd.outcome.optionId : "rien";
+      await say(`Réponse reçue : ${picked}.`, "agent_message_chunk");
+      return { stopReason: "end_turn" };
     }
     if (ask.trim() === "/question") {
       // As Antigravity asks: a tool call left unfinished, the question as text, and the
@@ -784,6 +878,7 @@ const app = acp
     });
     await say(
       `Tu m'as demandé : « ${ask} » (modèle ${models.get(sessionId) ?? "rapide"}). ` +
+        (memoryLine ? `Mémoire reçue : « ${memoryLine.split("\n")[0]} ». ` : "") +
         (firstAsk ? `J'ai reçu l'historique, qui commence par « ${firstAsk} ». ` : "") +
         (attached.length ? `Pièces jointes : ${attached.join(", ")}. ` : "") +
         (mcpNames.get(sessionId)?.length

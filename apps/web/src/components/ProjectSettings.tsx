@@ -14,6 +14,7 @@ import {
   fits,
   ICON_PICKS,
   iconProblem,
+  memoryFits,
   oneLine,
   skillProblem,
 } from "../project-setup.ts";
@@ -37,7 +38,7 @@ const PANE_TITLE: Record<Pane, string> = {
 /**
  * A project's settings, as one sheet: its name, icon and tint, what it gives its agents
  * (read from and written to its own folder: `AGENTS.md`, its `/` commands and its skills),
- * its repository, and what can be done with the project itself.
+ * its shared memory, its repository, and what can be done with the project itself.
  */
 export function ProjectSettings(props: {
   project: Project;
@@ -63,6 +64,7 @@ export function ProjectSettings(props: {
   const [muted, setMuted] = useState(() => projectMuted(projectId));
   const [name, setName] = useState(project.name);
   const [rules, setRules] = useState<string>();
+  const [memory, setMemory] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [iconOpen, setIconOpen] = useState(false);
@@ -72,6 +74,7 @@ export function ProjectSettings(props: {
     setPane("main");
     setName(project.name);
     setRules(undefined);
+    setMemory(undefined);
     setError(undefined);
     let live = true;
     connection
@@ -93,10 +96,17 @@ export function ProjectSettings(props: {
 
   const savedRules = setup?.rules.text ?? "";
   const text = rules ?? savedRules;
+  // Kept by MoonAgentic, not in the folder: shared at once by every agent, thread and branch.
+  const savedMemory = setup?.memory.text ?? "";
+  const notes = memory ?? savedMemory;
+  const memoryChanged =
+    memory !== undefined && memory.replace(/\r\n/g, "\n").trim() !== savedMemory;
   const newName = name.trim();
   const dirty =
-    (!!newName && newName !== project.name) || (rules !== undefined && rules !== savedRules);
-  const canSave = dirty && !busy && fits(text);
+    (!!newName && newName !== project.name) ||
+    (rules !== undefined && rules !== savedRules) ||
+    memoryChanged;
+  const canSave = dirty && !busy && fits(text) && memoryFits(notes);
   const save = async () => {
     if (!canSave) return;
     setBusy(true);
@@ -108,6 +118,10 @@ export function ProjectSettings(props: {
       if (rules !== undefined && rules !== savedRules) {
         await change({ type: "project.saveRules", requestId: newId(), projectId, text: rules });
         setRules(undefined);
+      }
+      if (memory !== undefined && memoryChanged) {
+        await change({ type: "project.saveMemory", requestId: newId(), projectId, text: memory });
+        setMemory(undefined);
       }
     } catch (e) {
       setError(why(e));
@@ -224,6 +238,26 @@ export function ProjectSettings(props: {
                 </span>
               </div>
             )}
+          </div>
+        )}
+        <div className="gl2">Mémoire partagée</div>
+        <label className="fld ta">
+          <textarea
+            aria-label="Mémoire partagée du projet"
+            value={notes}
+            disabled={!setup}
+            placeholder={
+              setup ? "Décisions, conventions, pièges connus" : (loadError ?? "Lecture du dossier…")
+            }
+            spellCheck={false}
+            onChange={(e) => setMemory(e.target.value)}
+          />
+        </label>
+        {!memoryFits(notes) && (
+          <div className="ins">
+            <div className="it ro">
+              <span className="tx mer">Mémoire trop longue (16 Ko max)</span>
+            </div>
           </div>
         )}
         <div className="gl2">Dépôt</div>
@@ -400,6 +434,7 @@ type SetupRequest = Extract<
   {
     type:
       | "project.saveRules"
+      | "project.saveMemory"
       | "project.linkClaude"
       | "project.saveCommand"
       | "project.removeCommand"
