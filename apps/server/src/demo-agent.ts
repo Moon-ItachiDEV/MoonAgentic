@@ -214,7 +214,7 @@ const app = acp
     cwds.set(sessionId, params.cwd);
     mcpNames.set(
       sessionId,
-      params.mcpServers.map((m) => m.name),
+      params.mcpServers.map((m) => m.name).filter((name) => name !== "moonagentic"),
     );
     mcpServers.set(sessionId, params.mcpServers);
     // Lists its commands right behind the reply naming the session, often in the same read.
