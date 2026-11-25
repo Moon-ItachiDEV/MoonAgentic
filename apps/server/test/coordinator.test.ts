@@ -434,7 +434,8 @@ describe("a project's coordinator", () => {
     // 1. Refusing cancels start_team without opening any team.
     const refusedReq = post(tokens[0]!, {
       tool: "start_team",
-      args: { task_key: "refuse", task: "Tâche refusée" },
+      // Written with a character that turns the end of the task around on screen.
+      args: { task_key: "refuse", task: "Tâche \u202Eeésufer\u202C" },
     });
     const askRefuse = () =>
       store
@@ -443,16 +444,26 @@ describe("a project's coordinator", () => {
           (i) => i.kind === "permission" && i.title.includes("accès complet") && i.outcome === null,
         );
     await soon(askRefuse).toBeTruthy();
+    // The request reads as the task is written: nothing in it reorders or hides.
+    expect(askRefuse()).toMatchObject({
+      title: "Lancer l'équipe en accès complet : Tâche eésufer",
+    });
     hub.respondToPermission(coordinatorId, askRefuse()!.id, "reject");
     expect((await refusedReq).status).toBe(400);
     expect(store.listThreads().some((t) => t.taskKey === "refuse")).toBe(false);
 
     // 2. Picking « Lancer en supervisé » launches the team in supervised mode.
+    // The request shows the start of the task as it is written, code included, and is cut
+    // between two characters: here an emoji sits where the cut falls.
+    const start = "Lance `pnpm test` puis ```git push --force``` et range".padEnd(78, ".");
     const supReq = post(tokens[0]!, {
       tool: "start_team",
-      args: { task_key: "sup", task: "En supervisé" },
+      args: { task_key: "sup", task: `${start}😀 puis le reste` },
     });
     await soon(askRefuse).toBeTruthy();
+    expect(askRefuse()).toMatchObject({
+      title: `Lancer l'équipe en accès complet : ${start}…`,
+    });
     hub.respondToPermission(coordinatorId, askRefuse()!.id, "supervised");
     const supRes = (await (await supReq).json()) as { result: { opened: { id: string } } };
     expect(store.getThread(supRes.result.opened.id)!.team).toMatchObject({

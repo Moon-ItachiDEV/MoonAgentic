@@ -38,13 +38,7 @@ export const Markdown = memo(function Markdown({
   // Worked out once per text: a pull request's state, when it comes, redraws every answer
   // on the page, and none of them should be parsed and cleaned again for that.
   const html = useMemo(
-    () =>
-      DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }), {
-        // An answer is text to read: nothing in it should look like part of the app or submit anything.
-        FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style"],
-        // Nor should it place itself over the app, which a style of its own would allow.
-        FORBID_ATTR: ["style"],
-      }),
+    () => DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }), CLEAN),
     [text],
   );
   const root = useRef<HTMLDivElement>(null);
@@ -125,7 +119,7 @@ export const Markdown = memo(function Markdown({
     <>
       <div
         ref={root}
-        className="md"
+        className="md md-own"
         onClick={open}
         onKeyDown={open}
         dangerouslySetInnerHTML={{ __html: html }}
@@ -136,6 +130,21 @@ export const Markdown = memo(function Markdown({
     </>
   );
 });
+
+/**
+ * What is kept of an answer. It is text to read, written by an agent that may repeat what a
+ * page or a file told it to: it never passes for a piece of the app, nor stands over it.
+ */
+const CLEAN = {
+  // Nothing that submits, and nothing the browser itself lays over the page.
+  FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style", "dialog"],
+  // No style of its own, and none of the app's: a class, an id, a name or a role is what the
+  // page's styles and code know their own pieces by. The few an answer needs are set below,
+  // once it is cleaned.
+  FORBID_ATTR: ["style", "class", "id", "name", "role", "slot", "part", "popover", "tabindex"],
+  ALLOW_DATA_ATTR: false,
+  ALLOW_ARIA_ATTR: false,
+};
 
 const KEEP_ICON =
   '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10V2.5M5 5.25 8 2.25l3 3M4.5 7.5H4a1.5 1.5 0 0 0-1.5 1.5v3.5A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5V9A1.5 1.5 0 0 0 12 7.5h-.5"/></svg>';
@@ -214,10 +223,27 @@ async function keepImage(threadId: string, ref: string) {
   a.remove();
 }
 
+/**
+ * Whether a link leads out of the app: to a page of another site, or to a letter to write.
+ * The address is read as the browser reads it, from the page it is on, so `#…`, `?…`, `/…`
+ * or `http:…` on the app's own server all count as the app itself.
+ */
+function leadsOut(href: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(href, document.baseURI);
+  } catch {
+    return false;
+  }
+  if (url.protocol === "mailto:") return true;
+  return (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin;
+}
+
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   // A file of the computer: shown and opened in the app, from an address the server gives.
   const local = markedRef(node.getAttribute(node.tagName === "IMG" ? "src" : "href"));
-  // Only what the Markdown itself marked is opened so: never an attribute the answer wrote.
+  // Only what carries the mark is opened so, never a `data-local` the answer wrote. An answer
+  // can write the mark itself in its HTML: it then names a file, as its Markdown would.
   node.removeAttribute("data-local");
   node.classList.remove("md-img", "md-file");
   if (node.tagName === "IMG") {
@@ -235,24 +261,47 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     node.setAttribute("data-local", local);
     node.setAttribute("title", local);
     node.classList.add("md-file");
+    // Opened by the app, on a click or a key: it keeps no address of its own. With one, a
+    // middle click, a long press or « open in a new tab » opened the app itself there, and
+    // an answer writes what follows the mark.
+    node.removeAttribute("href");
+    node.setAttribute("tabindex", "0");
+    node.setAttribute("role", "link");
     node.removeAttribute("target");
     node.removeAttribute("rel");
     return;
   }
-  if (node.tagName === "A") {
-    node.setAttribute("target", "_blank");
-    node.setAttribute("rel", "noopener noreferrer");
-    // A link to a pull request is drawn as GitHub draws it: its icon, then its number.
-    const pr = pullRequestUrl(node.getAttribute("href") ?? "");
-    node.classList.remove("prchip");
-    node.removeAttribute("data-pr");
-    node.removeAttribute("data-state");
-    if (pr) {
-      node.classList.add("prchip");
-      node.setAttribute("data-pr", pr.url);
-      // A bare address is long and says less than the number it ends with.
-      if (node.textContent?.trim() === node.getAttribute("href"))
-        node.textContent = `#${pr.number}`;
+  // Only the links of the text lead anywhere. What else can carry an address (a link drawn
+  // in a picture, an area of one, a piece of a formula, which some browsers follow) leads
+  // nowhere rather than take the app's own page elsewhere. A picture in a drawing keeps its
+  // source: it is shown, not followed.
+  if (node.tagName !== "A") {
+    if (node.localName !== "image") {
+      node.removeAttribute("href");
+      node.removeAttribute("xlink:href");
     }
+    return;
+  }
+  // A link to the app itself leads nowhere, an answer having neither anchors nor pages of
+  // its own there: followed, it would open the app at an address of the answer's choosing,
+  // where a token or a pairing code is read.
+  if (!leadsOut(node.getAttribute("href") ?? "")) {
+    node.removeAttribute("href");
+    node.removeAttribute("target");
+    node.removeAttribute("rel");
+    return;
+  }
+  node.setAttribute("target", "_blank");
+  node.setAttribute("rel", "noopener noreferrer");
+  // A link to a pull request is drawn as GitHub draws it: its icon, then its number.
+  const pr = pullRequestUrl(node.getAttribute("href") ?? "");
+  node.classList.remove("prchip");
+  node.removeAttribute("data-pr");
+  node.removeAttribute("data-state");
+  if (pr) {
+    node.classList.add("prchip");
+    node.setAttribute("data-pr", pr.url);
+    // A bare address is long and says less than the number it ends with.
+    if (node.textContent?.trim() === node.getAttribute("href")) node.textContent = `#${pr.number}`;
   }
 });

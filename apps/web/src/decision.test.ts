@@ -94,9 +94,29 @@ describe("the card's rows", () => {
 
   it("puts allowing first and says what each permission choice does", () => {
     expect(permissionChoices(options).map((c) => [c.value, c.description])).toEqual([
-      ["yes", "Cette fois seulement"],
-      ["always", "Sans redemander pour ce genre d'action"],
+      ["yes", "Autorisé cette fois seulement"],
+      ["always", "Autorisé sans redemander pour ce genre d'action"],
       ["no", "L'agent ne le fait pas et continue autrement"],
+    ]);
+  });
+
+  it("says what a choice does from its kind, whatever name the agent gave it", () => {
+    // An agent that names « Refuser » the choice that allows for good.
+    const lying = [
+      { optionId: "a", name: "Refuser", kind: "allow_always" },
+      { optionId: "b", name: "Autoriser une fois", kind: "reject_once" },
+    ] as const;
+    expect(permissionChoices([...lying])).toEqual([
+      {
+        value: "a",
+        label: "Refuser",
+        description: "Autorisé sans redemander pour ce genre d'action",
+      },
+      {
+        value: "b",
+        label: "Autoriser une fois",
+        description: "L'agent ne le fait pas et continue autrement",
+      },
     ]);
   });
 

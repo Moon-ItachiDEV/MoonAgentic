@@ -2,6 +2,7 @@ import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import type { AgentProcessRef, DiagnosticsMonitor } from "./diagnostics.ts";
 import { generatedFolders, madeImages, resolveThreadFile } from "./thread-files.ts";
+import { labelStart, plainLabel } from "./labels.ts";
 import { COMPUTER_ACTOR, ProjectLocks } from "./locks.ts";
 import {
   linkClaude,
@@ -174,8 +175,8 @@ const stoppedError = (detail: string): string => {
 };
 
 const titleFrom = (text: string, images = 0) => {
-  const line = text.trim().split("\n")[0] ?? "";
-  if (line.length > 60) return `${line.slice(0, 57).trimEnd()}…`;
+  const line = plainLabel(text.trim().split("\n")[0] ?? "");
+  if (line.length > 60) return `${labelStart(line, 57).trimEnd()}…`;
   // A message of images alone has no words to name the conversation with.
   return line || (images > 1 ? "Images" : images ? "Image" : "Nouvelle discussion");
 };
@@ -1979,7 +1980,7 @@ export class Hub {
       prReview: {
         ...review,
         repo,
-        title: pr.title,
+        title: plainLabel(pr.title),
         url: pr.url,
         head,
         base: pr.base,
@@ -3991,17 +3992,19 @@ export class Hub {
     const images = [
       ...new Set([...(existing?.images ?? []), ...madeImages(update.content, update.rawOutput)]),
     ];
+    // The agent's own words for what it does, shown as they read.
+    const title = update.title ? plainLabel(update.title) : undefined;
     // A new call joins the step of the agent's plan it is on.
-    if (!existing && update.title) {
+    if (!existing && title) {
       const planId = `plan:${this.turnIds.get(threadId) ?? "late"}`;
       const plan = this.store.getItem(threadId, planId);
-      const entries = plan?.kind === "plan" ? noteTool(plan.entries, update.title) : undefined;
+      const entries = plan?.kind === "plan" ? noteTool(plan.entries, title) : undefined;
       if (plan?.kind === "plan" && entries) this.putItem(threadId, { ...plan, entries });
     }
     this.putItem(threadId, {
       id,
       kind: "tool",
-      title: update.title ?? existing?.title ?? "Outil",
+      title: title || existing?.title || "Outil",
       toolKind: update.kind ?? existing?.toolKind ?? "other",
       status: update.status ?? existing?.status ?? "pending",
       content: content ?? existing?.content ?? [],
@@ -4073,8 +4076,13 @@ export class Hub {
     this.putItem(threadId, {
       id,
       kind: "permission",
-      title: request.toolCall.title ?? "L'agent demande une autorisation",
-      options: request.options.map((o) => ({ optionId: o.optionId, name: o.name, kind: o.kind })),
+      // What the user decides by reads as it is written: no character in it reorders or hides.
+      title: plainLabel(request.toolCall.title ?? "") || "L'agent demande une autorisation",
+      options: request.options.map((o) => ({
+        optionId: o.optionId,
+        name: plainLabel(o.name),
+        kind: o.kind,
+      })),
       outcome: null,
       at: Date.now(),
     });
@@ -4145,7 +4153,11 @@ export class Hub {
     signal?: AbortSignal,
   ): Promise<PermissionMode | null> {
     if (signal?.aborted) return Promise.resolve(null);
-    const preview = summaryOf(task, 80);
+    // The task is the coordinator's own words, and this is the request that opens the most:
+    // its start is shown as it is written, signs and code included, and not a summary of it,
+    // which would leave out a block of code.
+    const said = plainLabel(task);
+    const preview = said.length > 80 ? `${labelStart(said, 79).trimEnd()}…` : said;
     const id = `permission:${randomUUID()}`;
     this.putItem(coordinatorId, {
       id,

@@ -11,6 +11,8 @@ import { initialState, reduce, type State } from "./state.ts";
 export type { ConnectionStatus, Review, State } from "./state.ts";
 
 const TOKEN_KEY = "moonagentic.token";
+/** Where a token the address offered waits, in its own tab only, for the server's answer. */
+const OFFERED_KEY = "moonagentic.token.offered";
 /** The code the server closes a connection with when its token was replaced. */
 const TOKEN_RENEWED = 4001;
 /** The code the server closes a device's connections with when it is revoked. */
@@ -64,19 +66,32 @@ export interface ConnectionOptions {
   pingMs?: number;
 }
 
-export function readToken(): string | null {
-  if (typeof location === "undefined") return null;
+/** A token is sent in a header: anything but printable ASCII cannot be one. */
+const wellFormed = (token: string | null): token is string =>
+  !!token && /^[\x21-\x7e]+$/.test(token);
+
+/** The tokens a page starts with. */
+export interface Tokens {
+  /** The one its address gave: only a claim, since anyone can write a link. */
+  offered: string | null;
+  /** The one this device kept, which a server has accepted before. */
+  kept: string | null;
+}
+
+/**
+ * Reads the token of the address (`#token=…`, or `?token=…` in older links) and the one this
+ * device kept. The address loses its token at once, so it stays in no history or bookmark.
+ * A link can be written by anyone, an agent's answer included: its token is tried first, and
+ * replaces the kept one only once the server has accepted it. Until then it is remembered
+ * for this tab alone, so a page reloaded before the server answered still has it to try.
+ */
+export function readTokens(): Tokens {
+  if (typeof location === "undefined") return { offered: null, kept: null };
   const url = new URL(location.href);
   const hashParams = new URLSearchParams(url.hash.replace(/^#/, ""));
   const fromHash = hashParams.get("token");
   const fromQuery = url.searchParams.get("token");
-  const fromUrl = fromHash || fromQuery;
-  if (fromUrl) {
-    try {
-      localStorage.setItem(TOKEN_KEY, fromUrl);
-    } catch {
-      // private mode: the token lives only in this tab
-    }
+  if (fromHash !== null || fromQuery !== null) {
     if (fromHash !== null) {
       hashParams.delete("token");
       const nextHash = hashParams.toString();
@@ -84,12 +99,30 @@ export function readToken(): string | null {
     }
     if (fromQuery !== null) url.searchParams.delete("token");
     history.replaceState(history.state, "", url);
-    return fromUrl;
+  }
+  const fromUrl = fromHash || fromQuery;
+  let offered = wellFormed(fromUrl) ? fromUrl : null;
+  let kept: string | null = null;
+  try {
+    kept = localStorage.getItem(TOKEN_KEY);
+  } catch {
+    // private mode: nothing was kept
   }
   try {
-    return localStorage.getItem(TOKEN_KEY);
+    if (offered) sessionStorage.setItem(OFFERED_KEY, offered);
+    else offered = sessionStorage.getItem(OFFERED_KEY);
   } catch {
-    return null;
+    // no storage for the tab: the offered token lives only in this page
+  }
+  return { offered: wellFormed(offered) ? offered : null, kept };
+}
+
+/** The server has answered for the token this tab was offered: it waits no more. */
+function forgetOffered(): void {
+  try {
+    sessionStorage.removeItem(OFFERED_KEY);
+  } catch {
+    // no storage for the tab: nothing was remembered
   }
 }
 
@@ -200,7 +233,12 @@ export class Connection {
   /** How many parts of the page show each thread: it is left once none does. */
   private readonly shownBy = new Map<string, number>();
   private retry = 0;
-  private token = readToken();
+  private token: string | null;
+  /**
+   * Set while the token in use is the one the address offered, which no server has accepted
+   * yet: what this device kept before, to go back to if the offered one is refused.
+   */
+  private untried: { kept: string | null } | null = null;
   /** A token being renewed: reconnecting waits for it, so it does not try the old one. */
   private renewal: Promise<unknown> | null = null;
   private readonly askTimeoutMs: number;
@@ -219,6 +257,10 @@ export class Connection {
   constructor(options: ConnectionOptions = {}) {
     this.askTimeoutMs = options.askTimeoutMs ?? ASK_TIMEOUT_MS;
     this.pingMs = options.pingMs ?? PING_MS;
+    const { offered, kept } = readTokens();
+    this.token = offered ?? kept;
+    if (offered && offered !== kept) this.untried = { kept };
+    else forgetOffered();
     const pairCode = readPairCode();
     if (pairCode) {
       // Opened from a pairing link: this device gets its own token first.
@@ -252,7 +294,19 @@ export class Connection {
   }
 
   private usableToken(): boolean {
-    return !!this.token && /^[\x21-\x7e]+$/.test(this.token);
+    return wellFormed(this.token);
+  }
+
+  /** Takes a token the server itself gave or accepted: it is the one this device keeps. */
+  private keep(token: string): void {
+    this.token = token;
+    this.untried = null;
+    forgetOffered();
+    try {
+      localStorage.setItem(TOKEN_KEY, token);
+    } catch {
+      // private mode: the token lives only in this tab
+    }
   }
 
   /** Why the last pairing failed, to show on the page asking for a code. */
@@ -281,12 +335,7 @@ export class Connection {
     if (!response.ok || !body?.token) {
       throw new Error(body?.message ?? `Le serveur a répondu ${response.status}.`);
     }
-    this.token = body.token;
-    try {
-      localStorage.setItem(TOKEN_KEY, body.token);
-    } catch {
-      // private mode: the token lives only in this tab
-    }
+    this.keep(body.token);
     this.pairError = null;
     this.set({ ...this.state, status: "connecting" });
     void this.open();
@@ -481,12 +530,7 @@ export class Connection {
    */
   async renewToken(): Promise<string> {
     const renewal = this.api<{ token: string }>("/api/remote/token", "POST").then(({ token }) => {
-      this.token = token;
-      try {
-        localStorage.setItem(TOKEN_KEY, token);
-      } catch {
-        // private mode: the token lives only in this tab
-      }
+      this.keep(token);
       return token;
     });
     this.renewal = renewal.catch(() => undefined);
@@ -551,10 +595,21 @@ export class Connection {
           if (attempt === this.attempt) void this.open();
           return;
         }
+        const refused = this.untried;
+        this.untried = null;
+        if (refused) forgetOffered();
+        if (refused && wellFormed(refused.kept)) {
+          // The link's token is not this server's: the device goes on with the one it kept.
+          this.token = refused.kept;
+          void this.open();
+          return;
+        }
         this.set({ ...this.state, status: "unauthorized" });
         return;
       }
       if (response.ok) {
+        // Accepted: a token that came from the address is now the one this device keeps.
+        if (this.untried && this.token) this.keep(this.token);
         const body = (await response.json().catch(() => null)) as { ticket?: unknown } | null;
         if (typeof body?.ticket === "string" && body.ticket) ticket = body.ticket;
       }

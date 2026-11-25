@@ -111,9 +111,13 @@ export interface Choice {
   recommended?: boolean;
 }
 
+/**
+ * What each choice does, said from its kind alone. The name beside it is the agent's own
+ * word, which may say anything: the note says whether the choice allows or refuses.
+ */
 const PERMISSION_NOTE: Record<PermissionOption["kind"], string> = {
-  allow_once: "Cette fois seulement",
-  allow_always: "Sans redemander pour ce genre d'action",
+  allow_once: "Autorisé cette fois seulement",
+  allow_always: "Autorisé sans redemander pour ce genre d'action",
   reject_once: "L'agent ne le fait pas et continue autrement",
   reject_always: "Refusé à chaque fois, sans redemander",
 };
