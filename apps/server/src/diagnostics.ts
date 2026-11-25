@@ -766,6 +766,12 @@ export class DiagnosticsMonitor {
     lines.push("--- Erreurs côté interface (navigateur / téléphone) ---");
     if (this.clientErrors.length === 0) {
       lines.push("Aucune erreur interface signalée depuis le démarrage.");
+    } else if (locked) {
+      // One may name a locked project's thread, written before the lock: none is shown.
+      const n = this.clientErrors.length;
+      lines.push(
+        `${n} erreur${n > 1 ? "s" : ""} d'interface masquée${n > 1 ? "s" : ""} tant qu'un projet est verrouillé (/lock).`,
+      );
     } else {
       for (const err of this.clientErrors.slice(-15)) {
         const route = err.route ? ` (${err.route})` : "";

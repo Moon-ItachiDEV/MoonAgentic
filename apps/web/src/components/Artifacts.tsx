@@ -123,10 +123,13 @@ function Preview({
 export function Artifacts({
   threads,
   projects,
+  online,
   onOpenThread,
 }: {
   threads: Thread[];
   projects: Project[];
+  /** The connection is open: the list is asked for only then, and again each time it opens. */
+  online: boolean;
   onOpenThread: (id: string) => void;
 }) {
   const [list, setList] = useState<{ artifacts: Artifact[]; capped: boolean } | null>(null);
@@ -154,11 +157,13 @@ export function Artifacts({
       },
     );
   }, []);
-  // Asked again whenever a turn starts or ends: what the agent wrote is then on disk.
+  // Asked again whenever a turn starts or ends: what the agent wrote is then on disk. Not
+  // before the connection is open: opened at its address, the page asked too early and kept
+  // « Pas de connexion ».
   const working = workingKey(threads);
   useEffect(() => {
-    load();
-  }, [load, working]);
+    if (online) load();
+  }, [load, working, online]);
   useEffect(
     () => () => {
       asked.current += 1;

@@ -196,6 +196,42 @@ describe("artifacts", () => {
     await page.close();
   });
 
+  /** A page whose connection opens late: its ticket is answered after `ms`. */
+  const slowConnection = async (ms: number) => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // The token is kept first, as on any device already paired.
+    await page.goto(url);
+    await page.locator(".top").waitFor();
+    await page.route("**/api/ws-ticket", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      await route.continue();
+    });
+    return page;
+  };
+
+  it("lists the artifacts when opened at its address, before the connection is open", async () => {
+    const page = await slowConnection(1_500);
+    await page.goto(new URL("/artefacts", url).href);
+    await page.getByRole("button", { name: /^accueil\.html/ }).waitFor({ timeout: 15_000 });
+    expect(await page.getByText("Pas de connexion").count()).toBe(0);
+    await page.close();
+  });
+
+  it("finds messages for a search typed before the connection is open", async () => {
+    const page = await slowConnection(1_500);
+    await page.reload();
+    await page.locator(".top").waitFor();
+    await page.keyboard.press("Control+k");
+    await page.getByLabel("Rechercher").first().fill("réponse vaut");
+    const dialog = page.getByRole("dialog", { name: "Recherche rapide" });
+    await dialog.getByText("Messages", { exact: true }).waitFor({ timeout: 15_000 });
+    await dialog
+      .getByText(/la réponse vaut 42/)
+      .first()
+      .waitFor();
+    await page.close();
+  });
+
   it("is the phone's fourth tab", async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 780 } });
     await page.goto(url);

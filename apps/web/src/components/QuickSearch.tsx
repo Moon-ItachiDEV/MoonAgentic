@@ -55,9 +55,11 @@ export function QuickSearch(props: {
     return () => document.removeEventListener("keydown", escape);
   }, [onClose]);
 
-  // Messages are searched on the server, which holds every thread's timeline.
+  // Messages are searched on the server, which holds every thread's timeline: once the
+  // connection is open, and again when it opens anew, so a search typed meanwhile is not lost.
+  const online = state.status === "open";
   useEffect(() => {
-    if (q.length < 2) return;
+    if (q.length < 2 || !online) return;
     let current = true;
     const timer = setTimeout(() => {
       connection
@@ -69,7 +71,7 @@ export function QuickSearch(props: {
       current = false;
       clearTimeout(timer);
     };
-  }, [q]);
+  }, [q, online]);
 
   const projectName = (id: string) => state.projects.find((p) => p.id === id)?.name ?? "";
   const threadTitle = (id: string) => state.threads.find((t) => t.id === id)?.title ?? "";

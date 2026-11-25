@@ -940,6 +940,7 @@ export function App() {
             <Artifacts
               threads={state.threads}
               projects={state.projects}
+              online={state.status === "open"}
               onOpenThread={(id) => go({ name: "thread", threadId: id })}
             />
           </ErrorBoundary>

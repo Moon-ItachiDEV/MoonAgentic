@@ -25,16 +25,35 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const dayOf = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const timeOf = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
+/** Names under which a secret is given: in a query, a form, a JSON record, an environment. */
+const SECRET_NAMES =
+  "password|passwd|pwd|secret|client[_-]?secret|api[_-]?key|apikey|access[_-]?key|" +
+  "secret[_-]?key|private[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|key";
+
 /**
- * Strips access tokens, WebSocket tickets, Bearer credentials, GitHub tokens and common API keys
- * before anything reaches a log file or a service manager's journal.
+ * Strips what gives access before anything reaches a log file, the diagnostic report or a
+ * service manager's journal: the app's own tokens and tickets, credentials in headers and
+ * addresses, values given under a secret's name, and the keys of the services agents use.
+ * Agents and tools print them as they fail, so the forms are those they print.
  */
 export const redact = (line: string) =>
   line
     .replace(/(token|ticket)=[\w-]+/gi, "$1=…")
     .replace(/\b(Bearer)\s+(?:(?=\S*[0-9._~+/=-])\S{6,}|[A-Za-z0-9._~+/=-]{16,})/gi, "$1 …")
+    .replace(/\b(Basic)\s+(?=\S*[0-9+/=])[A-Za-z0-9+/]{8,}={0,2}/g, "$1 …")
+    .replace(/\b(x-api-key|api-key|x-auth-token|private-token)(\s*:\s*)[^\s,;"']+/gi, "$1$2…")
+    // `user:password@` in an address: the password goes, the rest says where it failed.
+    .replace(/\b([a-z][\w+.-]*:\/\/[^\s/:@]+):[^\s/@]+@/gi, "$1:…@")
+    .replace(new RegExp(`\\b(${SECRET_NAMES})=[^\\s&"',;]+`, "gi"), "$1=…")
+    .replace(new RegExp(`("(?:${SECRET_NAMES}|token)"\\s*:\\s*)"[^"]*"`, "gi"), '$1"…"')
     .replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{6,}\b/g, "$1…")
-    .replace(/\b(sk-(?:ant-|proj-|live-|test-)?)[A-Za-z0-9_-]{12,}\b/g, "$1…");
+    .replace(/\b(sk-(?:ant-|proj-|live-|test-)?)[A-Za-z0-9_-]{12,}\b/g, "$1…")
+    .replace(/\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, "$1…")
+    .replace(/\b(xox[abprse]-)[A-Za-z0-9-]{10,}/g, "$1…")
+    .replace(/\bAIza[0-9A-Za-z_-]{20,}/g, "AIza…")
+    .replace(/\b(glpat-)[A-Za-z0-9_-]{10,}/g, "$1…")
+    .replace(/\b(npm_)[A-Za-z0-9]{20,}/g, "$1…")
+    .replace(/\beyJ[A-Za-z0-9_-]{5,}\.eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/g, "eyJ…");
 
 const currentStdStreams = (): string[] => {
   const streams: string[] = [];
