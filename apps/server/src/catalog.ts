@@ -24,9 +24,35 @@ import {
   stripMcpSecrets,
 } from "./mcp-secrets.ts";
 import { AgentSession, describe, type ModelOption, needsSignIn } from "./session.ts";
-import type { Store } from "./store.ts";
+import { isRecord, type Store } from "./store.ts";
 
 const DISCOVERY_TIMEOUT_MS = 30_000;
+
+// What the saved settings hold, as far as the code that reads them relies on it. An entry
+// of another shape (a damaged file, a hand edit) is left out by the store instead of
+// stopping the start or every screen that connects.
+const isStrings = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((s) => typeof s === "string");
+const isCustomAgent = (value: unknown): value is CustomAgent =>
+  isRecord(value) &&
+  typeof value.id === "string" &&
+  typeof value.name === "string" &&
+  typeof value.command === "string" &&
+  isStrings(value.args);
+const isFavoriteRef = (value: unknown): value is FavoriteRef =>
+  isRecord(value) && typeof value.agentId === "string" && typeof value.model === "string";
+const isSecrets = (value: unknown): boolean =>
+  Array.isArray(value) && value.every((s) => isRecord(s) && typeof s.name === "string");
+const isMcpServer = (value: unknown): value is McpServerRecord => {
+  if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string") {
+    return false;
+  }
+  const t = value.transport;
+  if (!isRecord(t)) return false;
+  return t.type === "stdio"
+    ? typeof t.command === "string" && isStrings(t.args) && isSecrets(t.env)
+    : t.type === "http" && typeof t.url === "string" && isSecrets(t.headers);
+};
 
 export const agentCommands = (update: acp.AvailableCommandsUpdate): AgentCommand[] =>
   update.availableCommands.slice(0, 200).map((c) => ({
@@ -333,7 +359,7 @@ export class AgentCatalog {
   }
 
   private customAgents(): CustomAgent[] {
-    return this.store.getSetting<CustomAgent[]>("customAgents", []);
+    return this.store.listSetting("customAgents", isCustomAgent);
   }
 
   private saveCustomAgents(agents: CustomAgent[]): void {
@@ -374,7 +400,7 @@ export class AgentCatalog {
   }
 
   favorites(): Favorites {
-    return this.store.getSetting<Favorites>("favorites", {});
+    return this.store.recordSetting("favorites", isStrings);
   }
 
   toggleFavorite(agentId: string, model: string, starred: boolean): void {
@@ -398,7 +424,7 @@ export class AgentCatalog {
   favoriteOrder(): FavoriteRef[] {
     return orderedFavorites(
       this.favorites(),
-      this.store.getSetting<FavoriteRef[]>("favoriteOrder", []),
+      this.store.listSetting("favoriteOrder", isFavoriteRef),
     );
   }
 
@@ -417,7 +443,7 @@ export class AgentCatalog {
   }
 
   private rawMcpServers(): McpServerRecord[] {
-    return this.store.getSetting<McpServerRecord[]>("mcpServers", []);
+    return this.store.listSetting("mcpServers", isMcpServer);
   }
 
   /**

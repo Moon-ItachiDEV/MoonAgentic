@@ -481,6 +481,8 @@ export function askCodex(
         } catch {
           continue;
         }
+        // A line that is JSON but no message (`null`, a number, a text) is no answer either.
+        if (typeof message !== "object" || message === null) continue;
         // Notifications and Codex's own requests to us carry a method: not answers.
         if (typeof message.id !== "number" || message.method !== undefined) continue;
         // Wait for the `initialize` response before sending `initialized` and requests.

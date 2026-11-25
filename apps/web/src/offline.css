@@ -21,6 +21,16 @@
   pointer-events: none;
 }
 
+/* The server saves nothing (a full disk, a held database): the same pill, in the colour of an
+   error, and on two lines where a phone's width asks for it. */
+.offline.unsaved {
+  background: color-mix(in srgb, var(--err) 9%, var(--surface));
+  width: max-content;
+  white-space: normal;
+  text-align: center;
+  border-radius: 16px;
+}
+
 /* A notice takes the width its text asks for, up to the screen's: centred from the middle,
    it was otherwise squeezed into half of a phone's width. */
 .toast {

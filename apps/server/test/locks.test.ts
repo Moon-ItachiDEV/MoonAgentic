@@ -73,6 +73,35 @@ describe("project locks", () => {
     expect(new ProjectLocks(storage).lockedProjects()).toEqual(["p2"]);
   });
 
+  it("locks every project when the saved list cannot be read, rather than opening them", () => {
+    const storage = memory();
+    const first = new ProjectLocks(storage);
+    first.setPin("482913");
+    first.lock("p1");
+    const everyProject = () => ["p1", "p2", "p3"];
+    for (const damaged of [{ p1: true }, "p1", null, ["p1", 42]]) {
+      storage.settings.set("lock.projects", damaged);
+      const locks = new ProjectLocks(storage, undefined, everyProject);
+      expect(locks.lockedProjects()).toEqual(["p1", "p2", "p3"]);
+      expect(() => locks.unlock("p2", "000000")).toThrow(/Code incorrect/);
+    }
+    // The code opens each one again, and what is saved from there is a sound list.
+    const locks = new ProjectLocks(storage, undefined, everyProject);
+    locks.unlock("p2", "482913");
+    expect(storage.settings.get("lock.projects")).toEqual(["p1", "p3"]);
+    expect(new ProjectLocks(storage, undefined, everyProject).lockedProjects()).toEqual([
+      "p1",
+      "p3",
+    ]);
+  });
+
+  it("locks nothing on a list it cannot read when no code is set: nothing could open it", () => {
+    const storage = memory();
+    storage.settings.set("lock.projects", { p1: true });
+    const locks = new ProjectLocks(storage, undefined, () => ["p1", "p2"]);
+    expect(locks.any()).toBe(false);
+  });
+
   it("refuses every code for a while after too many wrong ones", () => {
     let now = 1_000_000;
     const locks = new ProjectLocks(memory(), () => now);

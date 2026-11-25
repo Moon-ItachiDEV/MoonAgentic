@@ -71,6 +71,8 @@ export interface State {
   teamPresets: TeamPreset[] | null;
   /** MoonAgentic's own version and what it knows of a newer one. */
   app: AppInfo | null;
+  /** Why the server saves nothing right now (a full disk, a held database); null otherwise. */
+  storageError: string | null;
   items: Record<string, Item[]>;
   /** What part of each of those timelines is held. */
   held: Record<string, Held>;
@@ -104,6 +106,7 @@ export function reduce(state: State, message: ServerMessage): State {
         defaults: message.snapshot.defaults ?? null,
         teamPresets: message.snapshot.teamPresets ?? null,
         app: message.snapshot.app ?? null,
+        storageError: message.snapshot.storageError ?? null,
         mcpSecretsError: message.snapshot.mcpSecretsError ?? null,
         items: keep(state.items),
         held: keep(state.held),
@@ -122,6 +125,8 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, defaults: message.defaults };
     case "app":
       return { ...state, app: message.app };
+    case "storage":
+      return { ...state, storageError: message.error };
     case "teamPresets":
       return { ...state, teamPresets: message.presets };
     case "coordinatorSettings":
@@ -330,6 +335,7 @@ export const initialState: State = {
   defaults: null,
   teamPresets: null,
   app: null,
+  storageError: null,
   items: {},
   held: {},
   reviews: {},

@@ -7,6 +7,8 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 export interface LockStorage {
   getSetting<T>(key: string, fallback: T): T;
   setSetting(key: string, value: unknown): void;
+  /** Whether anything is saved under this key, readable or not. */
+  hasSetting?(key: string): boolean;
 }
 
 const LOCKED_SETTING = "lock.projects";
@@ -47,11 +49,39 @@ export class ProjectLocks {
   /** When each recent wrong code was given, per device (`computer` or paired device id). */
   private failures: Record<string, number[]> = {};
 
-  constructor(storage: LockStorage, now: () => number = Date.now) {
+  /** `projects` gives every project there is, for the day the saved list cannot be read. */
+  constructor(
+    storage: LockStorage,
+    now: () => number = Date.now,
+    projects: () => string[] = () => [],
+  ) {
     this.storage = storage;
     this.now = now;
-    this.locked = new Set(storage.getSetting<string[]>(LOCKED_SETTING, []));
+    const saved = this.savedLocks();
+    if (saved) {
+      this.locked = new Set(saved);
+    } else {
+      // A list that cannot be read (a damaged file, an edit made by hand) must not open what
+      // it kept closed: every project is locked, and the code opens each one again. Without
+      // a code nothing could be locked, and nothing could be opened again either.
+      this.locked = new Set(this.hasPin() ? projects() : []);
+      console.error(
+        "Verrouillage : la liste des projets verrouillés est illisible. " +
+          (this.locked.size
+            ? "Tous les projets sont verrouillés : le code les rouvre."
+            : "Rien n'est verrouillé."),
+      );
+    }
     this.failures = loadFailures(storage.getSetting<unknown>(FAILURES_SETTING, {}));
+  }
+
+  /** The saved list of locked projects; nothing when what is saved does not read as one. */
+  private savedLocks(): string[] | undefined {
+    const saved = this.storage.getSetting<unknown>(LOCKED_SETTING, undefined);
+    if (saved === undefined) return this.storage.hasSetting?.(LOCKED_SETTING) ? undefined : [];
+    return Array.isArray(saved) && saved.every((id) => typeof id === "string")
+      ? (saved as string[])
+      : undefined;
   }
 
   /** True when some project is locked: everything sent is then looked at. */

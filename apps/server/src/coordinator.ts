@@ -288,7 +288,9 @@ export class Coordinators {
 
   /** The teams the user set up in the settings, if ever. */
   private savedPresets(): TeamPreset[] | undefined {
-    return this.store.getSetting<TeamPreset[] | null>(TEAM_PRESETS_SETTING, null) ?? undefined;
+    return (
+      this.store.getSetting<TeamPreset[] | null>(TEAM_PRESETS_SETTING, null, "array") ?? undefined
+    );
   }
 
   /** Forgets every access given to a coordinator's bridge so far. */

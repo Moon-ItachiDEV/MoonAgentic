@@ -1146,6 +1146,12 @@ export function App() {
           Reconnexion au serveur…
         </div>
       )}
+      {/* The server saves nothing meanwhile: said on every page too, under no other notice. */}
+      {state.status !== "closed" && state.storageError && (
+        <div className="offline unsaved" role="alert">
+          {state.storageError}
+        </div>
+      )}
       {state.notice && (
         <div className="toast" role="status">
           {state.notice}
