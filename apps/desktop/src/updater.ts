@@ -254,9 +254,15 @@ export class Updater {
       notes: release.notes,
       url: release.page,
     };
-    const installer = installerOf(release, this.options.platform);
     // macOS: an unsigned app cannot replace itself. The page to download it from is given.
-    if (!installer) return this.set(found);
+    if (this.options.platform !== "win32") return this.set(found);
+    const installer = installerOf(release, this.options.platform);
+    // A release published from GitHub while CI is still building the Windows installer has no
+    // .exe yet: wait for it rather than showing a broken « ready » card or burning the notice.
+    if (!installer) {
+      if (ready) return this.set({ ...was, checkedAt: this.now() });
+      return this.set({ state: "none", checkedAt: this.now() });
+    }
     try {
       await this.download(release, installer, found);
     } catch (error) {

@@ -449,7 +449,11 @@ export class AppUpdates {
     const info = this.info();
     this.options.broadcast({ type: "app", app: info });
     const u = info.update;
-    if (!info.notify || !u.version || (u.state !== "ready" && u.state !== "available")) return;
+    const readyToTell =
+      info.kind === "windows"
+        ? u.state === "ready"
+        : u.state === "ready" || u.state === "available";
+    if (!info.notify || !u.version || !readyToTell) return;
     if (this.options.settings.getSetting<string>(NOTIFIED, "") === u.version) return;
     this.options.settings.setSetting(NOTIFIED, u.version);
     this.options.notify(

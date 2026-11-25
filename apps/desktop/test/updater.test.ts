@@ -32,15 +32,20 @@ const NOTES = [
   `**Full Changelog**: https://github.com/${REPO}/compare/v0.1.4...v0.1.5`,
 ].join("\n");
 
-function release(installer: Buffer, opts: { sums?: string | null; tag?: string } = {}) {
+function release(
+  installer: Buffer,
+  opts: { sums?: string | null; tag?: string; withExe?: boolean } = {},
+) {
   const sha = createHash("sha256").update(installer).digest("hex");
   const sums = opts.sums === undefined ? `${sha}  ${EXE}\n${"a".repeat(64)}  x.dmg\n` : opts.sums;
   const json = {
     tag_name: opts.tag ?? "v0.1.5",
-    html_url: `https://github.com/${REPO}/releases/tag/v0.1.5`,
+    html_url: `https://github.com/${REPO}/releases/tag/${opts.tag ?? "v0.1.5"}`,
     body: NOTES,
     assets: [
-      { name: EXE, browser_download_url: `${DL}/${EXE}`, size: installer.length },
+      ...(opts.withExe === false
+        ? []
+        : [{ name: EXE, browser_download_url: `${DL}/${EXE}`, size: installer.length }]),
       {
         name: "MoonAgentic-0.1.5-mac-arm64.dmg",
         browser_download_url: `${DL}/MoonAgentic-0.1.5-mac-arm64.dmg`,
@@ -250,6 +255,30 @@ describe("Updater", () => {
     offline = true;
     await u.check();
     expect(u.state.state).toBe("ready");
+    expect(existsSync(u.installer!)).toBe(true);
+  });
+
+  it("on Windows, waits for the .exe to be attached before announcing a release", async () => {
+    const { fetch, asked } = release(Buffer.from("x"), { withExe: false, sums: null });
+    const { u } = updater(fetch, "win32");
+    await u.check();
+    expect(u.state).toEqual({ state: "none", checkedAt: 1_000 });
+    expect(u.installer).toBeUndefined();
+    expect(asked).toHaveLength(1);
+  });
+
+  it("on Windows, keeps an already-ready installer when a newer release has no .exe yet", async () => {
+    const installer = Buffer.from("prêt");
+    const readyRelease = release(installer, { tag: "v0.1.5" });
+    const pendingRelease = release(Buffer.from("x"), { tag: "v0.1.6", withExe: false, sums: null });
+    let pending = false;
+    const { u } = updater(((url: string | URL) =>
+      pending ? pendingRelease.fetch(url) : readyRelease.fetch(url)) as typeof globalThis.fetch);
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.5" });
+    pending = true;
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.5" });
     expect(existsSync(u.installer!)).toBe(true);
   });
 });

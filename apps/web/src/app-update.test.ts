@@ -119,6 +119,10 @@ describe("the notice of a version ready", () => {
     expect(updateNotice(a, "0.1.6")).toBeUndefined();
     expect(updateNotice({ ...a, notify: false }, null)).toBeUndefined();
     expect(updateNotice(app({ state: "downloading", version: "0.1.6" }), null)).toBeUndefined();
+    expect(updateNotice(app({ state: "available", version: "0.1.6" }), null)).toBeUndefined();
+    expect(
+      updateNotice(app({ state: "available", version: "0.1.6" }, { kind: "mac" }), null),
+    ).toMatchObject({ title: "Mise à jour 0.1.6 prête" });
   });
 });
 

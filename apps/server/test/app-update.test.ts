@@ -171,6 +171,16 @@ describe("AppUpdates", () => {
     expect(t.told).toHaveLength(2);
   });
 
+  it("does not notify Windows devices on state 'available' before the installer is ready", () => {
+    const t = setup();
+    t.report(ready({ state: "available", version: "0.1.6" }));
+    expect(t.told).toEqual([]);
+    t.report(ready({ state: "ready", version: "0.1.6" }));
+    expect(t.told).toEqual([
+      { title: "Mise à jour 0.1.6 prête", body: "Touche pour choisir quand l'installer." },
+    ]);
+  });
+
   it("tells nothing when the user said not to", () => {
     const t = setup();
     t.app.setSettings({ notify: false });
