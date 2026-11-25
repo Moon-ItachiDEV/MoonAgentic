@@ -110,7 +110,9 @@ export function updateNotice(
 ): Notice | undefined {
   if (!app?.notify || app.kind === "other" || !app.update.version) return undefined;
   const { state, version } = app.update;
-  if ((state !== "ready" && state !== "available") || version === told) return undefined;
+  const ready =
+    app.kind === "windows" ? state === "ready" : state === "ready" || state === "available";
+  if (!ready || version === told) return undefined;
   return {
     tag: "app-update",
     threadId: "",

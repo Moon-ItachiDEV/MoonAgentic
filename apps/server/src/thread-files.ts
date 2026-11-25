@@ -3,8 +3,7 @@
 // (`C:\Users\…\image.png`, `file:///…`, `images/plan.png`), which no other device can read.
 // Such a path is served only when it leads to a file of a kind that is shown (an image, a
 // PDF, a page…), inside the thread's own folders or where agents keep what they generate.
-import { realpathSync } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAX_SERVED_BYTES, servedType } from "./artifacts.ts";
@@ -78,9 +77,9 @@ export function refPath(ref: string): string | undefined {
   return raw || undefined;
 }
 
-function real(file: string): string | undefined {
+async function real(file: string): Promise<string | undefined> {
   try {
-    return realpathSync.native(file);
+    return await realpath(file);
   } catch {
     return undefined;
   }
@@ -120,7 +119,9 @@ export async function resolveThreadFile(
   } catch {
     // kept as written
   }
-  const insideRoots = [...roots, ...generated].map(real).filter((r): r is string => !!r);
+  const insideRoots = (await Promise.all([...roots, ...generated].map(real))).filter(
+    (r): r is string => !!r,
+  );
   const candidates = [...new Set([written, decoded])];
   const tried: string[] = [];
   for (const candidate of candidates) {
@@ -145,7 +146,7 @@ const isAbsolute = (file: string) => path.isAbsolute(file) || /^[a-zA-Z]:[\\/]/.
 /** The first of `files` that can be served, once every link is followed. */
 async function firstServed(files: string[], roots: string[]): Promise<ServedFile | undefined> {
   for (const candidate of files) {
-    const found = real(candidate);
+    const found = await real(candidate);
     if (!found || !roots.some((root) => isInside(root, found))) continue;
     // The kind is the real file's: a link named `.png` to something else is not an image.
     const type = servedType(found);

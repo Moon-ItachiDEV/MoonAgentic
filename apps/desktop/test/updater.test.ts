@@ -18,7 +18,9 @@ import {
 } from "../src/updater.ts";
 
 const dirs: string[] = [];
+const updaters: Updater[] = [];
 afterEach(() => {
+  for (const u of updaters.splice(0)) u.close();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
 });
 
@@ -32,23 +34,32 @@ const NOTES = [
   `**Full Changelog**: https://github.com/${REPO}/compare/v0.1.4...v0.1.5`,
 ].join("\n");
 
-function release(installer: Buffer, opts: { sums?: string | null; tag?: string } = {}) {
+function release(
+  installer: Buffer,
+  opts: { sums?: string | null; tag?: string; withExe?: boolean } = {},
+) {
+  const tag = opts.tag ?? "v0.1.5";
+  const ver = tag.replace(/^v/, "");
+  const dl = `https://github.com/${REPO}/releases/download/${tag}`;
+  const exe = `MoonAgentic-${ver}-windows-x64.exe`;
   const sha = createHash("sha256").update(installer).digest("hex");
-  const sums = opts.sums === undefined ? `${sha}  ${EXE}\n${"a".repeat(64)}  x.dmg\n` : opts.sums;
+  const sums = opts.sums === undefined ? `${sha}  ${exe}\n${"a".repeat(64)}  x.dmg\n` : opts.sums;
   const json = {
-    tag_name: opts.tag ?? "v0.1.5",
-    html_url: `https://github.com/${REPO}/releases/tag/v0.1.5`,
+    tag_name: tag,
+    html_url: `https://github.com/${REPO}/releases/tag/${tag}`,
     body: NOTES,
     assets: [
-      { name: EXE, browser_download_url: `${DL}/${EXE}`, size: installer.length },
+      ...(opts.withExe === false
+        ? []
+        : [{ name: exe, browser_download_url: `${dl}/${exe}`, size: installer.length }]),
       {
-        name: "MoonAgentic-0.1.5-mac-arm64.dmg",
-        browser_download_url: `${DL}/MoonAgentic-0.1.5-mac-arm64.dmg`,
+        name: `MoonAgentic-${ver}-mac-arm64.dmg`,
+        browser_download_url: `${dl}/MoonAgentic-${ver}-mac-arm64.dmg`,
         size: 10,
       },
       ...(sums === null
         ? []
-        : [{ name: "SHA256SUMS.txt", browser_download_url: `${DL}/SHA256SUMS.txt`, size: 10 }]),
+        : [{ name: "SHA256SUMS.txt", browser_download_url: `${dl}/SHA256SUMS.txt`, size: 10 }]),
     ],
   };
   const asked: string[] = [];
@@ -58,13 +69,17 @@ function release(installer: Buffer, opts: { sums?: string | null; tag?: string }
     if (u.startsWith("https://api.github.com/")) return Response.json(json);
     if (u.endsWith("/SHA256SUMS.txt"))
       return new Response(sums ?? "", { status: sums ? 200 : 404 });
-    if (u.endsWith(`/${EXE}`)) return new Response(new Uint8Array(installer));
+    if (u.endsWith(`/${exe}`)) return new Response(new Uint8Array(installer));
     return new Response("", { status: 404 });
   }) as typeof globalThis.fetch;
   return { fetch, asked };
 }
 
-function updater(fetch: typeof globalThis.fetch, platform: NodeJS.Platform = "win32") {
+function updater(
+  fetch: typeof globalThis.fetch,
+  platform: NodeJS.Platform = "win32",
+  incompleteRetryMs = 0,
+) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-updates-"));
   dirs.push(dir);
   const states: ShellUpdate[] = [];
@@ -74,8 +89,10 @@ function updater(fetch: typeof globalThis.fetch, platform: NodeJS.Platform = "wi
     dir,
     fetch,
     now: () => 1_000,
+    incompleteRetryMs,
     onState: (s) => states.push(s),
   });
+  updaters.push(u);
   return { u, dir, states };
 }
 
@@ -251,5 +268,112 @@ describe("Updater", () => {
     await u.check();
     expect(u.state.state).toBe("ready");
     expect(existsSync(u.installer!)).toBe(true);
+  });
+
+  it("on Windows, waits for the .exe to be attached before announcing a release", async () => {
+    const { fetch, asked } = release(Buffer.from("x"), { withExe: false, sums: null });
+    const { u } = updater(fetch, "win32");
+    await u.check();
+    expect(u.state).toEqual({ state: "none", checkedAt: 1_000 });
+    expect(u.installer).toBeUndefined();
+    expect(asked).toHaveLength(1);
+  });
+
+  it("on Windows, keeps an already-ready installer when a newer release has no .exe yet", async () => {
+    const installer = Buffer.from("prêt");
+    const readyRelease = release(installer, { tag: "v0.1.5" });
+    const pendingRelease = release(Buffer.from("x"), { tag: "v0.1.6", withExe: false, sums: null });
+    let pending = false;
+    const { u } = updater(((url: string | URL) =>
+      pending ? pendingRelease.fetch(url) : readyRelease.fetch(url)) as typeof globalThis.fetch);
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.5" });
+    pending = true;
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.5" });
+    expect(existsSync(u.installer!)).toBe(true);
+  });
+
+  it("keeps an already-ready installer usable if a newer release has .exe before SHA256SUMS.txt or fails mid-download", async () => {
+    const v5 = Buffer.from("installeur-0.1.5");
+    const v6 = Buffer.from("installeur-0.1.6");
+    const r5 = release(v5, { tag: "v0.1.5" });
+    const r6NoSums = release(v6, { tag: "v0.1.6", sums: null });
+    const r6BadHash = release(v6, {
+      tag: "v0.1.6",
+      sums: `${"0".repeat(64)}  MoonAgentic-0.1.6-windows-x64.exe\n`,
+    });
+    const r6Complete = release(v6, { tag: "v0.1.6" });
+    let stage: "v5" | "noSums" | "badHash" | "v6" = "v5";
+    const { u, dir } = updater(((url: string | URL) => {
+      if (stage === "v5") return r5.fetch(url);
+      if (stage === "noSums") return r6NoSums.fetch(url);
+      if (stage === "badHash") return r6BadHash.fetch(url);
+      return r6Complete.fetch(url);
+    }) as typeof globalThis.fetch);
+
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.5" });
+    const v5File = u.installer!;
+    expect(existsSync(v5File)).toBe(true);
+
+    // Parallel upload race: .exe visible before SHA256SUMS.txt -> 0.1.5 stays ready and on disk.
+    stage = "noSums";
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.5" });
+    expect(u.installer).toBe(v5File);
+    expect(existsSync(v5File)).toBe(true);
+
+    // Failed download of 0.1.6 -> 0.1.5 still stays ready and on disk.
+    stage = "badHash";
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.5" });
+    expect(u.installer).toBe(v5File);
+    expect(existsSync(v5File)).toBe(true);
+
+    // Once 0.1.6 is complete, it swaps in cleanly and removes 0.1.5.
+    stage = "v6";
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.6" });
+    expect(readdirSync(dir)).toEqual(["MoonAgentic-0.1.6-windows-x64.exe"]);
+  });
+
+  it("retries shortly when a Windows release is still missing its .exe and picks it up once uploaded", async () => {
+    const installer = Buffer.from("installeur-0.1.6");
+    const incomplete = release(installer, { tag: "v0.1.6", withExe: false, sums: null });
+    const complete = release(installer, { tag: "v0.1.6" });
+    let calls = 0;
+    const { u } = updater(
+      ((url: string | URL) => {
+        if (String(url).startsWith("https://api.github.com/")) calls += 1;
+        return calls >= 2 ? complete.fetch(url) : incomplete.fetch(url);
+      }) as typeof globalThis.fetch,
+      "win32",
+      25,
+    );
+
+    await u.check();
+    expect(u.state).toEqual({ state: "none", checkedAt: 1_000 });
+    await expect.poll(() => u.state.state, { timeout: 1_000 }).toBe("ready");
+    expect(u.state.version).toBe("0.1.6");
+    expect(calls).toBe(2);
+  });
+
+  it("stops short retries after MAX_INCOMPLETE_RETRIES if a release stays permanently incomplete", async () => {
+    const incomplete = release(Buffer.from("x"), { tag: "v0.1.6", withExe: false, sums: null });
+    let calls = 0;
+    const { u } = updater(
+      ((url: string | URL) => {
+        calls += 1;
+        return incomplete.fetch(url);
+      }) as typeof globalThis.fetch,
+      "win32",
+      10,
+    );
+
+    await u.check();
+    await new Promise((r) => setTimeout(r, 200));
+    // Initial check + 6 short retries = 7 total checks, then stops.
+    expect(calls).toBe(7);
   });
 });
