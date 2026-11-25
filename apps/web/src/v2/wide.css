@@ -1,0 +1,523 @@
+/* ===== iPad et Bureau : même app, même design, mise en page large ===== */
+
+/* Guide en barre du haut, la fenêtre prend la place */
+
+/* iPad (paysage) */
+
+/* Bureau : fenêtre de l'app */
+
+/* Contenu centré dès qu'il y a de la place (iPad portrait, fenêtre étroite) */
+.scr.roomy .view {
+  padding-inline: max(20px, calc(50% - 380px));
+}
+.scr.roomy .bottom {
+  padding-inline: max(12px, calc(50% - 388px));
+}
+.scr.roomy .sugm {
+  left: max(12px, calc(50% - 388px));
+  right: max(12px, calc(50% - 388px));
+}
+.scr.roomy .ctxp {
+  right: max(12px, calc(50% - 388px));
+}
+.scr.roomy .sscroll {
+  padding-inline: max(16px, calc(50% - 340px));
+}
+
+.scr.roomy .ttl b {
+  max-width: 420px;
+}
+.scr.roomy .phot .grid {
+  grid-template-columns: repeat(6, 1fr);
+  max-height: 264px;
+}
+.scr.roomy .agrid {
+  grid-template-columns: repeat(3, 1fr);
+}
+.scr.roomy:not(.wide)[data-s="planner"] .view,
+.scr.wide[data-s="arts"] .view {
+  padding-inline: 28px;
+}
+.scr.roomy:not(.wide)[data-s="planner"] .kbc {
+  width: 300px;
+}
+.scr.wide[data-s="arts"] .agrid {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+/* Feuilles : fenêtre centrée au lieu de monter du bas */
+.scr.roomy .sheet {
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  top: 50%;
+  width: min(540px, calc(100% - 48px));
+  max-height: min(780px, calc(100% - 56px));
+  border-radius: 32px;
+  transform: translate(-50%, -47%) scale(0.97);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 420ms var(--spring),
+    opacity 200ms var(--out);
+}
+.scr.roomy .sheet.on {
+  transform: translate(-50%, calc(-50% + var(--dy, 0px)));
+  opacity: 1;
+  pointer-events: auto;
+}
+.scr.roomy .sheet.tall {
+  top: 50%;
+  width: min(760px, calc(100% - 48px));
+  height: min(780px, calc(100% - 56px));
+}
+.scr.roomy .sheet .grab {
+  visibility: hidden;
+  margin-bottom: 0;
+}
+
+/* Large : le menu devient une barre latérale fixe, plus d'onglets en bas */
+.scr.wide {
+  --sbw: 312px;
+}
+.scr.wide .drawer {
+  width: var(--sbw);
+  transform: none !important;
+  opacity: 1 !important;
+}
+.scr.wide .main {
+  left: var(--sbw);
+  transform: none !important;
+  border-radius: 0 !important;
+  box-shadow: -0.5px 0 0 var(--glass-ring) !important;
+}
+.scr.wide .veil {
+  display: none;
+}
+.scr.wide .mtop [data-a="drawer"] {
+  visibility: hidden;
+}
+.scr.wide .tabbar,
+.scr.wide #tabpop,
+.scr.wide .tlabel {
+  display: none;
+}
+.scr.wide.tabs .bottom {
+  padding-bottom: calc(var(--sb) + 4px);
+}
+.scr.wide.tabs .bfade {
+  height: 150px;
+}
+.scr.wide.tp .tpscrim {
+  opacity: 0;
+  pointer-events: none;
+}
+.scr.wide.tp #gstack,
+.scr.wide.tp .bottom {
+  opacity: 1;
+  filter: none;
+}
+html[data-dev="desk"] .scr.wide .drawer .dtop {
+  padding-top: 10px;
+}
+
+/* Large : ce que les onglets du bas offraient (sessions de code, nouveau projet) passe dans la barre latérale */
+.scr:not(.wide) .wo {
+  display: none !important;
+}
+.pj.add {
+  color: var(--muted);
+  font-weight: 400;
+}
+.rc .wi2 {
+  width: 22px;
+  margin-right: 12px;
+  display: grid;
+  place-items: center;
+  flex: none;
+}
+.rc .wi2 .ud {
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--warn-dot);
+}
+.rc .nm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Large : réglages en plein écran, la liste prend la place de la barre latérale, la page prend le reste */
+.scr.wide .spg {
+  opacity: 0;
+  transform: none !important;
+  filter: none !important;
+  box-shadow: none;
+  transition: opacity 240ms var(--out);
+}
+.scr.wide .setl.on .spg {
+  opacity: 1;
+}
+.scr.wide {
+  --setw: max(var(--sbw), 320px);
+}
+.scr.wide .spg.root {
+  right: auto;
+  width: var(--setw);
+}
+.scr.wide #sroot .it .tx {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.scr.wide .spg.sub {
+  left: var(--setw);
+  background: var(--bg);
+  box-shadow: -0.5px 0 0 var(--glass-ring);
+}
+.scr.wide .spg.sub .bk {
+  visibility: hidden;
+}
+.scr.wide .spg.root .sscroll {
+  padding-inline: 12px;
+}
+.scr.wide .spg.sub .sscroll {
+  padding-inline: max(28px, calc(50% - 360px));
+}
+/* Large : la liste des réglages n'a pas de cartes, des lignes simples comme la barre latérale */
+.scr.wide #sroot .ins.sg {
+  background: none;
+  box-shadow: none;
+  border-radius: 0;
+  padding: 0;
+  margin-bottom: 16px;
+}
+.scr.wide #sroot .prof {
+  background: none;
+  box-shadow: none;
+  padding: 8px 10px;
+  border-radius: 14px;
+  margin-bottom: 14px;
+}
+.scr.wide #sroot .it {
+  border-radius: 12px;
+  padding: 0 10px;
+  min-height: 44px;
+}
+.scr.wide #sroot .it::before,
+.scr.wide #sroot .it::after {
+  display: none;
+}
+.scr.wide #sroot .it[aria-current="true"],
+.scr.wide #sroot .prof[aria-current="true"] {
+  background: var(--hover);
+}
+@media (hover: hover) {
+  .scr.wide #sroot .it:hover,
+  .scr.wide #sroot .prof:hover {
+    background: var(--hover);
+  }
+}
+
+/* Large : Planner en une vue, les 5 colonnes côte à côte, sans défilement */
+.scr.wide[data-s="planner"] .view,
+.scr.wide[data-s="prs"] .view,
+.scr.wide[data-s="sched"] .view {
+  padding-inline: 28px;
+}
+.scr.wide[data-s="planner"] .ovtabs {
+  width: 300px;
+  margin: 0 auto;
+}
+.scr.wide[data-s="planner"] .kbtabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 -12px;
+  padding: 0;
+  overflow: visible;
+}
+.scr.wide[data-s="planner"] .kbtabs button {
+  height: 30px;
+  padding: 0 6px;
+  border-radius: 10px;
+  justify-content: flex-start;
+  background: none !important;
+  color: var(--muted) !important;
+  font-size: 13px;
+  pointer-events: none;
+}
+.scr.wide[data-s="planner"] .kbtabs button i {
+  color: var(--faint) !important;
+}
+.scr.wide[data-s="planner"] .kb {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 2px 0 4px;
+  overflow: visible;
+  scroll-snap-type: none;
+}
+.scr.wide[data-s="planner"] .kbc {
+  width: auto;
+  gap: 8px;
+  min-width: 0;
+}
+.scr.wide[data-s="planner"] .pc {
+  padding: 11px 12px;
+  border-radius: 16px;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+}
+.scr.wide[data-s="planner"] .pct {
+  font-size: 14px;
+}
+.scr.wide[data-s="planner"] .pcm {
+  font-size: 12px;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.scr.wide[data-s="planner"] .pcw,
+.scr.wide[data-s="planner"] .pcl {
+  font-size: 12px;
+}
+.scr.wide[data-s="planner"] .kbe {
+  margin: 14px 0;
+  font-size: 13px;
+}
+
+/* Large : listes de cartes sur deux colonnes */
+.scr.wide[data-s="prs"] .view,
+.scr.wide[data-s="sched"] .view {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 14px;
+}
+.scr.wide[data-s="prs"] .view > .ovtabs {
+  grid-column: 1/-1;
+  width: 340px;
+  margin: 0 auto;
+}
+.scr.wide[data-s="prs"] .view > .ins,
+.scr.wide .view > .end {
+  grid-column: 1/-1;
+}
+
+/* Très large (ordinateur) : sur la page projet, les fils restent visibles à côté du coordinateur */
+.rpan {
+  display: none;
+}
+.scr.xl[data-s="project"] .rpan {
+  display: block;
+  position: absolute;
+  z-index: 15;
+  top: calc(var(--st) + 60px);
+  right: 14px;
+  bottom: 14px;
+  width: 316px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 6px 10px 10px;
+  border-radius: 24px;
+  background: var(--side);
+  box-shadow: 0 0 0 0.5px var(--glass-ring);
+}
+.rpan .rph {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.rpan .sbody {
+  padding: 0;
+}
+.scr.xl[data-s="project"] .view {
+  padding-right: 350px;
+  padding-left: max(24px, calc((100% - 350px) / 2 - 340px));
+}
+.scr.xl[data-s="project"] .bottom {
+  padding-right: 350px;
+  padding-left: max(16px, calc((100% - 350px) / 2 - 348px));
+}
+.scr.xl[data-s="project"] .sugm {
+  right: 350px;
+  left: max(16px, calc((100% - 350px) / 2 - 348px));
+}
+
+/* Fenêtres : un peu d'air en haut et en bas, surtout sur iPad */
+.scr.roomy .sheet {
+  max-height: min(760px, calc(100% - 96px));
+  overflow: hidden;
+}
+.scr.roomy .sheet.tall {
+  height: min(760px, calc(100% - 96px));
+}
+
+/* Large : les fenêtres (feuilles) se centrent sur la zone de travail, pas sur la barre latérale */
+.scr.wide .sheet {
+  margin-left: calc(var(--sbw) / 2);
+}
+.scr.wide .sscrim {
+  left: var(--sbw);
+}
+.scr.wide:has(.setl.on) .sheet {
+  margin-left: calc(var(--setw) / 2);
+}
+.scr.wide:has(.setl.on) .sscrim {
+  left: var(--setw);
+}
+.scr.wide.sh .lkin,
+.scr.wide .setl .sscroll {
+  scrollbar-width: none;
+}
+
+/* Large : écran verrouillé, le pavé et les points restent au centre */
+.scr.wide .lkmid {
+  flex: none;
+  margin-top: auto;
+  padding-bottom: 26px;
+}
+.scr.wide .kp {
+  margin-bottom: auto;
+}
+
+/* Très large : quand la feuille « Fils » est ouverte, le panneau de droite s'efface */
+.scr.xl.sh[data-s="project"] .rpan {
+  display: none;
+}
+
+/* Ordinateur : sur l'accueil vide, la zone de saisie est au centre, sous la phrase d'accueil */
+html[data-dev="desk"] .scr.wide[data-s="home"] .bottom {
+  bottom: auto;
+  top: calc(50% + 26px);
+  padding-bottom: 0;
+}
+html[data-dev="desk"] .scr.wide[data-s="home"] .bfade {
+  display: none;
+}
+html[data-dev="desk"] .scr.wide[data-s="home"].ph .bottom {
+  top: auto;
+  bottom: 0;
+  padding-bottom: calc(var(--sb) + 4px);
+}
+html[data-dev="desk"] .scr.wide[data-s="home"].ph .gstack {
+  position: static;
+  margin: auto 0;
+}
+html[data-dev="desk"] .scr.wide[data-s="home"] .phot .grid {
+  max-height: min(300px, 26vh);
+}
+html[data-dev="desk"] .scr.wide[data-s="home"] .gstack,
+html[data-dev="desk"] .scr.wide[data-s="home"] .greet.priv {
+  margin: 0;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(50% - 6px);
+  padding-bottom: 0;
+}
+.rpan .newth {
+  height: 42px;
+  border-radius: 21px;
+  font-size: 14.5px;
+  margin-top: 12px;
+}
+.rpan .it {
+  min-height: 46px;
+  font-size: 14.5px;
+}
+.rpan .gl2 {
+  margin-top: 10px;
+}
+
+/* Ordinateur : barre latérale et listes plus denses (souris) */
+html[data-dev="desk"] .scr.wide {
+  --sbw: 276px;
+}
+html[data-dev="desk"] .scr.wide .dtop {
+  height: 48px;
+  padding: 0 10px 0 16px;
+}
+html[data-dev="desk"] .scr.wide .dtop .brand {
+  font-size: 18px;
+  gap: 8px;
+}
+html[data-dev="desk"] .scr.wide .dtop .brand svg {
+  width: 24px;
+  height: 24px;
+}
+html[data-dev="desk"] .scr.wide .dtop .gb {
+  width: 36px;
+  height: 36px;
+}
+html[data-dev="desk"] .scr.wide .ni,
+html[data-dev="desk"] .scr.wide .pj {
+  height: 38px;
+  font-size: 14.5px;
+  gap: 11px;
+  border-radius: 11px;
+  padding: 0 10px;
+}
+html[data-dev="desk"] .scr.wide .ni svg,
+html[data-dev="desk"] .scr.wide .pj svg {
+  width: 19px;
+  height: 19px;
+}
+html[data-dev="desk"] .scr.wide .rc {
+  height: 34px;
+  font-size: 14px;
+  border-radius: 11px;
+  padding: 0 10px;
+}
+html[data-dev="desk"] .scr.wide .dsec {
+  height: 30px;
+  font-size: 12.5px;
+  padding: 0 10px;
+}
+html[data-dev="desk"] .scr.wide .nav,
+html[data-dev="desk"] .scr.wide .coll {
+  margin-bottom: 14px;
+}
+html[data-dev="desk"] .scr.wide .cnt,
+html[data-dev="desk"] .scr.wide .prc {
+  transform: scale(0.88);
+  transform-origin: 100% 50%;
+}
+html[data-dev="desk"] .scr.wide .dfoot .me {
+  width: 36px;
+  height: 36px;
+}
+html[data-dev="desk"] .scr.wide .dfoot .me svg {
+  width: 21px;
+  height: 21px;
+}
+html[data-dev="desk"] .scr.wide .dfoot .newd {
+  height: 40px;
+  font-size: 14.5px;
+}
+html[data-dev="desk"] .scr.wide #sroot .it {
+  min-height: 40px;
+  font-size: 14.5px;
+  border-radius: 12px;
+}
+html[data-dev="desk"] .scr.wide #sroot .lt {
+  font-size: 24px;
+}
+
+@media (hover: hover) {
+  .scr.wide .ni:hover,
+  .scr.wide .pj:hover,
+  .scr.wide .rc:hover {
+    background: var(--hover);
+  }
+}
+
+/* Sur un vrai iPad (écran tactile) : pas de cadre, la maquette prend l'écran sous la barre */
+/* Sur un téléphone : toujours plein écran, mise en page téléphone */

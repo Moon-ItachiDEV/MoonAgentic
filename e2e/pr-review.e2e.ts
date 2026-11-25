@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { addProject } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -130,10 +131,7 @@ describe("/revue", () => {
         if (shots) await page.screenshot({ path: path.join(shots, `${name}.png`) });
       };
       await page.goto(url);
-      await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-      await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-      await page.getByLabel("Dossier", { exact: true }).fill(repo);
-      await page.getByRole("button", { name: "Ajouter le projet" }).click();
+      await addProject(page, repo);
       const composer = page.getByRole("combobox", { name: "Message" });
       await expect.poll(() => composer.isEnabled()).toBe(true);
 
@@ -142,61 +140,62 @@ describe("/revue", () => {
       await page.getByRole("option", { name: /revue/ }).first().waitFor();
       await composer.fill("/revue 42");
       await composer.press("Enter");
-      const dialog = page.getByRole("dialog", { name: /Relire une PR/ });
+      const dialog = page.getByRole("dialog", { name: "Relire une PR" });
       await dialog.waitFor();
       expect(await dialog.getByLabel("Numéro ou adresse de la PR").inputValue()).toBe("42");
       // The demo agents stand in for the three makers; their models come once asked.
-      const pick = async (label: string, value: string) => {
-        const select = dialog.getByLabel(label);
+      const pick = async (label: string, agent: string, model: RegExp) => {
+        await dialog.getByRole("button", { name: new RegExp(`^${label} : `) }).click();
+        const sheet = page.getByRole("dialog", { name: label, exact: true });
+        const all = sheet.getByRole("button", { name: "Tous", exact: true });
+        const wanted = sheet
+          .getByRole("group", { name: agent, exact: true })
+          .getByRole("radio", { name: model });
         await expect
-          .poll(() =>
-            select.evaluate(
-              (el, v) => [...(el as HTMLSelectElement).options].some((o) => o.value === v),
-              value,
-            ),
-          )
+          .poll(async () => {
+            if (await wanted.count()) return true;
+            if (await all.count()) await all.click();
+            return false;
+          })
           .toBe(true);
-        await select.selectOption(value);
+        await wanted.click();
       };
-      await pick("Relecteur OpenAI", "demo\nrapide");
-      await pick("Relecteur Anthropic", "demo-2\nprecis");
-      await pick("Relecteur Google", "demo-2\nrapide");
-      await pick("Arbitre", "demo\nprecis");
+      await pick("Relecteur OpenAI", "Agent de démo", /^Démo rapide/);
+      await pick("Relecteur Anthropic", "Second agent de démo", /^Démo précis/);
+      await pick("Relecteur Google", "Second agent de démo", /^Démo rapide/);
+      await pick("Arbitre", "Agent de démo", /^Démo précis/);
       await shot("r1-dialogue");
       await dialog.getByRole("button", { name: "Lancer la revue" }).click();
 
       const card = page.getByRole("region", { name: "Revue de la PR #42" });
       await card.waitFor();
       await card.getByText("Donne enfin la bonne réponse").waitFor();
-      await card.getByText(/Relecture en cours/).waitFor();
       await shot("r2-en-cours");
 
       // Then they weigh each other's points, and the judge settles the one still disputed.
-      // Seen only when slowed down for the captures: otherwise it may be over at once.
-      if (shots) {
-        await card.getByText(/Confrontation ·/).waitFor({ timeout: 30_000 });
-        await shot("r3-confrontation");
-      }
-      await card.getByText("Relue par les 3").waitFor({ timeout: 30_000 });
-      await card.getByText("1 point tranché").waitFor();
-      await card.getByText("Confirmés").waitFor();
-      const ruled = card.locator(".prr-pt", { has: page.locator(".prr-ruling") });
-      expect(await ruled.locator(".prr-ruling").textContent()).toContain("Arbitre : réel");
-      expect(await ruled.locator(".prr-sev").textContent()).toBe("Mineur");
+      await card.getByText(/^Verdict · \d+ points?$/).waitFor({ timeout: 30_000 });
+      await card.getByText("1 tranché").waitFor();
+      await card.getByText(/\d+ confirmés?/).waitFor();
+      const points = card.locator(".rvf");
+      const ruled = points.filter({ hasText: "Tranché : réel" });
+      expect(await ruled.getAttribute("aria-label")).toMatch(/^Mineur : /);
       // Lines 1 and 2 of the file changed are one point, seen by all three, worst first.
-      const first = card.locator(".prr-pt").first();
-      expect(await first.locator(".prr-sev").textContent()).toBe("Critique");
-      expect(await first.locator(".prr-at").textContent()).toBe("src/answer.ts:1");
-      expect(await first.locator(".prr-by .ag").count()).toBe(3);
+      const first = points.first();
+      expect(await first.getAttribute("aria-label")).toMatch(/^Critique : /);
+      expect(await first.locator(".m .mono").textContent()).toBe("src/answer.ts:1");
+      await first.getByText("Critique · vu par 3").waitFor();
+      await first.click();
       await first.getByText(/Gravité discutée/).waitFor();
-      await first.locator(".prr-pt-h").click();
-      await first.locator(".prr-notes li").first().waitFor();
-      await ruled.locator(".prr-pt-h").click();
-      await ruled.locator(".prr-vote.disagree").first().waitFor();
+      await ruled.click();
+      await ruled
+        .getByText(/pas d'accord/)
+        .first()
+        .waitFor();
       await shot("r4-synthese");
 
       // Each reviewer has its own thread, which leads back to the review.
-      await card.getByRole("button", { name: "Ouvrir" }).first().click();
+      await card.locator(".tmrb").first().click();
+      await page.waitForURL((u) => u.pathname.startsWith("/t/"));
       await page.getByRole("button", { name: /Relecteur de la « Revue de la PR #42 »/ }).click();
       await card.waitFor();
 
@@ -206,7 +205,7 @@ describe("/revue", () => {
 
       await page.setViewportSize({ width: 390, height: 844 });
       await page.reload();
-      await card.getByText("Relue par les 3").waitFor();
+      await card.getByText(/^Verdict · /).waitFor();
       const width = await page.evaluate(() => document.documentElement.scrollWidth);
       expect(width).toBeLessThanOrEqual(390);
       await shot("r6-mobile");

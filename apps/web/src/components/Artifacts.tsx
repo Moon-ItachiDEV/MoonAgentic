@@ -7,96 +7,98 @@ import {
   FILTERS,
   fileName,
   filtered,
-  folderOf,
   KIND_LABEL,
   workingKey,
 } from "../artifacts.ts";
 import { connection, newId } from "../connection.ts";
-import {
-  IconArrowLeft,
-  IconChat,
-  IconChevron,
-  IconFile,
-  IconImage,
-  IconRefresh,
-} from "./icons.tsx";
+import { shortAgo } from "../project-threads.ts";
+import { I } from "../v2/I.tsx";
+import { Sheet } from "../v2/Sheet.tsx";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** One artifact shown as it is, from an address that works for some minutes. */
-function Preview({
-  artifact,
-  onBack,
-  onOpenThread,
-}: {
-  artifact: Artifact;
-  onBack: () => void;
-  onOpenThread: (id: string) => void;
-}) {
+/** An address that shows the artifact for some minutes, asked for when `on`. */
+function useArtifactUrl(artifact: Artifact | null, on: boolean) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const asked = useRef(0);
+  const threadId = artifact?.threadId;
+  const path = artifact?.path;
   const load = useCallback(() => {
+    if (!threadId || !path) return;
     const seq = ++asked.current;
     setError(null);
-    connection
-      .ask({
-        type: "artifacts.open",
-        requestId: newId(),
-        threadId: artifact.threadId,
-        path: artifact.path,
-      })
-      .then(
-        (reply) => seq === asked.current && setUrl(reply.url),
-        (e: unknown) => seq === asked.current && setError(message(e)),
-      );
-  }, [artifact.threadId, artifact.path]);
+    connection.ask({ type: "artifacts.open", requestId: newId(), threadId, path }).then(
+      (reply) => seq === asked.current && setUrl(reply.url),
+      (e: unknown) => seq === asked.current && setError(message(e)),
+    );
+  }, [threadId, path]);
   useEffect(() => {
+    if (!on) return;
     load();
     return () => {
       asked.current += 1;
     };
-  }, [load]);
+  }, [load, on]);
+  return { url, error, load };
+}
+
+/** An image's own picture as its thumbnail, asked for once it comes into sight. */
+function ImageThumb({ artifact }: { artifact: Artifact }) {
+  const box = useRef<HTMLSpanElement>(null);
+  const [seen, setSeen] = useState(false);
+  useEffect(() => {
+    const el = box.current;
+    if (!el || seen) return;
+    const watch = new IntersectionObserver(
+      (entries) => entries.some((e) => e.isIntersecting) && setSeen(true),
+      { rootMargin: "200px" },
+    );
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, [seen]);
+  const { url } = useArtifactUrl(artifact, seen);
+  const [broken, setBroken] = useState(false);
+  return (
+    <span ref={box} className={`thumb ${url && !broken ? "img" : "ic"}`}>
+      {url && !broken ? (
+        <img src={url} alt="" loading="lazy" onError={() => setBroken(true)} />
+      ) : (
+        <I n="image" s={26} />
+      )}
+    </span>
+  );
+}
+
+/** One artifact shown as it is, from an address that works for some minutes. */
+function Preview({
+  artifact,
+  onOpenThread,
+}: {
+  artifact: Artifact;
+  onOpenThread: (id: string) => void;
+}) {
+  const { url, error, load } = useArtifactUrl(artifact, true);
   const name = fileName(artifact.path);
   return (
-    <section className="art-preview" aria-label={`Aperçu de ${name}`}>
-      <div className="art-bar">
-        <button className="ib" aria-label="Retour aux artefacts" title="Retour" onClick={onBack}>
-          <IconArrowLeft size={16} />
-        </button>
-        <div className="art-bar-tx">
-          <strong title={artifact.path}>{name}</strong>
-          <small>{artifact.threadTitle}</small>
-        </div>
-        <button
-          className="ib"
-          aria-label="Recharger l'aperçu"
-          title="Recharger : l'agent a pu le changer"
-          onClick={load}
-        >
-          <IconRefresh size={15} />
-        </button>
-        <button className="btn sm" onClick={() => onOpenThread(artifact.threadId)}>
-          <IconChat size={14} />
-          Ouvrir le fil
-        </button>
+    <div className="sbody artv">
+      <div className="pcm">
+        <span className="mono">{artifact.path}</span>
+        {artifact.kind === "html" && <span className="ppill">Aperçu protégé, sans scripts</span>}
       </div>
-      {artifact.kind === "html" && (
-        <p className="art-note">
-          Aperçu protégé : les scripts de la page et ce qu'elle chargerait d'Internet ne sont pas
-          lancés.
-        </p>
-      )}
-      <div className={`art-stage art-${artifact.kind}`}>
+      <div className={`artst k-${artifact.kind}`}>
         {error ? (
-          <div className="empty-note" role="alert">
-            <p>{error}</p>
-            <button className="btn sm" onClick={load}>
+          <div className="empty2" role="alert">
+            <span className="eic e">
+              <I n="errc" s={24} />
+            </span>
+            <b>{error}</b>
+            <button className="newth press" onClick={load}>
               Réessayer
             </button>
           </div>
         ) : !url ? (
-          <p className="art-wait">Chargement…</p>
+          <span className="t2-spin" role="status" aria-label="Chargement" />
         ) : artifact.kind === "image" ? (
           <img key={url} src={url} alt={name} />
         ) : artifact.kind === "html" ? (
@@ -107,12 +109,22 @@ function Preview({
           <iframe key={url} src={url} title={name} referrerPolicy="no-referrer" />
         )}
       </div>
-      {url && (
-        <a className="art-tab" href={url} target="_blank" rel="noopener noreferrer">
-          Ouvrir dans un nouvel onglet
-        </a>
-      )}
-    </section>
+      <div className="rqa">
+        <button className="b2 soft press" aria-label="Recharger l'aperçu" onClick={load}>
+          <I n="refresh" s={16} />
+          Recharger
+        </button>
+        {url && (
+          <a className="b2 soft press" href={url} target="_blank" rel="noopener noreferrer">
+            <I n="ext" s={16} />
+            Nouvel onglet
+          </a>
+        )}
+        <button className="b2 ink press" onClick={() => onOpenThread(artifact.threadId)}>
+          Ouvrir le fil
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -128,7 +140,7 @@ export function Artifacts({
 }: {
   threads: Thread[];
   projects: Project[];
-  /** The connection is open: the list is asked for only then, and again each time it opens. */
+  /** Asked only once the connection is open: an ask before then fails at once. */
   online: boolean;
   onOpenThread: (id: string) => void;
 }) {
@@ -141,9 +153,8 @@ export function Artifacts({
   const asked = useRef(0);
   const load = useCallback(() => {
     const seq = ++asked.current;
-    setLoading(true);
-    // Asked again: what failed before says nothing yet of this time.
     setError(null);
+    setLoading(true);
     connection.ask({ type: "artifacts.list", requestId: newId() }).then(
       (reply) => {
         if (seq !== asked.current) return;
@@ -159,9 +170,7 @@ export function Artifacts({
       },
     );
   }, []);
-  // Asked again whenever a turn starts or ends: what the agent wrote is then on disk. Not
-  // before the connection is open: opened at its address, the page asked too early and kept
-  // « Pas de connexion ».
+  // Asked again whenever a turn starts or ends: what the agent wrote is then on disk.
   const working = workingKey(threads);
   useEffect(() => {
     if (online) load();
@@ -173,91 +182,98 @@ export function Artifacts({
     [],
   );
 
-  if (open) {
-    return (
-      <div className="view art-view">
-        <Preview artifact={open} onBack={() => setOpen(null)} onOpenThread={onOpenThread} />
-      </div>
-    );
-  }
   const all = list?.artifacts ?? [];
   const n = counts(all);
   // A kind none is left of since the last look: back to all of them.
   const active: ArtifactFilter = filter !== "all" && n[filter] === 0 ? "all" : filter;
   const shown = filtered(all, active);
   return (
-    <div className="view art-view">
-      <div className="art-head">
-        <div>
-          <h2>Artefacts</h2>
-          <p>Les pages, images et PDF que tes agents ont créés dans les branches de leurs fils.</p>
-        </div>
-        <button
-          className="ib"
-          aria-label="Actualiser la liste"
-          title="Actualiser"
-          disabled={loading || !online}
-          onClick={load}
-        >
-          <IconRefresh size={15} />
-        </button>
-      </div>
+    <div className="view" id="view" role="region" aria-label="Artefacts">
       {all.length > 0 && (
-        <div className="art-filters" role="group" aria-label="Filtrer par type">
+        <div className="chips" role="group" aria-label="Filtrer par type">
           {FILTERS.map((f) => (
             <button
               key={f.id}
-              className={active === f.id ? "on" : ""}
               aria-pressed={active === f.id}
               disabled={f.id !== "all" && n[f.id] === 0}
               onClick={() => setFilter(f.id)}
             >
               {f.label}
-              <span className="aux">{n[f.id]}</span>
+              <i>{n[f.id]}</i>
             </button>
           ))}
+          <span className="sp" />
+          <button aria-label="Actualiser la liste" disabled={loading || !online} onClick={load}>
+            <I n="refresh" s={15} />
+          </button>
         </div>
       )}
       {error && (
-        <div className="empty-note" role="alert">
-          <p>{error}</p>
-          <button className="btn sm" onClick={load}>
+        <div className="empty2" role="alert">
+          <span className="eic e">
+            <I n="errc" s={24} />
+          </span>
+          <b>{error}</b>
+          <button className="newth press" onClick={load}>
             Réessayer
           </button>
         </div>
       )}
-      {!list && !error && <p className="art-wait">Recherche des artefacts…</p>}
       {list && all.length === 0 && !error && (
-        <div className="empty-note">
-          <p>
-            Rien pour l'instant. Quand un agent crée ou change une page HTML, une image ou un PDF
-            dans la branche de son fil, il apparaît ici.
-          </p>
+        <div className="empty2">
+          <span className="eic n">
+            <I n="stack" s={24} />
+          </span>
+          <b>Aucun artefact</b>
         </div>
       )}
       {shown.length > 0 && (
-        <ul className="art-list">
-          {shown.map((a) => (
-            <li key={`${a.threadId}:${a.path}`}>
-              <button className="art-row" onClick={() => setOpen(a)}>
-                <span className={`art-ico art-${a.kind}`} aria-hidden="true">
-                  {a.kind === "image" ? <IconImage size={16} /> : <IconFile size={16} />}
-                </span>
-                <span className="art-tx">
-                  <span className="art-name">
-                    {fileName(a.path)}
-                    <span className="art-kind">{KIND_LABEL[a.kind]}</span>
+        <div className="agrid">
+          {shown.map((a) => {
+            const project = projects.find((p) => p.id === a.projectId);
+            return (
+              <button
+                key={`${a.threadId}:${a.path}`}
+                className="acard press"
+                title={artifactLine(a, projects, now)}
+                onClick={() => setOpen(a)}
+              >
+                {a.kind === "image" ? (
+                  <ImageThumb artifact={a} />
+                ) : (
+                  <span className="thumb ic">
+                    <I n={a.kind === "html" ? "code" : "file"} s={26} />
                   </span>
-                  {folderOf(a.path) && <code>{folderOf(a.path)}</code>}
-                  <small>{artifactLine(a, projects, now)}</small>
-                </span>
-                <IconChevron size={12} />
+                )}
+                <b>{fileName(a.path)}</b>
+                <small>
+                  {project && (
+                    <i className={`pdot${project.color ? ` pc-${project.color}` : ""}`} />
+                  )}
+                  {KIND_LABEL[a.kind]} · {shortAgo(a.mtime, now)}
+                </small>
               </button>
-            </li>
-          ))}
-        </ul>
+            );
+          })}
+        </div>
       )}
-      {list?.capped && <p className="art-note">Seuls les {all.length} plus récents sont listés.</p>}
+      {list?.capped && <span className="ppill">{all.length} plus récents</span>}
+      <div className="end" style={{ height: 40 }} />
+      <Sheet
+        open={!!open}
+        onClose={() => setOpen(null)}
+        title={open ? fileName(open.path) : "Artefact"}
+        tall
+        className="artsh"
+      >
+        {open && (
+          <Preview
+            key={`${open.threadId}:${open.path}`}
+            artifact={open}
+            onOpenThread={onOpenThread}
+          />
+        )}
+      </Sheet>
     </div>
   );
 }

@@ -10,28 +10,13 @@ import {
   refusal,
   type Wait,
 } from "../decision.ts";
-import { AgentBadge } from "./AgentBadge.tsx";
+import { I } from "../v2/I.tsx";
 
-const icon = (d: string) => (
-  <svg
-    width="14"
-    height="14"
-    viewBox="0 0 16 16"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth="1.5"
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    aria-hidden
-  >
-    <path d={d} />
-  </svg>
-);
-const PREV = icon("M10 3.5 5.5 8l4.5 4.5");
-const NEXT = icon("m6 3.5 4.5 4.5L6 12.5");
-const ENTER = icon("M13 3.5v4a2 2 0 0 1-2 2H3.5M6 7 3.5 9.5 6 12");
-const OPEN = icon("m4 10 4-4 4 4");
-const CHECK = icon("m3.5 8.5 3 3 6-6.5");
+const PREV = <I n="left" s={16} />;
+const NEXT = <I n="right" s={16} />;
+const ENTER = <I n="up" s={16} />;
+const OPEN = <I n="up" s={16} />;
+const CHECK = <I n="check" s={14} />;
 
 // Too narrow for preview tiles side by side: one preview, of the row picked.
 const NARROW = "(max-width: 640px)";
@@ -221,7 +206,7 @@ export function DecisionCard(props: {
     if (!inside) {
       if (document.querySelector(".scrim, [aria-modal]")) return;
       // Two conversations side by side: only the first card listens from outside itself.
-      if (document.querySelector(".dcard") !== card.current) return;
+      if (document.querySelector(".dc") !== card.current) return;
       const typing = target instanceof HTMLTextAreaElement && target.value === "";
       if (!typing && target !== document.body && target !== null) return;
       if (wait.threadId !== props.threadId) return;
@@ -249,7 +234,6 @@ export function DecisionCard(props: {
   if (!wait) return null;
 
   const thread = props.threads.find((t) => t.id === wait.threadId);
-  const agent = props.agents.find((a) => a.id === thread?.agentId);
   const elsewhere = wait.threadId !== props.threadId;
   const title =
     wait.kind === "permission" ? wait.title : (question?.question ?? wait.questions[0]?.question);
@@ -257,42 +241,43 @@ export function DecisionCard(props: {
 
   if (folded) {
     return (
-      <button className="dcard-fold" onClick={() => setFolded(false)}>
-        <span className="dcard-tag">À toi</span>
-        <span className="dcard-fold-q">{title}</span>
-        {count && <span className="dcard-fold-n">{count}</span>}
-        <span className="dcard-ib" aria-hidden>
-          {OPEN}
-        </span>
-        <span className="sr-only">Rouvrir la demande</span>
+      <button
+        className="dcf press"
+        aria-label={`Rouvrir la demande : ${title}`}
+        // As on the open card: the focus stays in the composer, which would fold and move
+        // this line from under the press.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => setFolded(false)}
+      >
+        <span className="pill">À toi</span>
+        <span className="q">{title}</span>
+        {count && <span className="n">{count}</span>}
+        {OPEN}
       </button>
     );
   }
 
   const steps = wait.kind === "question" && wait.questions.length > 1;
   const source = (
-    <>
-      <AgentBadge agent={agent} small />
-      <span>
-        {thread?.title ?? "Fil"}
-        {steps && ` · question ${p.step + 1} sur ${wait.questions.length}`}
-      </span>
-    </>
+    <span>
+      {elsewhere && (thread?.title ?? "Fil")}
+      {steps && `${elsewhere ? " · " : ""}question ${p.step + 1} sur ${wait.questions.length}`}
+    </span>
   );
   const cap = (index: number, on: boolean) => (
-    <span className="dcard-k">{multi && on ? CHECK : index + 1}</span>
+    <span className="k">{multi && on ? CHECK : index + 1}</span>
   );
   const name = (choice: Choice) => (
-    <span className="dcard-on">
+    <span className="on">
       {choice.label}
-      {choice.recommended && <span className="dcard-rec">Recommandé</span>}
+      {choice.recommended && <span className="rec">Recommandé</span>}
     </span>
   );
   const shown = choices[Math.min(p.hi, choices.length - 1)];
 
   return (
     <section
-      className="dcard"
+      className="dc"
       ref={card}
       aria-label={`Demande d'un agent : ${title}`}
       // A press on the card leaves the focus where it was: the composer folds when it loses
@@ -301,52 +286,53 @@ export function DecisionCard(props: {
         if (!(e.target as HTMLElement).closest("input, textarea")) e.preventDefault();
       }}
     >
-      <header className="dcard-h">
-        <span className="dcard-tag">À toi</span>
+      <header className="hd">
+        <span className="pill">À toi</span>
         {elsewhere ? (
           <button
-            className="dcard-src"
+            className="src"
             title="Ouvrir ce fil"
             onClick={() => props.onOpenThread(wait.threadId, wait.id)}
           >
             {source}
           </button>
         ) : (
-          <span className="dcard-src">{source}</span>
+          <span className="src">{source}</span>
         )}
+        <span className="sp" />
         {count && (
-          <span className="dcard-pager">
-            <button className="dcard-ib" aria-label="Demande précédente" onClick={() => turn(-1)}>
+          <span className="pg">
+            <button className="ib press" aria-label="Demande précédente" onClick={() => turn(-1)}>
               {PREV}
             </button>
             <span aria-live="polite">{count}</span>
-            <button className="dcard-ib" aria-label="Demande suivante" onClick={() => turn(1)}>
+            <button className="ib press" aria-label="Demande suivante" onClick={() => turn(1)}>
               {NEXT}
             </button>
           </span>
         )}
-        <button className="dcard-later" onClick={() => setFolded(true)}>
+        <button className="later press" onClick={() => setFolded(true)}>
           Plus tard
         </button>
       </header>
-      <h2 className="dcard-q">{title}</h2>
+      <h3>{title}</h3>
 
       {layout === "tiles" && (
-        <div className="dcard-tiles" style={{ ["--n" as string]: choices.length }}>
+        <div className="tiles" style={{ ["--n" as string]: choices.length }}>
           {choices.map((choice, i) => {
             const on = p.picked.includes(choice.value);
             return (
               <button
                 key={choice.value}
-                className={`dcard-t${p.hi === i ? " hi" : ""}${on ? " on" : ""}`}
+                className={`tile press${p.hi === i ? " hl" : ""}${on ? " on" : ""}`}
                 aria-pressed={multi ? on : undefined}
                 onClick={() => pick(i)}
               >
-                <span className="dcard-pv">
+                <span className="pv">
                   {choice.preview && <pre>{choice.preview}</pre>}
-                  {choice.recommended && <span className="dcard-rec">Recommandé</span>}
+                  {choice.recommended && <span className="rec">Recommandé</span>}
                 </span>
-                <span className="dcard-tn">
+                <span className="tn">
                   {cap(i, on)}
                   <span>{choice.label}</span>
                 </span>
@@ -356,12 +342,12 @@ export function DecisionCard(props: {
         </div>
       )}
       {layout === "detail" && (
-        <div className="dcard-pane" aria-live="polite">
-          {shown?.preview ? <pre>{shown.preview}</pre> : <span>Pas d'aperçu pour ce choix.</span>}
+        <div className="pane" aria-live="polite">
+          {shown?.preview ? <pre>{shown.preview}</pre> : <span>Pas d'aperçu</span>}
         </div>
       )}
 
-      <div className="dcard-rows">
+      <div className="rows">
         {layout !== "tiles" &&
           choices.map((choice, i) => {
             const on = p.picked.includes(choice.value);
@@ -369,7 +355,7 @@ export function DecisionCard(props: {
             return (
               <button
                 key={choice.value}
-                className={`dcard-o${lit ? " hi" : ""}${on ? " on" : ""}`}
+                className={`opt press${lit ? " hl" : ""}${on ? " on" : ""}`}
                 aria-pressed={multi ? on : undefined}
                 // With one preview at a time, a first tap shows the row's, a second picks it.
                 onClick={() =>
@@ -381,28 +367,24 @@ export function DecisionCard(props: {
                 }
               >
                 {cap(i, on)}
-                <span className="dcard-ot">
+                <span className="ot">
                   {name(choice)}
-                  {choice.description && <span className="dcard-od">{choice.description}</span>}
+                  {choice.description && <small>{choice.description}</small>}
                 </span>
-                {layout === "detail" && lit && !multi ? (
-                  <span className="dcard-pick">Choisir</span>
-                ) : (
-                  <span className="dcard-ent">{ENTER}</span>
-                )}
+                {layout === "detail" && lit && !multi && <span className="pick">Choisir</span>}
               </button>
             );
           })}
         {hasOwn &&
           (p.editing ? (
             <form
-              className={`dcard-o own${p.hi === choices.length ? " hi" : ""}`}
+              className={`opt other${p.hi === choices.length ? " hl" : ""}`}
               onSubmit={(e) => {
                 e.preventDefault();
                 sayOwn();
               }}
             >
-              <span className="dcard-k">{choices.length + 1}</span>
+              <span className="k">{choices.length + 1}</span>
               <input
                 ref={own}
                 value={p.other}
@@ -419,28 +401,25 @@ export function DecisionCard(props: {
                   set({ editing: false, other: "" });
                 }}
               />
-              <button className="dcard-ent show" aria-label="Envoyer" disabled={!p.other.trim()}>
+              <button className="snd press" aria-label="Envoyer" disabled={!p.other.trim()}>
                 {ENTER}
               </button>
             </form>
           ) : (
             <button
-              className={`dcard-o own${p.hi === choices.length ? " hi" : ""}`}
+              className={`opt other press${p.hi === choices.length ? " hl" : ""}`}
               onClick={() => pick(choices.length)}
             >
-              <span className="dcard-k">{choices.length + 1}</span>
-              <span className="dcard-ot">
-                <span className="dcard-on">Autre chose…</span>
-              </span>
-              <span className="dcard-ent">{ENTER}</span>
+              <span className="k">{choices.length + 1}</span>
+              Autre chose…
             </button>
           ))}
       </div>
       {multi && (
-        <div className="dcard-go">
-          <span>Plusieurs choix possibles</span>
+        <div className="go">
+          <span>Plusieurs choix</span>
           <button
-            className="btn sm pri"
+            className="b2 ink press"
             disabled={!p.picked.length}
             onClick={() => commit({ picks: p.picked })}
           >

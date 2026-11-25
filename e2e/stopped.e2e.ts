@@ -5,7 +5,8 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Browser, chromium, type Page } from "playwright";
+import { type Browser, chromium } from "playwright";
+import { addProject, pickAgent } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -64,18 +65,11 @@ async function newThread(name: string) {
   writeFileSync(path.join(project, "README.md"), "# Démo\n");
   const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
   await page.goto(url);
-  await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-  await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-  await page.getByLabel("Dossier", { exact: true }).fill(project);
-  await page.getByRole("button", { name: "Ajouter le projet" }).click();
+  await addProject(page, project);
   const composer = page.getByRole("combobox", { name: "Message" });
   await expect.poll(() => composer.isEnabled()).toBe(true);
   // The demo agent, not a real one that may be installed on this machine.
-  await page.locator(".agentchip").click();
-  await page.getByRole("button", { name: "Tous", exact: true }).click();
-  await page.getByRole("button", { name: "Options", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-  await page.keyboard.press("Escape");
+  await pickAgent(page);
   return { page, composer };
 }
 
@@ -89,9 +83,6 @@ describe("agent stopped mid-turn", () => {
     await card.waitFor({ timeout: 15_000 });
     expect(await card.locator("b").textContent()).toBe("Agent de démo s'est arrêté");
     // No raw connection message up front: it is under « Détail ».
-    expect(await card.locator(".stopped-tx > span").textContent()).toContain(
-      "Ce qu'il a déjà fait reste dans le fil.",
-    );
     expect(await card.locator("code").isVisible()).toBe(false);
     // What the agent said before it stopped is still there.
     await page.getByText("Je commence le travail…").waitFor();
@@ -105,22 +96,25 @@ describe("agent stopped mid-turn", () => {
 
     // « Changer de modèle » opens the composer's picker, usable after the stop.
     await card.getByRole("button", { name: "Changer de modèle" }).click();
-    const chip = page.locator(".agentchip");
+    const chip = page.getByRole("button", { name: /^Agent : / });
     expect(await chip.isDisabled()).toBe(false);
     await expect.poll(() => chip.getAttribute("aria-expanded")).toBe("true");
     if (shots) {
       await page.waitForTimeout(400);
       await page.screenshot({ path: path.join(shots, "s2-modele.png") });
     }
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
+    await page.getByRole("button", { name: "Plus", exact: true }).click();
     await page.getByRole("menuitemradio", { name: /Démo rapide/ }).click();
     await page.keyboard.press("Escape");
+    // The composer folds once the focus is out of it, its model with it: it is opened to read it.
+    await composer.click();
     await expect.poll(() => chip.textContent()).toContain("Démo rapide");
 
     await card.getByRole("button", { name: "Reprendre" }).click();
     await card.waitFor({ state: "detached", timeout: 15_000 });
     await page.getByText("Tu as été interrompu : reprends là où tu t'es arrêté.").waitFor();
     // A new session took the thread up, with the model picked after the stop.
+    await composer.click();
     expect(await chip.textContent()).toContain("Démo rapide");
     if (shots) {
       await page.waitForTimeout(400);

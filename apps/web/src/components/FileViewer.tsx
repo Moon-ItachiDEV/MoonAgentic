@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useState } from "react";
 import { fileSize } from "../file-tree.ts";
 import { type FileLink, fileLink, refName } from "../local-files.ts";
-import { IconClose, IconDownload, IconExternal, IconFile } from "./icons.tsx";
+import { I } from "../v2/I.tsx";
+import { Viewer } from "../v2/Viewer.tsx";
 
 /**
  * A file an answer names, over the page: an image at its full size, any other file by its
@@ -11,7 +11,6 @@ import { IconClose, IconDownload, IconExternal, IconFile } from "./icons.tsx";
 export function FileViewer(props: { threadId: string; fileRef: string; onClose: () => void }) {
   const [link, setLink] = useState<FileLink>();
   const [error, setError] = useState<string>();
-  const close = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     let current = true;
     setLink(undefined);
@@ -24,64 +23,44 @@ export function FileViewer(props: { threadId: string; fileRef: string; onClose: 
       current = false;
     };
   }, [props.threadId, props.fileRef]);
-  useEffect(() => {
-    const before = document.activeElement;
-    close.current?.focus();
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      props.onClose();
-    };
-    document.addEventListener("keydown", escape, true);
-    return () => {
-      document.removeEventListener("keydown", escape, true);
-      if (before instanceof HTMLElement) before.focus();
-    };
-  }, []);
   const name = link?.name ?? refName(props.fileRef);
   const image = link?.mime.startsWith("image/");
-  // On the page itself, so no message's own layout clips it.
-  return createPortal(
-    <div
-      className="scrim img-view file-view"
-      role="dialog"
-      aria-modal
-      aria-label={name}
-      onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}
+  return (
+    <Viewer
+      label={name}
+      onClose={props.onClose}
+      actions={
+        link && (
+          <>
+            <a className="ivs press" href={link.url} target="_blank" rel="noopener noreferrer">
+              <I n="ext" s={18} />
+              Ouvrir
+            </a>
+            <a className="ivs press" href={link.url} download={name}>
+              <I n="dl" s={18} />
+              Télécharger
+            </a>
+          </>
+        )
+      }
     >
       {error ? (
-        <div className="file-view-card" role="alert">
-          <IconFile size={18} />
-          <strong>{name}</strong>
-          <p>{error}</p>
+        <div className="ivc" role="alert">
+          <I n="file" s={22} />
+          <b>{name}</b>
+          <small>{error}</small>
         </div>
       ) : !link ? (
-        <p className="file-view-wait">Chargement…</p>
+        <span className="t2-spin" role="status" aria-label="Chargement" />
       ) : image ? (
         <img src={link.url} alt={name} />
       ) : (
-        <div className="file-view-card">
-          <IconFile size={18} />
-          <strong>{name}</strong>
+        <div className="ivc">
+          <I n="file" s={22} />
+          <b>{name}</b>
           <small>{fileSize(link.size)}</small>
         </div>
       )}
-      {link && (
-        <div className="file-view-bar">
-          <a className="btn sm" href={link.url} target="_blank" rel="noopener noreferrer">
-            <IconExternal size={14} />
-            Ouvrir
-          </a>
-          <a className="btn sm" href={link.url} download={name}>
-            <IconDownload size={14} />
-            Télécharger
-          </a>
-        </div>
-      )}
-      <button ref={close} className="img-view-x" aria-label="Fermer" onClick={props.onClose}>
-        <IconClose size={16} />
-      </button>
-    </div>,
-    document.body,
+    </Viewer>
   );
 }

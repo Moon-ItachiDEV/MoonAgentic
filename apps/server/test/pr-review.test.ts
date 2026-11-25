@@ -317,6 +317,10 @@ function repository() {
   git(repo, "add", "-A");
   git(repo, "commit", "-q", "-m", "init");
   git(repo, "remote", "add", "origin", "https://github.com/moon/demo.git");
+  // No such repository exists: a fetch would ask github.com, then the machine's sign-in
+  // helper, which on a Windows CI machine can wait longer than a test does. Git refuses the
+  // address at once instead, and the review goes on with the commits already here.
+  git(repo, "config", "protocol.https.allow", "never");
   git(repo, "checkout", "-q", "-b", "feature");
   writeFileSync(path.join(repo, "README.md"), "# Demo\n\nanswer = 42\n");
   git(repo, "commit", "-q", "-am", "answer");

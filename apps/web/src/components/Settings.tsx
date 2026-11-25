@@ -25,179 +25,71 @@ import {
   notificationsOn,
   showNotice,
 } from "../notifications.ts";
+import { appLock, LOCK_AFTER, type LockAfter } from "../app-lock.ts";
 import { lockSheet, toggleLock } from "../lock.ts";
+import { lockApp } from "./AppLock.tsx";
 import { setDefault, useDefaults } from "../defaults.ts";
 import { copyDiagnosticText, downloadDiagnosticText } from "../diagnostics.ts";
 import { disablePush, enablePush, pushOn, pushReached, pushSupport } from "../push.ts";
 import type { PushSupport } from "../push-device.ts";
-import { desktopShell } from "../desktop.ts";
 import type { SettingsSection } from "../router.ts";
 import { mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
+import { isDiscussionsProject } from "../default-models.ts";
 import { matchSections } from "../settings-search.ts";
-import { isDark, readTheme, setTheme, subscribeTheme, type Theme } from "../theme.ts";
-import { AgentBadge } from "./AgentBadge.tsx";
-import { AppUpdateSettings } from "./AppUpdate.tsx";
-import {
-  IconArrowLeft,
-  IconBranch,
-  IconFolder,
-  IconGauge,
-  IconGear,
-  IconLock,
-  IconMoon,
-  IconSearch,
-  IconSun,
-  IconPlug,
-  IconShield,
-  IconStar,
-  IconUsers,
-  IconWifi,
-} from "./icons.tsx";
-import { ConfirmDialog } from "./ConfirmDialog.tsx";
+import { formatPercent, tightest } from "../quotas.ts";
+import { useQuotas } from "../use-quotas.ts";
+import { readTheme, setTheme, subscribeTheme, type Theme } from "../theme.ts";
+import { I } from "../v2/I.tsx";
+import type { IconName } from "../v2/sprite.ts";
+import { Sheet } from "../v2/Sheet.tsx";
+import { AppUpdateSettings, useApp } from "./AppUpdate.tsx";
 import { MascotSettings } from "./MascotSettings.tsx";
 import { ModelFavorites } from "./ModelFavorites.tsx";
 import { RemoteAccess } from "./RemoteAccess.tsx";
 import { Subscriptions } from "./Subscriptions.tsx";
+import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
 import { TeamPresets } from "./TeamPresets.tsx";
+import {
+  AgentAddSheet,
+  AgentSheet,
+  AgentState,
+  GithubSheet,
+  useAgentChecks,
+  useGithubStatus,
+} from "./Connections.tsx";
+import { McpAddSheet, McpServerSheet } from "./McpSheets.tsx";
 
-const SECTIONS: { id: SettingsSection; label: string; icon: ReactNode }[] = [
-  { id: "general", label: "Général", icon: <IconGear size={15} /> },
-  { id: "appearance", label: "Apparence", icon: <span className="set-half" aria-hidden /> },
-  { id: "agents", label: "Agents", icon: <IconShield size={15} /> },
-  { id: "mascots", label: "Mascottes", icon: <IconMoon size={15} /> },
-  { id: "models", label: "Modèles", icon: <IconStar size={15} /> },
-  { id: "subscriptions", label: "Abonnements", icon: <IconGauge size={15} /> },
-  { id: "coordinator", label: "Coordinateur", icon: <IconBranch size={15} /> },
-  { id: "teams", label: "Équipes", icon: <IconUsers size={15} /> },
-  { id: "mcp", label: "Serveurs MCP", icon: <IconPlug size={15} /> },
-  { id: "remote", label: "Accès distant", icon: <IconWifi size={15} /> },
+/** The sections, in the groups the list shows them in. */
+const GROUPS: { id: SettingsSection; label: string; icon: IconName | "half" }[][] = [
+  [
+    { id: "general", label: "Général", icon: "gear" },
+    { id: "appearance", label: "Apparence", icon: "half" },
+    { id: "mascots", label: "Mascottes", icon: "moon" },
+  ],
+  [
+    { id: "agents", label: "Agents", icon: "shield" },
+    { id: "models", label: "Modèles", icon: "star" },
+    { id: "subscriptions", label: "Abonnements", icon: "gauge" },
+  ],
+  [
+    { id: "coordinator", label: "Coordinateur", icon: "branch" },
+    { id: "teams", label: "Équipes", icon: "users" },
+    { id: "mcp", label: "Connexions et MCP", icon: "plug" },
+  ],
+  [{ id: "remote", label: "Accès distant", icon: "wifi" }],
 ];
+const SECTIONS = GROUPS.flat();
+const THEMES: Record<Theme, string> = { system: "Système", light: "Clair", dark: "Sombre" };
 
-/** The GitHub account `gh` is signed in to, as the server reports it; nothing when none. */
-function useGithubLogin(): string | undefined {
-  const [login, setLogin] = useState<string>();
-  useEffect(() => {
-    let live = true;
-    connection
-      .ask({ type: "github.status", requestId: newId() })
-      .then((reply) => live && setLogin(reply.status.login))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
-  return login;
-}
-
-/** The sidebar while in the settings: back to the app, a search, one entry per section. */
-export function SettingsNav(props: {
-  section: SettingsSection;
-  onPick: (section: SettingsSection) => void;
-  onBack: () => void;
-}) {
-  const [query, setQuery] = useState("");
-  const shown = matchSections(SECTIONS, query);
-  const login = useGithubLogin();
-  const theme = useSyncExternalStore(subscribeTheme, readTheme);
-  const dark = isDark(theme);
-  return (
-    <aside className="side set-side" aria-label="Réglages">
-      <button className="set-back" onClick={props.onBack}>
-        <IconArrowLeft size={16} />
-        Retour
-      </button>
-      <label className="set-search">
-        <IconSearch size={15} />
-        <input
-          type="search"
-          placeholder="Rechercher un réglage"
-          aria-label="Rechercher un réglage"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && shown[0]) props.onPick(shown[0].id);
-            if (e.key === "Escape") setQuery("");
-          }}
-        />
-      </label>
-      <nav className="set-nav">
-        {shown.map((s) => (
-          <button
-            key={s.id}
-            className={s.id === props.section ? "on" : undefined}
-            aria-current={s.id === props.section ? "page" : undefined}
-            onClick={() => props.onPick(s.id)}
-          >
-            <span className="set-ic">{s.icon}</span>
-            {s.label}
-          </button>
-        ))}
-        {!shown.length && <p className="set-none">Aucun réglage ne correspond.</p>}
-      </nav>
-      <div className="side-foot set-foot">
-        <button
-          className="ib set-gear on"
-          aria-label="Fermer les réglages"
-          title="Fermer les réglages"
-          aria-pressed
-          onClick={props.onBack}
-        >
-          <IconGear size={17} />
-        </button>
-        {login && (
-          <span className="set-me" title="Compte GitHub de gh">
-            <span className="set-avatar" aria-hidden>
-              {login.slice(0, 2).toUpperCase()}
-            </span>
-            <span className="set-who">
-              <span className="set-login">{login}</span>
-              <small>GitHub</small>
-            </span>
-          </span>
-        )}
-        <button
-          className="ib set-theme"
-          aria-label={dark ? "Passer en clair" : "Passer en sombre"}
-          title={dark ? "Passer en clair" : "Passer en sombre"}
-          onClick={() => setTheme(dark ? "light" : "dark")}
-        >
-          {dark ? <IconSun /> : <IconMoon />}
-        </button>
-      </div>
-    </aside>
-  );
-}
-
+/** One line of a group: what it sets, a word on its state when it has one, then its control. */
 function Row(props: { title: string; text?: ReactNode; children?: ReactNode }) {
   return (
-    <div className="set-row">
-      <div className="set-tx">
-        <b>{props.title}</b>
-        {props.text && <p>{props.text}</p>}
-      </div>
-      {props.children && <div className="set-ctl">{props.children}</div>}
-    </div>
-  );
-}
-
-function Seg<T extends string>(props: {
-  label: string;
-  value: T;
-  choices: { id: T; name: string }[];
-  onPick: (value: T) => void;
-}) {
-  return (
-    <div className="set-seg" role="radiogroup" aria-label={props.label}>
-      {props.choices.map((c) => (
-        <button
-          key={c.id}
-          role="radio"
-          aria-checked={c.id === props.value}
-          onClick={() => props.onPick(c.id)}
-        >
-          {c.name}
-        </button>
-      ))}
+    <div className="it ro">
+      <span className="tx">
+        {props.title}
+        {props.text && <small>{props.text}</small>}
+      </span>
+      {props.children}
     </div>
   );
 }
@@ -210,13 +102,43 @@ function Toggle(props: {
 }) {
   return (
     <button
-      className={`set-sw${props.on ? " on" : ""}`}
+      className="tog"
       role="switch"
       aria-checked={props.on}
       aria-label={props.label}
       disabled={props.disabled}
       onClick={() => props.onChange(!props.on)}
     />
+  );
+}
+
+/** A number set with − and +, between its bounds. */
+function Stepper(props: {
+  label: string;
+  value: number;
+  max: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <span className="stpr" role="group" aria-label={props.label}>
+      <button
+        aria-label="Moins"
+        disabled={props.value <= 1}
+        onClick={() => props.onChange(props.value - 1)}
+      >
+        −
+      </button>
+      <b key={props.value} className="bump">
+        {props.value}
+      </b>
+      <button
+        aria-label="Plus"
+        disabled={props.value >= props.max}
+        onClick={() => props.onChange(props.value + 1)}
+      >
+        +
+      </button>
+    </span>
   );
 }
 
@@ -228,14 +150,8 @@ const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
  */
 function PushRow() {
   const support = pushSupport();
-  if (support === "desktop") {
-    return (
-      <Row
-        title="Même quand l'app est fermée"
-        text="Déjà le cas dans l'app de bureau : fermer la fenêtre la cache seulement, MoonAgentic continue près de l'horloge et t'avertit par les notifications du système. Seul « Quitter MoonAgentic » les arrête, avec tes agents. Pour ton téléphone, active-les dans ses propres réglages."
-      />
-    );
-  }
+  // The desktop app goes on beside the clock when its window is closed: nothing to set.
+  if (support === "desktop") return null;
   return <BrowserPushRow support={support} />;
 }
 
@@ -251,7 +167,7 @@ function BrowserPushRow({ support }: { support: Exclude<PushSupport, "desktop"> 
         if (!live) return;
         setOn(reached);
         setBusy(false);
-        if (!reached) setError("Ce navigateur n'est plus abonné : réactive-les.");
+        if (!reached) setError("Ce navigateur n'est plus abonné");
       },
       (e: unknown) => {
         if (!live) return;
@@ -264,10 +180,7 @@ function BrowserPushRow({ support }: { support: Exclude<PushSupport, "desktop"> 
     };
   }, []);
   const text =
-    support === "unsupported"
-      ? "Ce navigateur ne les reçoit pas. Sur iPhone, ouvre MoonAgentic depuis l'écran d'accueil."
-      : (error ??
-        "Les mêmes alertes, même quand MoonAgentic est fermé. Elles passent par le service de notifications du navigateur (Google, Apple, Mozilla ou Microsoft), chiffrées pour cet appareil : ce service ne peut pas les lire. Il faut que l'ordinateur de MoonAgentic ait accès à Internet.");
+    support === "unsupported" ? "Ouvre MoonAgentic depuis l'écran d'accueil" : (error ?? undefined);
   return (
     <Row title="Même quand l'app est fermée" text={text}>
       <Toggle
@@ -301,53 +214,49 @@ function NotificationsRow() {
   const [tried, setTried] = useState<"sent" | "refused" | null>(null);
   const text =
     support === "insecure"
-      ? "Indisponibles à cette adresse : le navigateur ne les autorise qu'en HTTPS (par exemple avec tailscale serve) ou sur la machine elle-même."
+      ? "HTTPS requis à cette adresse"
       : support === "unsupported"
-        ? "Ce navigateur n'en propose pas. Sur iPhone, ajoute d'abord MoonAgentic à l'écran d'accueil."
+        ? "Ajoute d'abord MoonAgentic à l'écran d'accueil"
         : permission === "denied"
-          ? "Bloquées par le navigateur pour ce site : autorise-les dans ses réglages, puis réessaie."
-          : desktopShell()
-            ? "Sur cet ordinateur, par les notifications du système, quand un fil attend ta réponse ou qu'une équipe termine ou échoue, sauf si tu as déjà MoonAgentic sous les yeux."
-            : "Sur cet appareil, quand un fil attend ta réponse ou qu'une équipe termine ou échoue, sauf si tu as déjà MoonAgentic sous les yeux. Il faut qu'il reste ouvert dans un onglet, même en arrière-plan.";
+          ? "Bloquées par le navigateur pour ce site"
+          : undefined;
   return (
     <>
       <Row title="Notifications" text={text}>
-        <div className="set-notif">
-          {on && (
-            <button
-              className="btn quiet sm"
-              onClick={() =>
-                void showNotice({
-                  tag: "essai",
-                  threadId: "",
-                  title: "MoonAgentic",
-                  body: "Les notifications marchent sur cet appareil.",
-                }).then((shown) => setTried(shown ? "sent" : "refused"))
-              }
-            >
-              {tried === "sent" ? "Envoyée" : tried === "refused" ? "Refusée" : "Essayer"}
-            </button>
-          )}
-          <Toggle
-            label="Notifications"
-            on={on}
-            disabled={support !== "ok"}
-            onChange={(next) => {
-              setTried(null);
-              if (!next) {
-                disableNotifications();
-                setOn(false);
-                // None at all: those sent while the app is closed stop too.
-                if (pushOn()) void disablePush().catch(() => undefined);
-                return;
-              }
-              void enableNotifications().then((answer) => {
-                setPermission(answer);
-                setOn(answer === "granted");
-              });
-            }}
-          />
-        </div>
+        {on && (
+          <button
+            className="mini press"
+            onClick={() =>
+              void showNotice({
+                tag: "essai",
+                threadId: "",
+                title: "MoonAgentic",
+                body: "Les notifications marchent sur cet appareil.",
+              }).then((shown) => setTried(shown ? "sent" : "refused"))
+            }
+          >
+            {tried === "sent" ? "Envoyée" : tried === "refused" ? "Refusée" : "Essayer"}
+          </button>
+        )}
+        <Toggle
+          label="Notifications"
+          on={on}
+          disabled={support !== "ok"}
+          onChange={(next) => {
+            setTried(null);
+            if (!next) {
+              disableNotifications();
+              setOn(false);
+              // None at all: those sent while the app is closed stop too.
+              if (pushOn()) void disablePush().catch(() => undefined);
+              return;
+            }
+            void enableNotifications().then((answer) => {
+              setPermission(answer);
+              setOn(answer === "granted");
+            });
+          }}
+        />
       </Row>
       {on && support === "ok" && <PushRow />}
     </>
@@ -358,92 +267,96 @@ function NotificationsRow() {
  * /lock: the code, kept on the computer, and the projects it hides. Locking or opening one
  * here does it for every device.
  */
-function LockCard(props: { projects: Project[]; lockPin: boolean }) {
+function LockGroup(props: { projects: Project[]; lockPin: boolean }) {
   const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
   const pairedDevice = useSyncExternalStore(connection.subscribe, connection.getState).pairedDevice;
   const [confirmReset, setConfirmReset] = useState(false);
+  const after = useSyncExternalStore(appLock.subscribe, appLock.after);
+  const projects = props.projects.filter((p) => !isDiscussionsProject(p));
   return (
     <>
-      <h3 className="lk-h">Verrouillage des projets</h3>
-      <div className="set-card">
+      <div className="gl2">
+        <I n="lock" s={14} />
+        Verrouillage
+      </div>
+      <div className="ins">
+        <button className="it acc" onClick={() => lockApp(props.lockPin)}>
+          <span className="tx">Verrouiller maintenant</span>
+        </button>
+        <ChoiceRow
+          title="Verrouiller après"
+          value={after}
+          shown={LOCK_AFTER.find((o) => o.value === after)?.label ?? "Jamais"}
+          choices={LOCK_AFTER.map((o) => ({ value: o.value, label: o.label }))}
+          onPick={(value) => appLock.setAfter(value as LockAfter)}
+        />
         <Row
-          title="Code de verrouillage"
-          text={
-            pairedDevice
-              ? props.lockPin
-                ? "Un code à 6 chiffres est défini. Pour le changer ou le réinitialiser, va sur l'ordinateur où tourne MoonAgentic."
-                : "Aucun code pour l'instant. Il se définit depuis l'ordinateur où tourne MoonAgentic."
-              : props.lockPin
-                ? "Un code à 6 chiffres est défini. Il est demandé pour rouvrir un projet verrouillé. Réservé à cet ordinateur."
-                : "Aucun code pour l'instant. Il te sera demandé au premier verrouillage (sur cet ordinateur)."
-          }
+          title="Code à 6 chiffres"
+          text={pairedDevice ? "Se crée et se change sur l'ordinateur" : undefined}
         >
+          {props.lockPin && <span className="okp">Défini</span>}
           {!pairedDevice && (
             <button
-              className="btn sm"
+              className="mini press"
               onClick={() => lockSheet.open(props.lockPin ? { kind: "change" } : { kind: "set" })}
             >
               {props.lockPin ? "Changer le code" : "Définir le code"}
             </button>
           )}
         </Row>
-        {props.lockPin && !pairedDevice && (
-          <Row
-            title="Code oublié"
-            text="Efface le code et rouvre tous les projets verrouillés. Réservé à cet ordinateur."
-          >
-            <button className="btn sm" onClick={() => setConfirmReset(true)}>
-              Réinitialiser le code
-            </button>
+        {projects.map((p) => (
+          <Row key={p.id} title={p.name}>
+            <Toggle
+              label={p.locked ? `Déverrouiller ${p.name}` : `Verrouiller ${p.name}`}
+              on={!!p.locked}
+              onChange={() => toggleLock(p, props.lockPin)}
+            />
           </Row>
-        )}
-        {props.projects.length > 0 && (
-          <Row
-            title="Projets verrouillés"
-            text="Leurs discussions sont masquées sur tous tes appareils. Les agents continuent de travailler."
-          >
-            <span className="lk-chips">
-              {props.projects.map((p) => (
-                <button
-                  key={p.id}
-                  className="lk-chip"
-                  aria-pressed={!!p.locked}
-                  title={p.locked ? `Déverrouiller ${p.name}` : `Verrouiller ${p.name}`}
-                  onClick={() => toggleLock(p, props.lockPin)}
-                >
-                  <IconLock size={12} />
-                  {p.name}
-                </button>
-              ))}
-            </span>
-          </Row>
-        )}
-        <Row
-          title="Raccourci"
-          text="Verrouille le projet ouvert. La commande /lock fait la même chose."
-        >
-          <kbd>{mac ? "⌘ ⇧ L" : "Ctrl Maj L"}</kbd>
+        ))}
+        <Row title="Raccourci">
+          <span className="rt">
+            <span className="mono">{mac ? "⌘ ⇧ L" : "Ctrl Maj L"}</span>
+          </span>
         </Row>
+        {props.lockPin && !pairedDevice && (
+          <button className="it dng" onClick={() => setConfirmReset(true)}>
+            <span className="tx">Réinitialiser le code</span>
+          </button>
+        )}
       </div>
-      {confirmReset && (
-        <ConfirmDialog
-          confirm={{
-            title: "Réinitialiser le code de verrouillage ?",
-            text: "Le code sera effacé et tous les projets verrouillés redeviendront visibles sur tes appareils.",
-            action: "Réinitialiser",
-            run: async () => {
-              await connection.request({ type: "lock.reset", requestId: newId() });
-            },
-          }}
-          onClose={() => setConfirmReset(false)}
-        />
-      )}
+      <Sheet
+        open={confirmReset}
+        onClose={() => setConfirmReset(false)}
+        label="Réinitialiser le code de verrouillage ?"
+      >
+        <div className="cfw">
+          <div className="grab" />
+          <h3>Réinitialiser le code ?</h3>
+          <span className="ppill">Tous les projets verrouillés redeviennent visibles</span>
+          <div className="cfa">
+            <button
+              className="b2 red press"
+              onClick={() => {
+                setConfirmReset(false);
+                void connection
+                  .request({ type: "lock.reset", requestId: newId() })
+                  .catch((e: unknown) => connection.notify(reason(e)));
+              }}
+            >
+              Réinitialiser
+            </button>
+            <button className="b2 soft press" onClick={() => setConfirmReset(false)}>
+              Annuler
+            </button>
+          </div>
+        </div>
+      </Sheet>
     </>
   );
 }
 
 /** One-click redacted crash & multi-agent performance report export in Réglages › Général. */
-function DiagnosticsCard() {
+function DiagnosticsGroup() {
   const [busy, setBusy] = useState<"copy" | "download" | null>(null);
   const [done, setDone] = useState<"copy" | "download" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -480,89 +393,71 @@ function DiagnosticsCard() {
 
   return (
     <>
-      <h3 className="lk-h">Diagnostic</h3>
-      <div className="set-card">
-        <Row
-          title="Journaux et performances"
-          text={
-            error ??
-            "Mémoire globale et par agent (pics multi-agents), lenteurs et erreurs récentes, sans jetons ni secrets."
-          }
-        >
-          <div className="set-notif">
-            <button className="btn sm" disabled={busy !== null} onClick={() => void run("copy")}>
-              {busy === "copy"
-                ? "Préparation…"
-                : done === "copy"
-                  ? "Copié"
-                  : "Copier le diagnostic"}
-            </button>
-            <button
-              className="btn quiet sm"
-              disabled={busy !== null}
-              onClick={() => void run("download")}
-            >
-              {busy === "download"
-                ? "Préparation…"
-                : done === "download"
-                  ? "Téléchargé"
-                  : "Télécharger"}
-            </button>
-          </div>
-        </Row>
+      <div className="gl2">Diagnostic</div>
+      <div className="ins">
+        <button className="it acc" disabled={busy !== null} onClick={() => void run("copy")}>
+          <span className="tx">
+            {busy === "copy" ? "Préparation…" : done === "copy" ? "Copié" : "Copier le diagnostic"}
+            {error && <small className="erx">{error}</small>}
+          </span>
+        </button>
+        <button className="it acc" disabled={busy !== null} onClick={() => void run("download")}>
+          <span className="tx">
+            {busy === "download"
+              ? "Préparation…"
+              : done === "download"
+                ? "Téléchargé"
+                : "Télécharger"}
+          </span>
+        </button>
       </div>
     </>
   );
 }
 
-/**
- * The single agent + model menu of one coordinator route: the favorites (or every model when
- * there are none), grouped by agent, with the chosen agent's badge beside it.
- */
-function RouteSelect(props: {
+/** The agent and model one kind of work goes to: its line, and the sheet to change it. */
+function RouteRow(props: {
   kind: RouteKind;
+  title: string;
   agents: AgentInfo[];
   favorites: Favorites;
   route: { agentId: string; model?: string } | undefined;
-  showAll: boolean;
 }) {
   const { kind, route } = props;
-  const { groups } = routeChoices(props.agents, props.favorites, route, props.showAll);
-  const agent = route && props.agents.find((a) => a.id === route.agentId);
+  const [all, setAll] = useState(false);
+  const { groups, favoritesOnly } = routeChoices(props.agents, props.favorites, route, all);
+  const none = kind === "default" ? "Agent du coordinateur" : "Par défaut";
+  const value = route ? routeValue(route.agentId, route.model) : "";
+  const choices: Choice[] = [
+    { value: "", label: none },
+    ...groups.flatMap((g) =>
+      g.options.map((o) => ({ value: o.value, label: o.label, group: g.agent.name })),
+    ),
+  ];
   return (
-    <label className="set-select set-route">
-      {route && <AgentBadge agent={agent ?? { id: route.agentId, short: "?" }} small />}
-      <select
-        aria-label={`Modèle pour ${KIND_LABEL[kind]}`}
-        value={route ? routeValue(route.agentId, route.model) : ""}
-        onChange={(e) => {
-          const picked = parseRouteValue(e.target.value);
-          connection.send({
-            type: "coordinator.setRoute",
-            kind,
-            ...(picked ? { agentId: picked.agentId } : {}),
-            ...(picked?.model ? { model: picked.model } : {}),
-          });
-        }}
-      >
-        <option value="">{kind === "default" ? "Agent du coordinateur" : "Par défaut"}</option>
-        {groups.map((g) => (
-          <optgroup key={g.agent.id} label={g.agent.name}>
-            {g.options.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-    </label>
+    <ChoiceRow
+      title={props.title}
+      label={`Modèle pour ${KIND_LABEL[kind]}`}
+      value={value}
+      shown={choices.find((c) => c.value === value)?.label ?? none}
+      choices={choices}
+      {...(favoritesOnly || all
+        ? { more: { label: all ? "Favoris" : "Tous", on: all, toggle: () => setAll((on) => !on) } }
+        : {})}
+      onPick={(picked) => {
+        const to = parseRouteValue(picked);
+        connection.send({
+          type: "coordinator.setRoute",
+          kind,
+          ...(to ? { agentId: to.agentId } : {}),
+          ...(to?.model ? { model: to.model } : {}),
+        });
+      }}
+    />
   );
 }
 
-/** One section of the settings; every value here is real and takes effect at once. */
-export function SettingsPage(props: {
-  section: SettingsSection;
+interface PageProps {
   agents: AgentInfo[];
   favorites: Favorites;
   coordinator: CoordinatorSettings;
@@ -573,302 +468,495 @@ export function SettingsPage(props: {
   mcpServers: McpServerInfo[];
   mcpSecretsError?: string | null;
   onPickProject: (id: string) => void;
-  onOpenConnections: () => void;
-  onOpenMcp: () => void;
-}) {
+}
+
+/** What the pages share with the layer: GitHub as the server reports it, and its sheet. */
+interface GithubProps {
+  github: ReturnType<typeof useGithubStatus>;
+  onOpenGithub: () => void;
+}
+
+/** « Agents »: each one with its state; a line opens it, the last adds one. */
+function AgentsPage({ agents }: { agents: AgentInfo[] }) {
+  const [opened, setOpened] = useState<string>();
+  const [adding, setAdding] = useState(false);
+  const checks = useAgentChecks();
+  const agent = agents.find((a) => a.id === opened);
+  return (
+    <>
+      <div className="ins">
+        {agents.map((a) => (
+          <button key={a.id} className="it" onClick={() => setOpened(a.id)}>
+            <span className="tx">
+              {a.name}
+              <small>
+                {!a.available
+                  ? (a.hint ?? "Pas trouvé sur cette machine")
+                  : (a.check?.version ?? a.command ?? "")}
+              </small>
+            </span>
+            <span className="rt">
+              <AgentState agent={a} checking={checks.checking(a)} />
+              <I n="right" s={15} />
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="ins">
+        <button className="it acc" onClick={() => setAdding(true)}>
+          <I n="plus" s={18} />
+          <span className="tx">Ajouter un agent</span>
+        </button>
+      </div>
+      <AgentSheet
+        agent={agent}
+        checking={!!agent && checks.checking(agent)}
+        onCheck={() => agent && checks.check(agent)}
+        onClose={() => setOpened(undefined)}
+      />
+      <AgentAddSheet open={adding} onClose={() => setAdding(false)} />
+    </>
+  );
+}
+
+/** « Connexions et MCP »: the GitHub account, then the servers given to the agents. */
+function McpPage(props: PageProps & GithubProps) {
+  const [opened, setOpened] = useState<string>();
+  const [adding, setAdding] = useState(false);
+  const { status, checking } = props.github;
+  return (
+    <>
+      <div className="gl2">Comptes</div>
+      <div className="ins">
+        <button className="it" onClick={props.onOpenGithub}>
+          <span className="ic">
+            <I n="gh" s={18} />
+          </span>
+          <span className="tx">GitHub</span>
+          <span className="rt">
+            {status?.login ?? (checking ? "" : "Non connecté")}
+            <I n="right" s={15} />
+          </span>
+        </button>
+      </div>
+      <div className="gl2">Serveurs MCP</div>
+      <div className="ins">
+        {props.mcpSecretsError && (
+          <div className="it ro">
+            <span className="tx">
+              <small className="erx">{props.mcpSecretsError}</small>
+            </span>
+          </div>
+        )}
+        {props.mcpServers.map((s) => (
+          <button key={s.id} className="it" onClick={() => setOpened(s.id)}>
+            <span className="tx">
+              {s.name}
+              <small>{mcpScopeLabel(scopeOf(s), props.projects)}</small>
+            </span>
+            <span className="rt">
+              {s.enabled ? (
+                <span className="dvon">Actif</span>
+              ) : (
+                <span className="mof">Arrêté</span>
+              )}
+              <I n="right" s={15} />
+            </span>
+          </button>
+        ))}
+        <button className="it acc" onClick={() => setAdding(true)}>
+          <I n="plus" s={18} />
+          <span className="tx">Ajouter un serveur</span>
+        </button>
+      </div>
+      <McpServerSheet
+        server={props.mcpServers.find((s) => s.id === opened)}
+        projects={props.projects}
+        onClose={() => setOpened(undefined)}
+      />
+      <McpAddSheet open={adding} projects={props.projects} onClose={() => setAdding(false)} />
+    </>
+  );
+}
+
+/** One section of the settings; every value here is real and takes effect at once. */
+function SectionBody(props: PageProps & GithubProps & { section: SettingsSection }) {
   // Kept by the server: the same on every device.
   const { permissionMode: mode, isolated } = useDefaults();
-  // The coordinator's menus: favorites only, until « Afficher tous les modèles ».
-  const [allModels, setAllModels] = useState(false);
   const theme = useSyncExternalStore(subscribeTheme, readTheme);
-  const title = SECTIONS.find((s) => s.id === props.section)?.label ?? "";
 
-  let body: ReactNode;
   switch (props.section) {
-    case "general":
-      body = (
+    case "general": {
+      const open = props.projects.filter((p) => !p.locked && !isDiscussionsProject(p));
+      return (
         <>
-          <div className="set-card">
-            <Row
-              title="Projet par défaut"
-              text="Les nouvelles discussions démarrent dans ce projet."
-            >
-              {props.projects.some((p) => !p.locked) ? (
-                <label className="set-select">
-                  <IconFolder size={14} />
-                  <select
-                    aria-label="Projet par défaut"
-                    value={props.projectId ?? ""}
-                    onChange={(e) => props.onPickProject(e.target.value)}
-                  >
-                    {props.projects
-                      .filter((p) => !p.locked)
-                      .map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
-                      ))}
-                  </select>
-                </label>
-              ) : (
-                <span className="set-note">Aucun projet</span>
-              )}
-            </Row>
-            <Row
-              title="Autorisations par défaut"
-              text={
-                mode === "full"
-                  ? "Accès complet : l'agent agit sans demander."
-                  : "Supervisé : l'agent demande avant de modifier ou de lancer quoi que ce soit."
-              }
-            >
-              <Seg
-                label="Autorisations par défaut"
-                value={mode}
-                choices={[
-                  { id: "supervised", name: "Supervisé" },
-                  { id: "full", name: "Accès complet" },
-                ]}
-                onPick={(value) => setDefault({ permissionMode: value })}
+          <div className="ins">
+            {open.length > 0 ? (
+              <ChoiceRow
+                title="Projet par défaut"
+                value={props.projectId ?? ""}
+                shown={open.find((p) => p.id === props.projectId)?.name ?? "Hors projet"}
+                choices={open.map((p) => ({ value: p.id, label: p.name }))}
+                onPick={props.onPickProject}
               />
-            </Row>
-            <Row
-              title="Branche à part"
-              text="Dans un projet git, chaque nouvelle discussion travaille sur sa propre branche, dans une copie à part."
-            >
+            ) : (
+              <Row title="Projet par défaut">
+                <span className="rt">Aucun projet</span>
+              </Row>
+            )}
+            <div className="it ro col">
+              <span className="tx">Autorisations par défaut</span>
+              <div className="seg" role="radiogroup" aria-label="Autorisations par défaut">
+                <button
+                  role="radio"
+                  aria-checked={mode !== "full"}
+                  aria-pressed={mode !== "full"}
+                  onClick={() => setDefault({ permissionMode: "supervised" })}
+                >
+                  <I n="hand" s={16} />
+                  Supervisé
+                </button>
+                <button
+                  className="f"
+                  role="radio"
+                  aria-checked={mode === "full"}
+                  aria-pressed={mode === "full"}
+                  onClick={() => setDefault({ permissionMode: "full" })}
+                >
+                  <I n="bolt" s={16} />
+                  Accès complet
+                </button>
+              </div>
+            </div>
+            <Row title="Branche à part">
               <Toggle
                 label="Branche à part"
                 on={isolated}
                 onChange={(on) => setDefault({ isolated: on })}
               />
             </Row>
+          </div>
+          <div className="gl2">Notifications</div>
+          <div className="ins">
             <NotificationsRow />
           </div>
-          <LockCard projects={props.projects} lockPin={props.lockPin} />
           <AppUpdateSettings row={Row} toggle={Toggle} />
-          <DiagnosticsCard />
+          <LockGroup projects={props.projects} lockPin={props.lockPin} />
+          <DiagnosticsGroup />
         </>
       );
-      break;
+    }
     case "appearance":
-      body = (
-        <div className="set-card">
-          <Row title="Thème" text="Sur cet appareil seulement.">
-            <Seg
-              label="Thème"
-              value={theme}
-              choices={[
-                { id: "system", name: "Système" },
-                { id: "light", name: "Clair" },
-                { id: "dark", name: "Sombre" },
-              ]}
-              onPick={(value: Theme) => setTheme(value)}
-            />
-          </Row>
+      return (
+        <div className="thg" role="radiogroup" aria-label="Thème">
+          {(Object.keys(THEMES) as Theme[]).map((k) => (
+            <button
+              key={k}
+              className="thp press"
+              role="radio"
+              aria-checked={theme === k}
+              aria-pressed={theme === k}
+              onClick={() => setTheme(k)}
+            >
+              <span className={`mini-ph ${k}`}>
+                <i />
+                <i />
+                <i />
+              </span>
+              <span className="rad" />
+              {THEMES[k]}
+            </button>
+          ))}
         </div>
       );
-      break;
     case "agents":
-      body = (
+      return <AgentsPage agents={props.agents} />;
+    case "mascots":
+      return <MascotSettings agents={props.agents} />;
+    case "models":
+      return (
         <>
-          <div className="set-card">
-            {props.agents.map((a) => (
-              <div key={a.id} className="set-row">
-                <AgentBadge agent={a} />
-                <div className="set-tx">
-                  <b>{a.name}</b>
-                  <p>
-                    {!a.available
-                      ? (a.hint ?? "Pas trouvé sur cette machine.")
-                      : a.check?.signInNeeded
-                        ? `Connexion requise${a.login ? ` : ${a.login}` : ""}`
-                        : (a.check?.version ?? a.command ?? "Prêt")}
-                  </p>
-                </div>
-                <span
-                  className={`set-dot ${
-                    !a.available
-                      ? "off"
-                      : a.check?.signInNeeded || a.check?.ok === false
-                        ? "warn"
-                        : "ok"
-                  }`}
-                  aria-hidden
-                />
-              </div>
+          <ModelFavorites agents={props.agents} favorites={props.favorites} />
+          <div className="gl2">Par type de travail</div>
+          <div className="ins">
+            {ROUTE_KINDS.filter((kind) => kind !== "default").map((kind) => (
+              <RouteRow
+                key={kind}
+                kind={kind}
+                title={KIND_LABEL[kind]}
+                agents={props.agents}
+                favorites={props.favorites}
+                route={props.coordinator.routes[kind]}
+              />
             ))}
           </div>
-          <button className="btn" onClick={props.onOpenConnections}>
-            <IconPlug size={14} />
-            Vérifier ou ajouter un agent
-          </button>
+          <div className="gl2">Limites</div>
+          <div className="ins">
+            <Row title="Fils en même temps" text="Par projet">
+              <Stepper
+                label="Fils en même temps"
+                value={props.coordinator.parallel ?? DEFAULT_PARALLEL}
+                max={MAX_PARALLEL}
+                onChange={(parallel) =>
+                  connection.send({ type: "coordinator.setParallel", parallel })
+                }
+              />
+            </Row>
+            <Row title="Tours en même temps" text="Sur tout le serveur">
+              <Stepper
+                label="Tours en même temps sur tout le serveur"
+                value={props.coordinator.maxTurns ?? DEFAULT_MAX_TURNS}
+                max={MAX_MAX_TURNS}
+                onChange={(maxTurns) => connection.send({ type: "server.setMaxTurns", maxTurns })}
+              />
+            </Row>
+          </div>
         </>
       );
-      break;
-    case "mascots":
-      body = <MascotSettings agents={props.agents} />;
-      break;
-    case "models":
-      body = <ModelFavorites agents={props.agents} favorites={props.favorites} />;
-      break;
     case "coordinator": {
       const named = (m: TeamMember) => {
         const agent = props.agents.find((a) => a.id === m.agentId);
-        const model = modelNameOf(agent?.models, m.model);
-        return `${agent?.name ?? m.agentId}${model ? ` · ${model}` : ""}`;
+        return modelNameOf(agent?.models, m.model) ?? agent?.name ?? m.agentId;
       };
       const team = props.coordinator.team;
-      const hasFavorites = routeChoices(
-        props.agents,
-        props.favorites,
-        undefined,
-        false,
-      ).favoritesOnly;
-      body = (
+      const roles: [string, string][] = team
+        ? [
+            ["Chef", named(team.lead)],
+            [team.coders > 1 ? `${team.coders} codeurs` : "Codeur", named(team.coder)],
+            ...(team.reviewer ? [["Relecture", named(team.reviewer)] as [string, string]] : []),
+            ...(team.tester ? [["Tests", named(team.tester)] as [string, string]] : []),
+            ...(team.merger ? [["Fusion", named(team.merger)] as [string, string]] : []),
+          ]
+        : [];
+      return (
         <>
-          <p className="set-empty">
-            Quand un coordinateur ouvre un fil, il l'envoie au modèle choisi ici pour ce type de
-            travail, sinon à celui de « Par défaut ». Sans aucun choix, le fil garde l'agent et le
-            modèle du coordinateur. La liste montre tes modèles favoris ; sans favori, tous les
-            modèles.
-          </p>
-          <div className="set-card">
-            {ROUTE_KINDS.map((kind) => {
-              const route = props.coordinator.routes[kind];
-              return (
-                <Row key={kind} title={KIND_LABEL[kind]}>
-                  <RouteSelect
-                    kind={kind}
-                    agents={props.agents}
-                    favorites={props.favorites}
-                    route={route}
-                    showAll={allModels}
-                  />
-                </Row>
-              );
-            })}
-          </div>
-          {hasFavorites && (
-            <button
-              className="btn quiet sm set-more"
-              aria-pressed={allModels}
-              onClick={() => setAllModels((on) => !on)}
-            >
-              {allModels ? "Seulement mes favoris" : "Afficher tous les modèles"}
-            </button>
-          )}
-          <div className="set-card">
-            <Row
-              title="Fils en même temps"
-              text="Au-delà, les fils qu'un coordinateur ouvre attendent en file et démarrent dès qu'une place se libère."
-            >
-              <label className="set-select">
-                <select
-                  aria-label="Fils en même temps"
-                  value={props.coordinator.parallel ?? DEFAULT_PARALLEL}
-                  onChange={(e) =>
-                    connection.send({
-                      type: "coordinator.setParallel",
-                      parallel: Number(e.target.value),
-                    })
-                  }
-                >
-                  {Array.from({ length: MAX_PARALLEL }, (_, i) => i + 1).map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </Row>
-            <Row
-              title="Tours en même temps sur tout le serveur"
-              text="Au-delà, ce que lancent un coordinateur, une équipe ou une tâche planifiée attend en file. Ce que tu envoies toi-même part toujours."
-            >
-              <label className="set-select">
-                <select
-                  aria-label="Tours en même temps sur tout le serveur"
-                  value={props.coordinator.maxTurns ?? DEFAULT_MAX_TURNS}
-                  onChange={(e) =>
-                    connection.send({
-                      type: "server.setMaxTurns",
-                      maxTurns: Number(e.target.value),
-                    })
-                  }
-                >
-                  {Array.from({ length: MAX_MAX_TURNS }, (_, i) => i + 1).map((n) => (
-                    <option key={n} value={n}>
-                      {n}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </Row>
-            <Row
-              title="Équipe lancée par un coordinateur"
-              text={
-                team
-                  ? `Chef : ${named(team.lead)}. ${team.coders} codeur${team.coders > 1 ? "s" : ""} : ${named(team.coder)}.${
-                      team.reviewer ? ` Relecture : ${named(team.reviewer)}.` : ""
-                    }${team.tester ? ` Tests : ${named(team.tester)}.` : ""}${
-                      team.merger ? ` Fusion : ${named(team.merger)}.` : ""
-                    } C'est la dernière équipe que tu as lancée avec /equipe.`
-                  : "Aucune pour l'instant. Lance une équipe toi-même une fois avec /equipe : un coordinateur reprendra la même."
-              }
+          <div className="ins">
+            <RouteRow
+              kind="default"
+              title="Modèle des fils ouverts"
+              agents={props.agents}
+              favorites={props.favorites}
+              route={props.coordinator.routes.default}
             />
           </div>
+          <div className="gl2">Équipe lancée par un coordinateur</div>
+          <div className="ins">
+            {team ? (
+              roles.map(([role, who]) => (
+                <Row key={role} title={role}>
+                  <span className="rt">{who}</span>
+                </Row>
+              ))
+            ) : (
+              <Row title="Aucune">
+                <span className="rt">
+                  <span className="mono">/equipe</span>
+                </span>
+              </Row>
+            )}
+          </div>
         </>
       );
-      break;
     }
     case "mcp":
-      body = (
-        <>
-          {props.mcpSecretsError && <p className="error">{props.mcpSecretsError}</p>}
-          {props.mcpServers.length ? (
-            <div className="set-card">
-              {props.mcpServers.map((s) => (
-                <Row
-                  key={s.id}
-                  title={s.name}
-                  text={`${s.transport === "http" ? "HTTP" : "Commande"} · ${s.target} · ${mcpScopeLabel(scopeOf(s), props.projects)}`}
-                >
-                  <span className={`set-tag${s.enabled ? " on" : ""}`}>
-                    {s.enabled ? "Actif" : "Désactivé"}
-                  </span>
-                </Row>
-              ))}
-            </div>
-          ) : (
-            <p className="set-empty">
-              Aucun serveur MCP. Ceux que tu ajoutes ici sont donnés aux agents, pour tous les
-              projets ou ceux que tu choisis.
-            </p>
-          )}
-          <button className="btn" onClick={props.onOpenMcp}>
-            <IconPlug size={14} />
-            Gérer les serveurs MCP
-          </button>
-        </>
-      );
-      break;
+      return <McpPage {...props} />;
     case "teams":
-      body = <TeamPresets agents={props.agents} projectId={props.projectId} />;
-      break;
+      return <TeamPresets agents={props.agents} projectId={props.projectId} />;
     case "remote":
-      body = <RemoteAccess />;
-      break;
+      return <RemoteAccess />;
     case "subscriptions":
-      body = <Subscriptions agents={props.agents} />;
-      break;
+      return <Subscriptions agents={props.agents} />;
   }
+}
+
+/** The page's title folds into its header once the page is scrolled. */
+function useScrolled() {
+  const [scrolled, setScrolled] = useState(false);
+  const onScroll = (e: React.UIEvent<HTMLDivElement>) =>
+    setScrolled(e.currentTarget.scrollTop > 34);
+  return { scrolled, onScroll, reset: () => setScrolled(false) };
+}
+
+/**
+ * The settings, over the whole app. On a phone the list of sections, then the section pushed
+ * over it; on a wider screen the list where the side bar was and the section in the rest.
+ */
+export function SettingsLayer(
+  props: PageProps & {
+    section: SettingsSection;
+    /** A phone shows the list, not the section. */
+    list: boolean;
+    wide: boolean;
+    onPick: (section: SettingsSection) => void;
+    onList: () => void;
+    onClose: () => void;
+  },
+) {
+  const [query, setQuery] = useState("");
+  const github = useGithubStatus();
+  const [githubOpen, setGithubOpen] = useState(false);
+  const login = github.status?.login;
+  const theme = useSyncExternalStore(subscribeTheme, readTheme);
+  const quotas = useQuotas();
+  const { app } = useApp();
+  const root = useScrolled();
+  const sub = useScrolled();
+  // The layer slides in once it is there.
+  const [on, setOn] = useState(false);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setOn(true));
+    return () => cancelAnimationFrame(frame);
+  }, []);
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector(".sheet.on")) return;
+      event.preventDefault();
+      if (!props.wide && !props.list) props.onList();
+      else props.onClose();
+    };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  });
+
+  const worst = Math.max(0, ...quotas.map((q) => tightest(q)?.usedPercent ?? 0));
+  const ready = props.agents.filter((a) => a.available).length;
+  const favorites = Object.values(props.favorites).reduce((n, list) => n + list.length, 0);
+  const servers = props.mcpServers.filter((s) => s.enabled).length;
+  const main = props.coordinator.routes.default;
+  const state: Partial<Record<SettingsSection, string>> = {
+    appearance: THEMES[theme],
+    agents: ready ? `${ready} ${ready > 1 ? "prêts" : "prêt"}` : "",
+    models: favorites ? `${favorites} ${favorites > 1 ? "favoris" : "favori"}` : "",
+    subscriptions: quotas.length ? formatPercent(worst) : "",
+    coordinator: main
+      ? (modelNameOf(props.agents.find((a) => a.id === main.agentId)?.models, main.model) ??
+        props.agents.find((a) => a.id === main.agentId)?.name ??
+        "")
+      : "",
+    mcp: servers ? `${servers} ${servers > 1 ? "actifs" : "actif"}` : "",
+  };
+  const shown = new Set(matchSections(SECTIONS, query).map((s) => s.id));
+  const title = SECTIONS.find((s) => s.id === props.section)?.label ?? "";
+  const subIn = props.wide || !props.list;
+  const pick = (section: SettingsSection) => {
+    sub.reset();
+    props.onPick(section);
+  };
 
   return (
-    <div className="view set-view">
-      <div className="set-page">
-        <h1>{title}</h1>
-        {body}
+    <div className={`setl${on ? " on" : ""}`} id="setl">
+      <div
+        className={`spg root${subIn && !props.wide ? " back" : ""}${root.scrolled ? " sc" : ""}`}
+        id="sroot"
+        role="navigation"
+        aria-label="Réglages"
+        inert={subIn && !props.wide}
+      >
+        <div className="shdr">
+          <button
+            className="gb glass press"
+            aria-label="Fermer les réglages"
+            onClick={props.onClose}
+          >
+            <I n="x" s={19} />
+          </button>
+          <b className="stitle">Réglages</b>
+          <span className="sph" />
+        </div>
+        <div className="sscroll" onScroll={root.onScroll}>
+          <h1 className="lt">Réglages</h1>
+          <label className="ssearch">
+            <I n="search" s={17} />
+            <input
+              type="search"
+              placeholder="Rechercher un réglage"
+              aria-label="Rechercher un réglage"
+              autoComplete="off"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                const first = SECTIONS.find((s) => shown.has(s.id));
+                if (e.key === "Enter" && first) pick(first.id);
+                if (e.key === "Escape" && query) {
+                  e.preventDefault();
+                  setQuery("");
+                }
+              }}
+            />
+          </label>
+          {!query && (
+            <button className="prof press" onClick={() => setGithubOpen(true)}>
+              <span className="me sm">{(login ?? "M").slice(0, 1).toUpperCase()}</span>
+              <span className="tx">
+                <b>{login ?? "MoonAgentic"}</b>
+                <small>
+                  <I n="gh" s={13} />
+                  {login ? "GitHub" : "GitHub non connecté"}
+                </small>
+              </span>
+              <I n="right" s={15} />
+            </button>
+          )}
+          {GROUPS.map((group) => {
+            const rows = group.filter((s) => shown.has(s.id));
+            if (!rows.length) return null;
+            return (
+              <div key={group[0]!.id} className="ins sg">
+                {rows.map((s) => (
+                  <button
+                    key={s.id}
+                    className="it"
+                    aria-current={props.wide && s.id === props.section ? "true" : undefined}
+                    onClick={() => pick(s.id)}
+                  >
+                    <span className="ic tile">
+                      {s.icon === "half" ? <span className="half" /> : <I n={s.icon} s={17} />}
+                    </span>
+                    <span className="tx">{s.label}</span>
+                    <span className="rt">
+                      {state[s.id]}
+                      <I n="right" s={15} />
+                    </span>
+                  </button>
+                ))}
+              </div>
+            );
+          })}
+          {!shown.size && <p className="snone">Aucun réglage ne correspond.</p>}
+          {app && (
+            <p className="sver">
+              <b>MoonAgentic</b> {app.version}
+            </p>
+          )}
+        </div>
       </div>
+      <div
+        className={`spg sub${subIn ? " in" : ""}${sub.scrolled ? " sc" : ""}`}
+        id="ssub"
+        role="region"
+        aria-label={title}
+        inert={!subIn}
+      >
+        <div className="shdr">
+          <button
+            className="bk glass press"
+            aria-label="Retour aux réglages"
+            onClick={props.onList}
+          >
+            <I n="back" s={20} />
+            <span>Réglages</span>
+          </button>
+          <b className="stitle">{title}</b>
+          <span className="sph" />
+        </div>
+        <div className="sscroll" key={props.section} onScroll={sub.onScroll}>
+          <h1 className="lt">{title}</h1>
+          <SectionBody {...props} github={github} onOpenGithub={() => setGithubOpen(true)} />
+          <div style={{ height: 30 }} />
+        </div>
+      </div>
+      <GithubSheet open={githubOpen} github={github} onClose={() => setGithubOpen(false)} />
     </div>
   );
 }

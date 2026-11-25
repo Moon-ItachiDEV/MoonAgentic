@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { addProject, pickAgent, setAccess } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -74,20 +75,12 @@ describe("review remarks", () => {
     const errors: Error[] = [];
     page.on("pageerror", (err) => errors.push(err));
     await page.goto(url);
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(repo);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
+    await addProject(page, repo);
     const composer = page.getByRole("combobox", { name: "Message" });
     await expect.poll(() => composer.isEnabled()).toBe(true);
-    await page.locator(".agentchip").click();
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
-    await page.getByRole("button", { name: "Options", exact: true }).click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-    await page.keyboard.press("Escape");
+    await pickAgent(page);
     // Let through, so its turn ends by itself.
-    await page.getByRole("button", { name: /Mode d'accès/ }).click();
-    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
+    await setAccess(page, /Accès complet/);
     await composer.fill("Corrige la réponse");
     await composer.press("Enter");
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
@@ -102,36 +95,42 @@ describe("review remarks", () => {
       "# Notes\n\nLigne à revoir, plus longue.\n",
     );
 
-    const open = page.getByRole("button", { name: /^Code/ });
-    const panel = page.getByRole("complementary", { name: "À revoir" });
-    await open.click();
-    const line = panel.getByRole("row").filter({ hasText: "Ligne à revoir, plus longue." });
+    const open = page.getByRole("button", { name: /^Modifications/ });
+    const panel = page.getByRole("dialog", { name: "Modifications" });
+    /** The file's own changes, one level down in the sheet. */
+    const file = page.getByRole("dialog", { name: "notes.md" });
+    const line = file.getByRole("row").filter({ hasText: "Ligne à revoir, plus longue." });
+    const remark = file.getByRole("button", { name: /Dis plutôt pourquoi$/ });
+    const toFile = async () => {
+      await open.click();
+      await panel.getByRole("button", { name: /^notes\.md/ }).click();
+    };
+    await toFile();
     await line.click();
-    await panel.getByPlaceholder("Ce que l'agent doit changer ici").fill("Dis plutôt pourquoi");
-    await panel.getByRole("button", { name: "Ajouter", exact: true }).click();
-    const remark = panel.getByRole("button", { name: "Dis plutôt pourquoi" });
+    await file.getByPlaceholder("Ce que l'agent doit changer ici").fill("Dis plutôt pourquoi");
+    await file.getByRole("button", { name: "Ajouter", exact: true }).click();
     await remark.waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "revue-commentaire.png") });
 
     // Closed and opened again: the remark is on its line.
-    await page.getByRole("button", { name: "Fermer la revue" }).click();
-    await expect.poll(() => panel.count()).toBe(0);
-    await open.click();
+    await file.getByRole("button", { name: "Fermer", exact: true }).click();
+    await expect.poll(() => page.getByRole("dialog").count()).toBe(0);
+    await toFile();
     await remark.waitFor();
 
-    // The page loaded again: still there, kept on this device.
+    // The page loaded again: still there, kept on this device, and counted on the file.
     await page.reload();
-    await open.click();
+    await toFile();
     await remark.waitFor();
 
     // Sent to the agent, it leaves the list, and does not come back with the panel.
-    await panel.getByRole("button", { name: "Envoyer à l'agent" }).click();
+    await file.getByRole("button", { name: /^Envoyer à l'agent/ }).click();
     await page.getByText("Dis plutôt pourquoi").first().waitFor();
     await expect.poll(() => remark.count(), { timeout: 15_000 }).toBe(0);
+    await page.keyboard.press("Escape");
     await page.getByText("C'est fait, la réponse vaut 42.").nth(1).waitFor();
     await page.reload();
-    await open.click();
-    await panel.waitFor();
+    await toFile();
     await line.waitFor();
     expect(await remark.count()).toBe(0);
     expect(errors).toEqual([]);

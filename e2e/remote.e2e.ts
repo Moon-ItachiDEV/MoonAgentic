@@ -109,9 +109,9 @@ describe("Réglages → Accès distant", () => {
 
       // Tailscale runs but publishes nothing: no address, nothing to pair with, the command.
       await page.getByRole("heading", { name: "Accès distant" }).waitFor();
-      await page.getByText("Aucune adresse ne permet encore").waitFor();
+      await page.getByText("Aucune", { exact: true }).waitFor();
       await page.getByText(`tailscale serve --bg ${opened.port}`).waitFor();
-      await page.getByText("Aucun pour l'instant.").waitFor();
+      await page.getByText("Aucun", { exact: true }).waitFor();
       expect(await page.getByRole("button", { name: "Appairer un appareil" }).count()).toBe(0);
       // The computer's own token is never shown on the page any more.
       expect(await page.content()).not.toContain(token);
@@ -152,13 +152,15 @@ describe("Réglages → Accès distant", () => {
       await phone.goto(`${new URL(url).origin}/#pair=${code}`);
       await phone.getByRole("combobox", { name: "Message" }).waitFor();
       expect(new URL(phone.url()).hash).toBe("");
-      await page.getByText("« iPhone · Safari » est appairé.").waitFor();
-      await page.locator(".ra-devices").getByText("iPhone · Safari").waitFor();
+      await page.getByRole("status").getByText("iPhone · Safari appairé").waitFor();
+      await page.getByRole("button", { name: "Fermer", exact: true }).click();
+      const revoke = page.getByRole("button", { name: "Révoquer iPhone · Safari" });
+      await revoke.waitFor();
       if (shots) await page.screenshot({ path: path.join(shots, "appareils.png"), fullPage: true });
       // On the phone, the devices are not listed: only the computer manages them.
       await phone.goto(`${new URL(url).origin}/reglages/remote`);
-      await phone.getByText("Cet appareil est appairé").waitFor();
-      expect(await phone.getByRole("button", { name: "Renouveler" }).count()).toBe(0);
+      await phone.getByText("Appairé", { exact: true }).waitFor();
+      expect(await phone.getByRole("button", { name: /Renouveler/ }).count()).toBe(0);
 
       // The same code does not work twice.
       const again = await (await browser.newContext()).newPage();
@@ -174,7 +176,7 @@ describe("Réglages → Accès distant", () => {
       await phone.goto(`${new URL(url).origin}/reglages/remote`);
 
       // Renewing the computer's token: the old one is refused, the phone stays connected.
-      await page.getByRole("button", { name: "Renouveler", exact: true }).click();
+      await page.getByRole("button", { name: "Renouveler le jeton de cet ordinateur" }).click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Renouveler" }).click();
       await page.getByRole("alertdialog").waitFor({ state: "detached" });
       const auth = (given: string) =>
@@ -185,17 +187,12 @@ describe("Réglages → Accès distant", () => {
       const renewed = readFileSync(path.join(dir, "data", "token"), "utf8");
       expect(await auth(renewed)).toBe(204);
       await phone.reload();
-      await phone.getByText("Cet appareil est appairé").waitFor();
+      await phone.getByText("Appairé", { exact: true }).waitFor();
 
       // Revoked from the computer, the phone is asked to pair again.
-      await page
-        .locator(".ra-devices li", { hasText: "iPhone · Safari" })
-        .getByRole("button", {
-          name: "Révoquer",
-        })
-        .click();
+      await revoke.click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Révoquer" }).click();
-      await page.getByText("Aucun pour l'instant.").waitFor();
+      await expect.poll(() => revoke.count()).toBe(0);
       await phone.getByRole("heading", { name: "Appairer cet appareil" }).waitFor();
       // The failed link from before is not shown as the reason.
       expect(await phone.getByText("il a expiré").count()).toBe(0);

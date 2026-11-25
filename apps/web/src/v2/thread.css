@@ -1,0 +1,1242 @@
+/* The thread as the app draws it: what the mockup's thread does not show (tools, questions,
+   notices, long answers) in the same language. */
+.feed {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+.feed > .feed-top {
+  display: none;
+}
+.feed .item {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+.feed .item.flash {
+  animation: flash 1.6s var(--out);
+}
+@keyframes flash {
+  0%,
+  30% {
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
+    box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 12%, transparent);
+    border-radius: 12px;
+  }
+}
+.vh {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The user's message, where it came from, and the way back to it. */
+.uw {
+  align-self: flex-end;
+  max-width: 82%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+.uw .u {
+  max-width: 100%;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.u .tok {
+  font-weight: 500;
+}
+.ufrom {
+  font-size: 13px;
+  color: var(--muted);
+  padding-right: 6px;
+}
+.uact {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 6px;
+  font-size: 13px;
+  color: var(--faint);
+  opacity: 0;
+  transition: opacity 160ms var(--out);
+}
+.uw:hover .uact,
+.uact:focus-visible,
+html[data-dev="touch"] .uact {
+  opacity: 1;
+}
+.uact:hover {
+  color: var(--fg2);
+}
+.ucf {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.ucf .b2 {
+  height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+}
+.uerr {
+  margin: 0;
+  font-size: 13px;
+  color: var(--err-tx);
+}
+
+/* Who answers, and what it wrote. */
+.a {
+  min-width: 0;
+}
+.a .md {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  font-size: 16px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.a .md > * {
+  margin: 0;
+  min-width: 0;
+}
+.a .md h1,
+.a .md h2,
+.a .md h3,
+.a .md h4 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin-top: 6px;
+}
+.a .md h1 {
+  font-size: 20px;
+}
+.a .md h2 {
+  font-size: 18px;
+}
+.a .md h3,
+.a .md h4 {
+  font-size: 16px;
+}
+.a .md ul,
+.a .md ol {
+  padding-left: 22px;
+  display: grid;
+  gap: 4px;
+}
+.a .md li > p {
+  margin: 0;
+}
+.a .md a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.a .md a:hover {
+  text-decoration: underline;
+}
+.a .md code {
+  font: 400 0.88em var(--mono);
+  padding: 2px 6px;
+  border-radius: 7px;
+  background: var(--card);
+}
+.a .md pre {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: var(--card);
+  overflow-x: auto;
+  font: 400 13px/1.55 var(--mono);
+}
+.a .md pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+.a .md blockquote {
+  padding-left: 14px;
+  color: var(--fg2);
+  box-shadow: inset 2px 0 0 var(--track);
+}
+.a .md hr {
+  border: 0;
+  height: 1px;
+  background: var(--track);
+}
+.a .md table {
+  border-collapse: collapse;
+  font-size: 14px;
+  display: block;
+  overflow-x: auto;
+}
+.a .md th,
+.a .md td {
+  padding: 7px 12px;
+  text-align: left;
+  border: 0;
+  box-shadow: inset 0 -1px 0 var(--track);
+}
+.a .md th {
+  font-weight: 500;
+  color: var(--muted);
+}
+.a .md img {
+  max-width: min(100%, 280px);
+  border-radius: 20px;
+  display: block;
+}
+
+/* Threads the coordinator opened, and what they brought back. */
+.hook {
+  max-width: 100%;
+}
+.hook .st {
+  margin-left: auto;
+  color: var(--muted);
+}
+.hook .st.er {
+  color: var(--err-tx);
+}
+.hook.gone {
+  color: var(--faint);
+}
+.hook.up .hk {
+  margin-top: 0;
+}
+.hook:hover .t {
+  color: var(--fg);
+}
+.rsl {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  min-width: 0;
+}
+.rsl .done {
+  text-align: left;
+  font-weight: 500;
+}
+.rsl .done:not(:disabled):hover {
+  color: var(--fg);
+}
+.rsl.x .done svg {
+  color: var(--err);
+}
+.rsl p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--fg2);
+  padding-left: 24px;
+}
+.rsl .chips {
+  padding-left: 24px;
+  margin: 0;
+}
+.evt.earlier {
+  cursor: pointer;
+}
+.evt.earlier:hover {
+  color: var(--fg);
+}
+
+/* What the agent did on the way: one line, which opens on its steps. */
+.det {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.det > .live,
+.fold,
+.fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  width: 100%;
+  text-align: left;
+  font-size: 15px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+}
+.fold > summary::-webkit-details-marker {
+  display: none;
+}
+.det > .fold {
+  gap: 8px;
+}
+.det .tm {
+  margin-left: auto;
+  font: 400 12px var(--mono);
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+}
+.det > .fold .tm {
+  margin-left: 0;
+}
+.det .cv,
+.fold > summary svg,
+.tlh .cv {
+  color: var(--faint);
+  transition: transform 220ms var(--out);
+  flex: none;
+}
+.det.open > .fold .cv,
+.fold[open] > summary svg,
+.tl.open > .tlh .cv {
+  transform: rotate(90deg);
+}
+.det > .fold:hover,
+.fold > summary:hover {
+  color: var(--fg2);
+}
+.detb {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding-left: 12px;
+  box-shadow: inset 1.5px 0 0 var(--track);
+}
+.detb .item {
+  gap: 8px;
+}
+.detb .a {
+  font-size: 15px;
+  color: var(--fg2);
+  padding: 4px 0;
+}
+.detb .a .md {
+  font-size: 15px;
+}
+details.fold {
+  display: grid;
+  gap: 8px;
+}
+.fold .fb {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-left: 12px;
+  box-shadow: inset 1.5px 0 0 var(--track);
+}
+.live .lq {
+  color: var(--muted);
+}
+.live .lt {
+  color: var(--muted);
+}
+.live .nm,
+.fold .nm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A tool the agent ran. */
+.tl {
+  display: grid;
+  min-width: 0;
+}
+.tlh {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  width: 100%;
+  text-align: left;
+  font-size: 14px;
+  color: var(--fg2);
+}
+.tlh > :first-child {
+  justify-self: center;
+}
+.tlh .ok {
+  color: var(--ok);
+}
+.tlh .er {
+  color: var(--err);
+}
+.tlh .pend {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--track);
+}
+.tlh .gw {
+  display: grid;
+  place-items: center;
+}
+.tlh .nm {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+.tlh .tm {
+  margin: 0;
+  font: 400 12px var(--sans);
+  color: var(--faint);
+}
+.tlb {
+  display: grid;
+  gap: 8px;
+  margin: 4px 0 8px 30px;
+  min-width: 0;
+}
+.tlb pre,
+.tdf {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: var(--card);
+  font: 400 12.5px/1.55 var(--mono);
+  color: var(--fg2);
+  overflow-x: auto;
+  white-space: pre;
+  max-height: 420px;
+}
+.tdf {
+  padding: 0;
+  white-space: normal;
+}
+.tdh {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tdb {
+  padding: 0 0 8px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+  overflow-x: auto;
+}
+.tdb > div {
+  padding: 0 12px;
+  min-width: max-content;
+}
+.tdb .add {
+  background: var(--ok-bg, color-mix(in srgb, var(--ok) 12%, transparent));
+}
+.tdb .del {
+  background: var(--err-bg, color-mix(in srgb, var(--err) 10%, transparent));
+}
+.tlw {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.tlm {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+  justify-self: start;
+}
+
+/* A question or an agreement asked on the way: answered above the composer. */
+.ask {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  font-size: 15px;
+}
+.ask .aq {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+}
+.ask .aq b {
+  font-weight: 500;
+}
+.ask .aq span {
+  color: var(--muted);
+}
+.ask.done .aq b {
+  font-weight: 400;
+  color: var(--fg2);
+}
+.ask .st {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ask .st.w {
+  color: var(--accent);
+}
+.ask .st.w::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* A notice in the thread: the agent stopped, went quiet, or its turn failed. */
+.ntc {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 12px 14px 16px;
+  border-radius: 24px;
+  background: var(--card);
+  animation: up 420ms var(--spring) both;
+}
+.ntc.col {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 16px;
+}
+.ntc .ni {
+  color: var(--err);
+  flex: none;
+}
+.ntc .tx {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.ntc b {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.ntc small {
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.ntc details {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+.ntc summary {
+  cursor: pointer;
+}
+.ntc details code {
+  display: block;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--bg);
+  font: 400 12px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.ntc .na {
+  display: flex;
+  gap: 8px;
+}
+.ntc .na .b2 {
+  flex: 1;
+}
+.ntc > .b2 {
+  flex: none;
+  height: 40px;
+  padding: 0 16px;
+  font-size: 15px;
+}
+
+/* The agent's plan: what the mockup's steps do not carry. */
+.plan.ap {
+  position: relative;
+}
+.plan .stp > span:nth-child(2) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.plan.ap .stp small {
+  display: block;
+  font-size: 12px;
+  color: var(--faint);
+  margin-top: 1px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plan.ap .stp {
+  align-items: start;
+}
+.plan.ap .stp .tm,
+.plan.ap .stp .tg {
+  padding-top: 2px;
+}
+.plan.ap .stp.x {
+  color: var(--fg);
+}
+.plan.ap .stp.x > i {
+  color: var(--warn-dot);
+}
+.plan.ap button.tg:hover {
+  text-decoration: underline;
+}
+.plan.ap .stp.fold {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  min-height: 0;
+}
+.plan.ap .apf {
+  justify-self: start;
+  font-size: 13px;
+  color: var(--faint);
+  padding: 4px 0 0 32px;
+}
+.plan.ap .apf:hover {
+  color: var(--fg2);
+}
+
+/* Above the composer: the goal's note, a queued message's origin. */
+.gcard .gnote {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+button.cqt {
+  text-align: left;
+}
+.cqt small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Images joined to a message, in the thread. */
+.u-imgs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.u-img {
+  display: block;
+  width: 112px;
+  height: 112px;
+  padding: 0;
+  border-radius: 16px;
+  background: var(--group);
+  overflow: hidden;
+  cursor: zoom-in;
+  flex: none;
+}
+.u-img:disabled {
+  cursor: default;
+}
+.u-img img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* Alone, an image is larger. Its box is set before it loads, so the thread does not jump
+   under the reader when it arrives. */
+.u-imgs.one .u-img {
+  width: min(240px, 100%);
+  height: 180px;
+}
+.u-img.gone {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  height: 40px;
+  padding: 0 12px;
+  color: var(--faint);
+  font-size: 12.5px;
+  cursor: default;
+}
+
+/* The files of the computer an answer names: an image the agent made, in the thread. */
+.md img.md-img {
+  display: block;
+  max-width: min(100%, 520px);
+  max-height: 420px;
+  height: auto;
+  margin: 8px 0;
+  border-radius: 16px;
+  background: var(--group);
+  cursor: zoom-in;
+  object-fit: contain;
+}
+/* Its box is there before it loads, so the thread does not jump under the reader. */
+.md img.md-img.waiting {
+  width: min(100%, 320px);
+  aspect-ratio: 4 / 3;
+  animation: md-img-wait 1.4s ease-in-out infinite;
+}
+@keyframes md-img-wait {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .md img.md-img.waiting {
+    animation: none;
+  }
+}
+/* The image and, over its corner, what keeps it: a glass button. */
+.md .md-img-box {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+}
+.md-img-keep {
+  position: absolute;
+  right: 10px;
+  bottom: 18px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+  background: var(--glass);
+  backdrop-filter: blur(14px) saturate(1.6);
+  -webkit-backdrop-filter: blur(14px) saturate(1.6);
+  box-shadow: var(--glass-sh);
+  color: var(--fg);
+  transition: transform 150ms var(--out);
+}
+.md-img-keep:active {
+  transform: scale(0.94);
+}
+.md img.md-img.waiting + .md-img-keep {
+  display: none;
+}
+.md-img-keep:focus-visible,
+.md img.md-img:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.md-img-gone {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  margin: 4px 0;
+  padding: 0 12px;
+  border-radius: 16px;
+  background: var(--hover);
+  color: var(--faint);
+  font-size: 12.5px;
+}
+/* An agent's answer is drawn in a box of its own: nothing it holds shows, or takes a tap,
+   outside of it. The few pixels around its text leave room for a focus ring or a soft shadow. */
+.md-own {
+  contain: paint;
+  padding: 4px;
+  margin: -4px;
+}
+/* A link that leads nowhere reads as the text around it. */
+.md a:not([href]):not(.md-file) {
+  color: inherit;
+  text-decoration: none;
+  cursor: text;
+}
+/* A file the app opens itself: a link to the eye and to the hand, with no address to follow. */
+.md a.md-file {
+  cursor: pointer;
+}
+
+/* The image an agent is making, before it is there: dots, a wave of light, the real time. */
+.img-draft {
+  display: grid;
+  gap: 10px;
+  margin: 6px 0 10px;
+}
+.img-draft-label {
+  color: var(--faint);
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.img-draft-canvas {
+  position: relative;
+  width: min(100%, 360px);
+  aspect-ratio: 4 / 5;
+  border-radius: 20px;
+  overflow: hidden;
+}
+.img-draft-canvas::before,
+.img-draft-canvas::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, currentColor 1.1px, transparent 1.5px);
+  background-size: 14px 14px;
+  background-position: 7px 7px;
+}
+/* The grid at rest, barely there. */
+.img-draft-canvas::before {
+  color: color-mix(in srgb, var(--faint) 45%, transparent);
+}
+/* The same dots in the accent colour, seen through a soft light that drifts over them. */
+.img-draft-canvas::after {
+  color: var(--accent);
+  -webkit-mask-image: radial-gradient(ellipse 45% 55% at 50% 50%, #000 0%, transparent 70%);
+  mask-image: radial-gradient(ellipse 45% 55% at 50% 50%, #000 0%, transparent 70%);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 160% 160%;
+  mask-size: 160% 160%;
+  animation: img-draft-wave 5s ease-in-out infinite alternate;
+}
+@keyframes img-draft-wave {
+  0% {
+    -webkit-mask-position: 0% 10%;
+    mask-position: 0% 10%;
+  }
+  50% {
+    -webkit-mask-position: 90% 50%;
+    mask-position: 90% 50%;
+  }
+  100% {
+    -webkit-mask-position: 20% 100%;
+    mask-position: 20% 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .img-draft-canvas::after {
+    animation: none;
+  }
+}
+.img-draft-time {
+  position: absolute;
+  z-index: 1;
+  right: 12px;
+  bottom: 12px;
+  height: 28px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 14px;
+  background: var(--glass);
+  backdrop-filter: blur(14px) saturate(1.6);
+  -webkit-backdrop-filter: blur(14px) saturate(1.6);
+  box-shadow: var(--glass-sh);
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* What an agent waits on the user for, above the composer: beyond the mockup's three rows. */
+.dc .hd .src {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--muted);
+}
+.dc .hd button.src:hover {
+  color: var(--fg);
+}
+.dc .pg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.dc .ib {
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.dc .ib:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.dc h3 {
+  overflow-wrap: anywhere;
+}
+.dc .rows {
+  display: grid;
+  gap: 2px;
+}
+.opt {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.opt .k {
+  flex: none;
+}
+.opt.on .k {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+.opt .ot {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.opt .on {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.opt .ot small {
+  font-size: 13.5px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.dc .rec {
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accbg);
+}
+.opt .pick {
+  flex: none;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--accent);
+}
+form.opt.other {
+  color: var(--fg);
+}
+.opt.other input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font: inherit;
+  color: var(--fg);
+  caret-color: var(--accent);
+}
+.opt.other input::placeholder {
+  color: var(--faint);
+}
+.opt .snd {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--ink);
+  color: var(--on-ink);
+}
+.opt .snd:disabled {
+  opacity: 0.3;
+}
+.dc .tiles {
+  display: grid;
+  grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 2px 2px 6px;
+}
+.dc .tile {
+  display: grid;
+  align-items: stretch;
+  justify-content: stretch;
+  gap: 8px;
+  height: auto;
+  padding: 6px;
+  border-radius: 18px;
+  background: none;
+  font-weight: 400;
+  text-align: left;
+  min-width: 0;
+}
+.dc .tile.hl,
+.dc .tile:hover {
+  background: var(--card);
+}
+.dc .pv {
+  position: relative;
+  display: block;
+  height: 120px;
+  border-radius: 14px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+.dc .pv pre,
+.dc .pane pre {
+  margin: 0;
+  padding: 10px 12px;
+  font: 400 12px/1.5 var(--mono);
+  color: var(--fg2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dc .pv .rec {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+}
+.dc .tn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14.5px;
+  padding: 0 4px 2px;
+  min-width: 0;
+}
+.dc .tn .k,
+.dc .tile .k {
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: var(--card);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: var(--muted);
+  flex: none;
+}
+.dc .tile.hl .k,
+.dc .tile.on .k {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+.dc .pane {
+  max-height: 180px;
+  overflow: auto;
+  margin: 2px 2px 6px;
+  border-radius: 14px;
+  background: var(--sunken);
+  scrollbar-width: none;
+}
+.dc .pane > span {
+  display: block;
+  padding: 14px;
+  font-size: 13.5px;
+  color: var(--faint);
+}
+.dc .go {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px 2px 12px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.dc .go span {
+  flex: 1;
+}
+.dc .go .b2 {
+  flex: none;
+  height: 40px;
+  padding: 0 20px;
+  border-radius: 20px;
+}
+.dc .go .b2:disabled {
+  opacity: 0.35;
+}
+/* « Plus tard »: the card folded to one line. */
+.dcf {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 44px;
+  padding: 0 14px 0 10px;
+  border-radius: 22px;
+  background: var(--card);
+  text-align: left;
+  color: var(--muted);
+  animation: up 320ms var(--out) both;
+}
+.dcf .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: var(--accbg);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  flex: none;
+}
+.dcf .q {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  color: var(--fg);
+}
+.dcf .n {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* A link to a pull request, drawn as GitHub draws it: its mark, its number, its state's colour. */
+:root {
+  --pr-open: #1a7f37;
+  --pr-merged: #8250df;
+  --pr-closed: #cf222e;
+  --pr-draft: #6e7781;
+}
+:root[data-theme="dark"] {
+  --pr-open: #3fb950;
+  --pr-merged: #a371f7;
+  --pr-closed: #f85149;
+  --pr-draft: #8b949e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pr-open: #3fb950;
+    --pr-merged: #a371f7;
+    --pr-closed: #f85149;
+    --pr-draft: #8b949e;
+  }
+}
+.prchip {
+  /* Until GitHub has answered, the link keeps a neutral colour: no state is made up. */
+  --pr: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pr) 10%, transparent);
+  color: var(--pr) !important;
+  font-size: 0.92em;
+  font-weight: 500;
+  line-height: 1.5;
+  text-decoration: none !important;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+.prchip::before {
+  content: "";
+  width: 1em;
+  height: 1em;
+  flex: none;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.prchip[data-state="open"] {
+  --pr: var(--pr-open);
+}
+.prchip[data-state="draft"] {
+  --pr: var(--pr-draft);
+}
+.prchip[data-state="merged"] {
+  --pr: var(--pr-merged);
+}
+.prchip[data-state="closed"] {
+  --pr: var(--pr-closed);
+}
+
+/* A long message cut to its first lines, opened on demand. */
+.clamp {
+  max-height: 9.5em;
+  overflow: hidden;
+}
+.clamp.long {
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+.clamp.open {
+  max-height: none;
+}
+.clamp-more {
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.clamp-more:hover {
+  color: var(--fg);
+}
+.fold.thought {
+  color: var(--faint);
+}
+
+/* Dictation: what was typed before the voice stays grey. */
+.vxp-typed {
+  color: var(--muted);
+}
+kbd {
+  font: 12px var(--mono);
+  color: var(--muted);
+  background: var(--hover);
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+/* The moon of an agent, floating alone in the thread, and the tints it can take. */
+[data-moon="ice"] {
+  --sky-top: #2676dc;
+  --sky-bottom: #48c4e6;
+}
+[data-moon="violet"] {
+  --sky-top: #6744c7;
+  --sky-bottom: #b495ea;
+}
+[data-moon="pink"] {
+  --sky-top: #ad448a;
+  --sky-bottom: #f29cbb;
+}
+[data-moon="mint"] {
+  --sky-top: #197982;
+  --sky-bottom: #66d5c2;
+}
+[data-moon="amber"] {
+  --sky-top: #c65225;
+  --sky-bottom: #f4af65;
+}
+[data-moon="silver"] {
+  --sky-top: #506685;
+  --sky-bottom: #a6bfd2;
+}
+.mascot {
+  flex: none;
+  position: relative;
+}
+.mascot moon-mascot {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  inline-size: 140%;
+  translate: -50% -50%;
+}
+.prchip[data-state="merged"]::before {
+  /* GitHub's merge mark. */
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'/%3E%3C/svg%3E");
+}

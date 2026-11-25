@@ -11,21 +11,20 @@ import {
   rowPlace,
   withoutFile,
 } from "../diff.ts";
+import { baseName } from "../file-tree.ts";
 import { conflictRequest, type Forecast, forecastLine } from "../forecast.ts";
 import { readReviewDrafts, writeReviewDrafts } from "../review-drafts.ts";
-import { IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
-import { PullRequestStatus, usePullRequest } from "./PullRequestStatus.tsx";
+import { Glyph, I } from "../v2/I.tsx";
+import { Sheet } from "../v2/Sheet.tsx";
+import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 import { WorktreeFiles } from "./WorktreeFiles.tsx";
 
-const STATUS: Record<ReviewFile["status"], { letter: string; label: string }> = {
-  added: { letter: "A", label: "nouveau" },
-  modified: { letter: "M", label: "modifié" },
-  deleted: { letter: "D", label: "supprimé" },
-  renamed: { letter: "R", label: "renommé" },
+const STATUS: Record<ReviewFile["status"], string | undefined> = {
+  added: "nouveau",
+  modified: undefined,
+  deleted: "supprimé",
+  renamed: "renommé",
 };
-
-/** Past this many diff lines in all, files open one by one instead of all at once. */
-const OPEN_ALL_LINES = 400;
 
 /** Files that often hold secrets start unticked, so they never leave by accident. */
 export function looksSecret(file: string): boolean {
@@ -43,49 +42,28 @@ export function looksSecret(file: string): boolean {
 /** How long a sent review may take to start the agent before its remarks come back. */
 const SEND_WAIT = 10_000;
 
+const dirName = (file: string) => (file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "");
+
 /** The remark being written: the line it goes on, found again by its code if lines move. */
 type Editing = { id?: string; line: number; removed: boolean; code: string; text: string };
 
-/** One changed file: its header with the tick, then its numbered diff, each line open to a remark. */
-function FileCard(props: {
+/** One changed file's numbered diff: each line is open to a remark for the agent. */
+function FileDiff(props: {
   file: ReviewFile;
-  open: boolean;
-  ticked: boolean;
   canComment: boolean;
-  /** Its changes can be dropped now: the agent is not at work. */
-  canReject: boolean;
   /** This file's remarks, by row of its diff as it is now. */
   comments: Map<number, LineComment> | undefined;
-  onToggle: () => void;
-  onTick: (ticked: boolean) => void;
   onComment: (comment: LineComment) => void;
   onRemove: (id: string) => void;
-  onReject: () => Promise<void>;
 }) {
   const { file } = props;
-  const lines = useMemo(() => (props.open ? parsePatch(file.patch) : []), [props.open, file.patch]);
+  const lines = useMemo(() => parsePatch(file.patch), [file.patch]);
   const [editing, setEditing] = useState<Editing | null>(null);
   // Found again on each render: a fresh diff moves the box with its line.
   const editRow = editing ? findRow(lines, editing) : -1;
-  const status = STATUS[file.status];
-  const secret = looksSecret(file.path);
-  /** Asking before the changes go, then while they go. */
-  const [rejecting, setRejecting] = useState<"ask" | "busy" | null>(null);
-  const [rejectError, setRejectError] = useState<string | null>(null);
 
-  const reject = async () => {
-    setRejecting("busy");
-    setRejectError(null);
-    try {
-      await props.onReject();
-    } catch (e) {
-      setRejectError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRejecting(null);
-    }
-  };
-
-  const edit = (line: DiffLine, comment: LineComment | undefined) => {
+  const edit = (line: DiffLine, row: number, comment: LineComment | undefined) => {
+    if (editRow === row) return setEditing(null);
     const place = rowPlace(line);
     if (!place) return;
     setEditing({ id: comment?.id, ...place, code: line.text, text: comment?.text ?? "" });
@@ -104,181 +82,114 @@ function FileCard(props: {
     setEditing(null);
   };
 
+  if (!file.patch)
+    return <p className="pcw">{file.added === null ? "Fichier binaire" : "Rien à afficher"}</p>;
   return (
-    <section className={`rvf${props.open ? " open" : ""}`}>
-      <header className="rvf-h">
-        <button
-          className="rvf-tg"
-          aria-expanded={props.open}
-          aria-label={props.open ? `Replier ${file.path}` : `Déplier ${file.path}`}
-          onClick={props.onToggle}
-        >
-          <IconChevron />
-        </button>
-        <span className={`rvf-st st-${file.status}`} title={status.label}>
-          {status.letter}
-        </span>
-        <span className="rvf-path" title={file.from ? `${file.from} → ${file.path}` : file.path}>
-          {file.path}
-        </span>
-        {file.added === null ? (
-          <span className="rvf-n">binaire</span>
-        ) : (
-          <span className="rvf-n">
-            <span className="n-add">+{file.added}</span>{" "}
-            <span className="n-del">−{file.removed}</span>
-          </span>
-        )}
-        {props.canReject && (
-          <button
-            className="ib rvf-rj"
-            aria-label={`Annuler les changements de ${file.path}`}
-            title="Annuler les changements de ce fichier"
-            disabled={rejecting !== null}
-            onClick={() => setRejecting("ask")}
-          >
-            <IconUndo />
-          </button>
-        )}
-        <input
-          type="checkbox"
-          checked={props.ticked}
-          aria-label={`Envoyer ${file.path}`}
-          title={props.ticked ? "Part avec le commit" : "Reste en dehors du commit"}
-          onChange={(e) => props.onTick(e.target.checked)}
-        />
-      </header>
-      {rejecting && (
-        <div className="rvf-ask" role="alert">
-          <span>
-            {file.status === "added"
-              ? "Supprimer ce nouveau fichier ? "
-              : "Remettre ce fichier comme au départ de la branche ? "}
-            Ses changements seront perdus, même ceux déjà commités.
-          </span>
-          <span className="grow" />
-          <button
-            className="btn quiet sm"
-            disabled={rejecting === "busy"}
-            onClick={() => setRejecting(null)}
-          >
-            Garder
-          </button>
-          <button
-            className="btn danger sm"
-            disabled={rejecting === "busy"}
-            onClick={() => void reject()}
-          >
-            {rejecting === "busy" ? "Annulation…" : "Annuler les changements"}
-          </button>
-        </div>
-      )}
-      {rejectError && <p className="rvf-secret">{rejectError}</p>}
-      {secret && (
-        <p className="rvf-secret">Peut contenir un secret : coche-le seulement si tu en es sûr.</p>
-      )}
-      {props.open && file.patch && (
-        <div className="rvd" role="table" aria-label={`Changements de ${file.path}`}>
-          {lines.map((line, i) => {
-            const key = `${i}:${line.kind}:${line.text}`;
-            if (line.kind === "hunk" || line.kind === "note")
-              return (
-                <div key={key} className={`rvd-l ${line.kind}`} role="row">
-                  <span className="rvd-t">{line.text}</span>
-                </div>
-              );
-            const comment = props.comments?.get(i);
-            const sign = line.kind === "add" ? "+" : line.kind === "del" ? "−" : " ";
-            return (
-              <div key={key} className="rvd-g">
-                <div
-                  className={`rvd-l ${line.kind}${props.canComment ? " can" : ""}`}
-                  role="row"
-                  tabIndex={props.canComment ? 0 : undefined}
-                  title={props.canComment ? "Commenter cette ligne" : undefined}
-                  onClick={() => props.canComment && edit(line, comment)}
+    <div className="dfc" role="table" aria-label={`Changements de ${file.path}`}>
+      {lines.map((line, i) => {
+        const key = `${i}:${line.kind}:${line.text}`;
+        if (line.kind === "hunk" || line.kind === "note")
+          return (
+            <div key={key} className="dl hk" role="row">
+              <span />
+              <span />
+              <span className="dt mono">{line.text}</span>
+            </div>
+          );
+        const comment = props.comments?.get(i);
+        const kind = line.kind === "add" ? " add" : line.kind === "del" ? " del" : "";
+        return (
+          <div key={key} className="dlg">
+            <button
+              className={`dl${kind}${editRow === i ? " sel" : ""}`}
+              role="row"
+              disabled={!props.canComment}
+              title={props.canComment ? "Commenter cette ligne" : undefined}
+              onClick={() => edit(line, i, comment)}
+            >
+              <span className="dn mono">{line.new ?? line.old ?? ""}</span>
+              <span className="dk mono">
+                {line.kind === "add" ? "+" : line.kind === "del" ? "−" : ""}
+              </span>
+              <span className="dt mono">{line.text || " "}</span>
+            </button>
+            {editing && editRow === i ? (
+              <div className="dce">
+                <textarea
+                  className="rni dct"
+                  autoFocus
+                  rows={2}
+                  aria-label="Commentaire pour l'agent"
+                  placeholder="Ce que l'agent doit changer ici"
+                  value={editing.text}
+                  onChange={(e) => setEditing({ ...editing, text: e.target.value })}
                   onKeyDown={(e) => {
-                    if (props.canComment && e.key === "Enter") {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                       e.preventDefault();
-                      edit(line, comment);
+                      save();
+                    }
+                    if (e.key === "Escape") {
+                      // Only the box closes: the sheet stays.
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setEditing(null);
                     }
                   }}
-                >
-                  <span className="rvd-no">{line.old ?? ""}</span>
-                  <span className="rvd-no">{line.new ?? ""}</span>
-                  <span className="rvd-s">{sign}</span>
-                  <span className="rvd-t">{line.text || " "}</span>
-                </div>
-                {editing && editRow === i ? (
-                  <div className="rvc-edit">
-                    <textarea
-                      autoFocus
-                      rows={2}
-                      placeholder="Ce que l'agent doit changer ici"
-                      value={editing.text}
-                      onChange={(e) => setEditing({ ...editing, text: e.target.value })}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                          e.preventDefault();
-                          save();
-                        }
-                        if (e.key === "Escape") {
-                          e.stopPropagation();
-                          setEditing(null);
-                        }
+                />
+                <div className="dbt">
+                  {comment && (
+                    <button
+                      className="b2 soft press"
+                      onClick={() => {
+                        props.onRemove(comment.id);
+                        setEditing(null);
                       }}
-                    />
-                    <div className="rvc-act">
-                      {comment && (
-                        <button
-                          className="btn quiet sm"
-                          onClick={() => {
-                            props.onRemove(comment.id);
-                            setEditing(null);
-                          }}
-                        >
-                          Retirer
-                        </button>
-                      )}
-                      <span className="grow" />
-                      <button className="btn quiet sm" onClick={() => setEditing(null)}>
-                        Annuler
-                      </button>
-                      <button className="btn pri sm" disabled={!editing.text.trim()} onClick={save}>
-                        {comment ? "Modifier" : "Ajouter"}
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  comment && (
-                    <button className="rvc" onClick={() => edit(line, comment)}>
-                      {comment.text}
+                    >
+                      Retirer
                     </button>
-                  )
-                )}
+                  )}
+                  <button className="b2 ink press" disabled={!editing.text.trim()} onClick={save}>
+                    {comment ? "Modifier" : "Ajouter"}
+                  </button>
+                </div>
               </div>
-            );
-          })}
-          {file.truncated && (
-            <div className="rvd-l note">
-              <span className="rvd-t">… diff coupé, trop long pour l'afficher</span>
-            </div>
-          )}
+            ) : (
+              comment && (
+                <button className="dcm" onClick={() => edit(line, i, comment)}>
+                  <span className="ppill">
+                    <I n="bubble" s={13} />
+                    Toi
+                  </span>
+                  {comment.text}
+                </button>
+              )
+            )}
+          </div>
+        );
+      })}
+      {file.truncated && (
+        <div className="dl hk">
+          <span />
+          <span />
+          <span className="dt mono">… diff coupé, trop long pour l'afficher</span>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
 /**
- * What the thread's agent changed on its branch, docked beside the conversation: each file's
- * numbered diff, remarks on any line sent to the agent in one turn, then commit, push and PR.
+ * « Modifications »: what the thread's agent changed on its branch. The files first, each
+ * ticked or not for the commit; a file opens on its numbered diff, where any line takes a
+ * remark, sent to the agent in one turn; then commit, push and pull request.
  */
 export function ReviewPanel({
+  open,
   thread,
   review,
   onClose,
 }: {
+  open: boolean;
   thread: Thread;
   review: Review | undefined;
   onClose: () => void;
@@ -289,17 +200,16 @@ export function ReviewPanel({
   const [message, setMessage] = useState(thread.title);
   /** The tab shown: the branch's changes, or every file of its folder. */
   const [tab, setTab] = useState<"changes" | "files">("changes");
+  /** The changed file whose diff is open, by path. */
+  const [shown, setShown] = useState<string | null>(null);
+  /** The file of the folder being read, by path. */
+  const [reading, setReading] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [pushed, setPushed] = useState(false);
-  /** Counts the pushes made from here: each one may have opened or moved the pull request. */
-  const [pushes, setPushes] = useState(0);
-  const pull = usePullRequest(thread, `${running}:${pushes}`);
+  const [confirm, setConfirm] = useState<Confirmation | null>(null);
   /** Ticks the user changed, by path; the others follow `looksSecret`. */
   const [ticks, setTicks] = useState<Record<string, boolean>>({});
-  /** Files the user folded or unfolded, by path; the others follow the size of the change. */
-  const [opened, setOpened] = useState<Record<string, boolean>>({});
-  // Kept on this device until they are sent: closing the panel does not lose them.
+  // Kept on this device until they are sent: closing the sheet does not lose them.
   const [comments, setComments] = useState<LineComment[]>(() => readReviewDrafts(thread.id));
   useEffect(() => writeReviewDrafts(thread.id, comments), [thread.id, comments]);
   /** The remarks just sent, until the agent's turn starts; they come back if it does not. */
@@ -315,23 +225,30 @@ export function ReviewPanel({
   const [asks, setAsks] = useState(0);
   const ticked = (f: ReviewFile) => ticks[f.path] ?? !looksSecret(f.path);
   const picked = files?.filter(ticked) ?? [];
-  const totalLines = files?.reduce((n, f) => n + (f.added ?? 0) + (f.removed ?? 0), 0) ?? 0;
-  const isOpen = (f: ReviewFile, i: number) =>
-    opened[f.path] ?? (totalLines <= OPEN_ALL_LINES || i === 0);
   // Each remark found again on its file and line in the review as it is now.
   const placed = useMemo(() => placeComments(files, comments), [files, comments]);
   const remarks = placed.all;
   const lost = remarks.filter((c) => c.lost);
+  const file = shown ? files?.find((f) => f.path === shown) : undefined;
+  const hasFiles = !!workspace?.base && !thread.archived;
+
+  // Opened again, it starts from its list.
+  useEffect(() => {
+    if (!open) return;
+    setShown(null);
+    setReading(null);
+    setError(null);
+  }, [open]);
 
   // The server holds the files; ask on opening, once the branch exists, whenever a
   // turn starts or ends, and on each change of tab: files written meanwhile show up.
   useEffect(() => {
-    connection.send({ type: "workspace.review", threadId: thread.id });
-  }, [thread.id, running, workspace?.base, tab]);
+    if (open) connection.send({ type: "workspace.review", threadId: thread.id });
+  }, [open, thread.id, running, workspace?.base, tab]);
 
   const canForecast = !!workspace?.base && !!workspace.baseBranch && !thread.archived;
   useEffect(() => {
-    if (!canForecast || running) return;
+    if (!open || !canForecast || running) return;
     let live = true;
     connection.ask({ type: "workspace.forecast", requestId: newId(), threadId: thread.id }).then(
       (reply) => {
@@ -344,7 +261,7 @@ export function ReviewPanel({
     return () => {
       live = false;
     };
-  }, [thread.id, canForecast, running, workspace?.base, asks]);
+  }, [open, thread.id, canForecast, running, workspace?.base, asks]);
 
   const refresh = () => {
     connection.send({ type: "workspace.review", threadId: thread.id });
@@ -374,7 +291,8 @@ export function ReviewPanel({
         text: conflictRequest(forecast),
       })
     )
-      setSyncError("Pas de connexion au serveur.");
+      setSyncError("Pas de connexion au serveur");
+    else onClose();
   };
 
   const rejectFile = async (f: ReviewFile) => {
@@ -388,16 +306,11 @@ export function ReviewPanel({
       });
       // Its remarks have nothing left to be about: they would reach the agent as lost.
       setComments((c) => withoutFile(c, f));
+      setShown(null);
     } finally {
       refresh();
     }
   };
-
-  useEffect(() => {
-    const escape = (event: KeyboardEvent) => event.key === "Escape" && onClose();
-    document.addEventListener("keydown", escape);
-    return () => document.removeEventListener("keydown", escape);
-  }, [onClose]);
 
   const shipWith = async (pr: boolean) => {
     setBusy(true);
@@ -412,9 +325,10 @@ export function ReviewPanel({
         // A rename goes with the path it had, so the old file leaves with the new one.
         files: picked.flatMap((f) => (f.from ? [f.path, f.from] : [f.path])),
       });
-      setPushed(true);
-      setPushes((n) => n + 1);
       connection.send({ type: "workspace.review", threadId: thread.id });
+      // The pull request has its card in the thread: the sheet has nothing more to say.
+      connection.notify(pr ? "Branche poussée, pull request demandée" : "Branche poussée");
+      onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -441,7 +355,7 @@ export function ReviewPanel({
       text: reviewMessage(remarks),
     });
     if (!sent) {
-      setSendError("Pas de connexion au serveur : tes commentaires sont gardés.");
+      setSendError("Pas de connexion au serveur : tes commentaires sont gardés");
       return;
     }
     setSending(remarks.map((c) => c.id));
@@ -449,190 +363,257 @@ export function ReviewPanel({
     // remarks stay here to send again.
     sendTimer.current = setTimeout(() => {
       setSending(null);
-      setSendError("L'agent n'a pas démarré : tes commentaires sont gardés, renvoie-les.");
+      setSendError("L'agent n'a pas démarré : tes commentaires sont gardés");
     }, SEND_WAIT);
+    onClose();
   };
 
   const added = files?.reduce((n, f) => n + (f.added ?? 0), 0) ?? 0;
   const removed = files?.reduce((n, f) => n + (f.removed ?? 0), 0) ?? 0;
   // One change to the branch at a time: no push while it merges, and the other way round.
   const canShip = !busy && !syncing && !running && !!message.trim() && picked.length > 0;
+  const canReject = !thread.archived && !running && !syncing && !busy;
+  const sendBar = remarks.length > 0 && (
+    <>
+      <button
+        className="b2 soft press"
+        disabled={!!sending}
+        onClick={() => {
+          setComments([]);
+          setSendError(null);
+        }}
+      >
+        Effacer
+      </button>
+      <button
+        className="b2 ink press"
+        disabled={running || !!sending}
+        title={running ? "L'agent travaille encore" : undefined}
+        onClick={sendRemarks}
+      >
+        {sending ? "Envoi…" : `Envoyer à l'agent · ${remarks.length}`}
+      </button>
+    </>
+  );
+
+  const head = file
+    ? { title: baseName(file.path), sub: dirName(file.path) || STATUS[file.status] }
+    : reading
+      ? { title: baseName(reading), sub: dirName(reading) }
+      : { title: "Modifications" };
 
   return (
-    <>
-      <div className="rv-scrim" onClick={onClose} />
-      <aside className="rv-panel" aria-label="À revoir">
-        <div className="rv-top">
-          <div className="rv-tabs" role="tablist">
-            <button
-              className={`rv-tab${tab === "changes" ? " on" : ""}`}
-              role="tab"
-              aria-selected={tab === "changes"}
-              onClick={() => setTab("changes")}
-            >
-              Modifications {!!files?.length && <b>{files.length}</b>}
-            </button>
-            {!!workspace?.base && !thread.archived && (
+    <Sheet
+      open={open}
+      onClose={onClose}
+      title={head.title}
+      {...(head.sub ? { sub: head.sub } : {})}
+      {...(file || reading
+        ? {
+            onBack: () => {
+              setShown(null);
+              setReading(null);
+            },
+          }
+        : {})}
+      tall
+      className="dsh"
+    >
+      {file ? (
+        <>
+          <div className="sbody dfb">
+            {looksSecret(file.path) && <p className="pcw t-err">Peut contenir un secret</p>}
+            <FileDiff
+              key={file.path}
+              file={file}
+              canComment={!thread.archived}
+              comments={placed.rows.get(file.path)}
+              onComment={(comment) =>
+                setComments((c) =>
+                  c.some((x) => x.id === comment.id)
+                    ? c.map((x) => (x.id === comment.id ? comment : x))
+                    : [...c, comment],
+                )
+              }
+              onRemove={(id) => setComments((c) => c.filter((x) => x.id !== id))}
+            />
+            {canReject && (
+              <div className="mga drj">
+                <button
+                  className="b2 soft press"
+                  aria-label={`Annuler les changements de ${file.path}`}
+                  onClick={() =>
+                    setConfirm({
+                      title:
+                        file.status === "added"
+                          ? "Supprimer ce nouveau fichier ?"
+                          : "Remettre ce fichier comme au départ de la branche ?",
+                      text: "Ses changements seront perdus, même ceux déjà commités.",
+                      action: "Annuler les changements",
+                      run: () => rejectFile(file),
+                    })
+                  }
+                >
+                  Annuler les changements
+                </button>
+              </div>
+            )}
+          </div>
+          {sendBar && <div className="dbar">{sendBar}</div>}
+        </>
+      ) : (
+        <div className="sbody">
+          {workspace && !reading && (
+            <div className="dsum">
+              <span className="mono">{workspace.branch}</span>
+              {!!files?.length && (
+                <>
+                  <span className="dpl">+{added}</span>
+                  <span className="dmi">−{removed}</span>
+                </>
+              )}
+            </div>
+          )}
+          {hasFiles && !reading && (
+            <div className="ovtabs dtabs" role="tablist">
               <button
-                className={`rv-tab${tab === "files" ? " on" : ""}`}
                 role="tab"
-                aria-selected={tab === "files"}
-                onClick={() => setTab("files")}
+                aria-selected={tab === "changes"}
+                onClick={() => setTab("changes")}
               >
+                Modifications
+                {!!files?.length && <span className="cnt">{files.length}</span>}
+              </button>
+              <button role="tab" aria-selected={tab === "files"} onClick={() => setTab("files")}>
                 Fichiers
               </button>
-            )}
-          </div>
-          <span className="grow" />
-          <button className="ib" aria-label="Fermer la revue" onClick={onClose}>
-            <IconX size={14} />
-          </button>
-        </div>
-        {workspace && (
-          <p className="rv-branch">
-            <IconBranch size={13} />
-            <code>{workspace.branch}</code>
-            {workspace.baseBranch && <span className="rv-chip">depuis {workspace.baseBranch}</span>}
-          </p>
-        )}
-        {canForecast && (forecast || forecastError) && (
-          <div
-            className={`rv-sync${forecast?.conflicts.length ? " conflict" : forecast?.behind ? " behind" : ""}`}
-            role="status"
-          >
-            {forecastError ? (
-              <span className="rv-sync-t">{forecastError}</span>
-            ) : (
-              forecast && (
-                <>
-                  {!forecast.behind && <IconCheck size={12} />}
-                  <span
-                    className="rv-sync-t"
-                    title={forecast.conflicts.length ? forecast.conflicts.join("\n") : undefined}
+            </div>
+          )}
+          {canForecast && !reading && (forecastError || (forecast && forecast.behind > 0)) && (
+            <div className="dsy" role="status">
+              <span
+                className="tx"
+                title={forecast?.conflicts.length ? forecast.conflicts.join("\n") : undefined}
+              >
+                {forecastError ?? (forecast && forecastLine(forecast))}
+              </span>
+              {forecast &&
+                forecast.behind > 0 &&
+                (forecast.conflicts.length ? (
+                  <button
+                    className="b2 soft press"
+                    disabled={running || syncing || busy}
+                    title={running ? "L'agent travaille encore" : undefined}
+                    onClick={askMerge}
                   >
-                    {forecastLine(forecast)}
-                  </span>
-                  <span className="grow" />
-                  {forecast.behind > 0 &&
-                    (forecast.conflicts.length ? (
-                      <button
-                        className="btn quiet sm"
-                        disabled={running || syncing || busy}
-                        title={running ? "L'agent travaille encore" : undefined}
-                        onClick={askMerge}
-                      >
-                        Demander à l'agent
-                      </button>
-                    ) : (
-                      <button
-                        className="btn quiet sm"
-                        disabled={running || syncing || busy}
-                        title={running ? "L'agent travaille encore" : undefined}
-                        onClick={() => void sync()}
-                      >
-                        {syncing ? "Synchronisation…" : "Synchroniser"}
-                      </button>
-                    ))}
-                </>
-              )
-            )}
-          </div>
-        )}
-        {syncError && <p className="rv-msg error rv-sync-e">{syncError}</p>}
-        <div className="rv-scroll">
-          {tab === "files" && workspace?.base && !thread.archived ? (
+                    Demander à l'agent
+                  </button>
+                ) : (
+                  <button
+                    className="b2 soft press"
+                    disabled={running || syncing || busy}
+                    title={running ? "L'agent travaille encore" : undefined}
+                    onClick={() => void sync()}
+                  >
+                    {syncing ? "Synchronisation…" : "Synchroniser"}
+                  </button>
+                ))}
+            </div>
+          )}
+          {syncError && <p className="pcw t-err">{syncError}</p>}
+          {tab === "files" && hasFiles ? (
             <WorktreeFiles
               thread={thread}
               files={files}
+              path={reading}
+              onRead={setReading}
               onShowChange={(path) => {
                 setTab("changes");
-                setOpened((o) => ({ ...o, [path]: true }));
+                setReading(null);
+                setShown(path);
               }}
             />
           ) : !workspace?.base ? (
-            <p className="rv-msg">La branche sera créée quand l'agent démarrera.</p>
+            <p className="pcw">La branche sera créée au démarrage de l'agent</p>
           ) : review?.error ? (
-            <p className="rv-msg error">Impossible de lire les changements : {review.error}</p>
+            <p className="pcw t-err">Impossible de lire les changements : {review.error}</p>
           ) : !files ? (
-            <p className="rv-msg">Je regarde ce qui a changé…</p>
+            <p className="pcw">
+              <span className="shimmer">Lecture des changements…</span>
+            </p>
           ) : files.length === 0 ? (
-            <p className="rv-msg">Rien n'a changé sur cette branche pour l'instant.</p>
+            <p className="pcw">Rien n'a changé sur cette branche</p>
           ) : (
             <>
-              <p className="rv-hint">
-                Clique une ligne pour la commenter. Tes commentaires partent ensemble, en une seule
-                relecture.
-              </p>
-              <div className="rv-sum">
-                <span>
-                  {picked.length < files.length
-                    ? `${picked.length} sur ${files.length} à envoyer`
-                    : `${files.length} ${files.length > 1 ? "fichiers" : "fichier"}`}{" "}
-                  · <span className="n-add">+{added}</span>{" "}
-                  <span className="n-del">−{removed}</span>
-                </span>
-                <span className="grow" />
+              <div className="ins">
+                {files.map((f) => {
+                  const on = ticked(f);
+                  const notes = placed.rows.get(f.path)?.size ?? 0;
+                  const where = [dirName(f.path), STATUS[f.status]].filter(Boolean).join(" · ");
+                  return (
+                    <div key={f.path} className="it dfr">
+                      <button
+                        className={`tick${on ? " on" : ""}`}
+                        role="checkbox"
+                        aria-checked={on}
+                        aria-label={`Envoyer ${f.path}`}
+                        title={on ? "Part avec le commit" : "Reste en dehors du commit"}
+                        onClick={() => setTicks((t) => ({ ...t, [f.path]: !on }))}
+                      >
+                        {on && <I n="check" s={13} />}
+                      </button>
+                      <button
+                        className="dfo"
+                        title={f.from ? `${f.from} → ${f.path}` : f.path}
+                        onClick={() => setShown(f.path)}
+                      >
+                        <span className="tx">
+                          {baseName(f.path)}
+                          {looksSecret(f.path) ? (
+                            <small className="mer">Peut contenir un secret</small>
+                          ) : (
+                            where && <small className="mono">{where}</small>
+                          )}
+                        </span>
+                        {notes > 0 && <span className="cnt w">{notes}</span>}
+                        {f.added === null ? (
+                          <span className="dfd">binaire</span>
+                        ) : (
+                          <>
+                            <span className="dpl">+{f.added}</span>
+                            {!!f.removed && <span className="dmi">−{f.removed}</span>}
+                          </>
+                        )}
+                        <I n="right" s={15} />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              {files.length > 1 && (
                 <button
-                  className="btn quiet sm"
+                  className="rvw"
                   onClick={() => {
                     const all = picked.length < files.length;
                     setTicks(Object.fromEntries(files.map((f) => [f.path, all])));
                   }}
                 >
-                  {picked.length < files.length ? "Tout cocher" : "Tout décocher"}
+                  {picked.length < files.length
+                    ? `Tout cocher · ${picked.length} sur ${files.length}`
+                    : "Tout décocher"}
                 </button>
-              </div>
-              {files.map((f, i) => (
-                <FileCard
-                  key={f.path}
-                  file={f}
-                  open={isOpen(f, i)}
-                  ticked={ticked(f)}
-                  canComment={!thread.archived}
-                  canReject={!thread.archived && !running && !syncing && !busy}
-                  comments={placed.rows.get(f.path)}
-                  onToggle={() => setOpened((o) => ({ ...o, [f.path]: !isOpen(f, i) }))}
-                  onTick={(on) => setTicks((t) => ({ ...t, [f.path]: on }))}
-                  onComment={(comment) =>
-                    setComments((c) =>
-                      c.some((x) => x.id === comment.id)
-                        ? c.map((x) => (x.id === comment.id ? comment : x))
-                        : [...c, comment],
-                    )
-                  }
-                  onRemove={(id) => setComments((c) => c.filter((x) => x.id !== id))}
-                  onReject={() => rejectFile(f)}
-                />
-              ))}
-              {!!review?.omitted && (
-                <p className="rv-msg">
-                  {review.omitted} autres fichiers ne sont pas listés, trop nombreux : ils restent
-                  sur ta machine.
-                </p>
               )}
-            </>
-          )}
-        </div>
-        <div className="rv-foot">
-          {lost.length > 0 && (
-            <div className="rv-lost" role="status">
-              <p>
-                {lost.length > 1
-                  ? `${lost.length} commentaires portent sur une ligne qui a changé depuis.`
-                  : "Un commentaire porte sur une ligne qui a changé depuis."}{" "}
-                {lost.length > 1
-                  ? "L'agent les recevra avec leur ancienne place."
-                  : "L'agent le recevra avec son ancienne place."}
-              </p>
+              {!!review?.omitted && (
+                <p className="pcw">{review.omitted} autres fichiers non listés</p>
+              )}
               {lost.map((c) => (
-                <div key={c.id} className="rv-lost-c">
-                  <span className="rv-lost-w">
-                    {c.path}:{c.line}
-                    {c.code.trim() && <code>{c.code.trim()}</code>}
+                <div key={c.id} className="dcm lost" role="status">
+                  <span className="ppill">
+                    Ligne changée · {baseName(c.path)}:{c.line}
                   </span>
-                  <span className="rv-lost-t">{c.text}</span>
+                  {c.text}
                   <button
-                    className="btn quiet sm"
+                    className="b2 soft press"
                     disabled={!!sending}
                     onClick={() => setComments((all) => all.filter((x) => x.id !== c.id))}
                   >
@@ -640,102 +621,48 @@ export function ReviewPanel({
                   </button>
                 </div>
               ))}
-            </div>
-          )}
-          {remarks.length > 0 && (
-            <div className="rv-remarks">
-              <span>
-                {sending
-                  ? "Envoi à l'agent…"
-                  : `${remarks.length} ${remarks.length > 1 ? "commentaires" : "commentaire"}`}
-              </span>
-              <span className="grow" />
-              <button
-                className="btn quiet sm"
-                disabled={!!sending}
-                onClick={() => {
-                  setComments([]);
-                  setSendError(null);
-                }}
-              >
-                Effacer
-              </button>
-              <button
-                className="btn pri sm"
-                disabled={running || !!sending}
-                title={running ? "L'agent travaille encore" : undefined}
-                onClick={sendRemarks}
-              >
-                Envoyer à l'agent
-              </button>
-            </div>
-          )}
-          {sendError && <p className="rv-msg error">{sendError}</p>}
-          {pull.pr ? (
-            <PullRequestStatus
-              pr={pull.pr}
-              loading={pull.loading}
-              onRefresh={() => void pull.refresh()}
-              onMerge={pull.merge}
-              watch={thread.prWatch}
-              onWatch={
-                workspace?.base && !thread.team && !thread.role && !thread.parentId
-                  ? async (on) => {
-                      await connection.request({
-                        type: "thread.watchPr",
-                        requestId: newId(),
-                        threadId: thread.id,
-                        on,
-                      });
-                    }
-                  : undefined
-              }
-              remarks={
-                workspace?.base
-                  ? { threadId: thread.id, busy: thread.status === "running" }
-                  : undefined
-              }
-            />
-          ) : (
-            workspace?.prUrl && (
-              <p className="rv-pr">
-                <a href={workspace.prUrl} target="_blank" rel="noreferrer">
-                  {workspace.prOpened
-                    ? "Voir la pull request"
-                    : "Ouvrir la pull request sur GitHub"}
-                </a>
-              </p>
-            )
-          )}
-          {pull.error && !pull.pr && (
-            <p className="rv-msg">État de la pull request indisponible : {pull.error}</p>
-          )}
-          {pushed && !workspace?.prUrl && !pull.pr && <p className="rv-pr">Branche poussée.</p>}
-          {running && (
-            <p className="rv-msg">
-              L'agent travaille encore. Tu pourras envoyer quand il aura fini.
-            </p>
-          )}
-          {error && <p className="rv-msg error">{error}</p>}
-          {!!files?.length && (
-            <div className="rv-ship">
-              <input
-                className="rv-commit"
-                aria-label="Message de commit"
-                placeholder="Message de commit"
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-              />
-              <button className="btn" disabled={!canShip} onClick={() => void shipWith(false)}>
-                Commit et push
-              </button>
-              <button className="btn pri" disabled={!canShip} onClick={() => void shipWith(true)}>
-                Commit et PR
-              </button>
-            </div>
+              {sendError && <p className="pcw t-err">{sendError}</p>}
+              {error && <p className="pcw t-err">{error}</p>}
+              {sendBar ? (
+                <div className="dbar in">{sendBar}</div>
+              ) : (
+                <div className="dship">
+                  {running && (
+                    <span className="ppill">
+                      <Glyph />
+                      L'agent travaille
+                    </span>
+                  )}
+                  <input
+                    className="rni"
+                    aria-label="Message de commit"
+                    placeholder="Message de commit"
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                  />
+                  <div className="dbt">
+                    <button
+                      className="b2 soft press"
+                      disabled={!canShip}
+                      onClick={() => void shipWith(false)}
+                    >
+                      Commit et push
+                    </button>
+                    <button
+                      className="b2 ink press"
+                      disabled={!canShip}
+                      onClick={() => void shipWith(true)}
+                    >
+                      Commit et PR
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
-      </aside>
-    </>
+      )}
+      {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
+    </Sheet>
   );
 }

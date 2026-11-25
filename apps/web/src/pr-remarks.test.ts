@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { remarkPlace } from "./components/PrRemarks.tsx";
+import { remarkPlace } from "./pull-request.ts";
 
 describe("where a review remark is", () => {
   it("names its file and line, or the review it belongs to", () => {

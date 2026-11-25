@@ -27,17 +27,16 @@ import { openQuestion as askedQuestion } from "../decision.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { useLiveText } from "../live-text.ts";
 import type { Held } from "../state.ts";
-import { AgentBadge } from "./AgentBadge.tsx";
 import { AgentPlan } from "./AgentPlan.tsx";
-import { IconAlert, IconBranch, IconCheck, IconChevron, IconUndo, IconX } from "./icons.tsx";
+import { Glyph, I } from "../v2/I.tsx";
 import { GROUP_LABEL, threadLine } from "../project-threads.ts";
 import { Clamp } from "./Clamp.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MessageImages } from "./MessageImages.tsx";
-import { TeamCard } from "./TeamCard.tsx";
+import { PrCard } from "./PrCard.tsx";
 import { ReviewCard } from "./ReviewCard.tsx";
-import { TeamStrip } from "./TeamStrip.tsx";
+import { TeamPanel } from "./TeamPanel.tsx";
 import { withoutTeamJson } from "../team-json.ts";
 import { isTeamThread, teamFeed } from "../team-feed.ts";
 import {
@@ -51,7 +50,6 @@ import {
   unshownImages,
 } from "../activity.ts";
 import { ImageDraft } from "./ImageDraft.tsx";
-import { StateGlyph } from "./StateGlyph.tsx";
 import { Mascot } from "./Mascot.tsx";
 import { mascotExpression } from "../mascot.ts";
 import { speakerName } from "../speaker.ts";
@@ -320,8 +318,8 @@ function Conversation({
     return (
       <div key={item.id} className="item" data-item={item.id}>
         {i === firstNew && (
-          <div className="new-sep" role="separator">
-            <span>Nouveau</span>
+          <div className="sec" role="separator">
+            Nouveau
           </div>
         )}
         <FeedItem
@@ -351,6 +349,7 @@ function Conversation({
   return (
     <div
       className="view"
+      id="view"
       ref={view}
       onScroll={(e) => {
         const el = e.currentTarget;
@@ -362,26 +361,17 @@ function Conversation({
         if (anchor.current) markAnchor();
       }}
     >
-      <div className="feed" ref={feed}>
+      <div className={`feed${working ? " working" : ""}`} ref={feed}>
         {intro}
-        {/* A team started before the timeline was recorded has nothing to draw. */}
-        {!!strip?.team.timeline?.length && (
-          <TeamStrip
+        {strip && (
+          <TeamPanel
             key={strip.lead.id}
             lead={strip.lead}
             team={strip.team}
             threads={threads}
             agents={agents}
             onOpenThread={onOpenThread}
-            defaultOpen={strip.lead.id === thread.id}
-          />
-        )}
-        {thread.team && (
-          <TeamCard
-            thread={thread}
-            team={thread.team}
-            threads={threads}
-            onOpenThread={onOpenThread}
+            own={strip.lead.id === thread.id}
           />
         )}
         {thread.prReview && (
@@ -394,16 +384,19 @@ function Conversation({
           />
         )}
         {lead && (
-          <button className="team-parent" onClick={() => onOpenThread(lead.id)}>
-            {lead.prReview
-              ? `Relecteur de la « ${lead.title} »`
-              : `Sous-tâche de l'équipe « ${lead.title.replace(/^Équipe : /, "")} »`}
+          <button className="hook up" onClick={() => onOpenThread(lead.id)}>
+            <I n="back" s={16} className="hk" />
+            <span className="t">
+              {lead.prReview
+                ? `Relecteur de la « ${lead.title} »`
+                : `Sous-tâche de l'équipe « ${lead.title.replace(/^Équipe : /, "")} »`}
+            </span>
           </button>
         )}
         {earlier > 0 && (
           <button
             ref={more}
-            className="earlier"
+            className="evt earlier"
             disabled={pagingState === "busy"}
             onClick={() => void loadEarlier()}
           >
@@ -452,19 +445,21 @@ function Conversation({
             !(above?.kind === "item" && items![above.index]?.kind === "agent");
           return renderItem(block.index, block.clamp, showBy);
         })}
+        {/* Its branch's pull request, as it is now: a team shows its own in its card. */}
+        {thread.workspace?.base && !thread.team && <PrCard key={thread.id} thread={thread} />}
         {/* The live line of the stretch at work says what the agent does: no second line. */}
         {thread.status === "running" && thread.inLine && (
-          <div className="working">
-            <StateGlyph kind="file" size={18} />
-            En file : démarre dès qu'une place se libère sur le serveur.
+          <div className="live" role="status">
+            <I n="clock" s={16} className="lq" />
+            <span className="lt">En file</span>
           </div>
         )}
         {thread.status === "running" && !thread.inLine && blocks.at(-1)?.kind !== "detail" && (
-          <div className="working">
+          <div className="live" role="status">
             {mascot ? (
               <Mascot mascot={mascot} expression={mascotExpression(lastItem)} name={agent.name} />
             ) : (
-              <StateGlyph kind={lastGlyph} size={18} />
+              <Glyph />
             )}
             <span className="shimmer">
               {agent ? speakerName(agent, thread) : "L'agent"}{" "}
@@ -483,17 +478,20 @@ function Conversation({
           <StoppedNotice key={thread.id} thread={thread} name={agent?.name ?? "L'agent"} />
         )}
         {thread.status === "error" && thread.error && !agentStopped(thread.error) && (
-          <div className={mascot ? "failed with-mascot" : "failed"} role="alert">
-            {mascot && agent && (
+          <div className="ntc err" role="alert">
+            {mascot && agent ? (
               <Mascot mascot={mascot} expression="error" name={agent.name} still />
+            ) : (
+              <I n="errc" s={20} className="ni" />
             )}
-            <span>
+            <span className="tx">
               <b>Le tour s'est arrêté</b>
-              {thread.error}
+              <small>{thread.error}</small>
             </span>
           </div>
         )}
       </div>
+      <div className="end" />
     </div>
   );
 }
@@ -513,28 +511,25 @@ function StoppedNotice({ thread, name }: { thread: Thread; name: string }) {
     .trim();
   const waiting = thread.queue?.length ?? 0;
   return (
-    <div className="stopped" role="alert">
-      <div className="stopped-tx">
+    <div className="ntc col" role="alert">
+      <span className="tx">
         <b>{name} s'est arrêté</b>
-        <span>
-          Ce qu'il a déjà fait reste dans le fil.{" "}
-          {waiting
-            ? `Reprendre envoie ${waiting > 1 ? "les messages en file" : "le message en file"}.`
-            : "Reprends quand tu veux, avec ce modèle ou un autre."}
-        </span>
+        {waiting > 0 && (
+          <small>{waiting > 1 ? `${waiting} messages en file` : "1 message en file"}</small>
+        )}
         {detail && (
           <details>
             <summary>Détail</summary>
             <code>{detail}</code>
           </details>
         )}
-      </div>
-      <div className="stopped-act">
-        <button className="btn sm quiet" onClick={() => openComposerPicker(thread.id)}>
+      </span>
+      <div className="na">
+        <button className="b2 soft press" onClick={() => openComposerPicker(thread.id)}>
           Changer de modèle
         </button>
         <button
-          className="btn sm pri"
+          className="b2 ink press"
           disabled={sent}
           onClick={() => {
             // Once: the card goes when the turn starts. Refused (busy for a moment), it can
@@ -564,14 +559,19 @@ function QuietNotice({ since, name, threadId }: { since: number; name: string; t
   const minutes = Math.max(1, Math.floor((now - since) / 60_000));
   const left = Math.max(1, Math.ceil((since + AGENT_SILENCE_STOP_MS - now) / 60_000));
   return (
-    <div className="quiet" role="status">
-      <span>
+    <div className="ntc" role="status">
+      <span className="tx">
         <b>
           {name} ne donne plus signe de vie depuis {minutes} min.
         </b>
-        Sans nouvelles, il sera arrêté dans {left} min.
+        <small>Arrêt automatique dans {left} min</small>
       </span>
-      <button onClick={() => connection.send({ type: "thread.cancel", threadId })}>Arrêter</button>
+      <button
+        className="b2 soft press"
+        onClick={() => connection.send({ type: "thread.cancel", threadId })}
+      >
+        Arrêter
+      </button>
     </div>
   );
 }
@@ -621,10 +621,10 @@ const FeedItem = memo(function FeedItem({
       const opened = threads.find((t) => t.id === item.threadId);
       if (!opened) {
         return (
-          <div className="opened-line gone">
-            <IconBranch size={13} />
-            <span className="oc-t">{item.title}</span>
-            <span className="oc-state">Ce fil a été supprimé.</span>
+          <div className="hook gone">
+            <I n="hook" s={18} className="hk" />
+            <span className="t">{item.title}</span>
+            <span className="st">supprimé</span>
           </div>
         );
       }
@@ -634,14 +634,17 @@ const FeedItem = memo(function FeedItem({
       const why = group === "waiting" ? threadLine(opened, members) : "";
       return (
         <button
-          className="opened-line"
+          className="hook"
           data-group={group}
           aria-label={`Ouvrir le fil ${opened.title}`}
           onClick={() => onOpenThread(opened.id)}
         >
-          <IconBranch size={13} />
-          <span className="oc-t">{opened.title}</span>
-          <span className="oc-state">
+          <I n="hook" s={18} className="hk" />
+          <span className="t">{opened.title}</span>
+          <span
+            className={`st${opened.status === "error" ? " er" : group === "waiting" ? " w" : group === "running" ? " ac" : ""}`}
+          >
+            {group === "running" && !opened.held && !opened.inLine && <Glyph />}
             {opened.held || opened.inLine ? "En file" : why || GROUP_LABEL[group]}
           </span>
         </button>
@@ -650,24 +653,20 @@ const FeedItem = memo(function FeedItem({
     case "result": {
       const done = threads.find((t) => t.id === item.threadId);
       return (
-        <div className={`result${item.failed ? " failed-result" : ""}`}>
-          <button
-            className="result-t"
-            disabled={!done}
-            onClick={() => done && onOpenThread(done.id)}
-          >
-            {item.failed ? <IconAlert size={13} /> : <IconCheck size={12} />}
+        <div className={`rsl${item.failed ? " x" : ""}`}>
+          <button className="done" disabled={!done} onClick={() => done && onOpenThread(done.id)}>
+            <I n={item.failed ? "errc" : "check"} s={16} />
             {done?.title ?? item.title}
           </button>
-          <p className="result-s">{item.summary}</p>
+          <p>{item.summary}</p>
           {item.files.length > 0 && (
-            <div className="result-files">
+            <div className="chips wrap">
               {item.files.map((file) => (
-                <span key={file} className="result-file" title={file}>
+                <span key={file} className="ppill mono" title={file}>
                   {file.split("/").pop()}
                 </span>
               ))}
-              {!!item.moreFiles && <span className="result-more">+{item.moreFiles}</span>}
+              {!!item.moreFiles && <span className="ppill">+{item.moreFiles}</span>}
             </div>
           )}
         </div>
@@ -676,8 +675,7 @@ const FeedItem = memo(function FeedItem({
     case "handoff": {
       const name = (id: string) => agents.find((a) => a.id === id)?.name ?? "Agent retiré";
       return (
-        <div className="handoff">
-          <AgentBadge agent={agents.find((a) => a.id === item.to)} small />
+        <div className="evt">
           {name(item.from)} passe le relais à {name(item.to)}
         </div>
       );
@@ -685,12 +683,7 @@ const FeedItem = memo(function FeedItem({
     case "agent":
       return (
         <div className="a">
-          {showBy && (
-            <div className="by">
-              <AgentBadge agent={agent} small />
-              {speakerName(agent, thread)}
-            </div>
-          )}
+          {showBy && <Who agent={agent} thread={thread} />}
           {/* The team card shows the plan; its raw JSON is for the server only. */}
           {clamp ? (
             <Clamp>
@@ -707,12 +700,12 @@ const FeedItem = memo(function FeedItem({
       );
     case "thought":
       return (
-        <details className="thought">
+        <details className="fold thought">
           <summary>
-            <IconChevron />
             Réflexion
+            <I n="right" s={13} />
           </summary>
-          <div className="md">{item.text}</div>
+          <div className="fb">{item.text}</div>
         </details>
       );
     case "tool":
@@ -726,6 +719,17 @@ const FeedItem = memo(function FeedItem({
       return <PermissionCard item={item} />;
   }
 });
+
+/** Who answers: the agent, then the model it runs when that says more. */
+function Who({ agent, thread }: { agent: AgentInfo | undefined; thread: Thread }) {
+  const speaker = speakerName(agent, thread);
+  return (
+    <div className="who">
+      {agent?.name ?? speaker}
+      {agent && speaker !== agent.name && <span className="m">{speaker}</span>}
+    </div>
+  );
+}
 
 /** An answer: while it is being written, its Markdown is worked out a few times a second. */
 function Answer({ text, live, threadId }: { text: string; live: boolean; threadId: string }) {
@@ -761,31 +765,31 @@ function ActivityDetail({
   const last = items[indices.at(-1)!];
   const label = live ? activityLabel(last) : "Voir le détail";
   return (
-    <div className={`team-detail${open ? " open" : ""}`}>
+    <div className={`det${open ? " open" : ""}`}>
       <button
-        className="team-detail-h"
+        className={live ? "live" : "fold"}
         aria-expanded={open}
         onClick={() => {
           if (open) onFold();
           setOpened(!open);
         }}
       >
-        {live && mascot ? (
-          <Mascot mascot={mascot.mascot} expression={mascotExpression(last)} name={mascot.name} />
-        ) : live ? (
-          <StateGlyph kind={activityGlyph(last)} size={18} />
-        ) : (
-          <IconChevron />
-        )}
+        {live &&
+          (mascot ? (
+            <Mascot mascot={mascot.mascot} expression={mascotExpression(last)} name={mascot.name} />
+          ) : (
+            <Glyph />
+          ))}
         <span className={live ? "nm shimmer" : "nm"}>{label}</span>
         {steps > 0 && (
-          <span className="meta">
+          <span className="tm">
             {steps} {steps > 1 ? "étapes" : "étape"}
             {failed > 0 && ` · ${failed} ${failed > 1 ? "échecs" : "échec"}`}
           </span>
         )}
+        {!live && <I n="right" s={13} className="cv" />}
       </button>
-      {open && <div className="team-detail-b">{indices.map((i) => render(i))}</div>}
+      {open && <div className="detb">{indices.map((i) => render(i))}</div>}
     </div>
   );
 }
@@ -825,12 +829,12 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
   };
 
   return (
-    <div className="u-wrap">
-      {item.from === "coordinator" && <div className="u-from">Coordinateur</div>}
-      {item.from === "goal" && <div className="u-from">Objectif · relance automatique</div>}
-      {item.from === "pr" && <div className="u-from">Pull request · correction automatique</div>}
+    <div className="uw">
+      {item.from === "coordinator" && <div className="ufrom">Coordinateur</div>}
+      {item.from === "goal" && <div className="ufrom">Objectif · relance automatique</div>}
+      {item.from === "pr" && <div className="ufrom">Pull request · correction automatique</div>}
       {item.from === "remarks" && (
-        <div className="u-from">Pull request · remarques de relecture</div>
+        <div className="ufrom">Pull request · remarques de relecture</div>
       )}
       {!!item.images?.length && <MessageImages threadId={thread.id} images={item.images} />}
       {item.text && (
@@ -848,27 +852,27 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
       )}
       {canRestore &&
         (confirming ? (
-          <div className="u-confirm" role="group" aria-label="Revenir à ce message">
-            <span>Les fichiers reviennent à avant ce message, et la suite du fil est effacée.</span>
-            <button className="btn sm quiet" disabled={busy} onClick={() => setConfirming(false)}>
+          <div className="ucf" role="group" aria-label="Revenir à ce message">
+            <span className="ppill">Fichiers remis comme avant, suite du fil effacée</span>
+            <button className="b2 soft press" disabled={busy} onClick={() => setConfirming(false)}>
               Annuler
             </button>
-            <button className="btn sm danger" disabled={busy} onClick={() => void restore()}>
+            <button className="b2 red press" disabled={busy} onClick={() => void restore()}>
               Revenir ici
             </button>
           </div>
         ) : (
           <button
-            className="u-act"
+            className="uact"
             title="Remettre les fichiers comme avant ce message et reprendre d'ici"
             onClick={() => setConfirming(true)}
           >
-            <IconUndo />
+            <I n="back" s={13} />
             Revenir ici
           </button>
         ))}
       {error && (
-        <p className="u-err" role="alert">
+        <p className="uerr" role="alert">
           {error}
         </p>
       )}
@@ -888,12 +892,7 @@ const TOOL_KIND: Record<string, string> = {
 };
 
 /** What waits for the user is answered on the card above the composer: here, a reminder. */
-const WAITING = (
-  <span className="ask-wait">
-    <i aria-hidden />
-    Attend ta réponse, au-dessus du champ de saisie
-  </span>
-);
+const WAITING = <span className="st w">Attend ta réponse</span>;
 
 /**
  * A question the agent asks with a tool of its own (Antigravity's `ask_question`, Claude
@@ -903,19 +902,15 @@ const WAITING = (
 function QuestionCard({ item, open }: { item: Extract<Item, { kind: "tool" }>; open: boolean }) {
   const questions = item.questions ?? [];
   return (
-    <div className={`approve ask${open ? "" : " done"}`}>
+    <div className={`ask${open ? "" : " done"}`}>
       {questions.map((q, i) => (
-        <div key={i} className="ask-q">
-          <div className="q">
-            <span>
-              <b>{q.question}</b>
-              {item.form === "answered" && item.answers?.[i] && ` · ${item.answers[i]}`}
-            </span>
-          </div>
+        <div key={i} className="aq">
+          <b>{q.question}</b>
+          {item.form === "answered" && item.answers?.[i] && <span>{item.answers[i]}</span>}
         </div>
       ))}
-      {open && <div className="ask-hint">{WAITING}</div>}
-      {item.form === "cancelled" && <div className="ask-hint">Sans réponse.</div>}
+      {open && WAITING}
+      {item.form === "cancelled" && <span className="st">Sans réponse</span>}
     </div>
   );
 }
@@ -964,28 +959,25 @@ function ToolRow({
   // What was read stays on screen while a newer version is on its way.
   const content = item.omitted ? whole?.content : item.content;
   return (
-    <div className={`tool${open ? " open" : ""}`}>
+    <div className={`tl${open ? " open" : ""}`}>
       <button
-        className="tool-h"
+        className="tlh"
         onClick={() => hasBody && setOpen((o) => !o)}
         aria-expanded={hasBody ? open : undefined}
       >
-        <ToolStatusIcon
-          status={item.status === "in_progress" && !live ? "pending" : item.status}
-          glyph={activityGlyph(item)}
-        />
+        <ToolStatusIcon status={item.status === "in_progress" && !live ? "pending" : item.status} />
         <span className="nm">{item.title}</span>
-        <span className="meta">{TOOL_KIND[item.toolKind] ?? ""}</span>
-        {hasBody && <IconChevron />}
+        <span className="tm">{TOOL_KIND[item.toolKind] ?? ""}</span>
+        {hasBody && <I n="right" s={13} className="cv" />}
       </button>
       {open && (
-        <div className="tool-body">
+        <div className="tlb">
           {/* Said even above an older result: it is then known not to be the latest. */}
           {missing && failed && (
-            <p className="tool-wait" role="alert">
+            <p className="tlw" role="alert">
               {failed}
               {content ? " Ce résultat n'est pas le dernier. " : " "}
-              <button className="tool-more" onClick={() => setTries((n) => n + 1)}>
+              <button className="tlm" onClick={() => setTries((n) => n + 1)}>
                 Réessayer
               </button>
             </p>
@@ -994,7 +986,7 @@ function ToolRow({
             <ToolBody key={i} content={c} />
           ))}
           {!content && !failed && (
-            <p className="tool-wait" role="status">
+            <p className="tlw" role="status">
               Chargement du résultat…
             </p>
           )}
@@ -1011,28 +1003,23 @@ function useShownLines<T>(lines: T[]): { shown: T[]; more: ReactNode } {
   return {
     shown: hidden ? lines.slice(0, TOOL_SHOWN_LINES) : lines,
     more: hidden > 0 && (
-      <button className="tool-more" onClick={() => setAll(true)}>
+      <button className="tlm" onClick={() => setAll(true)}>
         Afficher tout ({hidden} {hidden > 1 ? "lignes de plus" : "ligne de plus"})
       </button>
     ),
   };
 }
 
-function ToolStatusIcon({ status, glyph }: { status: string; glyph: GlyphKind }) {
-  if (status === "completed")
+function ToolStatusIcon({ status }: { status: string }) {
+  if (status === "completed") return <I n="check" s={15} className="ok" />;
+  if (status === "failed") return <I n="x" s={15} className="er" />;
+  if (status === "in_progress")
     return (
-      <span className="ok-ic">
-        <IconCheck />
+      <span className="gw" role="img" aria-label="En cours">
+        <Glyph />
       </span>
     );
-  if (status === "failed")
-    return (
-      <span className="err-ic">
-        <IconX />
-      </span>
-    );
-  if (status === "in_progress") return <StateGlyph kind={glyph} size={14} label="En cours" />;
-  return <span className="pend-ic" />;
+  return <span className="pend" />;
 }
 
 function ToolBody({ content }: { content: ToolContent }) {
@@ -1063,12 +1050,12 @@ function ToolDiff({ content }: { content: Extract<ToolContent, { type: "diff" }>
   ];
   const { shown, more } = useShownLines(lines);
   return (
-    <div className="diff">
-      <div className="diff-h">{content.path}</div>
-      <div className="diff-b">
+    <div className="tdf">
+      <div className="tdh mono">{content.path}</div>
+      <div className="tdb mono">
         {shown.map((line, i) => (
           <div key={i} className={line.t}>
-            {line.t === "add" ? "+ " : "- "}
+            {line.t === "add" ? "+ " : "− "}
             {line.l}
           </div>
         ))}
@@ -1082,20 +1069,20 @@ function PermissionCard({ item }: { item: Extract<Item, { kind: "permission" }> 
   if (item.outcome !== null) {
     const chosen = item.options.find((o) => o.optionId === item.outcome);
     return (
-      <div className="approve done">
-        {item.title} · {chosen ? chosen.name : "Annulé"}
+      <div className="ask done">
+        <div className="aq">
+          <b>{item.title}</b>
+          <span>{chosen ? chosen.name : "Annulé"}</span>
+        </div>
       </div>
     );
   }
   return (
-    <div className="approve">
-      <div className="q">
-        <IconAlert />
-        <span>
-          L'agent demande ton accord : <b>{item.title}</b>
-        </span>
+    <div className="ask">
+      <div className="aq">
+        <b>{item.title}</b>
       </div>
-      <div className="ask-hint">{WAITING}</div>
+      {WAITING}
     </div>
   );
 }

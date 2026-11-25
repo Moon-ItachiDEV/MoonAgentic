@@ -1,118 +1,81 @@
-import type { AgentInfo, Thread } from "@moonagentic/protocol";
-import { formatPercent, formatReset, quotaLevel, tightest } from "../quotas.ts";
-import { useQuotas } from "../use-quotas.ts";
-import { connection, type State } from "../connection.ts";
+import type { Project, SearchHit, Thread } from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
-import { pinnedFirst, waitingCount } from "../project-threads.ts";
+import { connection, newId, type State } from "../connection.ts";
 import { isDiscussionsProject } from "../default-models.ts";
-import { ProjectIcon } from "./ProjectIcon.tsx";
+import { plannerSignal, plannerSignalText } from "../planner.ts";
+import { prBoard } from "../pr-board.ts";
 import { readPref, writePref } from "../prefs.ts";
-import { recentAlwaysShown } from "../recent.ts";
+import { pinnedFirst, waitingCount } from "../project-threads.ts";
+import { RECENT } from "../recent.ts";
 import {
   childrenOf as membersOf,
   conversationsByProject,
   lineStatus,
-  projectOpen,
-  teamOpen,
   type LineStatus,
 } from "../sidebar-tree.ts";
-import {
-  IconArchive,
-  IconChevron,
-  IconClock,
-  IconCopies,
-  IconClose,
-  IconCompose,
-  IconFolder,
-  IconList,
-  IconGear,
-  IconMore,
-  IconInbox,
-  IconLock,
-  IconPin,
-  IconPlug,
-  IconPlus,
-  IconSearch,
-  IconSidebar,
-  IconShield,
-} from "./icons.tsx";
+import { Glyph, I } from "../v2/I.tsx";
+import { useThreadRowMenu } from "../v2/ThreadRowMenu.tsx";
 import { Wordmark } from "./MoonMark.tsx";
-import { Presence } from "./Presence.tsx";
-import { SidePullRequests } from "./SidePullRequests.tsx";
-import { AppUpdatePill } from "./AppUpdatePill.tsx";
-import { StateGlyph } from "./StateGlyph.tsx";
-import { type PlannerSignal, plannerSignal, plannerSignalText } from "../planner.ts";
+import { ProjectIcon } from "./ProjectIcon.tsx";
+import { fuzzyMatch, type QuickAction } from "../quick-actions.ts";
 
-/** A menu this tall always fits: it opens upwards when the row is that close to the bottom. */
-const MENU_ROOM = 150;
-
-const EMPTY_KEYS: ReadonlySet<string> = new Set();
-
-function ThreadStatus({ status }: { status: LineStatus }) {
-  if (status === "running") return <StateGlyph kind="travaille" size={14} label="En cours" />;
-  if (status === "queued") return <StateGlyph kind="file" size={14} label="En file" />;
-  if (status === "waiting") return <StateGlyph kind="attend" size={14} label="Attend ta réponse" />;
-  if (status === "error") return <span className="dot err" title="Erreur" aria-label="Erreur" />;
-  return null;
+/** What a line of the menu shows before its title: at work, waiting for the user, failed. */
+function Mark({ status }: { status: LineStatus }) {
+  if (status === "running" || status === "queued")
+    return (
+      <span className="wi2" role="img" aria-label={status === "queued" ? "En file" : "En cours"}>
+        <Glyph />
+      </span>
+    );
+  if (status === "waiting")
+    return (
+      <span className="wi2" role="img" aria-label="Attend ta réponse">
+        <i className="ud" />
+      </span>
+    );
+  if (status === "error")
+    return (
+      <span className="wi2 err" role="img" aria-label="Erreur">
+        <i className="ud" />
+      </span>
+    );
+  return <span className="wi2" />;
 }
 
+const SEARCH_DELAY_MS = 150;
+const MAX_FOUND = 12;
+
 export function Sidebar(props: {
-  /** All but the messages: the side bar shows none, and is not drawn again for them. */
+  /** All but the messages: the menu shows none, and is not drawn again for them. */
   state: Omit<State, "items" | "held" | "reviews">;
   activeThreadId: string | undefined;
+  /** The project whose page is shown. */
   activeProjectId: string | undefined;
-  /** True on the planner's page. */
-  onPlanner: boolean;
-  /** The planned tasks are shown: they have their own address in the planner. */
-  onSchedules: boolean;
-  /** True on a project's page. */
-  onProject: boolean;
+  /** The page of the menu that is shown. */
+  page: "inbox" | "planner" | "schedules" | "artifacts" | "prs" | undefined;
+  /** The search replaces the menu while it is open (Ctrl K opens it too). */
+  searching: boolean;
+  onSearching: (on: boolean) => void;
+  /** What the search offers besides the conversations. */
+  onListActions: () => QuickAction[];
+  onOpenInbox: () => void;
   onOpenPlanner: () => void;
-  /** True on the « Artefacts » page. */
-  onArtifacts: boolean;
-  onOpenArtifacts: () => void;
-  /** The planner's « Planifiées » view: the tasks MoonAgentic starts by itself. */
   onOpenSchedules: () => void;
+  onOpenArtifacts: () => void;
+  onOpenPrs: () => void;
   onNewThread: () => void;
   onNewProject: () => void;
-  onOpenConnections: () => void;
-  onOpenRequests: () => void;
-  /** Shows the project: its planner on the planner's page, else its new conversation. */
   onPickProject: (id: string) => void;
-  /** Starts a new conversation in the project. */
-  onNewInProject: (id: string) => void;
-  onOpenThread: (id: string) => void;
+  onOpenThread: (id: string, itemId?: string) => void;
   onTogglePin: (id: string, pinned: boolean) => void;
   onSetArchived: (id: string, archived: boolean) => void;
   /** Asks before deleting the thread. */
   onDeleteThread: (thread: Thread) => void;
-  onRemoveProject: (id: string) => void;
-  /** Locks the project with the code, or asks for the code when it is locked. */
-  onToggleLock: (id: string) => void;
   onOpenSettings: () => void;
-  /** Réglages > Abonnements, where every quota is shown in full. */
-  onOpenSubscriptions: () => void;
-  onOpenSearch: () => void;
-  /** Folds the side bar away, on a computer. */
-  onCollapse: () => void;
 }) {
   const { state } = props;
-  const available = state.agents.filter((a) => a.available).length;
   const [projectsOpen, setProjectsOpen] = useState(() => readPref("projectsOpen") !== "false");
-  // Each project folded or not, as the user left it.
-  const [folds, setFolds] = useState<Record<string, boolean>>(() => {
-    try {
-      return JSON.parse(readPref("projectFolds") ?? "{}") as Record<string, boolean>;
-    } catch {
-      return {};
-    }
-  });
-  const setFold = (id: string, open: boolean) => {
-    const next = { ...folds, [id]: open };
-    setFolds(next);
-    writePref("projectFolds", JSON.stringify(next));
-  };
-  // Projects and teams whose every line is shown, past « Voir plus », or whose members are.
+  // Lists cut to their latest lines until asked, and the resolved ones folded away.
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
   const toggle = (key: string) => {
     const next = new Set(unfolded);
@@ -120,580 +83,450 @@ export function Sidebar(props: {
     setUnfolded(next);
   };
 
-  // The row whose « … » menu is open (a thread can be listed twice: by its line's key), and where its button is on screen.
-  const [menu, setMenu] = useState<{
-    id: string;
-    key: string;
-    x: number;
-    y: number;
-    up: boolean;
-  } | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const menuThread = state.threads.find((t) => t.id === menu?.id);
-  const menuOpen = !!menu && !!menuThread;
-  useEffect(() => {
-    if (!menuOpen) return;
-    const away = (event: PointerEvent) => {
-      const target = event.target as Element;
-      // Its own button closes it by itself.
-      if (!menuRef.current?.contains(target) && !target.closest(".thr-row .acts")) setMenu(null);
-    };
-    const escape = (event: KeyboardEvent) => event.key === "Escape" && setMenu(null);
-    const moved = () => setMenu(null);
-    document.addEventListener("pointerdown", away);
-    document.addEventListener("keydown", escape);
-    window.addEventListener("resize", moved);
-    return () => {
-      document.removeEventListener("pointerdown", away);
-      document.removeEventListener("keydown", escape);
-      window.removeEventListener("resize", moved);
-    };
-  }, [menuOpen]);
-  const act = (run: () => void) => () => {
-    setMenu(null);
-    run();
-  };
+  // The menu of a line: a right click, or a finger held on it.
+  const { bind, menu: rowMenu } = useThreadRowMenu(state.threads, props);
 
-  const scheduled = state.schedules.filter((s) => s.enabled).length;
   const planSignal = plannerSignal(state.plan, state.threads, state.agents);
-  const planText = plannerSignalText(planSignal);
+  const planCount = planSignal.waiting || planSignal.active;
+  const prs = prBoard(state.threads);
   const live = state.threads.filter((t) => !t.archived);
-  // A resolved team counts once, as its lead: its members are put away with it.
-  const resolvedLeads = new Set(state.threads.filter((t) => t.archived).map((t) => t.id));
-  const archived = state.threads.filter(
-    (t) => t.archived && !(t.parentId && resolvedLeads.has(t.parentId)),
-  );
   const members = membersOf(live);
-  const byProject = conversationsByProject(live);
-  const active = live.find((t) => t.id === props.activeThreadId);
-  const activeLead =
-    active?.parentId && members.has(active.parentId) ? active.parentId : active?.id;
-  // Keys of the currently open team that the user folded during this visit; reset when
-  // moving to another team, so visited teams fold back automatically on leave.
-  const [foldedActive, setFoldedActive] = useState<{
-    lead: string | undefined;
-    keys: ReadonlySet<string>;
-  }>({ lead: undefined, keys: new Set() });
-  const foldedForLead = foldedActive.lead === activeLead ? foldedActive.keys : EMPTY_KEYS;
-  const toggleTeam = (key: string, isActive: boolean) => {
-    if (!isActive) return toggle(key);
-    const next = new Set(foldedForLead);
-    if (next.delete(key)) {
-      setFoldedActive({ lead: activeLead, keys: next });
-      return;
-    }
-    next.add(key);
-    setFoldedActive({ lead: activeLead, keys: next });
-    if (unfolded.has(key)) toggle(key);
-  };
-  // « Discussions » holds the conversations started outside any project: not a project of the
-  // user's, so it is not listed with them and its threads go under « Récents ».
-  const discussions = state.projects.find(isDiscussionsProject);
-  const discussionsId = discussions?.id;
-  // Its resolved ones have no project to sit under: they wait below « Récents ».
-  const discussionsResolved = archived.filter((t) => t.projectId === discussionsId);
-  const discussionsResolvedOpen = unfolded.has("resolved:discussions");
-  const codeProjects = state.projects.filter((p) => p.id !== discussionsId);
-  // Opening a thread unfolds its project once, even when multi-project defaults it folded.
-  const activeProject = active?.projectId;
-  useEffect(() => {
-    setFoldedActive((prev) =>
-      prev.keys.size === 0 ? prev : { lead: activeLead, keys: new Set() },
-    );
-    if (
-      activeProject &&
-      activeProject !== discussionsId &&
-      !projectOpen(folds[activeProject], codeProjects.length === 1)
-    ) {
-      setFold(activeProject, true);
-    }
-    // Only when the open thread changes, not on every fold.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProject, activeLead]);
-  const known = new Set(state.projects.map((p) => p.id));
-  const pinned = [...byProject.values()].flat().filter((t) => t.pinned);
-  // Across projects, only when there are several; a thread whose project is gone too, and
-  // every conversation of « Discussions », which has no line of its own.
-  const recentAll = [...byProject.values()]
+  // A team counts once, as its lead.
+  const lines = [...conversationsByProject(live).values()]
     .flat()
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  const discussions = state.projects.find(isDiscussionsProject);
+  const codeProjects = state.projects.filter((p) => p.id !== discussions?.id);
+  const locked = new Set(state.projects.filter((p) => p.locked).map((p) => p.id));
+  const shown = lines.filter((t) => !locked.has(t.projectId));
+  const pinned = shown.filter((t) => t.pinned);
+  // « Code » : the conversations with a branch of their own. « Récents » : the others.
+  const code = shown.filter((t) => !t.pinned && t.workspace);
+  const recent = shown.filter((t) => !t.pinned && !t.workspace);
+  // A resolved team counts once too; those of a project are listed on its page.
+  const resolvedLeads = new Set(state.threads.filter((t) => t.archived).map((t) => t.id));
+  const resolved = state.threads
     .filter(
       (t) =>
-        !t.pinned &&
-        (codeProjects.length > 1 || !known.has(t.projectId) || t.projectId === discussionsId),
+        t.archived &&
+        !(t.parentId && resolvedLeads.has(t.parentId)) &&
+        (!codeProjects.some((p) => p.id === t.projectId) || !t.workspace) &&
+        !locked.has(t.projectId),
     )
     .sort((a, b) => b.updatedAt - a.updatedAt);
-  const moreRecent = unfolded.has("more:recent");
-  const { always: recentShown, foldable: recentFoldable } = recentAlwaysShown(
-    recentAll,
-    members,
-    props.activeThreadId,
-  );
-  const recent = moreRecent ? recentAll : recentShown;
 
-  // A team on one line, its members folded under it unless asked or one of them is open.
-  const tree = (t: Thread, prefix: string) => {
-    const team = members.get(t.id) ?? [];
-    const key = `${prefix}${t.id}`;
-    const isActive = activeLead === t.id;
-    const open = team.length > 0 && teamOpen(key, isActive, unfolded, foldedForLead);
-    return [
-      row(t, {
-        status: lineStatus(t, open ? [] : team),
-        team: team.length ? { open, toggle: () => toggleTeam(key, isActive) } : undefined,
-        key,
-      }),
-      ...(open ? team.map((c) => row(c, { child: true, key: `${prefix}${c.id}` })) : []),
-    ];
+  const cut = (key: string, list: Thread[]) => {
+    const all = unfolded.has(key);
+    // The open conversation stays in sight, even far down the list.
+    const head = list.filter((t, i) => i < RECENT || t.id === props.activeThreadId);
+    return { rows: all ? list : head, more: list.length - head.length, all };
   };
-  const row = (
-    t: Thread,
-    opts: {
-      key: string;
-      child?: boolean;
-      status?: LineStatus;
-      team?: { open: boolean; toggle: () => void } | undefined;
-    },
-  ) => (
-    <div
-      key={opts.key}
-      className={`thr-row has-more${t.pinned ? " pinned" : ""}${opts.child ? " child" : ""}${opts.team ? " lead" : ""}${t.unread ? " unread" : ""}${menu?.key === opts.key ? " menu-open" : ""}`}
+  const row = (t: Thread, mark: boolean) => (
+    <button
+      key={t.id}
+      className={`rc${mark ? " wo" : ""}${t.id === props.activeThreadId ? " on" : ""}${t.unread ? " unread" : ""}`}
+      aria-current={t.id === props.activeThreadId ? "page" : undefined}
+      onClick={() => props.onOpenThread(t.id)}
+      {...bind(t)}
     >
-      {opts.team && (
-        <button
-          className={`fold-team${opts.team.open ? " open" : ""}`}
-          aria-expanded={opts.team.open}
-          aria-label={`${opts.team.open ? "Replier" : "Déplier"} l'équipe ${t.title}`}
-          onClick={opts.team.toggle}
-        >
-          <IconChevron size={11} />
-        </button>
+      {mark && <Mark status={lineStatus(t, members.get(t.id))} />}
+      <span className="nm">{t.title}</span>
+      {!mark && lineStatus(t, members.get(t.id)) === "waiting" && (
+        <i className="ud" role="img" aria-label="Attend ta réponse" />
       )}
-      <button
-        className={`thr${t.id === props.activeThreadId ? " on" : ""}`}
-        onClick={() => props.onOpenThread(t.id)}
-      >
-        <span className="t">{t.title}</span>
-        {t.unread && <span className="unread-mark" title="Non lu" aria-label="Non lu" />}
-        <ThreadStatus status={opts.status ?? lineStatus(t)} />
-      </button>
-      {/* A pinned thread keeps its pin in sight; the rest is behind « … ». */}
-      {!t.archived && t.pinned && (
-        <button
-          className="pin"
-          aria-pressed
-          aria-label={`Désépingler ${t.title}`}
-          title="Désépingler"
-          onClick={() => props.onTogglePin(t.id, false)}
-        >
-          <IconPin filled />
-        </button>
-      )}
-      <button
-        className="pin acts"
-        aria-label={`Actions de ${t.title}`}
-        title="Actions"
-        aria-haspopup="menu"
-        aria-expanded={menu?.key === opts.key}
-        onClick={(e) => {
-          if (menu?.key === opts.key) return setMenu(null);
-          const box = e.currentTarget.getBoundingClientRect();
-          const up = box.bottom + MENU_ROOM > window.innerHeight;
-          setMenu({
-            id: t.id,
-            key: opts.key,
-            x: box.right,
-            y: up ? box.top - 4 : box.bottom + 4,
-            up,
-          });
-        }}
-      >
-        <IconMore size={15} />
-      </button>
-    </div>
+      {t.unread && <i className="nr" role="img" aria-label="Non lu" />}
+    </button>
   );
-
-  const project = (p: State["projects"][number]) => {
-    // Pinned ones too: « Épinglés » is a shortcut, the project still holds them.
-    const all = byProject.get(p.id) ?? [];
-    const open = projectOpen(folds[p.id], codeProjects.length === 1);
-    const { always, foldable } = recentAlwaysShown(all, members, props.activeThreadId);
-    const more = unfolded.has(`more:${p.id}`);
-    const count = byProject.get(p.id)?.length ?? 0;
-    const waiting = waitingCount(live, p.id);
-    // Put away inside their project, as a folder of its own: never beside the projects.
-    const resolved = archived.filter((t) => t.projectId === p.id);
-    const resolvedOpen = unfolded.has(`resolved:${p.id}`);
-    return [
-      <div key={p.id} className={`thr-row proj${open ? " open" : ""}${p.locked ? " locked" : ""}`}>
-        <button
-          className="fold-proj"
-          aria-expanded={open}
-          aria-label={`${open ? "Replier" : "Déplier"} le projet ${p.name}`}
-          onClick={() => setFold(p.id, !open)}
-        >
-          <ProjectIcon project={p} />
-          <IconChevron size={11} />
-        </button>
-        <button
-          className={`thr${props.onProject && p.id === props.activeProjectId ? " on" : ""}`}
-          title={p.path}
-          onClick={() => {
-            if (!open) setFold(p.id, true);
-            props.onPickProject(p.id);
-          }}
-        >
-          <span className="t">{p.name}</span>
-          {p.pinned && (
-            <span className="proj-pin" title="Projet épinglé" aria-label="Épinglé">
-              <IconPin size={11} filled />
-            </span>
-          )}
-          {waiting > 0 && (
-            <span
-              className="dot"
-              title={`${waiting} en attente`}
-              aria-label={`${waiting} en attente`}
-            />
-          )}
-          <span className="aux" title={`${count} discussion${count > 1 ? "s" : ""}`}>
-            {count || ""}
-          </span>
-        </button>
-        <button
-          className="pin lock"
-          aria-label={`${p.locked ? "Déverrouiller" : "Verrouiller"} le projet ${p.name}`}
-          aria-pressed={!!p.locked}
-          title={p.locked ? "Déverrouiller" : "Verrouiller (Ctrl Maj L)"}
-          onClick={() => props.onToggleLock(p.id)}
-        >
-          <IconLock />
-        </button>
-        <button
-          className="pin new"
-          aria-label={`Nouvelle discussion dans ${p.name}`}
-          title="Nouvelle discussion"
-          onClick={() => props.onNewInProject(p.id)}
-        >
-          <IconPlus size={14} />
-        </button>
-        <button
-          className="pin"
-          aria-label={`Retirer le projet ${p.name}`}
-          title="Retirer de MoonAgentic"
-          onClick={() => props.onRemoveProject(p.id)}
-        >
-          <IconClose />
-        </button>
-      </div>,
-      open && p.locked && (
-        <div key={`${p.id}:items`} className="proj-items">
-          <div className="empty-note lk-note">
-            <IconLock size={12} />
-            Discussions verrouillées
-          </div>
-        </div>
-      ),
-      open && !p.locked && (
-        <div key={`${p.id}:items`} className="proj-items">
-          {[
-            ...(all.length === 0 && resolved.length === 0
-              ? [
-                  <div key={`${p.id}:empty`} className="empty-note">
-                    Aucune discussion.
-                  </div>,
-                ]
-              : []),
-            ...(more ? all : always).flatMap((t) => tree(t, "")),
-            ...(foldable > 0
-              ? [
-                  <button
-                    key={`${p.id}:more`}
-                    className="more"
-                    aria-expanded={more}
-                    onClick={() => toggle(`more:${p.id}`)}
-                  >
-                    {more ? "Voir moins" : `Voir plus (${foldable})`}
-                  </button>,
-                ]
-              : []),
-            ...(resolved.length > 0
-              ? [
-                  <button
-                    key={`${p.id}:resolved`}
-                    className={`more resolved${resolvedOpen ? " open" : ""}`}
-                    aria-expanded={resolvedOpen}
-                    onClick={() => toggle(`resolved:${p.id}`)}
-                  >
-                    <IconArchive size={13} />
-                    Résolus ({resolved.length})
-                    <IconChevron size={11} />
-                  </button>,
-                  ...(resolvedOpen
-                    ? resolved.map((t) => row(t, { key: `resolved:${t.id}`, child: true }))
-                    : []),
-                ]
-              : []),
-          ]}
-        </div>
-      ),
-    ];
+  const more = (key: string, n: number, all: boolean, wide = false) =>
+    (n > 0 || all) && (
+      <button
+        className={`rc more${wide ? " wo" : ""}`}
+        aria-expanded={all}
+        onClick={() => toggle(key)}
+      >
+        {wide && <span className="wi2" />}
+        <span className="nm">{all ? "Voir moins" : `Voir plus (${n})`}</span>
+      </button>
+    );
+  const section = (key: string, title: string, list: Thread[], mark: boolean) => {
+    if (!list.length) return null;
+    const { rows, more: n, all } = cut(key, list);
+    return (
+      <>
+        <div className={`dsec${mark ? " wo" : ""}`}>{title}</div>
+        {rows.map((t) => row(t, mark))}
+        {more(key, n, all, mark)}
+      </>
+    );
   };
 
+  if (props.searching)
+    return (
+      <DrawerSearch
+        state={state}
+        actions={props.onListActions()}
+        onClose={() => props.onSearching(false)}
+        onOpenThread={props.onOpenThread}
+        onPickProject={props.onPickProject}
+      />
+    );
+
+  const resolvedOpen = unfolded.has("resolved");
   return (
-    <aside className="side" onScrollCapture={() => menu && setMenu(null)}>
-      <Presence show={menuOpen}>
-        {menu && menuThread && (
-          <>
-            <div className="menu-scrim" onClick={() => setMenu(null)} />
-            <div
-              ref={menuRef}
-              className={`menu row-menu${menu.up ? " up" : ""}`}
-              role="menu"
-              aria-label={`Actions de ${menuThread.title}`}
-              style={{ "--x": `${menu.x}px`, "--y": `${menu.y}px` } as React.CSSProperties}
-            >
-              {!menuThread.archived && (
-                <button
-                  role="menuitem"
-                  onClick={act(() => props.onTogglePin(menuThread.id, !menuThread.pinned))}
-                >
-                  <IconPin filled={!!menuThread.pinned} />
-                  {menuThread.pinned ? "Désépingler" : "Épingler"}
-                </button>
-              )}
-              {!menuThread.archived && (
-                <button
-                  role="menuitem"
-                  onClick={act(() =>
-                    connection.send({
-                      type: "thread.setUnread",
-                      threadId: menuThread.id,
-                      unread: !menuThread.unread,
-                    }),
-                  )}
-                >
-                  <IconInbox />
-                  {menuThread.unread ? "Marquer comme lu" : "Marquer comme non lu"}
-                </button>
-              )}
-              <button
-                role="menuitem"
-                onClick={act(() => props.onSetArchived(menuThread.id, !menuThread.archived))}
-              >
-                <IconArchive />
-                {menuThread.archived ? "Rouvrir" : "Marquer résolu"}
-              </button>
-              <button
-                role="menuitem"
-                className="danger"
-                onClick={act(() => props.onDeleteThread(menuThread))}
-              >
-                <IconClose />
-                Supprimer…
-              </button>
-            </div>
-          </>
-        )}
-      </Presence>
-      <div className="side-top">
+    <>
+      {rowMenu}
+      <div className="dtop">
         <Wordmark />
         <button
-          className={`ib side-plug${state.ready && state.status === "open" && !available ? " warn" : ""}`}
-          aria-label="Connexions"
-          title={`Connexions : ${available} ${available > 1 ? "agents prêts" : "agent prêt"} · ${
-            state.mcpServers.filter((m) => m.enabled).length
-          } MCP`}
-          onClick={props.onOpenConnections}
+          className="gb glass srch"
+          aria-label="Rechercher"
+          title="Rechercher (Ctrl K)"
+          onClick={() => props.onSearching(true)}
         >
-          <IconPlug size={16} />
-        </button>
-        <button
-          className="ib side-fold"
-          aria-label="Masquer la barre latérale"
-          title="Masquer la barre latérale"
-          onClick={props.onCollapse}
-        >
-          <IconSidebar />
+          <I n="search" s={20} />
         </button>
       </div>
-      <nav className="nav">
-        {state.requests.length > 0 && (
-          <button className="inbrow" onClick={props.onOpenRequests}>
-            <IconShield />À traiter
-            <span className="aux badge">{state.requests.length}</span>
+      <div className="dscroll">
+        <nav className="nav" aria-label="Pages">
+          <button
+            className={`ni press${props.page === "inbox" ? " on" : ""}`}
+            aria-current={props.page === "inbox" ? "page" : undefined}
+            onClick={props.onOpenInbox}
+          >
+            <I n="hand" />
+            <span>À traiter</span>
+            <span className="sp" />
+            {state.requests.length > 0 && (
+              <span className="cnt w" aria-label={`${state.requests.length} à traiter`}>
+                {state.requests.length}
+              </span>
+            )}
+          </button>
+          <button
+            className={`ni press${props.page === "planner" ? " on" : ""}`}
+            aria-current={props.page === "planner" ? "page" : undefined}
+            title={plannerSignalText(planSignal) || undefined}
+            onClick={props.onOpenPlanner}
+          >
+            <I n="grid" />
+            <span>Planner</span>
+            <span className="sp" />
+            {planCount > 0 && (
+              <span className={`cnt${planSignal.waiting ? " w" : ""}`} aria-hidden>
+                {planCount}
+              </span>
+            )}
+          </button>
+          <button
+            className={`ni press${props.page === "schedules" ? " on" : ""}`}
+            aria-current={props.page === "schedules" ? "page" : undefined}
+            onClick={props.onOpenSchedules}
+          >
+            <I n="clock" />
+            <span>Tâches planifiées</span>
+          </button>
+          <button
+            className={`ni press${props.page === "artifacts" ? " on" : ""}`}
+            aria-current={props.page === "artifacts" ? "page" : undefined}
+            onClick={props.onOpenArtifacts}
+          >
+            <I n="image" />
+            <span>Artefacts</span>
+          </button>
+          <button
+            className={`ni press${props.page === "prs" ? " on" : ""}`}
+            aria-current={props.page === "prs" ? "page" : undefined}
+            onClick={props.onOpenPrs}
+          >
+            <I n="merge" />
+            <span>Pull requests</span>
+            <span className="sp" />
+            {(prs.red > 0 || prs.green > 0) && (
+              <span
+                className="prc"
+                role="img"
+                aria-label={`${prs.red} en échec, ${prs.green} à fusionner`}
+              >
+                {prs.red > 0 && <i className="r">{prs.red}</i>}
+                {prs.green > 0 && <i className="g">{prs.green}</i>}
+              </span>
+            )}
+          </button>
+        </nav>
+        <button
+          className="dsec"
+          aria-expanded={projectsOpen}
+          onClick={() => {
+            setProjectsOpen(!projectsOpen);
+            writePref("projectsOpen", String(!projectsOpen));
+          }}
+        >
+          Projets
+          <I n="down" s={14} />
+        </button>
+        <div className={`coll${projectsOpen ? "" : " shut"}`}>
+          <div>
+            {pinnedFirst(codeProjects).map((p) => (
+              <ProjectRow
+                key={p.id}
+                project={p}
+                on={p.id === props.activeProjectId}
+                waiting={p.locked ? 0 : waitingCount(live, p.id)}
+                shut={!projectsOpen}
+                onPick={() => props.onPickProject(p.id)}
+              />
+            ))}
+            <button
+              className={`pj press add${codeProjects.length ? " wo" : ""}`}
+              tabIndex={projectsOpen ? undefined : -1}
+              onClick={props.onNewProject}
+            >
+              <I n="plus" />
+              <span className="nm">Nouveau projet</span>
+            </button>
+          </div>
+        </div>
+        {section("pinned", "Épinglés", pinned, false)}
+        {section("code", "Code", code, true)}
+        {(recent.length > 0 || resolved.length > 0) && <div className="dsec">Récents</div>}
+        {(() => {
+          const { rows, more: n, all } = cut("recent", recent);
+          return (
+            <>
+              {rows.map((t) => row(t, false))}
+              {more("recent", n, all)}
+            </>
+          );
+        })()}
+        {resolved.length > 0 && (
+          <button
+            className="rc more"
+            aria-expanded={resolvedOpen}
+            onClick={() => toggle("resolved")}
+          >
+            <span className="nm">Résolus ({resolved.length})</span>
           </button>
         )}
-        <button onClick={props.onNewThread}>
-          <IconCompose />
+        {resolvedOpen && resolved.map((t) => row(t, false))}
+      </div>
+      <div className="dfoot">
+        <button className="me press" aria-label="Réglages" onClick={props.onOpenSettings}>
+          <I n="gear" />
+        </button>
+        <span className="sp" />
+        <button className="newd press" onClick={props.onNewThread}>
+          <I n="plus" s={20} />
           Nouvelle discussion
         </button>
-        <button onClick={props.onNewProject}>
-          <IconFolder />
-          Nouveau projet
-        </button>
-        <button
-          className={props.onSchedules ? "on" : ""}
-          aria-current={props.onSchedules ? "page" : undefined}
-          onClick={props.onOpenSchedules}
-        >
-          <IconClock />
-          Tâches planifiées
-          {scheduled > 0 && <span className="aux">{scheduled}</span>}
-        </button>
-        <button
-          className={props.onPlanner ? "on" : ""}
-          aria-current={props.onPlanner ? "page" : undefined}
-          onClick={props.onOpenPlanner}
-          title={planText || undefined}
-        >
-          <IconList />
-          Planner
-          <PlannerSign signal={planSignal} />
-        </button>
-        <button
-          className={props.onArtifacts ? "on" : ""}
-          aria-current={props.onArtifacts ? "page" : undefined}
-          onClick={props.onOpenArtifacts}
-        >
-          <IconCopies size={16} />
-          Artefacts
-        </button>
-      </nav>
-      <div className="side-scroll">
-        {/* No projects, no section: « Nouveau projet » above stays the way in. */}
-        {codeProjects.length > 0 && (
-          <button
-            className={`sec-h fold${projectsOpen ? "" : " shut"}`}
-            aria-expanded={projectsOpen}
-            onClick={() => {
-              setProjectsOpen(!projectsOpen);
-              writePref("projectsOpen", String(!projectsOpen));
-            }}
-          >
-            <span>Projets</span>
-            <IconChevron size={13} />
-          </button>
-        )}
-        {(projectsOpen ? pinnedFirst(codeProjects) : []).flatMap(project)}
-        {pinned.length > 0 && <div className="sec-h">Épinglés</div>}
-        {pinned.flatMap((t) => tree(t, "pin:"))}
-        {(recent.length > 0 || discussionsResolved.length > 0 || discussions?.locked) && (
-          <div className="sec-h">Récents</div>
-        )}
-        {recent.flatMap((t) => tree(t, "recent:"))}
-        {recentFoldable > 0 && (
-          <button className="more" aria-expanded={moreRecent} onClick={() => toggle("more:recent")}>
-            {moreRecent ? "Voir moins" : `Voir plus (${recentFoldable})`}
-          </button>
-        )}
-        {discussions?.locked && (
-          <button className="more" onClick={() => props.onToggleLock(discussions.id)}>
-            <IconLock size={12} />
-            Discussions verrouillées
-          </button>
-        )}
-        {discussionsResolved.length > 0 && (
-          <button
-            className={`more resolved${discussionsResolvedOpen ? " open" : ""}`}
-            aria-expanded={discussionsResolvedOpen}
-            onClick={() => toggle("resolved:discussions")}
-          >
-            <IconArchive size={13} />
-            Résolus ({discussionsResolved.length})
-            <IconChevron size={11} />
-          </button>
-        )}
-        {discussionsResolvedOpen &&
-          discussionsResolved.map((t) => row(t, { key: `resolved:${t.id}`, child: true }))}
-        <SidePullRequests threads={state.threads} onOpenThread={props.onOpenThread} />
       </div>
-      {state.status !== "open" && <div className="side-warn st warn">Reconnexion au serveur…</div>}
-      <SideQuotas agents={state.agents} onOpen={props.onOpenSubscriptions} />
-      <AppUpdatePill />
-      <div className="side-foot">
-        <button
-          className="ib set-gear"
-          aria-label="Réglages"
-          title="Réglages"
-          onClick={props.onOpenSettings}
-        >
-          <IconGear size={17} />
-        </button>
-        <button className="side-search" onClick={props.onOpenSearch}>
-          <IconSearch size={15} />
-          <span>Rechercher</span>
-          <kbd>Ctrl K</kbd>
-        </button>
-      </div>
-    </aside>
+    </>
   );
 }
 
-/**
- * Beside « Planner »: a live glyph while an agent works on a card, the cards that wait for
- * the user in amber, else those in progress in grey; nothing while nothing moves.
- */
-function PlannerSign({ signal: s }: { signal: PlannerSignal }) {
-  if (!s.live && !s.waiting && !s.active) return null;
+function ProjectRow(props: {
+  project: Project;
+  on: boolean;
+  waiting: number;
+  shut: boolean;
+  onPick: () => void;
+}) {
+  const p = props.project;
   return (
-    // Hidden from screen readers: the line keeps « Planner » as its name, its title says the rest.
-    <span className="pind" aria-hidden>
-      {s.live && <StateGlyph kind="travaille" size={14} />}
-      {s.waiting > 0 ? (
-        <span className="pind-a">{s.waiting}</span>
-      ) : s.active > 0 ? (
-        <span className="pind-n">{s.active}</span>
-      ) : null}
-    </span>
-  );
-}
-
-/**
- * Each installed agent's tightest subscription window, as three quiet lines at the foot of
- * the side bar: always in sight, even inside a conversation. Agents that pay as they go are
- * left out; one whose figures cannot be read says so.
- */
-function SideQuotas({ agents, onOpen }: { agents: AgentInfo[]; onOpen: () => void }) {
-  const quotas = useQuotas();
-  const rows = quotas
-    .filter((q) => q.state !== "none" && agents.some((a) => a.id === q.agentId && a.available))
-    .slice(0, 4);
-  if (!rows.length) return null;
-  return (
-    <button className="side-quotas" onClick={onOpen} aria-label="Abonnements : voir le détail">
-      <span className="sq-h">Abonnements</span>
-      {rows.map((q) => {
-        const name = agents.find((a) => a.id === q.agentId)?.name ?? q.agentId;
-        const worst = tightest(q);
-        if (!worst)
-          return (
-            <span key={q.agentId} className="sq-r na">
-              <span className="sq-n">{name}</span>
-              <span className="sq-p">{q.state === "loading" ? "…" : "non lisible"}</span>
-            </span>
-          );
-        const level = quotaLevel(worst.usedPercent);
-        return (
-          <span
-            key={q.agentId}
-            className={`sq-r ${level}`}
-            title={
-              worst.resetsAt
-                ? `${worst.label} · se libère ${formatReset(worst.resetsAt)}`
-                : worst.label
-            }
-          >
-            <span className="sq-n">
-              {name}
-              <small>{worst.short}</small>
-            </span>
-            <span className="sq-p">{formatPercent(worst.usedPercent)}</span>
-            <span className="sq-b">
-              <i style={{ width: `${Math.min(100, worst.usedPercent)}%` }} />
-            </span>
-          </span>
-        );
-      })}
+    <button
+      className={`pj press${props.on ? " on" : ""}`}
+      aria-current={props.on ? "page" : undefined}
+      title={p.path}
+      tabIndex={props.shut ? -1 : undefined}
+      onClick={props.onPick}
+    >
+      <ProjectIcon project={p} size={22} />
+      <span className="nm">{p.name}</span>
+      {p.locked && (
+        <span className="lk" role="img" aria-label="Verrouillé">
+          <I n="lock" s={16} />
+        </span>
+      )}
+      {props.waiting > 0 && (
+        <span className="cnt w" aria-label={`${props.waiting} en attente`}>
+          {props.waiting}
+        </span>
+      )}
     </button>
+  );
+}
+
+/** The search, in place of the menu: conversations, projects, actions, and every message. */
+function DrawerSearch(props: {
+  state: Omit<State, "items" | "held" | "reviews">;
+  actions: QuickAction[];
+  onClose: () => void;
+  onOpenThread: (id: string, itemId?: string) => void;
+  onPickProject: (id: string) => void;
+}) {
+  const { state } = props;
+  const [query, setQuery] = useState("");
+  const [active, setActive] = useState(0);
+  const [hits, setHits] = useState<{ query: string; hits: SearchHit[] } | null>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const q = query.trim();
+  const online = state.status === "open";
+
+  // Messages are searched on the server, which holds every thread's timeline. A search typed
+  // before the connection opens is sent once it does: an ask before then fails at once.
+  useEffect(() => {
+    if (q.length < 2 || !online) return;
+    let current = true;
+    const timer = setTimeout(() => {
+      connection
+        .ask({ type: "search", requestId: newId(), query: q })
+        .then((reply) => current && setHits({ query: q, hits: reply.hits }))
+        .catch(() => undefined);
+    }, SEARCH_DELAY_MS);
+    return () => {
+      current = false;
+      clearTimeout(timer);
+    };
+  }, [q, online]);
+
+  const projectName = (id: string) => state.projects.find((p) => p.id === id)?.name ?? "";
+  const threadTitle = (id: string) => state.threads.find((t) => t.id === id)?.title ?? "";
+  const threads = state.threads
+    // Resolved conversations stay out of the recent ones, but typing still finds them.
+    .filter((t) => (q ? fuzzyMatch(q, t.title) : !t.archived && !t.parentId))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, q ? MAX_FOUND : 8);
+  const entries: {
+    key: string;
+    group: string;
+    label: string;
+    detail?: string;
+    icon: React.ReactNode;
+    run: () => void;
+  }[] = [
+    ...threads.map((t) => ({
+      key: `thread:${t.id}`,
+      group: q ? "Discussions" : "Récents",
+      label: t.title,
+      detail: t.archived ? `${projectName(t.projectId)} · Résolu` : projectName(t.projectId),
+      icon: <I n={t.pinned ? "star" : "bubble"} s={18} className="ic2" />,
+      run: () => props.onOpenThread(t.id),
+    })),
+    ...state.projects
+      .filter((p) => q && !isDiscussionsProject(p) && fuzzyMatch(q, p.name))
+      .map((p) => ({
+        key: `project:${p.id}`,
+        group: "Projets",
+        label: p.name,
+        detail: p.path,
+        icon: <I n="folder" s={18} className="ic2" />,
+        run: () => props.onPickProject(p.id),
+      })),
+    ...props.actions
+      .filter((a) => q && fuzzyMatch(q, a.label))
+      .map((a, i) => ({
+        key: `action:${i}`,
+        group: "Actions",
+        label: a.label,
+        icon: <I n="right" s={18} className="ic2" />,
+        run: a.run,
+      })),
+    ...(q.length >= 2 && hits?.query === q ? hits.hits : []).map((h) => ({
+      key: `hit:${h.threadId}:${h.itemId}`,
+      group: "Messages",
+      label: h.snippet,
+      detail: `${h.kind === "user" ? "Toi" : "Agent"} · ${threadTitle(h.threadId)}`,
+      icon: <I n="bubble" s={18} className="ic2" />,
+      run: () => props.onOpenThread(h.threadId, h.itemId),
+    })),
+  ];
+  const highlighted = Math.min(active, Math.max(0, entries.length - 1));
+  useEffect(() => {
+    list.current
+      ?.querySelector<HTMLElement>(`[data-index="${highlighted}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  }, [highlighted]);
+  const choose = (entry: (typeof entries)[number] | undefined) => {
+    if (!entry) return;
+    props.onClose();
+    entry.run();
+  };
+
+  let group = "";
+  return (
+    <div className="dsearch rise" role="dialog" aria-label="Recherche">
+      <div className="sfield">
+        <label className="in glass">
+          <I n="search" s={18} />
+          <input
+            autoFocus
+            value={query}
+            placeholder="Rechercher des discussions…"
+            aria-label="Rechercher"
+            role="combobox"
+            aria-expanded
+            aria-controls="ds-list"
+            aria-activedescendant={entries.length ? `ds-${highlighted}` : undefined}
+            autoComplete="off"
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setActive(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setActive(entries.length ? (highlighted + 1) % entries.length : 0);
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setActive(entries.length ? (highlighted - 1 + entries.length) % entries.length : 0);
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                choose(entries[highlighted]);
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                props.onClose();
+              }
+            }}
+          />
+        </label>
+        <button className="gb glass press" aria-label="Fermer la recherche" onClick={props.onClose}>
+          <I n="x" s={18} />
+        </button>
+      </div>
+      <div className="dscroll" id="ds-list" role="listbox" ref={list}>
+        {entries.length === 0 && (
+          <div className="nores">
+            {q.length >= 2 && hits?.query !== q
+              ? "Je cherche…"
+              : q
+                ? `Aucune discussion ne contient « ${q} ».`
+                : "Aucune discussion."}
+          </div>
+        )}
+        {entries.map((entry, i) => {
+          const heading = entry.group !== group ? (group = entry.group) : null;
+          return (
+            <div key={entry.key} role="presentation">
+              {heading && <div className="dsec">{heading}</div>}
+              <button
+                id={`ds-${i}`}
+                data-index={i}
+                role="option"
+                aria-selected={i === highlighted}
+                className={`rc${i === highlighted && q ? " on" : ""}`}
+                onMouseMove={() => i !== highlighted && setActive(i)}
+                onClick={() => choose(entry)}
+              >
+                {entry.icon}
+                <span className="nm">
+                  {entry.label}
+                  {entry.detail && <small>{entry.detail}</small>}
+                </span>
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

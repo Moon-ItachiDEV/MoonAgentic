@@ -133,18 +133,21 @@ describe("GitHub sign-in", () => {
     };
     await page.goto(url);
     await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByText("Connecte ton compte GitHub").waitFor();
+    await page.getByRole("radio", { name: "GitHub" }).click();
+    const signIn = page.getByRole("button", { name: "Se connecter" });
+    await signIn.waitFor();
     await shot("g1-se-connecter");
 
-    await page.getByRole("button", { name: "Se connecter à GitHub" }).click();
-    await expect.poll(() => page.locator(".gh-user-code").textContent()).toBe("WDJB-MJHT");
+    await signIn.click();
+    const code = page.getByLabel("Code à taper sur GitHub");
+    await expect.poll(() => code.textContent()).toBe("WDJB-MJHT");
     await shot("g2-code");
 
     // The user says yes on GitHub: the dialog goes on by itself.
     approved = true;
-    const list = page.getByRole("list", { name: "Tes dépôts GitHub" });
+    const list = page.getByRole("group", { name: "Tes dépôts GitHub" });
     await expect.poll(() => list.getByRole("button").count()).toBe(3);
-    await list.getByText("déjà cloné").waitFor();
+    await list.getByText("Sur le PC").waitFor();
     await shot("g3-depots");
 
     // The token stays on the server, sealed there: never in the page.
@@ -153,27 +156,37 @@ describe("GitHub sign-in", () => {
     const sealed = readFileSync(path.join(dir, "data", "github-token"), "utf8");
     expect(sealed).toBe("gho_e2e");
 
-    await list.getByRole("button", { name: /moon\/app/ }).click();
-    await page.getByText("Sera cloné dans").waitFor();
+    // Picked, a repository says where its clone goes; picked again, it is let go.
+    await list.getByRole("button", { name: /^app/ }).click();
+    await page.getByRole("button", { name: /^Emplacement/ }).waitFor();
+    await page.getByRole("button", { name: "Cloner", exact: true }).waitFor();
     await shot("g4-ou-va-le-clone");
-    await page.getByRole("button", { name: "Changer de dépôt" }).click();
+    await list.getByRole("button", { name: /^app/ }).click();
 
-    await list.getByRole("button", { name: /moon\/site/ }).click();
-    await page.getByText("Déjà cloné sur cette machine").waitFor();
+    await list.getByRole("button", { name: /^site/ }).click();
+    await page.getByRole("status").getByText("Déjà sur le PC").waitFor();
     await shot("g5-deja-clone");
-    await page.getByRole("button", { name: "Utiliser ce clone" }).click();
-    await expect.poll(() => page.getByRole("combobox", { name: "Message" }).isEnabled()).toBe(true);
+    await page.getByRole("button", { name: "Créer", exact: true }).click();
+    await page.waitForURL(/\/p\//);
 
     // Opened again, the same repository is now a project: it opens, nothing is cloned.
     await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await list.getByText("déjà un projet").waitFor();
+    await page.getByRole("radio", { name: "GitHub" }).click();
+    await list.getByText("Projet", { exact: true }).waitFor();
 
     // On a phone, the dialog fits the screen.
     const phone = await browser.newPage({ viewport: { width: 390, height: 780 }, hasTouch: true });
     await phone.goto(url);
-    await phone.getByRole("button", { name: "Menu", exact: true }).click();
-    await phone.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await phone.getByRole("list", { name: "Tes dépôts GitHub" }).getByText("moon/app").waitFor();
+    await phone
+      .getByRole("navigation", { name: "Sections" })
+      .getByRole("button", { name: "Projets" })
+      .click();
+    await phone.getByRole("menuitem", { name: "Nouveau projet" }).click();
+    await phone.getByRole("radio", { name: "GitHub" }).click();
+    await phone
+      .getByRole("group", { name: "Tes dépôts GitHub" })
+      .getByRole("button", { name: /^app/ })
+      .waitFor();
     expect(await phone.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );

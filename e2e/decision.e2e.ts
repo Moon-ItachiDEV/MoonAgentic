@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium, type Page } from "playwright";
+import { addProject, pickAgent } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -71,7 +72,7 @@ const shot = async (page: Page, name: string) => {
   await page.screenshot({ path: path.join(shots, `${name}.png`) });
 };
 const composer = (page: Page) => page.getByRole("combobox", { name: "Message" });
-const card = (page: Page) => page.locator(".dcard");
+const card = (page: Page) => page.locator(".dc");
 const say = async (page: Page, text: string) => {
   await composer(page).fill(text);
   await composer(page).press("Enter");
@@ -92,29 +93,22 @@ async function open(viewport: { width: number; height: number }, dark = false) {
 describe("decision card", () => {
   it("asks above the composer and takes the answer from the keyboard", async () => {
     const page = await open({ width: 1280, height: 820 });
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(project);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
+    await addProject(page, project);
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
-    await page.locator(".agentchip").click();
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
-    await page.getByRole("button", { name: "Options", exact: true }).click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-    await page.keyboard.press("Escape");
+    await pickAgent(page);
 
     // A question the agent holds its turn on, as Claude Code asks: options with what they mean.
     await say(page, "/choix");
     await card(page).getByRole("heading", { name: "Quelle file de messages ?" }).waitFor();
     await card(page).getByText("Recommandé").waitFor();
     await card(page).getByText("Géré, rien à faire tourner, mais pas de rejeu").waitFor();
-    expect(await card(page).locator(".dcard-o").count()).toBe(4);
+    expect(await card(page).locator(".opt").count()).toBe(4);
     await shot(page, "a1-question");
     // The card sits just above the composer, on its edges, once it has slid in.
     await card(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
     const [box, below] = await Promise.all([
       card(page).boundingBox(),
-      page.locator(".composer").boundingBox(),
+      page.locator(".cmp").boundingBox(),
     ]);
     expect(box!.x).toBe(below!.x);
     expect(box!.width).toBe(below!.width);
@@ -125,20 +119,21 @@ describe("decision card", () => {
     await page.waitForTimeout(900);
     await composer(page).focus();
     await page.keyboard.press("ArrowDown");
-    await expect.poll(() => card(page).locator(".dcard-o.hi").textContent()).toContain("SQS");
+    await expect.poll(() => card(page).locator(".opt.hl").textContent()).toContain("SQS");
     await page.keyboard.press("2");
     await page.getByText("Compris : SQS.").waitFor();
     thread = page.url();
     expect(await card(page).count()).toBe(0);
     // The feed keeps what was asked and answered.
-    await page.locator(".approve.done", { hasText: "Quelle file de messages ? · SQS" }).waitFor();
+    const asked = page.locator(".ask.done", { hasText: "Quelle file de messages ?" });
+    await asked.getByText("SQS", { exact: true }).waitFor();
 
     // Typing a message is never taken for an answer.
     await say(page, "/apercus");
     await card(page)
       .getByRole("heading", { name: "Quelle forme pour l'appel d'envoi ?" })
       .waitFor();
-    expect(await card(page).locator(".dcard-t").count()).toBe(3);
+    expect(await card(page).locator(".tile").count()).toBe(3);
     await card(page).getByText('const q = queue("ingest")').waitFor();
     await composer(page).fill("2 choses");
     expect(await card(page).count()).toBe(1);
@@ -165,8 +160,11 @@ describe("decision card", () => {
     await say(page, "Corrige la réponse");
     await card(page).getByRole("heading", { name: "Modifier src/app.ts" }).waitFor();
     await expect
-      .poll(() => card(page).locator(".dcard-o .dcard-on").allTextContents())
-      .toEqual(["Autoriser", "Refuser", "Autre chose…"]);
+      .poll(() => card(page).locator(".opt .on").allTextContents())
+      .toEqual(["Autoriser", "Refuser"]);
+    await card(page)
+      .getByRole("button", { name: /Autre chose…/ })
+      .waitFor();
     await shot(page, "a5-approbation");
     // A key from the composer may be the first of a message: it never allows.
     await page.waitForTimeout(900);
@@ -210,13 +208,13 @@ describe("decision card", () => {
     await card(page)
       .getByRole("heading", { name: "Quelle forme pour l'appel d'envoi ?" })
       .waitFor();
-    expect(await card(page).locator(".dcard-t").count()).toBe(0);
-    await card(page).locator(".dcard-pane").getByText("await send(").waitFor();
+    expect(await card(page).locator(".tile").count()).toBe(0);
+    await card(page).locator(".pane").getByText("await send(").waitFor();
     // The composer still has the focus, and folds when it loses it: the tap must land.
     await card(page)
       .getByRole("button", { name: /Client typé/ })
       .tap();
-    await card(page).locator(".dcard-pane").getByText('const q = queue("ingest")').waitFor();
+    await card(page).locator(".pane").getByText('const q = queue("ingest")').waitFor();
     await card(page).getByText("Choisir").waitFor();
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

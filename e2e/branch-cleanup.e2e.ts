@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { addProject } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -86,31 +87,33 @@ describe("cleaning a project's branches", () => {
     const errors: Error[] = [];
     page.on("pageerror", (err) => errors.push(err));
     await page.goto(url);
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(repo);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
-    await page.locator(".thr-row.proj", { hasText: "demo" }).locator(".thr").click();
-    await page.getByRole("heading", { name: "demo" }).waitFor();
+    await addProject(page, repo, false);
 
-    await page.getByRole("button", { name: "Actions du projet" }).click();
-    await page.getByRole("menuitem", { name: "Nettoyer les branches…" }).click();
-    const dialog = page.getByRole("dialog", { name: "Nettoyer les branches" });
-    await dialog.getByText("1 branche moon/* a tout son travail dans main").waitFor();
-    const merged = dialog.getByRole("checkbox", { name: /moon\/fini-aaaaaa/ });
-    expect(await merged.isChecked()).toBe(true);
-    await dialog.getByText("1 branche gardée").click();
+    // « Branches » is in the project's settings.
+    await page.getByRole("button", { name: "Réglages du projet" }).click();
+    await page
+      .getByRole("dialog", { name: "Réglages du projet" })
+      .getByRole("button", { name: "Branches" })
+      .click();
+    const dialog = page.getByRole("dialog", { name: "Branches" });
+    // The merged one is ticked; the other is only shown, with why it stays.
+    const merged = dialog.getByRole("button", { name: /moon\/fini-aaaaaa/ });
+    await merged.waitFor();
+    expect(await merged.getAttribute("aria-pressed")).toBe("true");
+    await dialog.getByText("moon/en-cours-bbbbbb").waitFor();
     await dialog.getByText("1 commit pas fusionné").waitFor();
-    expect(await dialog.getByRole("checkbox").count()).toBe(1);
+    expect(await dialog.locator("button[aria-pressed]").count()).toBe(1);
 
-    await dialog.getByRole("button", { name: "Supprimer 1 branche…" }).click();
-    await dialog.getByText("ne peut pas être annulé").waitFor();
+    await dialog.getByRole("button", { name: "Supprimer 1 branche" }).click();
+    const confirm = page.getByRole("alertdialog", { name: "Supprimer 1 branche ?" });
+    await confirm.getByText("Ne peut pas être annulé").waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "branches-confirmer.png") });
     // Still there until the second click.
     expect(branches()).toContain("moon/fini-aaaaaa");
-    await dialog.getByRole("button", { name: "Oui, supprimer 1 branche" }).click();
-    await dialog.getByText("1 branche supprimée.").waitFor();
-    await dialog.getByText("Aucune branche moon/* ne peut partir pour l'instant").waitFor();
+    await confirm.getByRole("button", { name: "Supprimer" }).click();
+    await dialog.getByRole("status").getByText("1 branche supprimée.").waitFor();
+    await expect.poll(() => dialog.locator("button[aria-pressed]").count()).toBe(0);
+    await dialog.getByText("moon/en-cours-bbbbbb").waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "branches-fait.png") });
     expect(branches()).toEqual(["main", "moon/en-cours-bbbbbb"]);
     expect(errors).toEqual([]);

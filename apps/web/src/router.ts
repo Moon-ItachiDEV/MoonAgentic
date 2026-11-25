@@ -37,6 +37,10 @@ export type Route =
   | { name: "thread"; threadId: string }
   /** The pages, images and PDFs the agents made in their threads' branches. */
   | { name: "artifacts" }
+  /** What the agents wait for: permissions to give, questions to answer. */
+  | { name: "inbox" }
+  /** The pull requests of the threads, open and merged. */
+  | { name: "prs" }
   | { name: "settings"; section: SettingsSection };
 
 const parse = (pathname: string): Route => {
@@ -64,6 +68,8 @@ const parse = (pathname: string): Route => {
     // an address no project can have
   }
   if (pathname === "/artefacts") return { name: "artifacts" };
+  if (pathname === "/a-traiter") return { name: "inbox" };
+  if (pathname === "/pull-requests") return { name: "prs" };
   const planner = /^\/planner(?:\/([a-z]+))?$/.exec(pathname);
   if (planner) {
     const view = PLANNER_VIEWS.find((v) => v === planner[1]);
@@ -93,7 +99,11 @@ const pathOf = (route: Route): string =>
           ? `/reglages/${route.section}`
           : route.name === "artifacts"
             ? "/artefacts"
-            : "/";
+            : route.name === "inbox"
+              ? "/a-traiter"
+              : route.name === "prs"
+                ? "/pull-requests"
+                : "/";
 
 export function navigate(route: Route, options: { replace?: boolean } = {}): void {
   const path = pathOf(route);

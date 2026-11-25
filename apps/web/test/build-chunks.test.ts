@@ -92,8 +92,8 @@ describe("web production build chunks", () => {
     expect(planner.isDynamicEntry).toBe(true);
     expect(settings.isEntry).toBe(false);
     expect(settings.isDynamicEntry).toBe(true);
-    // SettingsNav and SettingsPage share the same chunk.
-    expect(settings.exports).toEqual(expect.arrayContaining(["SettingsNav", "SettingsPage"]));
+    // The whole settings screen, list and pages, is one chunk.
+    expect(settings.exports).toEqual(expect.arrayContaining(["SettingsLayer"]));
 
     // Neither chunk is statically imported by the entry; both are dynamically imported.
     expect(entry!.imports).not.toContain(planner.fileName);

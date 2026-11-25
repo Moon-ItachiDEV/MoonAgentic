@@ -1428,6 +1428,17 @@ describe("Composer: files, skills, commands, pins and search", () => {
       files: ["src/app.ts"],
     });
 
+    // A limit of one, with nothing typed: the shallowest file only, as a project's tree asks
+    // for them (with a larger limit).
+    await hub.handle(client, {
+      type: "files.search",
+      requestId: "f2",
+      projectId,
+      query: "",
+      limit: 1,
+    });
+    expect((client.messages.at(-1) as { files: string[] }).files).toHaveLength(1);
+
     await hub.handle(client, { type: "composer.catalog", requestId: "c1", projectId });
     expect(client.messages.at(-1)).toMatchObject({
       type: "catalog",

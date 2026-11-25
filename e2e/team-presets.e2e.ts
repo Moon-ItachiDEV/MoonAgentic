@@ -99,32 +99,46 @@ describe("settings kept for every device", () => {
     one.on("pageerror", (err) => errors.push(err));
     await one.goto(at("teams"));
     await one.getByRole("heading", { name: "Équipes" }).waitFor();
-    await one.getByText("Des équipes suggérées").waitFor();
-    const names = () =>
+    const teams = (page: typeof one) =>
+      page
+        .getByRole("region", { name: "Équipes" })
+        .locator('.it[aria-haspopup="dialog"] .tx')
+        .evaluateAll((rows) => rows.map((r) => r.firstChild?.textContent ?? ""));
+    const names = () => teams(one);
+    await expect
+      .poll(names, { timeout: 30_000 })
+      .toEqual(["Équilibrée", "Économique", "Qualité max", "Neon relit et teste"]);
+    const row = (name: string) =>
       one
-        .locator(".tp-name")
-        .evaluateAll((inputs) => inputs.map((i) => (i as HTMLInputElement).value));
-    expect(await names()).toEqual([
-      "Équilibrée",
-      "Économique",
-      "Qualité max",
-      "Neon relit et teste",
-    ]);
+        .getByRole("region", { name: "Équipes" })
+        .getByRole("button", { name: new RegExp(`^${name}`) });
+    const sheet = one.getByRole("dialog", { name: "Équipe", exact: true });
+    const close = () => sheet.getByRole("button", { name: "Fermer", exact: true }).click();
 
-    const first = one.getByRole("textbox", { name: "Nom de l'équipe Équilibrée" });
+    await row("Équilibrée").click();
+    const first = sheet.getByRole("textbox", { name: "Nom de l'équipe Équilibrée" });
     await first.fill("Rapide");
     await first.press("Enter");
     await expect.poll(names, { timeout: 30_000 }).toContain("Rapide");
-    await one.getByText("La première sert au coordinateur").waitFor();
+    await close();
+    // The first one is the coordinator's.
+    await row("Rapide").getByText("Par défaut").waitFor();
 
-    await one.getByRole("button", { name: "Supprimer l'équipe Économique" }).click();
-    await one.getByRole("button", { name: "Supprimer", exact: true }).click();
+    await row("Économique").click();
+    await sheet.getByRole("button", { name: "Supprimer l'équipe Économique" }).click();
+    await one
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Supprimer", exact: true })
+      .click();
     await expect
       .poll(names, { timeout: 30_000 })
       .toEqual(["Rapide", "Qualité max", "Neon relit et teste"]);
-    // Renamed, then a click elsewhere at once: the new name is not lost to the click.
-    const third = one.getByRole("textbox", { name: "Nom de l'équipe Neon relit et teste" });
-    await third.fill("Neon partout");
+    // Renamed, then closed and a click elsewhere at once: the new name is not lost to the click.
+    await row("Neon relit et teste").click();
+    await sheet
+      .getByRole("textbox", { name: "Nom de l'équipe Neon relit et teste" })
+      .fill("Neon partout");
+    await close();
     await one.getByRole("button", { name: "Nouvelle équipe" }).click();
     await expect
       .poll(names, { timeout: 30_000 })
@@ -136,18 +150,15 @@ describe("settings kept for every device", () => {
     two.on("pageerror", (err) => errors.push(err));
     await two.goto(at("teams"));
     await expect
-      .poll(
-        () =>
-          two
-            .locator(".tp-name")
-            .evaluateAll((inputs) => inputs.map((i) => (i as HTMLInputElement).value)),
-        { timeout: 30_000 },
-      )
+      .poll(() => teams(two), { timeout: 30_000 })
       .toEqual(["Rapide", "Qualité max", "Neon partout", "Équipe 4"]);
     if (shots) await two.screenshot({ path: path.join(shots, "equipes-telephone.png") });
 
     await one.getByRole("button", { name: "Revenir aux suggestions" }).click();
-    await one.getByRole("button", { name: "Revenir aux suggestions" }).last().click();
+    await one
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Revenir aux suggestions" })
+      .click();
     await expect
       .poll(names, { timeout: 30_000 })
       .toEqual(["Équilibrée", "Économique", "Qualité max", "Neon relit et teste"]);

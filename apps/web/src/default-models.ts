@@ -1,5 +1,5 @@
 import type { AgentInfo, Favorites } from "@moonagentic/protocol";
-import { firstPick, type ModelPick } from "./components/ModelSelect.tsx";
+import { firstPick, type ModelPick } from "./model-pick.ts";
 
 /**
  * The first model of an agent that can run now whose id or name passes the test. Models are

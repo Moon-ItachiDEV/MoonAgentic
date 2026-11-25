@@ -97,14 +97,14 @@ describe("lazy-loaded routes", () => {
 
     await page.getByRole("button", { name: "Planner", exact: true }).click();
     await plannerSeen;
-    await page.locator("main.center > .view").waitFor();
+    await page.locator("#main > .view").waitFor();
     expect(requested.some(isSettingsChunk)).toBe(false);
 
     releasePlanner();
-    await page.getByText("Le planner range les tâches d'un projet.").waitFor();
+    await page.getByText("Le planner range les tâches d'un projet").waitFor();
     expect(requested.filter(isPlannerChunk)).toHaveLength(1);
 
-    // Delay the Settings chunk to verify the sidebar fallback keeps the layout steady.
+    // Delay the Settings chunk: until it is there, the page under it stays as it was.
     let settingsIntercepted!: () => void;
     let releaseSettings!: () => void;
     const settingsSeen = new Promise<void>((r) => {
@@ -122,35 +122,37 @@ describe("lazy-loaded routes", () => {
     await page.getByRole("button", { name: "Réglages" }).click();
     await settingsSeen;
 
-    const settingsAside = page.locator('aside.side.set-side[aria-label="Réglages"]');
-    await settingsAside.waitFor();
-    await page.locator("main.center > .view").waitFor();
-    const fallbackBox = await settingsAside.boundingBox();
+    const menu = page.getByRole("complementary", { name: "Menu" });
+    const settingsNav = page.getByRole("navigation", { name: "Réglages" });
+    await menu.waitFor();
+    expect(await settingsNav.count()).toBe(0);
+    const fallbackBox = await menu.boundingBox();
     expect(fallbackBox).not.toBeNull();
     expect(fallbackBox!.width).toBeGreaterThan(200);
 
     releaseSettings();
     await page.getByRole("heading", { name: "Général" }).waitFor();
-    await page.getByRole("button", { name: "Retour" }).waitFor();
+    await page.getByRole("button", { name: "Fermer les réglages" }).waitFor();
 
-    const loadedBox = await settingsAside.boundingBox();
+    // The settings take the whole screen, their list where the menu was.
+    const loadedBox = await settingsNav.boundingBox();
     expect(loadedBox).not.toBeNull();
     expect(loadedBox!.x).toBe(fallbackBox!.x);
-    expect(loadedBox!.width).toBe(fallbackBox!.width);
+    expect(loadedBox!.width).toBeGreaterThanOrEqual(fallbackBox!.width);
     // SettingsNav and SettingsPage come from one single chunk request.
     expect(requested.filter(isSettingsChunk)).toHaveLength(1);
 
     // Switching settings sections and going back works as expected.
-    await page.getByRole("button", { name: "Apparence" }).click();
+    await settingsNav.getByRole("button", { name: /^Apparence/ }).click();
     await page.getByRole("heading", { name: "Apparence" }).waitFor();
-    await page.getByRole("button", { name: "Agents" }).click();
+    await settingsNav.getByRole("button", { name: /^Agents/ }).click();
     await page.getByRole("heading", { name: "Agents" }).waitFor();
-    await page.getByRole("button", { name: "Modèles" }).click();
+    await settingsNav.getByRole("button", { name: /^Modèles/ }).click();
     await page.getByRole("heading", { name: "Modèles", exact: true }).waitFor();
-    await page.getByRole("button", { name: "Serveurs MCP" }).click();
-    await page.getByRole("heading", { name: "Serveurs MCP" }).waitFor();
+    await settingsNav.getByRole("button", { name: "Connexions et MCP" }).click();
+    await page.getByRole("heading", { name: "Connexions et MCP" }).waitFor();
 
-    await page.getByRole("button", { name: "Retour" }).click();
+    await page.getByRole("button", { name: "Fermer les réglages" }).click();
     await page.getByRole("button", { name: "Nouvelle discussion" }).waitFor();
 
     expect(errors).toEqual([]);
@@ -178,7 +180,7 @@ describe("lazy-loaded routes", () => {
     plannerPage.on("request", (req) => plannerRequests.push(req.url()));
 
     await plannerPage.goto(routeUrl("/planner"));
-    await plannerPage.getByText("Le planner range les tâches d'un projet.").waitFor();
+    await plannerPage.getByText("Le planner range les tâches d'un projet").waitFor();
     expect(plannerRequests.some(isPlannerChunk)).toBe(true);
     expect(plannerRequests.some(isSettingsChunk)).toBe(false);
     expect(plannerErrors).toEqual([]);
