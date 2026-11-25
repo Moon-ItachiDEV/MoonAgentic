@@ -2,7 +2,7 @@ import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import type { AgentProcessRef, DiagnosticsMonitor } from "./diagnostics.ts";
 import { generatedFolders, madeImages, resolveThreadFile } from "./thread-files.ts";
-import { plainLabel } from "./labels.ts";
+import { labelStart, plainLabel } from "./labels.ts";
 import { COMPUTER_ACTOR, ProjectLocks } from "./locks.ts";
 import {
   linkClaude,
@@ -176,7 +176,7 @@ const stoppedError = (detail: string): string => {
 
 const titleFrom = (text: string, images = 0) => {
   const line = plainLabel(text.trim().split("\n")[0] ?? "");
-  if (line.length > 60) return `${line.slice(0, 57).trimEnd()}…`;
+  if (line.length > 60) return `${labelStart(line, 57).trimEnd()}…`;
   // A message of images alone has no words to name the conversation with.
   return line || (images > 1 ? "Images" : images ? "Image" : "Nouvelle discussion");
 };
@@ -4153,8 +4153,11 @@ export class Hub {
     signal?: AbortSignal,
   ): Promise<PermissionMode | null> {
     if (signal?.aborted) return Promise.resolve(null);
-    // The task is the coordinator's own words, and this is the request that opens the most.
-    const preview = summaryOf(plainLabel(task), 80);
+    // The task is the coordinator's own words, and this is the request that opens the most:
+    // its start is shown as it is written, signs and code included, and not a summary of it,
+    // which would leave out a block of code.
+    const said = plainLabel(task);
+    const preview = said.length > 80 ? `${labelStart(said, 79).trimEnd()}…` : said;
     const id = `permission:${randomUUID()}`;
     this.putItem(coordinatorId, {
       id,

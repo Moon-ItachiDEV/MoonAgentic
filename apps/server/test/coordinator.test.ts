@@ -453,11 +453,17 @@ describe("a project's coordinator", () => {
     expect(store.listThreads().some((t) => t.taskKey === "refuse")).toBe(false);
 
     // 2. Picking « Lancer en supervisé » launches the team in supervised mode.
+    // The request shows the start of the task as it is written, code included, and is cut
+    // between two characters: here an emoji sits where the cut falls.
+    const start = "Lance `pnpm test` puis ```git push --force``` et range".padEnd(78, ".");
     const supReq = post(tokens[0]!, {
       tool: "start_team",
-      args: { task_key: "sup", task: "En supervisé" },
+      args: { task_key: "sup", task: `${start}😀 puis le reste` },
     });
     await soon(askRefuse).toBeTruthy();
+    expect(askRefuse()).toMatchObject({
+      title: `Lancer l'équipe en accès complet : ${start}…`,
+    });
     hub.respondToPermission(coordinatorId, askRefuse()!.id, "supervised");
     const supRes = (await (await supReq).json()) as { result: { opened: { id: string } } };
     expect(store.getThread(supRes.result.opened.id)!.team).toMatchObject({
