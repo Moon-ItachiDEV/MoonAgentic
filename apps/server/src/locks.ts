@@ -7,6 +7,8 @@ import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 export interface LockStorage {
   getSetting<T>(key: string, fallback: T): T;
   setSetting(key: string, value: unknown): void;
+  /** Whether anything is saved under this key, readable or not. */
+  hasSetting?(key: string): boolean;
 }
 
 const LOCKED_SETTING = "lock.projects";
@@ -20,7 +22,8 @@ export const TRIES_WINDOW_MS = 5 * 60_000;
 
 export const validPin = (pin: string) => /^\d{6}$/.test(pin);
 
-const hashPin = (pin: string, salt: Buffer) => scryptSync(pin, salt, 32);
+const PIN_HASH_BYTES = 32;
+const hashPin = (pin: string, salt: Buffer) => scryptSync(pin, salt, PIN_HASH_BYTES);
 
 /** Actor key for the computer itself (as opposed to paired devices). */
 export const COMPUTER_ACTOR = "computer";
@@ -47,11 +50,56 @@ export class ProjectLocks {
   /** When each recent wrong code was given, per device (`computer` or paired device id). */
   private failures: Record<string, number[]> = {};
 
-  constructor(storage: LockStorage, now: () => number = Date.now) {
+  /** `projects` gives every project there is, for the day the saved list cannot be read. */
+  constructor(
+    storage: LockStorage,
+    now: () => number = Date.now,
+    projects: () => string[] = () => [],
+  ) {
     this.storage = storage;
     this.now = now;
-    this.locked = new Set(storage.getSetting<string[]>(LOCKED_SETTING, []));
-    this.failures = loadFailures(storage.getSetting<unknown>(FAILURES_SETTING, {}));
+    const saved = this.savedLocks();
+    if (saved) {
+      this.locked = new Set(saved);
+    } else {
+      // A list that cannot be read (a damaged file, an edit made by hand) must not open what
+      // it kept closed: every project is locked, and the code opens each one again. Without
+      // a code nothing could be locked, and nothing could be opened again either.
+      this.locked = new Set(this.hasPin() ? projects() : []);
+      console.error(
+        "Verrouillage : la liste des projets verrouillés est illisible. " +
+          (this.locked.size
+            ? "Tous les projets sont verrouillés : le code les rouvre."
+            : "Rien n'est verrouillé."),
+      );
+    }
+    // No fallback of a kind: the older list of times is still read, as `loadFailures` does.
+    this.failures = loadFailures(storage.getSetting<unknown>(FAILURES_SETTING, undefined));
+  }
+
+  /**
+   * The saved code: none, the code, or « damaged » when something is saved that does not
+   * read as one. A damaged code still counts as a code (nothing opens without one) and no
+   * code matches it: only « lock.reset », on the computer, clears it.
+   */
+  private savedPin(): { salt: Buffer; hash: Buffer } | "none" | "damaged" {
+    const saved = this.storage.getSetting<unknown>(PIN_SETTING, undefined);
+    if (saved === null) return "none";
+    if (saved === undefined) return this.storage.hasSetting?.(PIN_SETTING) ? "damaged" : "none";
+    if (typeof saved !== "object" || Array.isArray(saved)) return "damaged";
+    const { salt, hash } = saved as { salt?: unknown; hash?: unknown };
+    if (typeof salt !== "string" || typeof hash !== "string") return "damaged";
+    const kept = { salt: Buffer.from(salt, "base64"), hash: Buffer.from(hash, "base64") };
+    return kept.salt.length && kept.hash.length === PIN_HASH_BYTES ? kept : "damaged";
+  }
+
+  /** The saved list of locked projects; nothing when what is saved does not read as one. */
+  private savedLocks(): string[] | undefined {
+    const saved = this.storage.getSetting<unknown>(LOCKED_SETTING, undefined);
+    if (saved === undefined) return this.storage.hasSetting?.(LOCKED_SETTING) ? undefined : [];
+    return Array.isArray(saved) && saved.every((id) => typeof id === "string")
+      ? (saved as string[])
+      : undefined;
   }
 
   /** True when some project is locked: everything sent is then looked at. */
@@ -68,7 +116,7 @@ export class ProjectLocks {
   }
 
   hasPin(): boolean {
-    return !!this.storage.getSetting<{ salt: string; hash: string } | null>(PIN_SETTING, null);
+    return this.savedPin() !== "none";
   }
 
   /** Sets the code, or changes it with the current one. */
@@ -86,9 +134,12 @@ export class ProjectLocks {
 
   /** Clears the code, unlocks every project, and resets failed attempt counters. */
   reset(): void {
+    // Written before anything changes here: a write the database refuses leaves every
+    // project as locked as the database still says it is. The code goes first, so a reset
+    // cut short in the middle can only leave projects locked, and is done again.
     this.storage.setSetting(PIN_SETTING, null);
+    this.storage.setSetting(LOCKED_SETTING, []);
     this.locked.clear();
-    this.save();
     this.failures = {};
     this.storage.setSetting(FAILURES_SETTING, {});
   }
@@ -96,20 +147,20 @@ export class ProjectLocks {
   /** Locks a project; a code must be set first, to open it again. */
   lock(projectId: string): void {
     if (!this.hasPin()) throw new Error("Choisis d'abord un code de verrouillage.");
-    this.locked.add(projectId);
-    this.save();
+    this.save(new Set([...this.locked, projectId]));
   }
 
   /** Opens a project again, for every device, with the code. */
   unlock(projectId: string, pin: string, actor = COMPUTER_ACTOR): void {
     if (!this.check(pin, actor)) throw new Error("Code incorrect.");
-    this.locked.delete(projectId);
-    this.save();
+    this.save(new Set([...this.locked].filter((id) => id !== projectId)));
   }
 
   /** Forgets a project removed meanwhile. */
   forget(projectId: string): void {
-    if (this.locked.delete(projectId)) this.save();
+    if (this.locked.has(projectId)) {
+      this.save(new Set([...this.locked].filter((id) => id !== projectId)));
+    }
   }
 
   /**
@@ -126,14 +177,14 @@ export class ProjectLocks {
       const wait = Math.ceil((list[0]! + TRIES_WINDOW_MS - now) / 60_000);
       throw new Error(`Trop de codes faux. Réessaie dans ${wait} min.`);
     }
-    const kept = this.storage.getSetting<{ salt: string; hash: string } | null>(PIN_SETTING, null);
-    const right =
-      !!kept &&
-      validPin(pin) &&
-      timingSafeEqual(
-        hashPin(pin, Buffer.from(kept.salt, "base64")),
-        Buffer.from(kept.hash, "base64"),
+    const kept = this.savedPin();
+    if (kept === "damaged") {
+      throw new Error(
+        "Le code de verrouillage enregistré est illisible : réinitialise-le depuis l'ordinateur.",
       );
+    }
+    const right =
+      kept !== "none" && validPin(pin) && timingSafeEqual(hashPin(pin, kept.salt), kept.hash);
     const before = list.length;
     if (right) {
       delete this.failures[actor];
@@ -152,7 +203,9 @@ export class ProjectLocks {
     return right;
   }
 
-  private save(): void {
-    this.storage.setSetting(LOCKED_SETTING, this.lockedProjects());
+  /** Writes the locked projects, then takes them: a refused write changes nothing here. */
+  private save(locked: Set<string>): void {
+    this.storage.setSetting(LOCKED_SETTING, [...locked].sort());
+    this.locked = locked;
   }
 }

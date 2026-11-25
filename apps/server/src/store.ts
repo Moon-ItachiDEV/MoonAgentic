@@ -16,6 +16,7 @@ import {
   type ThreadStatus,
   type Workspace,
 } from "@moonagentic/protocol";
+import { isAgentSetting, isModelChoice, isRecord } from "./saved-shapes.ts";
 
 export interface ProjectMemoryRecord {
   text: string;
@@ -107,6 +108,15 @@ const extraOf = (thread: ThreadExtra): string | null => {
   return Object.keys(extra).length ? JSON.stringify(extra) : null;
 };
 
+export { isRecord };
+
+/** The JSON of a column that holds a record; anything else is a damaged row. */
+function recordOf<T>(json: string): T {
+  const value: unknown = JSON.parse(json);
+  if (!isRecord(value)) throw new Error("ce n'est pas un objet JSON");
+  return value as T;
+}
+
 const toThread = (row: ThreadRow): Thread => ({
   id: row.id,
   projectId: row.project_id,
@@ -115,12 +125,83 @@ const toThread = (row: ThreadRow): Thread => ({
   status: row.status,
   permissionMode: row.permission_mode,
   ...(row.model ? { model: row.model } : {}),
-  ...(row.workspace ? { workspace: JSON.parse(row.workspace) as Workspace } : {}),
-  ...(row.extra ? (JSON.parse(row.extra) as ThreadExtra) : {}),
+  ...(row.workspace ? { workspace: recordOf<Workspace>(row.workspace) } : {}),
+  ...(row.extra ? recordOf<ThreadExtra>(row.extra) : {}),
   ...(row.error ? { error: row.error } : {}),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
+
+const TEXT_ITEMS = new Set(["user", "agent", "thought"]);
+
+/** An item of a timeline, as written: a record with an id and a kind, its text a text. */
+function parseItem(data: string): Item {
+  const item = recordOf<Record<string, unknown>>(data);
+  if (typeof item.id !== "string" || typeof item.kind !== "string") {
+    throw new Error("ce n'est pas un élément de fil");
+  }
+  if (TEXT_ITEMS.has(item.kind) && typeof item.text !== "string") {
+    throw new Error("son texte n'est pas un texte");
+  }
+  return item as unknown as Item;
+}
+
+/** The broad kind of a saved value: what its reader relies on before it looks any closer. */
+type SettingKind = "array" | "object" | "string" | "number" | "boolean";
+const kindOf = (value: unknown): SettingKind | "null" | "other" =>
+  value === null
+    ? "null"
+    : Array.isArray(value)
+      ? "array"
+      : typeof value === "object" ||
+          typeof value === "string" ||
+          typeof value === "number" ||
+          typeof value === "boolean"
+        ? (typeof value as SettingKind)
+        : "other";
+
+/**
+ * A write not even tried, because the database refuses writes for now and what waits must
+ * be written first. Taken as the refusal itself wherever one is.
+ */
+export class StorageRefused extends Error {
+  readonly trouble: string;
+  constructor(trouble: string) {
+    super(`${trouble} : rien n'a été enregistré.`);
+    this.name = "StorageRefused";
+    this.trouble = trouble;
+  }
+}
+
+/** How long a write waits for another program to let go of the database before it fails. */
+export const BUSY_TIMEOUT_MS = 2000;
+
+/**
+ * Why the database refused a write, in the user's words, when the cause is outside the
+ * server: a full disk, another program holding the file, a disk that cannot be written.
+ * Nothing for any other error.
+ */
+export function storageTrouble(error: unknown): string | undefined {
+  if (error instanceof StorageRefused) return error.trouble;
+  const failure = error as { code?: unknown; errcode?: unknown } | null;
+  if (failure?.code !== "ERR_SQLITE_ERROR" || typeof failure.errcode !== "number") {
+    return undefined;
+  }
+  // The low byte is the kind of failure; the rest only says where it happened.
+  switch (failure.errcode & 0xff) {
+    case 13:
+      return "Disque plein";
+    case 5:
+    case 6:
+      return "Base verrouillée par un autre programme";
+    case 8:
+    case 10:
+    case 14:
+      return "Écriture impossible sur le disque";
+    default:
+      return undefined;
+  }
+}
 
 /** How many items of a timeline a screen gets at a time. */
 export const PAGE_ITEMS = 120;
@@ -352,7 +433,9 @@ export function migrate(
       db.exec(`PRAGMA user_version = ${step + 1}`);
       db.exec("COMMIT");
     } catch (error) {
-      db.exec("ROLLBACK");
+      // SQLite may have ended the transaction itself (a full disk): the error to report is
+      // the one that stopped the step, not « no transaction is active ».
+      if (db.isTransaction) db.exec("ROLLBACK");
       throw error;
     }
   }
@@ -385,6 +468,32 @@ const BACKUP_PAGES = 256;
 
 /** Durable state: projects, threads and each thread's timeline items. */
 export class Store {
+  /** What this database already said it could not read, so each is said once. */
+  private readonly saidUnreadable = new Set<string>();
+
+  /**
+   * What a row or a setting holds, or nothing when it cannot be read: it is left out and said
+   * once in the log, instead of stopping the start or every screen that connects. The app
+   * writes none of these itself: it takes a damaged file or an edit made by hand.
+   */
+  private readable<T>(what: string, read: () => T): T | undefined {
+    try {
+      return read();
+    } catch (error) {
+      if (!this.saidUnreadable.has(what)) {
+        this.saidUnreadable.add(what);
+        const why = error instanceof Error ? error.message : String(error);
+        console.error(`Base de données : ${what} est illisible et laissé de côté (${why}).`);
+      }
+      return undefined;
+    }
+  }
+
+  /** An item read from the database; nothing for a row that cannot be read, said once. */
+  private readItem(data: string): Item | undefined {
+    return this.readable("un élément de fil", () => parseItem(data));
+  }
+
   readonly db: DatabaseSync;
   /** The path opened for this database, or `:memory:`. */
   readonly file: string;
@@ -392,13 +501,41 @@ export class Store {
   constructor(file: string) {
     this.file = file;
     this.db = new DatabaseSync(file);
+    // Another program that holds the file for a moment (a copy, a look with an SQLite tool)
+    // is waited for, instead of failing the write at once.
+    this.db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    // Turning WAL on needs the file to itself, and SQLite does not wait for it there: a
+    // database still in its older mode, held for a moment, is asked again for as long.
+    const until = Date.now() + BUSY_TIMEOUT_MS;
+    for (;;) {
+      try {
+        this.db.exec("PRAGMA journal_mode = WAL");
+        break;
+      } catch (error) {
+        const held = storageTrouble(error) === "Base verrouillée par un autre programme";
+        if (!held || Date.now() >= until) throw error;
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+      }
+    }
     // In WAL mode, NORMAL syncs the disk at each checkpoint instead of at each write: a
     // streamed reply writes many times a second. A power cut can lose the last writes, never
     // the database.
-    this.db.exec(
-      `PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;`,
-    );
+    this.db.exec(`PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;`);
     migrate(this.db, file);
+  }
+
+  /**
+   * Whether a write waits for another program to let go of the file. Not while the database
+   * is known to be held: each write would freeze the server for the whole wait, one after
+   * the other, and they are tried again anyway.
+   */
+  waitOnHold(wait: boolean): void {
+    this.db.exec(`PRAGMA busy_timeout = ${wait ? BUSY_TIMEOUT_MS : 0}`);
+  }
+
+  /** Writes one row, to learn whether the database takes writes: throws while it does not. */
+  tryWrite(): void {
+    this.setSetting("lastWriteCheck", Date.now());
   }
 
   /**
@@ -431,7 +568,14 @@ export class Store {
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      // The failure that stopped the write is the one to report. SQLite has sometimes ended
+      // the transaction itself by then (a full disk, a failed COMMIT), and a ROLLBACK that
+      // fails in its turn would hide it behind « no transaction is active ».
+      try {
+        if (this.db.isTransaction) this.db.exec("ROLLBACK");
+      } catch {
+        // Nothing left to undo.
+      }
       throw error;
     }
   }
@@ -491,7 +635,12 @@ export class Store {
       p256dh: r.p256dh,
       auth: r.auth,
       ...(r.device_id ? { deviceId: r.device_id } : {}),
-      muted: JSON.parse(r.muted) as string[],
+      muted:
+        this.readable(`un abonnement aux notifications`, () => {
+          const muted: unknown = JSON.parse(r.muted);
+          if (!Array.isArray(muted)) throw new Error("ce n'est pas une liste");
+          return muted.filter((id): id is string => typeof id === "string");
+        }) ?? [],
       createdAt: r.created_at,
     }));
   }
@@ -519,13 +668,62 @@ export class Store {
     );
   }
 
-  getSetting<T>(key: string, fallback: T): T {
+  /**
+   * A saved setting, or `fallback` when there is none or when what is saved is not of the kind
+   * its reader relies on: the kind of `fallback` itself (a list, a record, a text…), or `kind`
+   * when the fallback is null. A list read as a record, or the reverse, stopped the server at
+   * its start or closed every screen as it connected.
+   */
+  getSetting<T>(key: string, fallback: T, kind?: SettingKind): T {
     const row = this.sql(`SELECT value FROM settings WHERE key = ?`).get(key) as
       { value: string } | undefined;
-    return row ? (JSON.parse(row.value) as T) : fallback;
+    if (!row) return fallback;
+    const expected =
+      kind ?? (fallback === null || fallback === undefined ? undefined : kindOf(fallback));
+    const value = this.readable(`le réglage « ${key} »`, () => {
+      const saved: unknown = JSON.parse(row.value);
+      // A null saved where a value is optional is the absence of that value.
+      if (saved === null && (fallback === null || fallback === undefined)) return saved;
+      if (expected && kindOf(saved) !== expected) {
+        throw new Error(`${kindOf(saved)} au lieu de ${expected}`);
+      }
+      return saved;
+    });
+    return value === undefined ? fallback : (value as T);
+  }
+
+  /** A saved list, without the entries `isItem` does not know: they are left out, and said. */
+  listSetting<T>(key: string, isItem: (item: unknown) => item is T): T[] {
+    const saved = this.getSetting<unknown[]>(key, []);
+    const kept = saved.filter(isItem);
+    if (kept.length < saved.length) {
+      this.readable(`une entrée du réglage « ${key} »`, () => {
+        throw new Error("forme inattendue");
+      });
+    }
+    return kept;
+  }
+
+  /** A saved record, without the values `isValue` does not know: they are left out, and said. */
+  recordSetting<T>(key: string, isValue: (value: unknown) => value is T): Record<string, T> {
+    const saved = Object.entries(this.getSetting<Record<string, unknown>>(key, {}));
+    const kept = saved.filter((entry): entry is [string, T] => isValue(entry[1]));
+    if (kept.length < saved.length) {
+      this.readable(`une entrée du réglage « ${key} »`, () => {
+        throw new Error("forme inattendue");
+      });
+    }
+    return Object.fromEntries(kept);
+  }
+
+  /** Whether anything is saved under this key, readable or not. */
+  hasSetting(key: string): boolean {
+    return !!this.sql(`SELECT 1 FROM settings WHERE key = ?`).get(key);
   }
 
   setSetting(key: string, value: unknown): void {
+    // Written anew, it will be said again if it is damaged again.
+    this.saidUnreadable.delete(`le réglage « ${key} »`);
     this.sql(
       `INSERT INTO settings (key, value) VALUES (?, ?)
          ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
@@ -541,6 +739,7 @@ export class Store {
     const saved = this.getSetting<ProjectMemoryRecord | null>(
       `${PROJECT_MEMORY_PREFIX}${projectId}`,
       null,
+      "object",
     );
     return saved && typeof saved.text === "string"
       ? {
@@ -569,7 +768,32 @@ export class Store {
   getAgentModels(agentId: string): AgentModels | undefined {
     const row = this.sql(`SELECT data FROM agent_models WHERE agent_id = ?`).get(agentId) as
       { data: string } | undefined;
-    return row && (JSON.parse(row.data) as AgentModels);
+    return (
+      row &&
+      this.readable(`la liste des modèles de ${agentId}`, () => {
+        const saved = recordOf<Record<string, unknown>>(row.data);
+        if (!Array.isArray(saved.models)) throw new Error("pas de liste de modèles");
+        if (typeof saved.current !== "string") throw new Error("pas de modèle courant");
+        // A damaged entry is left out, the others kept.
+        const settingsOf = (value: unknown): AgentSetting[] | undefined =>
+          Array.isArray(value) ? value.filter(isAgentSetting) : undefined;
+        const settings = settingsOf(saved.settings);
+        const perModel = isRecord(saved.modelSettings)
+          ? Object.fromEntries(
+              Object.entries(saved.modelSettings).flatMap(([model, list]) => {
+                const kept = settingsOf(list);
+                return kept ? [[model, kept] as const] : [];
+              }),
+            )
+          : undefined;
+        return {
+          models: saved.models.filter(isModelChoice),
+          current: saved.current,
+          ...(settings ? { settings } : {}),
+          ...(perModel ? { modelSettings: perModel } : {}),
+        };
+      })
+    );
   }
 
   setAgentModels(agentId: string, models: AgentModels): void {
@@ -584,14 +808,16 @@ export class Store {
     this.db.exec(`UPDATE threads SET status = 'idle' WHERE status IN ('running', 'waiting')`);
     // A turn cut short is not quiet any more, nor in line.
     this.db.exec(
-      `UPDATE threads SET extra = NULLIF(json_remove(extra, '$.quietSince', '$.inLine'), '{}') WHERE json_extract(extra, '$.quietSince') IS NOT NULL OR json_extract(extra, '$.inLine') IS NOT NULL`,
+      // A row whose JSON is damaged is left as it is: SQLite's JSON functions fail on it, and
+      // the whole start with them. CASE is what guarantees they are not run on it.
+      `UPDATE threads SET extra = NULLIF(json_remove(extra, '$.quietSince', '$.inLine'), '{}') WHERE CASE WHEN json_valid(extra) THEN json_extract(extra, '$.quietSince') IS NOT NULL OR json_extract(extra, '$.inLine') IS NOT NULL END`,
     );
     const pending = this.sql(
-      `SELECT thread_id, data FROM items WHERE json_extract(data, '$.kind') = 'permission'`,
+      `SELECT thread_id, data FROM items WHERE CASE WHEN json_valid(data) THEN json_extract(data, '$.kind') = 'permission' END`,
     ).all() as { thread_id: string; data: string }[];
     for (const row of pending) {
-      const item = JSON.parse(row.data) as Item;
-      if (item.kind === "permission" && item.outcome === null) {
+      const item = this.readItem(row.data);
+      if (item?.kind === "permission" && item.outcome === null) {
         this.putItem(row.thread_id, { ...item, outcome: "cancelled" });
       }
     }
@@ -627,12 +853,12 @@ export class Store {
     const rows = this.sql(
       `SELECT * FROM threads ORDER BY updated_at DESC`,
     ).all() as unknown as ThreadRow[];
-    return rows.map(toThread);
+    return rows.flatMap((row) => this.readable(`le fil ${row.id}`, () => toThread(row)) ?? []);
   }
 
   getThread(id: string): Thread | undefined {
     const row = this.sql(`SELECT * FROM threads WHERE id = ?`).get(id) as ThreadRow | undefined;
-    return row && toThread(row);
+    return row && this.readable(`le fil ${row.id}`, () => toThread(row));
   }
 
   addThread(thread: Thread): void {
@@ -750,8 +976,8 @@ export class Store {
       `SELECT data FROM items WHERE thread_id = ? AND instr(data, ?) > 0 ORDER BY seq DESC`,
     ).all(threadId, JSON.stringify(text).slice(1, -1)) as { data: string }[];
     return rows.some((r) => {
-      const item = JSON.parse(r.data) as Item;
-      return item.kind === "agent" && item.text.includes(text);
+      const item = this.readItem(r.data);
+      return item?.kind === "agent" && item.text.includes(text);
     });
   }
 
@@ -761,8 +987,8 @@ export class Store {
       `SELECT data FROM items WHERE thread_id = ? AND instr(data, ?) > 0 ORDER BY seq DESC`,
     ).all(threadId, JSON.stringify(ref).slice(1, -1)) as { data: string }[];
     return rows.some((r) => {
-      const item = JSON.parse(r.data) as Item;
-      return item.kind === "tool" && !!item.images?.includes(ref);
+      const item = this.readItem(r.data);
+      return item?.kind === "tool" && Array.isArray(item.images) && item.images.includes(ref);
     });
   }
 
@@ -770,7 +996,7 @@ export class Store {
     const rows = this.sql(`SELECT data FROM items WHERE thread_id = ? ORDER BY seq`).all(
       threadId,
     ) as { data: string }[];
-    return rows.map((r) => JSON.parse(r.data) as Item);
+    return rows.flatMap((r) => this.readItem(r.data) ?? []);
   }
 
   /**
@@ -820,7 +1046,7 @@ export class Store {
       threadId,
       first,
     ) as { n: number };
-    return { items: rows.map((r) => JSON.parse(r.data) as Item), first, earlier: n };
+    return { items: rows.flatMap((r) => this.readItem(r.data) ?? []), first, earlier: n };
   }
 
   getItem(threadId: string, id: string): Item | undefined {
@@ -833,14 +1059,15 @@ export class Store {
       threadId,
       id,
     ) as { seq: number; data: string } | undefined;
-    return row && { item: JSON.parse(row.data) as Item, seq: row.seq };
+    const item = row && this.readItem(row.data);
+    return item && row && { item, seq: row.seq };
   }
 
   lastItem(threadId: string): Item | undefined {
     const row = this.sql(
       `SELECT data FROM items WHERE thread_id = ? ORDER BY seq DESC LIMIT 1`,
     ).get(threadId) as { data: string } | undefined;
-    return row && (JSON.parse(row.data) as Item);
+    return row && this.readItem(row.data);
   }
 
   /**
@@ -858,6 +1085,18 @@ export class Store {
   }
 
   /**
+   * Brings the index up to date before a search, when the database takes writes: one it
+   * refuses (a full disk, another program holding it) leaves the search to what is indexed.
+   */
+  private indexSearchIfWritable(): void {
+    try {
+      this.indexSearch();
+    } catch (error) {
+      if (!storageTrouble(error)) throw error;
+    }
+  }
+
+  /**
    * Puts in the search's index the messages written since it was last brought up to date.
    * With a time allowance it stops once it is spent and returns true: there is more to do.
    */
@@ -872,8 +1111,8 @@ export class Store {
       if (!stale.length) return false;
       this.transaction(() => {
         for (const row of stale) {
-          const item = JSON.parse(row.data) as Item;
-          const text = item.kind === "user" || item.kind === "agent" ? fold(item.text) : "";
+          const item = this.readItem(row.data);
+          const text = item?.kind === "user" || item?.kind === "agent" ? fold(item.text) : "";
           this.sql(`DELETE FROM search_fts WHERE rowid = ?`).run(row.n);
           if (text) this.sql(`INSERT INTO search_fts (rowid, text) VALUES (?, ?)`).run(row.n, text);
           this.sql(`UPDATE search_docs SET stale = 0 WHERE n = ?`).run(row.n);
@@ -892,7 +1131,7 @@ export class Store {
    */
   searchItems(query: string, limit = 30, hidden: string[] = []): SearchHit[] {
     // What was written since the index was last filled is found too.
-    this.indexSearch();
+    this.indexSearchIfWritable();
     // The folded text is looked for as it is, `*`, `?` and `[` included. From three letters
     // the index names the few messages to look in; shorter, the folded texts are read, the
     // latest first, until enough are found. No message is opened either way but those shown.
@@ -920,8 +1159,8 @@ export class Store {
           ).all(pattern, limit)
     ) as { thread_id: string; id: string; data: string }[];
     return rows.flatMap((row): SearchHit[] => {
-      const item = JSON.parse(row.data) as Item;
-      if (item.kind !== "user" && item.kind !== "agent") return [];
+      const item = this.readItem(row.data);
+      if (item?.kind !== "user" && item?.kind !== "agent") return [];
       return [
         {
           threadId: row.thread_id,
@@ -948,7 +1187,7 @@ export class Store {
   ): SearchHit[] {
     const terms = [...new Set(fold(query).trim().split(/\s+/).filter(Boolean))].slice(0, 6);
     if (!terms.length) return [];
-    this.indexSearch();
+    this.indexSearchIfWritable();
     // Drive the trigram index with the longest term (most selective), then require every other term.
     const ordered = [...terms].sort((a, b) => b.length - a.length);
     const primary = ordered[0]!;
@@ -979,8 +1218,11 @@ export class Store {
             ${extraClauses}
               AND t.project_id = ?
               ${excludeClause}
-              AND json_extract(t.extra, '$.parentId') IS NULL
-              AND COALESCE(json_extract(t.extra, '$.kind'), '') != 'coordinator'
+              AND CASE WHEN json_valid(t.extra) THEN json_extract(t.extra, '$.parentId') IS NULL
+                       ELSE t.extra IS NULL END
+              AND CASE WHEN json_valid(t.extra)
+                       THEN COALESCE(json_extract(t.extra, '$.kind'), '') != 'coordinator'
+                       ELSE t.extra IS NULL END
          ) hit
          JOIN items i ON i.thread_id = hit.thread_id AND i.id = hit.item_id
         WHERE hit.nth <= ?
@@ -989,8 +1231,8 @@ export class Store {
     ).all(...params) as { thread_id: string; id: string; data: string }[];
     const foldedQuery = fold(query).trim();
     return rows.flatMap((row): SearchHit[] => {
-      const item = JSON.parse(row.data) as Item;
-      if (item.kind !== "user" && item.kind !== "agent") return [];
+      const item = this.readItem(row.data);
+      if (item?.kind !== "user" && item?.kind !== "agent") return [];
       const focus = fold(item.text).includes(foldedQuery) ? query : primary;
       return [
         {
@@ -1040,16 +1282,22 @@ export class Store {
   }
 
   listPlanTasks(): PlanTask[] {
-    const rows = this.sql(`SELECT data FROM plan_tasks ORDER BY created_at, number`).all() as {
+    const rows = this.sql(`SELECT id, data FROM plan_tasks ORDER BY created_at, number`).all() as {
+      id: string;
       data: string;
     }[];
-    return rows.map((r) => JSON.parse(r.data) as PlanTask);
+    return rows.flatMap(
+      (r) =>
+        this.readable(`la carte ${r.id} du planificateur`, () => recordOf<PlanTask>(r.data)) ?? [],
+    );
   }
 
   getPlanTask(id: string): PlanTask | undefined {
     const row = this.sql(`SELECT data FROM plan_tasks WHERE id = ?`).get(id) as
       { data: string } | undefined;
-    return row && (JSON.parse(row.data) as PlanTask);
+    return (
+      row && this.readable(`la carte ${id} du planificateur`, () => recordOf<PlanTask>(row.data))
+    );
   }
 
   /** Takes the project's next card number: a number is never given twice. */
@@ -1075,16 +1323,19 @@ export class Store {
   }
 
   listSchedules(): Schedule[] {
-    const rows = this.sql(`SELECT data FROM schedules ORDER BY created_at, id`).all() as {
+    const rows = this.sql(`SELECT id, data FROM schedules ORDER BY created_at, id`).all() as {
+      id: string;
       data: string;
     }[];
-    return rows.map((r) => JSON.parse(r.data) as Schedule);
+    return rows.flatMap(
+      (r) => this.readable(`la tâche planifiée ${r.id}`, () => recordOf<Schedule>(r.data)) ?? [],
+    );
   }
 
   getSchedule(id: string): Schedule | undefined {
     const row = this.sql(`SELECT data FROM schedules WHERE id = ?`).get(id) as
       { data: string } | undefined;
-    return row && (JSON.parse(row.data) as Schedule);
+    return row && this.readable(`la tâche planifiée ${id}`, () => recordOf<Schedule>(row.data));
   }
 
   putSchedule(schedule: Schedule): void {
@@ -1120,7 +1371,7 @@ export class Store {
       threadId,
       id,
     );
-    return removed.map((r) => JSON.parse(r.data) as Item);
+    return removed.flatMap((r) => this.readItem(r.data) ?? []);
   }
 
   close(): void {

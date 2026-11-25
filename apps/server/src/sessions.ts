@@ -52,6 +52,11 @@ export class AgentPool {
     return this.sessions.get(threadId);
   }
 
+  /** Whether the thread's agent is there but its connection closed: nothing can be asked of it. */
+  isDead(threadId: string): boolean {
+    return !!this.resolved.get(threadId)?.closed;
+  }
+
   has(threadId: string): boolean {
     return this.sessions.has(threadId);
   }
@@ -165,6 +170,15 @@ export class AgentPool {
     this.idleTimers.set(threadId, timer);
   }
 
+  /** Moves an agent whose connection closed out of the pool; the next one waits until it is gone. */
+  dropDead(threadId: string): boolean {
+    if (!this.isDead(threadId)) return false;
+    const session = this.sessions.get(threadId);
+    if (!session) return false;
+    this.retire(threadId, session);
+    return true;
+  }
+
   /**
    * Stops the thread's agent but keeps its session: the next message resumes it, or gives a
    * new one the conversation so far.
@@ -176,11 +190,13 @@ export class AgentPool {
       if (session && !this.options.running(threadId)) this.leftIdle(threadId);
       return;
     }
+    this.retire(threadId, session);
+  }
+
+  /** Takes `session` out of the pool and stops it in the background; `open` and `closeAll` wait on it. */
+  private retire(threadId: string, session: Promise<AgentSession>): void {
     // A message sent meanwhile is not refused: its agent starts once this one is gone.
-    this.sessions.delete(threadId);
-    this.resolved.delete(threadId);
-    this.lastUsed.delete(threadId);
-    this.clearIdle(threadId);
+    this.exited(threadId);
     const steps = this.options.steps;
     const closing: Promise<void> = session
       .then((s) => s.close())

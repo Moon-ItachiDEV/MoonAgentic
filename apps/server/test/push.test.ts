@@ -230,6 +230,32 @@ describe("web push", () => {
     expect(svc.sent).toHaveLength(1);
   });
 
+  it.each<[string, unknown]>([
+    ["a text", "corrupted"],
+    ["an empty record", {}],
+    ["keys that are not a curve's", { x: "AAAA", y: "AAAA", d: "AAAA" }],
+  ])("makes a new key pair when the saved one is %s, and still sends", async (_, saved) => {
+    const s = store();
+    const svc = service();
+    const push = new Push(s, { send: svc.send });
+    push.subscribe({ endpoint: ENDPOINT, ...browser(), muted: [] }, "telephone");
+    s.setSetting("push.vapid", saved);
+    const escaped: unknown[] = [];
+    const note = (error: unknown) => escaped.push(error);
+    process.on("unhandledRejection", note);
+    try {
+      push.know([thread()]);
+      push.threadChanged(thread({ status: "waiting" }));
+      await expect.poll(() => svc.sent.length).toBe(1);
+    } finally {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      process.off("unhandledRejection", note);
+    }
+    expect(escaped).toEqual([]);
+    expect(svc.sent[0]!.headers.authorization).toMatch(/^vapid t=/);
+    expect(s.getSetting<{ d?: unknown }>("push.vapid", {}).d).toEqual(expect.any(String));
+  });
+
   it("says nothing of a locked project's threads", async () => {
     const s = store();
     const svc = service();

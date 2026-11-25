@@ -639,6 +639,9 @@ export class Connection {
         status: "open",
         // What could not leave can now: the notice that said so is out of date.
         notice: this.state.notice === NOT_SENT ? null : this.state.notice,
+        // The server's disk may have come back while this screen was away: the snapshot that
+        // follows says so either way.
+        storageError: null,
       });
       this.stopHeartbeat();
       if (this.pingMs > 0) this.pingTimer = setInterval(() => this.ping(), this.pingMs);
