@@ -236,6 +236,17 @@ createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", async 
         options: [{ optionId: "oui", name: "Oui", kind: "allow_once" }],
       });
       await say("Réponse : " + (answer?.outcome?.optionId ?? "aucune") + ".");
+    } else if (turn === "outil-puis-suite") {
+      await update({ sessionUpdate: "tool_call", toolCallId: "t3", title: "Vérif", kind: "read", status: "in_progress" });
+      await sleep(100);
+      await say("Debut ");
+      await sleep(100);
+      await update({ sessionUpdate: "tool_call_update", toolCallId: "t3", status: "completed" });
+      await sleep(100);
+      await say("suite");
+      await sleep(100);
+    } else if (turn === "echo-contexte") {
+      await say(text.includes("MEMOIRE_SECRETE") && text.includes("Bonjour.") ? "VU_MEMOIRE_ET_HISTORIQUE" : "OUBLIE");
     } else if (turn === "repos-34mo") {
       await say("Bonjour.");
       await out({ id, result: { stopReason: "end_turn" } });
@@ -877,6 +888,21 @@ describe("saved values the server did not write itself", () => {
       { routes: { default: 42, code: { agentId: "demo" } }, team: {}, parallel: "3" },
       (seen) => expect(seen.coordinator).toEqual({ routes: { code: { agentId: "demo" } } }),
     ],
+    [
+      "coordinator",
+      {
+        routes: {},
+        team: {
+          lead: { agentId: "demo" },
+          coder: { agentId: "demo" },
+          coders: 0,
+          permissionMode: "bogus",
+        },
+        parallel: 99,
+        maxTurns: 99,
+      },
+      (seen) => expect(seen.coordinator).toEqual({ routes: {} }),
+    ],
     ["teamPresets", [null, {}], (seen) => expect(seen.teamPresets).toEqual([])],
   ])("starts and opens a screen with « %s » saved as %j", async (key, value, check) => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
@@ -1352,6 +1378,121 @@ describe("an agent at rest whose connection closed", () => {
     expect(after?.status).toBe("idle");
     expect(agentText(store.listItems(threadId))).toBe("Bonjour.Bonjour.");
   }, 30_000);
+
+  it("gives the replacement agent the project memory and conversation history", async () => {
+    const { dir, hub, store, projectId } = setup();
+    store.setProjectMemory(projectId, "MEMOIRE_SECRETE");
+    const agentId = hub.addCustomAgent({
+      name: "Bavard au repos",
+      command: process.execPath,
+      args: [strayAgent(dir), ""],
+    });
+    const threadId = hub.createThread({
+      projectId,
+      agentId,
+      permissionMode: "full",
+      text: "TOUR:repos-34mo",
+    });
+    await hub.whenIdle(threadId);
+    await sleep(1_500);
+
+    hub.send(threadId, "TOUR:echo-contexte");
+    await hub.whenIdle(threadId);
+
+    const after = store.getThread(threadId);
+    expect(after?.error).toBeUndefined();
+    expect(after?.status).toBe("idle");
+    expect(agentText(store.listItems(threadId))).toBe("Bonjour.VU_MEMOIRE_ET_HISTORIQUE");
+  }, 30_000);
+
+  it("keeps timeline order and avoids splitting text when an earlier tool updates while storage is down", async () => {
+    const { dir, store, hub, screen, projectId } = setup();
+    const agentId = hub.addCustomAgent({
+      name: "Outil maj",
+      command: process.execPath,
+      args: [strayAgent(dir), ""],
+    });
+    const write = store.putItem.bind(store);
+    let full = false;
+    store.putItem = (id, item) => {
+      if (full && item.kind !== "user") throw diskFull();
+      return write(id, item);
+    };
+    const threadId = hub.createThread({
+      projectId,
+      agentId,
+      permissionMode: "full",
+      text: "TOUR:bonjour",
+    });
+    await hub.whenIdle(threadId);
+
+    // A screen holds the thread at its state right before the outage, then disconnects.
+    const watcher = new Screen();
+    const disconnect = hub.connect(watcher);
+    await hub.handle(watcher, { type: "thread.open", threadId });
+    const before = watcher.messages.find((m) => m.type === "items");
+    if (before?.type !== "items") throw new Error("Le fil ne s'est pas ouvert.");
+    disconnect();
+
+    // Outage starts before turn 2: tool starts, text begins, earlier tool finishes, text continues.
+    full = true;
+    hub.send(threadId, "TOUR:outil-puis-suite");
+    await hub.whenIdle(threadId);
+
+    // Reopening from before the outage must return the new tool before the new reply, unsplit.
+    watcher.messages.length = 0;
+    hub.connect(watcher);
+    await hub.handle(watcher, {
+      type: "thread.open",
+      threadId,
+      since: { epoch: before.epoch, rev: before.rev, first: before.first },
+    });
+    const delta = watcher.messages.find((m) => m.type === "changes");
+    if (delta?.type !== "changes") throw new Error("Pas de rattrapage reçu.");
+    expect(delta.items.map((c) => c.item.kind)).toEqual(["user", "tool", "agent"]);
+    const deltaAgent = delta.items.find((c) => c.item.kind === "agent")?.item;
+    expect(deltaAgent?.kind === "agent" ? deltaAgent.text : "").toBe("Debut suite");
+
+    // Once storage recovers, SQLite keeps the exact same order and single reply bubble.
+    full = false;
+    await expect.poll(() => screen.storage.at(-1), { timeout: 5_000 }).toBeNull();
+    const turn2 = store.listItems(threadId).slice(2);
+    expect(turn2.map((i) => i.kind)).toEqual(["user", "tool", "agent"]);
+    expect(turn2[1]).toMatchObject({ kind: "tool", status: "completed" });
+    expect(turn2[2]).toMatchObject({ kind: "agent", text: "Debut suite" });
+  }, 20_000);
+
+  it("does not split an already-persisted reply when an earlier persisted tool updates during an outage", async () => {
+    const { dir, store, hub, screen, projectId } = setup();
+    const agentId = hub.addCustomAgent({
+      name: "Outil persiste",
+      command: process.execPath,
+      args: [strayAgent(dir), ""],
+    });
+    const write = store.putItem.bind(store);
+    let full = false;
+    store.putItem = (id, item) => {
+      // Let the first tool_call and the first text chunk persist; refuse the later tool update and tail.
+      if (full) throw diskFull();
+      const seq = write(id, item);
+      if (item.kind === "agent" && item.text === "Debut ") full = true;
+      return seq;
+    };
+    const threadId = hub.createThread({
+      projectId,
+      agentId,
+      permissionMode: "full",
+      text: "TOUR:outil-puis-suite",
+    });
+    await hub.whenIdle(threadId);
+
+    full = false;
+    await expect.poll(() => screen.storage.at(-1), { timeout: 5_000 }).toBeNull();
+    const items = store.listItems(threadId);
+    expect(items.map((i) => i.kind)).toEqual(["user", "tool", "agent"]);
+    expect(items[1]).toMatchObject({ kind: "tool", status: "completed" });
+    expect(items[2]).toMatchObject({ kind: "agent", text: "Debut suite" });
+  }, 20_000);
 
   it("ends the turn in words when the agent opens a session with an id that is not a text", async () => {
     const { dir, hub, store, projectId } = setup();

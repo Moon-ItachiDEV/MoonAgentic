@@ -525,8 +525,13 @@ export class Hub {
         console.log(`Copie de la base avant la mise à jour : ${file}`);
       },
       // Said of no project: a locked one keeps its secrets.
-      notify: (title, body) =>
-        void this.push.deliver({ tag: "app-update", threadId: "", title, body }, ""),
+      notify: (title, body) => {
+        this.push
+          .deliver({ tag: "app-update", threadId: "", title, body }, "")
+          .catch((error: unknown) =>
+            console.error("Notifications :", error instanceof Error ? error.message : error),
+          );
+      },
       // Tasks due while the app is replaced start after, as after any stop.
       pause: () => this.scheduler.close(),
       resume: () => {
@@ -3694,7 +3699,8 @@ export class Hub {
           return;
         }
       }
-      const continuing = this.pool.has(thread.id);
+      // A pooled session whose connection already closed is replaced, not continued.
+      const continuing = this.pool.has(thread.id) && !this.pool.isDead(thread.id);
       session = await this.session(thread);
       await this.checkpoint(thread.id, itemId);
       if (this.cancelled.has(thread.id)) {
@@ -3803,8 +3809,8 @@ export class Hub {
 
   private session(thread: Thread): Promise<AgentSession> {
     // An agent whose connection closed while it waited (a line too long, a broken stream)
-    // is let go, and a new one is started for the message.
-    if (this.pool.isDead(thread.id)) void this.pool.stop(thread.id);
+    // is let go, and the new one starts once its process is gone.
+    this.pool.dropDead(thread.id);
     const existing = this.pool.get(thread.id);
     if (existing) return existing;
     const project = this.store.getProject(thread.projectId);
@@ -4410,17 +4416,23 @@ export class Hub {
     const ids = log.since(since.rev);
     if (!ids) return undefined;
     this.flushText(threadId, false);
-    const held = new Map(this.heldItems(threadId).map((item) => [item.id, item]));
+    const heldList = this.heldItems(threadId);
+    const held = new Map(heldList.map((item, index) => [item.id, { item, index }]));
     const items = ids
       .map((id) => {
         const found = this.store.getItemAt(threadId, id);
         const waiting = held.get(id);
-        if (!waiting) return found;
-        return { item: waiting, seq: found?.seq ?? Number.MAX_SAFE_INTEGER };
+        if (!waiting) return found && { ...found, order: found.seq };
+        return {
+          item: waiting.item,
+          seq: found?.seq ?? Number.MAX_SAFE_INTEGER,
+          // New held items stay in their creation order rather than last-touched order.
+          order: found?.seq ?? Number.MAX_SAFE_INTEGER - heldList.length + waiting.index,
+        };
       })
       .filter((found) => found !== undefined && found.seq >= since.first)
-      .map((found) => ({ item: light(found!.item), seq: found!.seq }))
-      .sort((a, b) => a.seq - b.seq);
+      .sort((a, b) => a!.order - b!.order)
+      .map((found) => ({ item: light(found!.item), seq: found!.seq }));
     return { type: "changes", threadId, items, rev: log.rev };
   }
 
@@ -4783,9 +4795,8 @@ export class Hub {
     this.sendToViewers(threadId, { type: "item", threadId, item: light(item), seq, rev });
   }
 
-  /** Keeps an item the database refused, last of what waits; gives its place in the timeline. */
+  /** Keeps an item the database refused in place when already held; gives its place in the timeline. */
   private hold(threadId: string, item: Item): number {
-    this.unsaved.delete(item.id);
     this.unsaved.set(item.id, { threadId, item });
     // Its own place when it was written before, else after everything: it comes last.
     return this.store.getItemAt(threadId, item.id)?.seq ?? Number.MAX_SAFE_INTEGER;
@@ -4822,7 +4833,11 @@ export class Hub {
   /** The thread's last item as it stands, written or not yet. */
   private lastItemOf(threadId: string): Item | undefined {
     const held = this.heldItems(threadId);
-    return held.at(-1) ?? this.store.lastItem(threadId);
+    // An update to an earlier item already in the database does not move it past what followed.
+    const added = held.findLast((item) => !this.store.getItemAt(threadId, item.id));
+    if (added) return added;
+    const last = this.store.lastItem(threadId);
+    return last ? (held.find((item) => item.id === last.id) ?? last) : undefined;
   }
 
   /** `items`, read from the database, with what is not written yet; `atEnd` adds what is new. */

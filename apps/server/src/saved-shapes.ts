@@ -1,13 +1,15 @@
 // What the server reads back from its own settings, checked before it is relied on. The app
 // writes none of the shapes refused here: they come from a damaged file or an edit by hand,
 // and stopped the start, or every screen that connected, until they were left out.
-import type {
-  AgentSetting,
-  CoordinatorSettings,
-  ModelChoice,
-  TeamMember,
-  TeamPreset,
-  TeamSetup,
+import {
+  type AgentSetting,
+  type CoordinatorSettings,
+  MAX_MAX_TURNS,
+  MAX_PARALLEL,
+  type ModelChoice,
+  type TeamMember,
+  type TeamPreset,
+  type TeamSetup,
 } from "@moonagentic/protocol";
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -46,6 +48,9 @@ export const isTeamPreset = (value: unknown): value is TeamPreset =>
   isMemberOrNone(value.roles.tester) &&
   isMemberOrNone(value.roles.merger);
 
+const isCount = (value: unknown, max: number): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= max;
+
 const isTeamSetup = (value: unknown): value is TeamSetup =>
   isRecord(value) &&
   isTeamMember(value.lead) &&
@@ -53,13 +58,9 @@ const isTeamSetup = (value: unknown): value is TeamSetup =>
   (value.reviewer === undefined || isTeamMember(value.reviewer)) &&
   (value.tester === undefined || isTeamMember(value.tester)) &&
   (value.merger === undefined || isTeamMember(value.merger)) &&
-  typeof value.coders === "number" &&
-  Number.isFinite(value.coders) &&
-  isText(value.permissionMode) &&
+  isCount(value.coders, 4) &&
+  (value.permissionMode === "supervised" || value.permissionMode === "full") &&
   (value.autoShip === undefined || typeof value.autoShip === "boolean");
-
-const isCount = (value: unknown): value is number =>
-  typeof value === "number" && Number.isInteger(value) && value > 0;
 
 /** How coordinators route work, without what does not read as it should. */
 export function coordinatorSettingsOf(saved: unknown): CoordinatorSettings {
@@ -76,7 +77,7 @@ export function coordinatorSettingsOf(saved: unknown): CoordinatorSettings {
     ...(saved.reviewJudge === null || isTeamMember(saved.reviewJudge)
       ? { reviewJudge: saved.reviewJudge }
       : {}),
-    ...(isCount(saved.parallel) ? { parallel: saved.parallel } : {}),
-    ...(isCount(saved.maxTurns) ? { maxTurns: saved.maxTurns } : {}),
+    ...(isCount(saved.parallel, MAX_PARALLEL) ? { parallel: saved.parallel } : {}),
+    ...(isCount(saved.maxTurns, MAX_MAX_TURNS) ? { maxTurns: saved.maxTurns } : {}),
   };
 }
