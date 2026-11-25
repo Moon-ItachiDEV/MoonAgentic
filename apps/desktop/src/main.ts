@@ -135,9 +135,10 @@ function fromServer(message: unknown): void {
  * The installer runs silent, in the same folder, and starts MoonAgentic again once done.
  */
 async function installUpdate(): Promise<void> {
-  const installer = updater.installer;
   if (installing) return;
-  if (process.platform !== "win32" || !installer) {
+  // Held: a look that ends while the server stops must not remove it before it starts.
+  const installer = process.platform === "win32" ? updater.hold() : undefined;
+  if (!installer) {
     updater.fail("Aucun installeur prêt sur cet ordinateur.");
     return;
   }

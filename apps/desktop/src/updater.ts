@@ -26,8 +26,12 @@ const ASK_TIMEOUT_MS = 30_000;
 const STALL_MS = 60_000;
 /** Retry interval while a newly published Windows release is still missing its .exe or sums. */
 export const INCOMPLETE_RETRY_MS = 3 * 60_000;
-/** Cap on quick retries for the same incomplete release (covers CI build without looping forever). */
-export const MAX_INCOMPLETE_RETRIES = 6;
+/**
+ * How many intervals each quick retry waits: every 3 minutes while CI usually builds, then
+ * further apart, over an hour in all. A Mac runner that waits its turn holds the Windows
+ * installer back well past the build itself (15 minutes for v0.1.6).
+ */
+export const INCOMPLETE_RETRY_STEPS = [1, 1, 1, 1, 1, 1, 2, 2, 3, 3, 5];
 
 export interface UpdateNote {
   title: string;
@@ -174,7 +178,10 @@ export interface UpdaterOptions {
   onState: (state: ShellUpdate) => void;
   fetch?: typeof fetch;
   now?: () => number;
-  /** Retry delay while a Windows release is missing its .exe or SHA256SUMS.txt; 0 disables it. */
+  /**
+   * The interval quick retries are counted in while a Windows release is missing its .exe or
+   * SHA256SUMS.txt (see INCOMPLETE_RETRY_STEPS); 0 disables them.
+   */
   incompleteRetryMs?: number;
 }
 
@@ -188,6 +195,8 @@ export class Updater {
   private running: Promise<void> | undefined;
   /** The installer downloaded and checked, for the version it is ready with. */
   private file: string | undefined;
+  /** The installer being started: it stays on disk whatever a look finds meanwhile. */
+  private held: string | undefined;
   private retryVersion: string | undefined;
   private retryCount = 0;
   private retryTimer: NodeJS.Timeout | undefined;
@@ -219,8 +228,18 @@ export class Updater {
     this.clearRetry();
   }
 
+  /**
+   * The installer ready to run, taken to be started now. The server is stopped first, which
+   * takes a while: a look that ends meanwhile with a newer version leaves this one on disk.
+   */
+  hold(): string | undefined {
+    this.held = this.installer;
+    return this.held;
+  }
+
   /** Says why installing could not go on, keeping what was found. */
   fail(error: string): void {
+    this.held = undefined;
     this.set({ ...this.current, state: "failed", error });
   }
 
@@ -245,13 +264,15 @@ export class Updater {
    * uploading both the .exe installer and SHA256SUMS.txt, avoiding a 6-hour wait.
    */
   private scheduleIncompleteRetry(version: string): void {
-    const delay = this.options.incompleteRetryMs ?? INCOMPLETE_RETRY_MS;
-    if (delay <= 0) return;
+    const every = this.options.incompleteRetryMs ?? INCOMPLETE_RETRY_MS;
+    if (every <= 0) return;
     if (this.retryVersion !== version) {
       this.retryVersion = version;
       this.retryCount = 0;
     }
-    if (this.retryCount >= MAX_INCOMPLETE_RETRIES) return;
+    const steps = INCOMPLETE_RETRY_STEPS[this.retryCount];
+    if (steps === undefined) return;
+    const delay = every * steps;
     this.retryCount += 1;
     clearTimeout(this.retryTimer);
     this.retryTimer = setTimeout(() => {
@@ -286,6 +307,9 @@ export class Updater {
       release = readRelease(await res.json());
       if (!release) throw new Error("La dernière version publiée n'est pas lisible.");
     } catch (error) {
+      // GitHub not reached while a release was awaited: the quick retries go on, they do not
+      // end on one network cut.
+      if (this.retryVersion) this.scheduleIncompleteRetry(this.retryVersion);
       if (ready) return this.set({ ...was, checkedAt: this.now() });
       return this.set({ ...was, state: "failed", checkedAt: this.now(), error: describe(error) });
     }
@@ -410,11 +434,13 @@ export class Updater {
     this.set({ ...base, state: "ready" });
   }
 
-  /** Removes the installers kept, but the one named. */
+  /** Removes the installers kept, but the one named and the one being started. */
   private clean(keep?: string): void {
+    const held = this.held && path.basename(this.held);
     try {
       for (const name of readdirSync(this.options.dir)) {
-        if (name !== keep) rmSync(path.join(this.options.dir, name), { force: true });
+        if (name === keep || name === held) continue;
+        rmSync(path.join(this.options.dir, name), { force: true });
       }
     } catch {
       // No folder yet.
