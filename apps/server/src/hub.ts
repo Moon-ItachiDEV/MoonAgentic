@@ -1193,6 +1193,10 @@ export class Hub {
         this.sendSnapshots();
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "lock.check":
+        this.locks.verify(message.pin, client.deviceId ?? COMPUTER_ACTOR);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "lock.reset":
         this.locks.reset();
         this.sendSnapshots();

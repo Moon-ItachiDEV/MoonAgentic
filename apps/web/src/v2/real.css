@@ -1327,3 +1327,49 @@ html[data-dev="desk"] .prk .stp a:hover {
   color: var(--faint);
   display: inline-grid;
 }
+
+/* The code: wrong, its dots turn red and shake; its sheet holds the same pad as the lock. */
+.pin.err i.full {
+  background: var(--err);
+}
+.pin.err {
+  animation: pin-no 420ms var(--out);
+}
+@keyframes pin-no {
+  20% {
+    transform: translateX(-9px);
+  }
+  40% {
+    transform: translateX(8px);
+  }
+  60% {
+    transform: translateX(-5px);
+  }
+  80% {
+    transform: translateX(3px);
+  }
+}
+.lkmid {
+  flex-direction: column;
+  gap: 14px;
+}
+.lkmsg {
+  color: var(--err-tx);
+}
+.kp button:disabled {
+  opacity: 0.5;
+}
+.lkw {
+  gap: 16px;
+}
+.lkw .pin {
+  margin: 8px 0 0;
+}
+.lkw .kp {
+  margin-top: 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pin.err {
+    animation: none;
+  }
+}

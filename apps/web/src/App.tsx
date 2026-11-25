@@ -59,6 +59,7 @@ import { isDiscussionsProject, isLooseHome, looseDefault } from "./default-model
 import { waits } from "./decision.ts";
 import { focusItem } from "./focus.ts";
 import { askUnlock, lockProject } from "./lock.ts";
+import { AppLock, lockApp } from "./components/AppLock.tsx";
 import { readPref, writePref } from "./prefs.ts";
 import { tightest } from "./quotas.ts";
 import { navigate, useRoute } from "./router.ts";
@@ -126,7 +127,7 @@ export function App() {
     document.addEventListener("keydown", open);
     return () => document.removeEventListener("keydown", open);
   }, []);
-  // Ctrl Maj L (⌘ ⇧ L) locks the project open, or asks for the code when it is locked.
+  // Ctrl Maj L (⌘ ⇧ L) locks the whole app on this device, until the code is typed.
   const lockShortcut = useRef<() => void>(() => undefined);
   useEffect(() => {
     const lock = (event: KeyboardEvent) => {
@@ -212,10 +213,7 @@ export function App() {
     lockProject(p, state.lockPin, () => {
       if (route.name === "thread" && thread?.projectId === p.id) go({ name: "home" });
     });
-  lockShortcut.current = () => {
-    if (project?.locked) askUnlock(project);
-    else if (project) lockOne(project);
-  };
+  lockShortcut.current = () => lockApp(state.lockPin);
   const pickProject = (id: string) => {
     setLoose(false);
     setPickedProjectId(id);
@@ -616,7 +614,7 @@ export function App() {
           agents={state.agents}
           agentId={homeAgentId}
           onUsage={() => go({ name: "settings", section: "subscriptions" })}
-          {...(project && !project.locked ? { onLock: () => lockOne(project) } : {})}
+          onLock={() => lockApp(state.lockPin)}
         />
       </>
     ) : route.name === "project" && projectTab === "overview" && routeProject ? (
@@ -1190,6 +1188,7 @@ export function App() {
           </div>
         )}
       </div>
+      <AppLock threads={state.threads} hasPin={state.lockPin} ready={state.ready} />
       {state.notice && (
         <div className="toast on" role="status">
           <span>{state.notice}</span>
@@ -1248,7 +1247,11 @@ function HomeCapsule(props: {
         </button>
       )}
       {props.onLock && (
-        <button aria-label="Verrouiller" title="Verrouiller (Ctrl Maj L)" onClick={props.onLock}>
+        <button
+          aria-label="Verrouiller l'app"
+          title="Verrouiller l'app (Ctrl Maj L)"
+          onClick={props.onLock}
+        >
           <I n="lock" s={20} />
         </button>
       )}

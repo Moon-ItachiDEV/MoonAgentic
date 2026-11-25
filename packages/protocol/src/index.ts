@@ -1931,6 +1931,11 @@ export const ClientMessage = z.discriminatedUnion("type", [
     projectId: id,
     pin: z.string().max(20),
   }),
+  /**
+   * Checks the lock code and changes nothing: what a device asks before it shows its own
+   * screen again, once locked as a whole.
+   */
+  z.object({ type: z.literal("lock.check"), requestId: id, pin: z.string().max(20) }),
   /** Clears the lock code and unlocks every project (computer only). */
   z.object({ type: z.literal("lock.reset"), requestId: id }),
   /** Asks for Web Push's key, and whether this browser is reached already; see `pushState`. */

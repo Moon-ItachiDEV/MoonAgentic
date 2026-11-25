@@ -308,6 +308,22 @@ describe("a locked project on the wire", () => {
     await hub.handle(client, { type: "thread.open", threadId: hidden });
   });
 
+  it("checks the code for a device locked as a whole, and changes nothing", async () => {
+    const { hub, client, secret } = setup();
+    await expect(
+      hub.handle(client, { type: "lock.check", requestId: "k0", pin: "123456" }),
+    ).rejects.toThrow(/Aucun code/);
+    await hub.handle(client, { type: "lock.setPin", requestId: "k1", pin: "123456" });
+    await hub.handle(client, { type: "lock.project", requestId: "k2", projectId: secret });
+    await expect(
+      hub.handle(client, { type: "lock.check", requestId: "k3", pin: "000000" }),
+    ).rejects.toThrow(/incorrect/);
+    await hub.handle(client, { type: "lock.check", requestId: "k4", pin: "123456" });
+    expect(client.last("done").requestId).toBe("k4");
+    // The right code opens the screen only: the project stays locked.
+    expect(hub.locks.isLocked(secret)).toBe(true);
+  });
+
   it("forgets the lock of a project removed", async () => {
     const { hub, client, secret } = setup();
     await hub.handle(client, { type: "lock.setPin", requestId: "r1", pin: "123456" });

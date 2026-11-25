@@ -25,7 +25,9 @@ import {
   notificationsOn,
   showNotice,
 } from "../notifications.ts";
+import { appLock, LOCK_AFTER, type LockAfter } from "../app-lock.ts";
 import { lockSheet, toggleLock } from "../lock.ts";
+import { lockApp } from "./AppLock.tsx";
 import { setDefault, useDefaults } from "../defaults.ts";
 import { copyDiagnosticText, downloadDiagnosticText } from "../diagnostics.ts";
 import { disablePush, enablePush, pushOn, pushReached, pushSupport } from "../push.ts";
@@ -276,6 +278,7 @@ function LockGroup(props: { projects: Project[]; lockPin: boolean }) {
   const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
   const pairedDevice = useSyncExternalStore(connection.subscribe, connection.getState).pairedDevice;
   const [confirmReset, setConfirmReset] = useState(false);
+  const after = useSyncExternalStore(appLock.subscribe, appLock.after);
   const projects = props.projects.filter((p) => !isDiscussionsProject(p));
   return (
     <>
@@ -284,6 +287,16 @@ function LockGroup(props: { projects: Project[]; lockPin: boolean }) {
         Verrouillage
       </div>
       <div className="ins">
+        <button className="it acc" onClick={() => lockApp(props.lockPin)}>
+          <span className="tx">Verrouiller maintenant</span>
+        </button>
+        <ChoiceRow
+          title="Verrouiller après"
+          value={after}
+          shown={LOCK_AFTER.find((o) => o.value === after)?.label ?? "Jamais"}
+          choices={LOCK_AFTER.map((o) => ({ value: o.value, label: o.label }))}
+          onPick={(value) => appLock.setAfter(value as LockAfter)}
+        />
         <Row
           title="Code à 6 chiffres"
           text={pairedDevice ? "Se crée et se change sur l'ordinateur" : undefined}

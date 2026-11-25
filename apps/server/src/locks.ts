@@ -107,6 +107,12 @@ export class ProjectLocks {
     this.save();
   }
 
+  /** Says whether the code is right and changes nothing; wrong ones count like any other. */
+  verify(pin: string, actor = COMPUTER_ACTOR): void {
+    if (!this.hasPin()) throw new Error("Aucun code de verrouillage n'est défini.");
+    if (!this.check(pin, actor)) throw new Error("Code incorrect.");
+  }
+
   /** Forgets a project removed meanwhile. */
   forget(projectId: string): void {
     if (this.locked.delete(projectId)) this.save();
