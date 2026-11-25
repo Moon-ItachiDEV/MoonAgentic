@@ -3,8 +3,10 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  INCOMPLETE_RETRY_MS,
+  INCOMPLETE_RETRY_STEPS,
   installerArgs,
   installerOf,
   installerSpawn,
@@ -20,6 +22,7 @@ import {
 const dirs: string[] = [];
 const updaters: Updater[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const u of updaters.splice(0)) u.close();
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
 });
@@ -94,6 +97,12 @@ function updater(
   });
   updaters.push(u);
   return { u, dir, states };
+}
+
+/** Lets a look started by a retry end: what it reads and writes is real, whatever the clock. */
+async function settled(u: Updater): Promise<void> {
+  await (u as unknown as { running?: Promise<void> }).running;
+  await new Promise((r) => setImmediate(r));
 }
 
 describe("versions and notes", () => {
@@ -359,21 +368,104 @@ describe("Updater", () => {
     expect(calls).toBe(2);
   });
 
-  it("stops short retries after MAX_INCOMPLETE_RETRIES if a release stays permanently incomplete", async () => {
+  it("spreads the quick retries over an hour, then leaves it to the next look", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const incomplete = release(Buffer.from("x"), { tag: "v0.1.6", withExe: false, sums: null });
-    let calls = 0;
+    const start = Date.now();
+    const looks: number[] = [];
     const { u } = updater(
       ((url: string | URL) => {
-        calls += 1;
+        looks.push((Date.now() - start) / 60_000);
         return incomplete.fetch(url);
       }) as typeof globalThis.fetch,
       "win32",
-      10,
+      INCOMPLETE_RETRY_MS,
     );
 
     await u.check();
-    await new Promise((r) => setTimeout(r, 200));
-    // Initial check + 6 short retries = 7 total checks, then stops.
-    expect(calls).toBe(7);
+    for (let minute = 0; minute < 3 * 60; minute++) {
+      await vi.advanceTimersByTimeAsync(60_000);
+      await settled(u);
+    }
+    // Every 3 minutes while CI usually builds, then further apart: a Mac runner that waits its
+    // turn holds the Windows installer back for longer than 18 minutes.
+    expect(looks).toEqual([0, 3, 6, 9, 12, 15, 18, 24, 30, 39, 48, 63]);
+    expect(looks).toHaveLength(INCOMPLETE_RETRY_STEPS.length + 1);
+  });
+
+  it("goes on with the quick retries after one that could not reach GitHub", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const installer = Buffer.from("installeur-0.1.6");
+    const incomplete = release(installer, { tag: "v0.1.6", withExe: false, sums: null });
+    const complete = release(installer, { tag: "v0.1.6" });
+    let stage: "incomplete" | "offline" | "complete" = "incomplete";
+    const { u } = updater(
+      ((url: string | URL) => {
+        if (stage === "offline") return Promise.reject(new Error("hors ligne"));
+        return stage === "complete" ? complete.fetch(url) : incomplete.fetch(url);
+      }) as typeof globalThis.fetch,
+      "win32",
+      INCOMPLETE_RETRY_MS,
+    );
+
+    await u.check();
+    expect(u.state.state).toBe("none");
+    stage = "offline";
+    await vi.advanceTimersByTimeAsync(INCOMPLETE_RETRY_MS);
+    await settled(u);
+    expect(u.state).toMatchObject({ state: "failed", error: "hors ligne" });
+    // The installer is attached meanwhile: found at the next quick retry, not six hours later.
+    stage = "complete";
+    await vi.advanceTimersByTimeAsync(INCOMPLETE_RETRY_MS);
+    await settled(u);
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.6" });
+  });
+
+  it("retries shortly when the .exe is there before SHA256SUMS.txt", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const installer = Buffer.from("installeur-0.1.6");
+    const noSums = release(installer, { tag: "v0.1.6", sums: null });
+    const complete = release(installer, { tag: "v0.1.6" });
+    let uploaded = false;
+    const { u } = updater(
+      ((url: string | URL) =>
+        uploaded ? complete.fetch(url) : noSums.fetch(url)) as typeof globalThis.fetch,
+      "win32",
+      INCOMPLETE_RETRY_MS,
+    );
+
+    await u.check();
+    expect(u.state).toMatchObject({ state: "failed", version: "0.1.6" });
+    expect(noSums.asked.some((a) => a.endsWith(".exe"))).toBe(false);
+    uploaded = true;
+    await vi.advanceTimersByTimeAsync(INCOMPLETE_RETRY_MS);
+    await settled(u);
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.6" });
+  });
+
+  it("leaves the installer being started on disk when a newer one is swapped in", async () => {
+    const r5 = release(Buffer.from("installeur-0.1.5"), { tag: "v0.1.5" });
+    const r6 = release(Buffer.from("installeur-0.1.6"), { tag: "v0.1.6" });
+    let latest = r5;
+    const { u, dir } = updater(((url: string | URL) =>
+      latest.fetch(url)) as typeof globalThis.fetch);
+    expect(u.hold()).toBeUndefined();
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.5" });
+
+    // The user asks to install 0.1.5: the app takes its installer, then stops the server. A
+    // look ends meanwhile with 0.1.6 downloaded.
+    const started = u.hold()!;
+    expect(started).toBe(path.join(dir, "MoonAgentic-0.1.5-windows-x64.exe"));
+    latest = r6;
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.6" });
+    expect(existsSync(started)).toBe(true);
+
+    // It could not start after all: nothing holds it any more, the next look removes it.
+    u.fail("L'installeur n'a pas pu démarrer.");
+    await u.check();
+    expect(u.state).toMatchObject({ state: "ready", version: "0.1.6" });
+    expect(readdirSync(dir)).toEqual(["MoonAgentic-0.1.6-windows-x64.exe"]);
   });
 });
