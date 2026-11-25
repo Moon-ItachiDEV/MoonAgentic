@@ -40,7 +40,6 @@ import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { PairGate } from "./components/PairGate.tsx";
 import { CoordinatorStart, ProjectOverview, ProjectThreads } from "./components/ProjectPage.tsx";
-import { ProjectSettings } from "./components/ProjectSettings.tsx";
 import { ProjectIcon } from "./components/ProjectIcon.tsx";
 import { SidePullRequests } from "./components/SidePullRequests.tsx";
 import { steady, useSame } from "./steady.tsx";
@@ -75,6 +74,10 @@ export { ErrorBoundary };
 // The planner and the settings are loaded on demand, so they stay out of the main chunk.
 const Planner = lazy(() =>
   import("./components/Planner.tsx").then((m) => ({ default: m.Planner })),
+);
+// Opened now and then: its editors stay out of the first load.
+const ProjectSettings = lazy(() =>
+  import("./components/ProjectSettings.tsx").then((m) => ({ default: m.ProjectSettings })),
 );
 const SettingsLayer = lazy(() =>
   import("./components/Settings.tsx").then((m) => ({ default: m.SettingsLayer })),
@@ -144,6 +147,9 @@ export function App() {
   /** On a narrow screen, what the project's page shows: the coordinator or the threads. */
   const [projectTab, setProjectTab] = useState<"chat" | "overview">("chat");
   const [projectSetup, setProjectSetup] = useState(false);
+  // Loaded the first time it is opened, then kept: it slides away when closed.
+  const [projectSetupSeen, setProjectSetupSeen] = useState(false);
+  if (projectSetup && !projectSetupSeen) setProjectSetupSeen(true);
   // Lists show every thread but the coordinators.
   const listedThreadsNow = useMemo(() => listedThreads(state.threads), [state.threads]);
   const listed = useMemo(
@@ -1046,30 +1052,32 @@ export function App() {
           </div>
         )}
       </Sheet>
-      {route.name === "project" && routeProject && !routeProject.locked && (
-        <ProjectSettings
-          key={routeProject.id}
-          project={routeProject}
-          open={projectSetup}
-          unread={state.threads.some((t) => t.projectId === routeProject.id && t.unread)}
-          coordinator={
-            coordinator
-              ? (modelNameOf(
-                  state.agents.find((a) => a.id === coordinator.agentId)?.models,
-                  coordinator.model,
-                ) ?? state.agents.find((a) => a.id === coordinator.agentId)?.name)
-              : undefined
-          }
-          onClose={() => setProjectSetup(false)}
-          onOpenCoordinator={() => go({ name: "settings", section: "coordinator" })}
-          onOpenUsage={() => go({ name: "settings", section: "subscriptions" })}
-          onOpenPlanner={() => {
-            pickProject(routeProject.id);
-            openPlanner();
-          }}
-          onLock={() => lockOne(routeProject)}
-          onRemove={() => askRemoveProject(routeProject.id)}
-        />
+      {route.name === "project" && routeProject && !routeProject.locked && projectSetupSeen && (
+        <Suspense fallback={null}>
+          <ProjectSettings
+            key={routeProject.id}
+            project={routeProject}
+            open={projectSetup}
+            unread={state.threads.some((t) => t.projectId === routeProject.id && t.unread)}
+            coordinator={
+              coordinator
+                ? (modelNameOf(
+                    state.agents.find((a) => a.id === coordinator.agentId)?.models,
+                    coordinator.model,
+                  ) ?? state.agents.find((a) => a.id === coordinator.agentId)?.name)
+                : undefined
+            }
+            onClose={() => setProjectSetup(false)}
+            onOpenCoordinator={() => go({ name: "settings", section: "coordinator" })}
+            onOpenUsage={() => go({ name: "settings", section: "subscriptions" })}
+            onOpenPlanner={() => {
+              pickProject(routeProject.id);
+              openPlanner();
+            }}
+            onLock={() => lockOne(routeProject)}
+            onRemove={() => askRemoveProject(routeProject.id)}
+          />
+        </Suspense>
       )}
       {route.name === "settings" && (
         <ErrorBoundary key="settings" resetKey={route.section}>
