@@ -639,7 +639,7 @@ html[data-dev="desk"] .scr.wide .mtop .plabel {
   transform: translateY(-2px);
 }
 .rv .fd.warn i {
-  background: var(--warn-dot);
+  background: var(--warn);
 }
 .rv .fd.note i {
   background: var(--faint);
@@ -686,4 +686,8 @@ html[data-dev="desk"] .scr.wide .mtop .plabel {
   .rv .rvmore {
     animation: none;
   }
+}
+.rv .rvmore .fd {
+  padding: 5px 0;
+  line-height: 1.4;
 }
