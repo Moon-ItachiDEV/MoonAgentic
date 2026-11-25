@@ -7,7 +7,7 @@ import {
   NOT_SENT,
   PING_MS,
   PONG_TIMEOUT_MS,
-  readToken,
+  readTokens,
   WAKE_PONG_MS,
 } from "./connection.ts";
 
@@ -90,21 +90,22 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("readToken", () => {
-  it("reads the token from #token= and strips it from the URL fragment", () => {
+describe("readTokens", () => {
+  it("reads the token from #token=, strips it from the URL fragment and keeps nothing yet", () => {
     const saved: [string, string][] = [];
     const replaced: string[] = [];
     vi.stubGlobal("location", { href: "http://127.0.0.1:4747/reglages/remote#token=frag-123&k=v" });
     vi.stubGlobal("localStorage", {
-      getItem: () => null,
+      getItem: () => "kept-000",
       setItem: (k: string, v: string) => saved.push([k, v]),
     });
     vi.stubGlobal("history", {
       state: null,
       replaceState: (_s: unknown, _t: string, url: URL) => replaced.push(url.href),
     });
-    expect(readToken()).toBe("frag-123");
-    expect(saved).toEqual([["moonagentic.token", "frag-123"]]);
+    expect(readTokens()).toEqual({ offered: "frag-123", kept: "kept-000" });
+    // A link is only a claim: reading it writes nothing.
+    expect(saved).toEqual([]);
     expect(replaced).toEqual(["http://127.0.0.1:4747/reglages/remote#k=v"]);
   });
 
@@ -116,8 +117,185 @@ describe("readToken", () => {
       state: null,
       replaceState: (_s: unknown, _t: string, url: URL) => replaced.push(url.href),
     });
-    expect(readToken()).toBe("old-456");
+    expect(readTokens()).toEqual({ offered: "old-456", kept: null });
     expect(replaced).toEqual(["http://127.0.0.1:4747/"]);
+  });
+
+  it("ignores a token that could not be sent, and still takes it out of the address", () => {
+    const replaced: string[] = [];
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/t/abc#token=%E2%80%AEjeton" });
+    vi.stubGlobal("localStorage", { getItem: () => "kept-000", setItem: () => undefined });
+    vi.stubGlobal("history", {
+      state: null,
+      replaceState: (_s: unknown, _t: string, url: URL) => replaced.push(url.href),
+    });
+    expect(readTokens()).toEqual({ offered: null, kept: "kept-000" });
+    expect(replaced).toEqual(["http://127.0.0.1:4747/t/abc"]);
+  });
+});
+
+/** What a tab remembers for itself, as `sessionStorage` does. */
+function tabStorage(held: Record<string, string> = {}) {
+  const tab = new Map(Object.entries(held));
+  vi.stubGlobal("sessionStorage", {
+    getItem: (k: string) => tab.get(k) ?? null,
+    setItem: (k: string, v: string) => void tab.set(k, v),
+    removeItem: (k: string) => void tab.delete(k),
+  });
+  return tab;
+}
+
+describe("Connection, opened from a link that carries a token", () => {
+  /**
+   * A page opened at `href` on a device that kept `kept`; the server knows only `valid`.
+   * `offeredBefore` is what the tab was offered by the page it showed just before.
+   */
+  async function openFrom(
+    href: string,
+    kept: string | null,
+    valid: string,
+    offeredBefore?: string,
+  ) {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    const saved: [string, string][] = [];
+    const tried: string[] = [];
+    const tab = tabStorage(
+      offeredBefore ? { "moonagentic.token.offered": offeredBefore } : undefined,
+    );
+    vi.stubGlobal("location", { href });
+    vi.stubGlobal("localStorage", {
+      getItem: () => kept,
+      setItem: (k: string, v: string) => saved.push([k, v]),
+    });
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: { headers?: Record<string, string> }) => {
+        if (input !== "/api/ws-ticket") return new Response(null, { status: 204 });
+        const given = (init?.headers?.authorization ?? "").replace(/^Bearer /, "");
+        tried.push(given);
+        if (given !== valid) return new Response(null, { status: 401 });
+        return new Response(JSON.stringify({ ticket: `ticket-for-${given}` }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const conn = new Connection({ pingMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    return { conn, saved, tried, tab };
+  }
+
+  it("keeps the link's token once the server has accepted it", async () => {
+    const { conn, saved, tried, tab } = await openFrom(
+      "http://127.0.0.1:4747/#token=new-token",
+      "old-token",
+      "new-token",
+    );
+    expect(tried).toEqual(["new-token"]);
+    expect(saved).toEqual([["moonagentic.token", "new-token"]]);
+    expect(tab.size).toBe(0);
+    expect(FakeWebSocket.instances.at(-1)?.url).toContain("ticket=ticket-for-new-token");
+    expect(conn.getToken()).toBe("new-token");
+  });
+
+  it("goes on with the kept token when the link's one is refused, and never keeps the refused one", async () => {
+    // What an agent's answer can write: a link to the app itself with a token of its own.
+    const { conn, saved, tried, tab } = await openFrom(
+      "http://127.0.0.1:4747/t/abc#token=jeton-pose-par-l-agent",
+      "owner-token",
+      "owner-token",
+    );
+    expect(tried).toEqual(["jeton-pose-par-l-agent", "owner-token"]);
+    expect(saved).toEqual([]);
+    // Refused, it is not tried again by this tab's next page either.
+    expect(tab.size).toBe(0);
+    expect(conn.getState().status).not.toBe("unauthorized");
+    expect(FakeWebSocket.instances.at(-1)?.url).toContain("ticket=ticket-for-owner-token");
+    expect(conn.getToken()).toBe("owner-token");
+  });
+
+  it("asks to pair when the link's token is refused and nothing was kept, without keeping it", async () => {
+    const { conn, saved, tried } = await openFrom(
+      "http://127.0.0.1:4747/#token=wrong",
+      null,
+      "owner-token",
+    );
+    expect(tried).toEqual(["wrong"]);
+    expect(saved).toEqual([]);
+    expect(conn.getState().status).toBe("unauthorized");
+    expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("still has the link's token to try when the page changed before the server answered", async () => {
+    // The link was opened, then another page of the app at once: the address no longer
+    // holds the token, and nothing was kept yet. The tab remembers what it was offered.
+    const { conn, saved, tried, tab } = await openFrom(
+      "http://127.0.0.1:4747/t/abc",
+      null,
+      "new-token",
+      "new-token",
+    );
+    expect(tried).toEqual(["new-token"]);
+    expect(saved).toEqual([["moonagentic.token", "new-token"]]);
+    expect(tab.size).toBe(0);
+    expect(conn.getState().status).not.toBe("unauthorized");
+  });
+
+  it("remembers the link's token for its tab alone until the server answers", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    const saved: [string, string][] = [];
+    const tab = tabStorage();
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/#token=new-token" });
+    vi.stubGlobal("localStorage", {
+      getItem: () => "old-token",
+      setItem: (k: string, v: string) => saved.push([k, v]),
+    });
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    // The server takes its time: no answer yet.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>(() => undefined)),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    new Connection({ pingMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    // What every tab of the device shares is untouched; this tab alone knows the offer.
+    expect(saved).toEqual([]);
+    expect([...tab]).toEqual([["moonagentic.token.offered", "new-token"]]);
+  });
+
+  it("keeps trying the link's token while the server cannot be reached, and keeps it only then", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    const saved: [string, string][] = [];
+    let reachable = false;
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/#token=new-token" });
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: (k: string, v: string) => saved.push([k, v]),
+    });
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        if (!reachable) throw new TypeError("Failed to fetch");
+        return new Response(JSON.stringify({ ticket: "ticket-1" }), { status: 200 });
+      }),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const conn = new Connection({ pingMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(conn.getState().status).toBe("closed");
+    expect(saved).toEqual([]);
+
+    reachable = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(saved).toEqual([["moonagentic.token", "new-token"]]);
+    expect(FakeWebSocket.instances).toHaveLength(1);
   });
 });
 

@@ -38,13 +38,7 @@ export const Markdown = memo(function Markdown({
   // Worked out once per text: a pull request's state, when it comes, redraws every answer
   // on the page, and none of them should be parsed and cleaned again for that.
   const html = useMemo(
-    () =>
-      DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }), {
-        // An answer is text to read: nothing in it should look like part of the app or submit anything.
-        FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style"],
-        // Nor should it place itself over the app, which a style of its own would allow.
-        FORBID_ATTR: ["style"],
-      }),
+    () => DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }), CLEAN),
     [text],
   );
   const root = useRef<HTMLDivElement>(null);
@@ -125,7 +119,7 @@ export const Markdown = memo(function Markdown({
     <>
       <div
         ref={root}
-        className="md"
+        className="md md-own"
         onClick={open}
         onKeyDown={open}
         dangerouslySetInnerHTML={{ __html: html }}
@@ -136,6 +130,21 @@ export const Markdown = memo(function Markdown({
     </>
   );
 });
+
+/**
+ * What is kept of an answer. It is text to read, written by an agent that may repeat what a
+ * page or a file told it to: it never passes for a piece of the app, nor stands over it.
+ */
+const CLEAN = {
+  // Nothing that submits, and nothing the browser itself lays over the page.
+  FORBID_TAGS: ["form", "input", "button", "textarea", "select", "option", "style", "dialog"],
+  // No style of its own, and none of the app's: a class, an id, a name or a role is what the
+  // page's styles and code know their own pieces by. The few an answer needs are set below,
+  // once it is cleaned.
+  FORBID_ATTR: ["style", "class", "id", "name", "role", "slot", "part", "popover", "tabindex"],
+  ALLOW_DATA_ATTR: false,
+  ALLOW_ARIA_ATTR: false,
+};
 
 const KEEP_ICON =
   '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 10V2.5M5 5.25 8 2.25l3 3M4.5 7.5H4a1.5 1.5 0 0 0-1.5 1.5v3.5A1.5 1.5 0 0 0 4 14h8a1.5 1.5 0 0 0 1.5-1.5V9A1.5 1.5 0 0 0 12 7.5h-.5"/></svg>';
@@ -214,6 +223,9 @@ async function keepImage(threadId: string, ref: string) {
   a.remove();
 }
 
+/** Whether a link only names a place in the page it is on, read as the browser reads it. */
+const inPage = (href: string) => [...href].find((c) => c > " ") === "#";
+
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   // A file of the computer: shown and opened in the app, from an address the server gives.
   const local = markedRef(node.getAttribute(node.tagName === "IMG" ? "src" : "href"));
@@ -239,7 +251,20 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     node.removeAttribute("rel");
     return;
   }
+  // A link drawn in a picture, or an area of one: only the links of the text are opened
+  // outside the app, so these lead nowhere rather than take the app's own page elsewhere.
+  if (node.localName === "area" || (node.localName === "a" && node.tagName !== "A")) {
+    node.removeAttribute("href");
+    node.removeAttribute("xlink:href");
+    return;
+  }
   if (node.tagName === "A") {
+    // A link into the page itself leads nowhere, an answer having no anchors: followed, it
+    // would only rewrite the app's own address, where a token or a pairing code is read.
+    if (inPage(node.getAttribute("href") ?? "")) {
+      node.removeAttribute("href");
+      return;
+    }
     node.setAttribute("target", "_blank");
     node.setAttribute("rel", "noopener noreferrer");
     // A link to a pull request is drawn as GitHub draws it: its icon, then its number.

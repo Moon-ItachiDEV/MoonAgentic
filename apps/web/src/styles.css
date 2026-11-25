@@ -874,6 +874,13 @@ svg {
 .md {
   min-width: 0;
 }
+/* An agent's answer is drawn in a box of its own: nothing it holds shows, or takes a tap,
+   outside of it. The few pixels around its text leave room for a focus ring or a soft shadow. */
+.md-own {
+  contain: paint;
+  padding: 4px;
+  margin: -4px;
+}
 .md pre {
   max-width: 100%;
   background: var(--card);
@@ -888,6 +895,10 @@ svg {
 }
 .md a {
   color: var(--accent);
+}
+/* A link that leads nowhere reads as the text around it. */
+.md a:not([href]) {
+  color: inherit;
 }
 .md ul,
 .md ol {
