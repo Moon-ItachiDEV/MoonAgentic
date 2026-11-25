@@ -10,14 +10,6 @@ import type { State } from "../state.ts";
 import { Glyph, I } from "../v2/I.tsx";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 
-/**
- * The conversation whose changes the « Code » tab opens: the latest one with its own branch,
- * a conversation of yours before a team member's.
- */
-export function codeThread(state: Pick<State, "threads">): Thread | undefined {
-  return codeThreads(state)[0];
-}
-
 /** The conversations with a branch of their own, the latest first, yours before a team member's. */
 export function codeThreads(state: Pick<State, "threads">): Thread[] {
   const withCode = state.threads

@@ -15,13 +15,6 @@ export function pullRequestUrl(href: string): { url: string; number: number } | 
   return match ? { url: match[1]!, number: Number(match[2]) } : undefined;
 }
 
-export const STATE_LABEL: Record<PullRequestInfo["state"], string> = {
-  open: "ouverte",
-  draft: "brouillon",
-  merged: "fusionnée",
-  closed: "fermée",
-};
-
 const plural = (n: number, one: string, many: string) => `${n} ${n > 1 ? many : one}`;
 
 /** The CI of a pull request in one line, and the checks to show by name: those that failed. */

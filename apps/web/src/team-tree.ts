@@ -102,15 +102,6 @@ export const GLYPH_LABEL: Record<GlyphKind, string> = {
   file: "En file",
 };
 
-export const TOOL_LABEL: Record<ToolGroup, string> = {
-  read: "Lecture",
-  edit: "Édition",
-  search: "Recherche",
-  run: "Terminal",
-  web: "Web",
-  other: "Autres",
-};
-
 const toolGroup = (kind: string): ToolGroup =>
   kind === "read"
     ? "read"

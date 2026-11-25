@@ -22,7 +22,7 @@ import { momentLabel, repeatLabel } from "../schedule.ts";
 import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
 import { Glyph, I } from "../v2/I.tsx";
 import { useThreadRowMenu } from "../v2/ThreadRowMenu.tsx";
-import type { ModelPick } from "./ModelSelect.tsx";
+import type { ModelPick } from "../model-pick.ts";
 
 /** The groups, in the words the mockup uses. */
 const GROUP_NAME: Record<ThreadGroup, string> = {

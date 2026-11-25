@@ -2,7 +2,6 @@ import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "@fontsource/instrument-serif";
 import "@fontsource-variable/newsreader/opsz.css";
-import "./legacy.css";
 import "./v2/tokens.css";
 import "./v2/app.css";
 import "./v2/wide.css";

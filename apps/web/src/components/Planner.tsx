@@ -31,7 +31,7 @@ import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
 import { Fab } from "../v2/Fab.tsx";
 import { Glyph, I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
-import { firstPick, type ModelPick } from "./ModelSelect.tsx";
+import { firstPick, type ModelPick } from "../model-pick.ts";
 import { PlanSchedules } from "./PlanSchedules.tsx";
 import { PlanTimeline } from "./PlanTimeline.tsx";
 

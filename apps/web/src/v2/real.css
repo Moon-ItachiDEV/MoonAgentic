@@ -2,32 +2,52 @@
 html {
   background: var(--bg);
 }
+html,
+body,
 #root {
   height: 100%;
 }
-
-/* A page or a dialog not ported to the new design yet keeps its old styles: inside it, the
-   new ones step back to the old layer. The id-weight selector outranks every new rule. */
-:is(.legacy, #_#_#_) * {
-  all: revert-layer;
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
 }
-.legacy-over,
-.legacy-side {
+code,
+kbd,
+pre,
+samp {
+  letter-spacing: 0;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Where a list does scroll in view (a computer's mouse), its bar stays thin and quiet. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--faint);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+/* A popup kept on screen while it closes takes no input and has no box of its own. */
+.presence {
   display: contents;
 }
-.main > .legacy-main {
-  position: absolute;
-  inset: 0;
-  grid-template-rows: minmax(0, 1fr) auto;
-  padding-top: calc(var(--st) + 56px);
-  background: var(--bg);
-}
-.legacy-sheet {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+.presence.closing * {
+  pointer-events: none;
 }
 
 /* The brand, in the menu. */
@@ -159,16 +179,7 @@ html {
   opacity: 0.75;
 }
 
-/* A page of the old design leaves room for what floats at the bottom. */
-.main > .legacy-main.with-bottom {
-  padding-bottom: calc(var(--cbh, 120px) - 12px);
-}
-
 /* The bottom of the page: what waits above the composer, then the composer and what opens from it. */
-.bottom > .res,
-.bottom > .legacy {
-  display: block;
-}
 .bottom > .res {
   display: flex;
 }
@@ -186,9 +197,6 @@ html {
 .cw > .dcw:empty {
   display: none;
 }
-.cw > .dcw > .legacy:empty {
-  display: none;
-}
 .cw > .dcw > .updb {
   margin: 0;
 }
@@ -202,10 +210,29 @@ html {
   white-space: nowrap;
 }
 .updb.qw .b2 {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
   height: 36px;
   padding: 0 14px;
   font-size: 14px;
+  gap: 0;
+  white-space: pre;
+}
+.updb.qw .b2 .nm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* On a phone the warning takes two lines instead of being cut. */
+.scr:not(.roomy) .updb.qw {
+  height: auto;
+  min-height: 52px;
+  padding-block: 8px;
+  border-radius: 24px;
+}
+.scr:not(.roomy) .updb.qw .tx {
+  white-space: normal;
 }
 .updb.qw.full .tx {
   color: var(--err-tx);
@@ -656,6 +683,7 @@ button.ovh {
 }
 .pstarts {
   justify-content: flex-start;
+  margin-bottom: 26px;
 }
 .pstarts .ppill {
   gap: 6px;
@@ -1566,4 +1594,22 @@ a.it {
 }
 .sbody > .mga + .ins {
   margin-top: 14px;
+}
+
+/* What the composer asks for stays on one line, cut when it is long. */
+.cmp textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Project page on a very wide screen: the conversation stays a centred column beside the threads. */
+.scr.xl[data-s="project"] .view {
+  padding-right: calc(350px + max(0px, (100% - 350px) / 2 - 340px));
+}
+.scr.xl[data-s="project"] .bottom {
+  padding-right: calc(350px + max(0px, (100% - 350px) / 2 - 348px));
+}
+.scr.xl[data-s="project"] .sugm {
+  right: calc(350px + max(0px, (100% - 350px) / 2 - 348px));
 }

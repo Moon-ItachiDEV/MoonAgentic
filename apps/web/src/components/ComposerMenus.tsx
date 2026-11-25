@@ -5,7 +5,7 @@ import { isDiscussionsProject } from "../default-models.ts";
 import { mcpInProject } from "../mcp-scope.ts";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
-import { arrowKeys } from "./ComposerTray.tsx";
+import { arrowKeys } from "../composer-tray.ts";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 
 /** A screen that is touched, so most likely a phone or a tablet with a camera. */

@@ -44,14 +44,14 @@ import { useImageDrafts } from "../use-image-drafts.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { looseDefault } from "../default-models.ts";
 import { modelNameOf } from "../model-label.ts";
-import type { ModelPick } from "./ModelSelect.tsx";
+import type { ModelPick } from "../model-pick.ts";
 import { setDefault, useDefaults } from "../defaults.ts";
 import { speakerName } from "../speaker.ts";
 import { quotaWarning, roomiest, tightest } from "../quotas.ts";
 import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
 import { ComposerImages } from "./ComposerImages.tsx";
 import { type ComposerContext, PlusPop, PlusSheet, WhereSheet } from "./ComposerMenus.tsx";
-import type { TrayQuota } from "./ComposerTray.tsx";
+import type { TrayQuota } from "../composer-tray.ts";
 import { GoalBar } from "./GoalBar.tsx";
 import { MessageQueue } from "./MessageQueue.tsx";
 import { Picker } from "./Picker.tsx";
@@ -847,7 +847,9 @@ export function Composer(props: {
             : "Ajouter une consigne"
           : thread
             ? `Répondre à ${speaker}`
-            : `Demander à ${(modelName ?? agent?.name ?? "tes agents").replace(/^Gemini \d+(\.\d+)? /, "")}`;
+            : `Demander à ${(modelName ?? agent?.name ?? "tes agents")
+                .replace(/^Gemini \d+(\.\d+)? /, "")
+                .replace(/\s*\([^)]*\)$/, "")}`;
 
   // On a phone the composer is one line until it is used, as in the mockup.
   const hasImages = images.drafts.length > 0;
@@ -1052,8 +1054,13 @@ export function Composer(props: {
                 {trayQuota.when && <small>{trayQuota.when}</small>}
               </span>
               {trayQuota.roomier && trayQuota.onSwitch ? (
-                <button className="b2 soft press" onClick={trayQuota.onSwitch}>
-                  Passer à {trayQuota.roomier.name}
+                <button
+                  className="b2 soft press"
+                  aria-label={`Passer à ${trayQuota.roomier.name}`}
+                  onClick={trayQuota.onSwitch}
+                >
+                  <span className="wo">Passer à </span>
+                  <span className="nm">{trayQuota.roomier.name}</span>
                 </button>
               ) : (
                 trayQuota.onLimits && (

@@ -16,23 +16,10 @@ import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx
 import { AppUpdateHostOnDemand, UpdateBar } from "./components/UpdateBar.tsx";
 import { Artifacts } from "./components/Artifacts.tsx";
 import { Home } from "./components/Home.tsx";
-import {
-  IconClock,
-  IconCompose,
-  IconFile,
-  IconArchive,
-  IconBoard,
-  IconClose,
-  IconFolder,
-  IconInbox,
-  IconLock,
-  IconPin,
-  IconPlug,
-} from "./components/icons.tsx";
 import { LockSheet } from "./components/LockSheet.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
-import type { QuickAction } from "./components/QuickSearch.tsx";
+import type { QuickAction } from "./quick-actions.ts";
 import { ProjectRequests, projectRequests } from "./components/ProjectRequests.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
@@ -382,58 +369,58 @@ export function App() {
   const quickActions: QuickAction[] = [
     {
       label: "Nouvelle discussion",
-      icon: <IconCompose size={15} />,
+      icon: <I n="edit" s={17} />,
       run: newLoose,
     },
     {
       label: "Nouveau projet",
-      icon: <IconFolder size={15} />,
+      icon: <I n="folder" s={17} />,
       run: () => setCreatingProject(true),
     },
     {
       label: `À traiter${state.requests.length ? ` (${state.requests.length})` : ""}`,
-      icon: <IconInbox size={15} />,
+      icon: <I n="hand" s={17} />,
       run: () => go({ name: "inbox" }),
     },
-    { label: "Planner", icon: <IconBoard size={15} />, run: openPlanner },
+    { label: "Planner", icon: <I n="grid" s={17} />, run: openPlanner },
     ...(project && !project.locked
       ? [
           {
             label: `Verrouiller le projet ${project.name}`,
-            icon: <IconLock size={15} />,
+            icon: <I n="lock" s={17} />,
             run: () => lockOne(project),
           },
         ]
       : []),
     {
       label: "Tâches planifiées",
-      icon: <IconClock size={15} />,
+      icon: <I n="clock" s={17} />,
       run: () => go({ name: "planner", view: "planifiees" }),
     },
-    { label: "Connexions", icon: <IconPlug size={15} />, run: openAgents },
-    { label: "Serveurs MCP", icon: <IconPlug size={15} />, run: openMcp },
+    { label: "Connexions", icon: <I n="plug" s={17} />, run: openAgents },
+    { label: "Serveurs MCP", icon: <I n="plug" s={17} />, run: openMcp },
     ...(thread
       ? [
           {
             label: thread.pinned ? "Désépingler cette discussion" : "Épingler cette discussion",
-            icon: <IconPin />,
+            icon: <I n="star" s={17} />,
             run: () => togglePin(thread.id, !thread.pinned),
           },
           {
             label: "Exporter cette discussion en Markdown",
-            icon: <IconFile />,
+            icon: <I n="file" s={17} />,
             run: () => exportThread(),
           },
           {
             label: thread.archived
               ? "Rouvrir cette discussion"
               : "Marquer cette discussion résolue",
-            icon: <IconArchive />,
+            icon: <I n="check" s={17} />,
             run: () => setArchived(thread.id, !thread.archived),
           },
           {
             label: "Supprimer cette discussion",
-            icon: <IconClose />,
+            icon: <I n="x" s={17} />,
             run: () => askDeleteThread(thread),
           },
         ]

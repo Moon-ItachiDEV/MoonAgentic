@@ -17,7 +17,7 @@ import { Glyph, I } from "../v2/I.tsx";
 import { Wordmark } from "./MoonMark.tsx";
 import { Presence } from "./Presence.tsx";
 import { ProjectIcon } from "./ProjectIcon.tsx";
-import { fuzzyMatch, type QuickAction } from "./QuickSearch.tsx";
+import { fuzzyMatch, type QuickAction } from "../quick-actions.ts";
 
 /** What a line of the menu shows before its title: at work, waiting for the user, failed. */
 function Mark({ status }: { status: LineStatus }) {

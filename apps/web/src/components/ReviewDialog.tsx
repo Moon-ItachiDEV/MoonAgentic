@@ -254,7 +254,7 @@ export function ReviewDialog({
             {error}
           </p>
         )}
-        <div className="mga">
+        <div className="mga stk">
           <button className="b2 ink press" disabled={!ready || busy}>
             {busy ? "Lancement…" : "Lancer la revue"}
           </button>

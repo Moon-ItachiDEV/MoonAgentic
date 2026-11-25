@@ -13,7 +13,7 @@ import { firstMoment, fromField, REPEATS, titleFromText, toField } from "../sche
 import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
-import { firstPick, type ModelPick } from "./ModelSelect.tsx";
+import { firstPick, type ModelPick } from "../model-pick.ts";
 
 /**
  * Plans a task for later, or changes one already planned. At its time the server starts a

@@ -828,3 +828,401 @@ button.cqt {
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
+
+/* What an agent waits on the user for, above the composer: beyond the mockup's three rows. */
+.dc .hd .src {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--muted);
+}
+.dc .hd button.src:hover {
+  color: var(--fg);
+}
+.dc .pg {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.dc .ib {
+  width: 28px;
+  height: 28px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.dc .ib:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.dc h3 {
+  overflow-wrap: anywhere;
+}
+.dc .rows {
+  display: grid;
+  gap: 2px;
+}
+.opt {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.opt .k {
+  flex: none;
+}
+.opt.on .k {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+.opt .ot {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.opt .on {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.opt .ot small {
+  font-size: 13.5px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.dc .rec {
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accbg);
+}
+.opt .pick {
+  flex: none;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--accent);
+}
+form.opt.other {
+  color: var(--fg);
+}
+.opt.other input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font: inherit;
+  color: var(--fg);
+  caret-color: var(--accent);
+}
+.opt.other input::placeholder {
+  color: var(--faint);
+}
+.opt .snd {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  background: var(--ink);
+  color: var(--on-ink);
+}
+.opt .snd:disabled {
+  opacity: 0.3;
+}
+.dc .tiles {
+  display: grid;
+  grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr));
+  gap: 6px;
+  margin: 0;
+  padding: 2px 2px 6px;
+}
+.dc .tile {
+  display: grid;
+  align-items: stretch;
+  justify-content: stretch;
+  gap: 8px;
+  height: auto;
+  padding: 6px;
+  border-radius: 18px;
+  background: none;
+  font-weight: 400;
+  text-align: left;
+  min-width: 0;
+}
+.dc .tile.hl,
+.dc .tile:hover {
+  background: var(--card);
+}
+.dc .pv {
+  position: relative;
+  display: block;
+  height: 120px;
+  border-radius: 14px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+.dc .pv pre,
+.dc .pane pre {
+  margin: 0;
+  padding: 10px 12px;
+  font: 400 12px/1.5 var(--mono);
+  color: var(--fg2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dc .pv .rec {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+}
+.dc .tn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14.5px;
+  padding: 0 4px 2px;
+  min-width: 0;
+}
+.dc .tn .k,
+.dc .tile .k {
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  background: var(--card);
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  color: var(--muted);
+  flex: none;
+}
+.dc .tile.hl .k,
+.dc .tile.on .k {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+.dc .pane {
+  max-height: 180px;
+  overflow: auto;
+  margin: 2px 2px 6px;
+  border-radius: 14px;
+  background: var(--sunken);
+  scrollbar-width: none;
+}
+.dc .pane > span {
+  display: block;
+  padding: 14px;
+  font-size: 13.5px;
+  color: var(--faint);
+}
+.dc .go {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 4px 2px 12px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+.dc .go span {
+  flex: 1;
+}
+.dc .go .b2 {
+  flex: none;
+  height: 40px;
+  padding: 0 20px;
+  border-radius: 20px;
+}
+.dc .go .b2:disabled {
+  opacity: 0.35;
+}
+/* « Plus tard »: the card folded to one line. */
+.dcf {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 44px;
+  padding: 0 14px 0 10px;
+  border-radius: 22px;
+  background: var(--card);
+  text-align: left;
+  color: var(--muted);
+  animation: up 320ms var(--out) both;
+}
+.dcf .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: var(--accbg);
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 500;
+  flex: none;
+}
+.dcf .q {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  color: var(--fg);
+}
+.dcf .n {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+/* A link to a pull request, drawn as GitHub draws it: its mark, its number, its state's colour. */
+:root {
+  --pr-open: #1a7f37;
+  --pr-merged: #8250df;
+  --pr-closed: #cf222e;
+  --pr-draft: #6e7781;
+}
+:root[data-theme="dark"] {
+  --pr-open: #3fb950;
+  --pr-merged: #a371f7;
+  --pr-closed: #f85149;
+  --pr-draft: #8b949e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --pr-open: #3fb950;
+    --pr-merged: #a371f7;
+    --pr-closed: #f85149;
+    --pr-draft: #8b949e;
+  }
+}
+.prchip {
+  /* Until GitHub has answered, the link keeps a neutral colour: no state is made up. */
+  --pr: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--pr) 10%, transparent);
+  color: var(--pr) !important;
+  font-size: 0.92em;
+  font-weight: 500;
+  line-height: 1.5;
+  text-decoration: none !important;
+  white-space: nowrap;
+  vertical-align: baseline;
+}
+.prchip::before {
+  content: "";
+  width: 1em;
+  height: 1em;
+  flex: none;
+  background: currentColor;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.prchip[data-state="open"] {
+  --pr: var(--pr-open);
+}
+.prchip[data-state="draft"] {
+  --pr: var(--pr-draft);
+}
+.prchip[data-state="merged"] {
+  --pr: var(--pr-merged);
+}
+.prchip[data-state="closed"] {
+  --pr: var(--pr-closed);
+}
+
+/* A long message cut to its first lines, opened on demand. */
+.clamp {
+  max-height: 9.5em;
+  overflow: hidden;
+}
+.clamp.long {
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+.clamp.open {
+  max-height: none;
+}
+.clamp-more {
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.clamp-more:hover {
+  color: var(--fg);
+}
+.fold.thought {
+  color: var(--faint);
+}
+
+/* Dictation: what was typed before the voice stays grey. */
+.vxp-typed {
+  color: var(--muted);
+}
+kbd {
+  font: 12px var(--mono);
+  color: var(--muted);
+  background: var(--hover);
+  border-radius: 6px;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+/* The moon of an agent, floating alone in the thread, and the tints it can take. */
+[data-moon="ice"] {
+  --sky-top: #2676dc;
+  --sky-bottom: #48c4e6;
+}
+[data-moon="violet"] {
+  --sky-top: #6744c7;
+  --sky-bottom: #b495ea;
+}
+[data-moon="pink"] {
+  --sky-top: #ad448a;
+  --sky-bottom: #f29cbb;
+}
+[data-moon="mint"] {
+  --sky-top: #197982;
+  --sky-bottom: #66d5c2;
+}
+[data-moon="amber"] {
+  --sky-top: #c65225;
+  --sky-bottom: #f4af65;
+}
+[data-moon="silver"] {
+  --sky-top: #506685;
+  --sky-bottom: #a6bfd2;
+}
+.mascot {
+  flex: none;
+  position: relative;
+}
+.mascot moon-mascot {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: 50%;
+  inline-size: 140%;
+  translate: -50% -50%;
+}
+.prchip[data-state="merged"]::before {
+  /* GitHub's merge mark. */
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'/%3E%3C/svg%3E");
+}

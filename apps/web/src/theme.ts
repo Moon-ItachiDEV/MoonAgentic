@@ -27,9 +27,3 @@ export function subscribeTheme(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
-
-/** Whether the page is dark right now: picked, or the system's choice. */
-export function isDark(theme: Theme = readTheme()): boolean {
-  if (theme !== "system") return theme === "dark";
-  return typeof matchMedia === "function" && matchMedia("(prefers-color-scheme: dark)").matches;
-}
