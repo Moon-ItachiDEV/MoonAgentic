@@ -31,8 +31,6 @@ const GROUP_NAME: Record<ThreadGroup, string> = {
   idle: "Inactifs",
   resolved: "Terminés",
 };
-/** Resolved conversations shown before « Voir plus ». */
-const RESOLVED_SHOWN = 5;
 
 interface ThreadActions {
   onOpenThread: (id: string) => void;
@@ -65,76 +63,6 @@ function Lead({ group, thread }: { group: ThreadGroup; thread: Thread }) {
       />
     );
   return <i className="idl" aria-hidden />;
-}
-
-/**
- * A project's conversations beside its coordinator, on a wide screen: grouped by what is
- * really going on, those waiting on the user first.
- */
-export function ProjectThreads(props: { project: Project; threads: Thread[] } & ThreadActions) {
-  const now = useNow();
-  const groups = groupThreads(props.threads, props.project.id);
-  const members = membersByLead(props.threads);
-  const [all, setAll] = useState(false);
-  const { bind, menu } = useThreadRowMenu(props.threads, props);
-  return (
-    <>
-      <div className="rph">Fils</div>
-      <div className="sbody">
-        {groups.map(({ group, threads }) => {
-          if (!threads.length) return null;
-          const shown = group === "resolved" && !all ? threads.slice(0, RESOLVED_SHOWN) : threads;
-          return (
-            <div key={group} data-group={group}>
-              <div className="gl2">{GROUP_NAME[group]}</div>
-              <div className="ins">
-                {shown.map((t) => {
-                  const line = threadLine(t, members.get(t.id));
-                  return (
-                    <button
-                      key={t.id}
-                      className={`it thr${t.unread ? " unread" : ""}`}
-                      onClick={() => props.onOpenThread(t.id)}
-                      {...bind(t)}
-                    >
-                      <Lead group={group} thread={t} />
-                      <span className="tx">
-                        <span className="thn">{t.title}</span>
-                        <small
-                          className={
-                            t.status === "error"
-                              ? "mer"
-                              : group === "waiting" || group === "running"
-                                ? "acc"
-                                : ""
-                          }
-                        >
-                          {group === "resolved" || !line
-                            ? shortAgo(t.updatedAt, now)
-                            : `${line} · ${shortAgo(t.updatedAt, now)}`}
-                        </small>
-                      </span>
-                      <I n="right" s={15} />
-                    </button>
-                  );
-                })}
-                {shown.length < threads.length && (
-                  <button className="it acc" onClick={() => setAll(true)}>
-                    <span className="tx">Voir plus ({threads.length - shown.length})</span>
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-        <button className="newth press" onClick={props.onNewThread}>
-          <I n="plus" s={18} />
-          Nouveau fil
-        </button>
-      </div>
-      {menu}
-    </>
-  );
 }
 
 /** A folder of the project's tree, folded until pressed. */
@@ -281,6 +209,8 @@ export function ProjectOverview(
     onOpenSettings: () => void;
     onOpenArtifacts: () => void;
     onSchedule: (schedule?: Schedule) => void;
+    /** Shown in the right panel of a split page, beside the coordinator, with a way to close it. */
+    pane?: { onClose: () => void };
   } & ThreadActions,
 ) {
   const [tab, setTab] = useState<OverviewTab>("fils");
@@ -345,119 +275,138 @@ export function ProjectOverview(
     );
   };
 
-  return (
-    <div className="view" id="view">
-      <div className="ovtabs" role="tablist" aria-label="Vue d'ensemble">
-        {TABS.map(([id, label]) => (
-          <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
-            {label}
-          </button>
-        ))}
-      </div>
-      {tab === "fils" ? (
-        <>
-          {artifacts.length > 0 && (
-            <>
-              <button className="ovh" onClick={props.onOpenArtifacts}>
-                Artefacts <I n="right" s={13} />
-              </button>
-              <div className="carou">
-                {artifacts.slice(0, 12).map((a) => (
-                  <button
-                    key={`${a.threadId}:${a.path}`}
-                    className="art"
-                    onClick={props.onOpenArtifacts}
-                  >
-                    <span className="thumb ic">
-                      <I
-                        n={a.kind === "image" ? "image" : a.kind === "html" ? "code" : "file"}
-                        s={26}
-                      />
-                    </span>
-                    <b>{fileName(a.path)}</b>
-                    <small>{shortAgo(a.mtime, now)}</small>
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-          {groups.map(({ group, threads }) =>
-            !threads.length ? null : group === "resolved" ? (
-              <div key={group} className="ovg">
+  const tabs = (
+    <div className="ovtabs" role="tablist" aria-label="Vue d'ensemble">
+      {TABS.map(([id, label]) => (
+        <button key={id} role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+  const body =
+    tab === "fils" ? (
+      <>
+        {artifacts.length > 0 && (
+          <>
+            <button className="ovh" onClick={props.onOpenArtifacts}>
+              Artefacts <I n="right" s={13} />
+            </button>
+            <div className="carou">
+              {artifacts.slice(0, 12).map((a) => (
                 <button
-                  className={`more${resolvedOpen ? " op" : ""}`}
-                  aria-expanded={resolvedOpen}
-                  onClick={() => setResolvedOpen(!resolvedOpen)}
+                  key={`${a.threadId}:${a.path}`}
+                  className="art"
+                  onClick={props.onOpenArtifacts}
                 >
-                  Résolus · {threads.length} <I n="right" s={13} />
+                  <span className="thumb ic">
+                    <I
+                      n={a.kind === "image" ? "image" : a.kind === "html" ? "code" : "file"}
+                      s={26}
+                    />
+                  </span>
+                  <b>{fileName(a.path)}</b>
+                  <small>{shortAgo(a.mtime, now)}</small>
                 </button>
-                {resolvedOpen && <div className="reslist">{threads.map((t) => row(group, t))}</div>}
-              </div>
-            ) : (
-              <div key={group} className="ovg">
-                <div className="ovh">
-                  {GROUP_NAME[group]} · {threads.length}
-                </div>
-                <div>{threads.map((t) => row(group, t))}</div>
-              </div>
-            ),
-          )}
-          {total === 0 && (
-            <div className="empty">
-              <span className="ei">
-                <I n="bubble" s={24} />
-              </span>
-              <b>Aucun fil</b>
+              ))}
             </div>
-          )}
-          <button className="newth press" onClick={props.onNewThread}>
-            <I n="plus" s={18} />
-            Nouveau fil
-          </button>
-        </>
-      ) : tab === "contexte" ? (
-        <Context
-          project={props.project}
-          coordinator={props.coordinator}
-          settings={props.settings}
-          agents={props.agents}
-          onOpenSettings={props.onOpenSettings}
-        />
-      ) : schedules.length ? (
-        <>
-          <div className="ins ovins">
-            {schedules.map((s) => (
-              <button key={s.id} className="it" onClick={() => props.onSchedule(s)}>
-                <span className="tx">
-                  {s.title}
-                  <small className={s.lastError ? "mer" : ""}>
-                    {s.lastError ??
-                      (s.enabled
-                        ? `${momentLabel(s.nextAt, now)} · ${repeatLabel(s)}`
-                        : "En pause")}
-                  </small>
-                </span>
-                <I n="right" s={15} />
+          </>
+        )}
+        {groups.map(({ group, threads }) =>
+          !threads.length ? null : group === "resolved" ? (
+            <div key={group} className="ovg">
+              <button
+                className={`more${resolvedOpen ? " op" : ""}`}
+                aria-expanded={resolvedOpen}
+                onClick={() => setResolvedOpen(!resolvedOpen)}
+              >
+                Résolus · {threads.length} <I n="right" s={13} />
               </button>
-            ))}
+              {resolvedOpen && <div className="reslist">{threads.map((t) => row(group, t))}</div>}
+            </div>
+          ) : (
+            <div key={group} className="ovg">
+              <div className="ovh">
+                {GROUP_NAME[group]} · {threads.length}
+              </div>
+              <div>{threads.map((t) => row(group, t))}</div>
+            </div>
+          ),
+        )}
+        {total === 0 && (
+          <div className="empty">
+            <span className="ei">
+              <I n="bubble" s={24} />
+            </span>
+            <b>Aucun fil</b>
           </div>
-          <button className="newth press" onClick={() => props.onSchedule()}>
-            <I n="plus" s={18} />
-            Nouvelle tâche
-          </button>
-        </>
-      ) : (
-        <div className="empty">
-          <span className="ei">
-            <I n="clock" s={24} />
-          </span>
-          <b>Aucune tâche planifiée pour ce projet</b>
-          <button className="newth press" onClick={() => props.onSchedule()}>
-            <I n="plus" s={18} />
-            Nouvelle tâche
+        )}
+        <button className="newth press" onClick={props.onNewThread}>
+          <I n="plus" s={18} />
+          Nouveau fil
+        </button>
+      </>
+    ) : tab === "contexte" ? (
+      <Context
+        project={props.project}
+        coordinator={props.coordinator}
+        settings={props.settings}
+        agents={props.agents}
+        onOpenSettings={props.onOpenSettings}
+      />
+    ) : schedules.length ? (
+      <>
+        <div className="ins ovins">
+          {schedules.map((s) => (
+            <button key={s.id} className="it" onClick={() => props.onSchedule(s)}>
+              <span className="tx">
+                {s.title}
+                <small className={s.lastError ? "mer" : ""}>
+                  {s.lastError ??
+                    (s.enabled ? `${momentLabel(s.nextAt, now)} · ${repeatLabel(s)}` : "En pause")}
+                </small>
+              </span>
+              <I n="right" s={15} />
+            </button>
+          ))}
+        </div>
+        <button className="newth press" onClick={() => props.onSchedule()}>
+          <I n="plus" s={18} />
+          Nouvelle tâche
+        </button>
+      </>
+    ) : (
+      <div className="empty">
+        <span className="ei">
+          <I n="clock" s={24} />
+        </span>
+        <b>Aucune tâche planifiée pour ce projet</b>
+        <button className="newth press" onClick={() => props.onSchedule()}>
+          <I n="plus" s={18} />
+          Nouvelle tâche
+        </button>
+      </div>
+    );
+
+  if (props.pane)
+    return (
+      <div className="pin">
+        <div className="phd ovp">
+          {tabs}
+          <button className="ib press" aria-label="Fermer le panneau" onClick={props.pane.onClose}>
+            <I n="x" s={18} />
           </button>
         </div>
-      )}
+        <div className="pl ovl" key={tab}>
+          {body}
+          {menu}
+        </div>
+      </div>
+    );
+  return (
+    <div className="view" id="view">
+      {tabs}
+      {body}
       <div className="end" />
       {menu}
     </div>

@@ -240,3 +240,251 @@ a.prl:active {
     animation: none;
   }
 }
+
+/* Page projet en deux (iPad à l'horizontale, ordinateur) : le coordinateur à gauche, la Vue
+   d'ensemble à droite, où s'ouvre aussi un fil */
+.rpan {
+  display: none;
+}
+.scr.sp[data-s="project"] .rpan {
+  position: absolute;
+  z-index: 15;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  width: round(down, calc(50% - 18px), 1px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 26px;
+  background: var(--side);
+  box-shadow: 0 0 0 0.5px var(--glass-ring);
+  transition:
+    transform 420ms var(--spring),
+    opacity 240ms var(--out);
+}
+.scr.sp.pclosed[data-s="project"] .rpan {
+  transform: translateX(calc(100% + 24px));
+  opacity: 0;
+  pointer-events: none;
+}
+.scr.sp[data-s="project"] .main > .view,
+.scr.sp[data-s="project"] .main > .bottom {
+  padding-right: calc(50% + 6px);
+  padding-left: max(24px, calc((50% - 720px) / 2));
+  transition: padding 420ms var(--spring);
+}
+.scr.sp[data-s="project"] .main > .mtop {
+  padding-right: calc(50% + 6px);
+  transition: padding 420ms var(--spring);
+}
+.scr.sp[data-s="project"] .main > .tfade,
+.scr.sp[data-s="project"] .main > .bfade {
+  right: 50%;
+}
+.scr.sp.pclosed[data-s="project"] .main > .view,
+.scr.sp.pclosed[data-s="project"] .main > .bottom {
+  padding-right: max(24px, calc((100% - 760px) / 2));
+  padding-left: max(24px, calc((100% - 760px) / 2));
+}
+.scr.sp.pclosed[data-s="project"] .main > .mtop {
+  padding-right: 14px;
+}
+.scr.sp.pclosed[data-s="project"] .main > .tfade,
+.scr.sp.pclosed[data-s="project"] .main > .bfade {
+  right: 0;
+}
+.rpan .pin {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  animation: pIn 300ms var(--out);
+}
+.rpan .phd {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 14px 6px;
+  position: relative;
+  z-index: 2;
+}
+.rpan .phd .ovtabs {
+  flex: 1;
+  margin: 0;
+}
+.rpan .pl {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+  padding: 8px 18px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: pFade 220ms var(--out);
+}
+.rpan .pl::-webkit-scrollbar {
+  display: none;
+}
+.rpan .pl .newth {
+  display: none;
+}
+/* Un fil ouvert dans le panneau : « Fils de discussion › titre », sa conversation, son composer */
+.rpan .phd.crumb {
+  gap: 6px;
+  padding: 12px 12px 10px 20px;
+  box-shadow: 0 0.5px 0 var(--glass-ring);
+}
+.rpan .phd.crumb .cr {
+  font-size: 14.5px;
+  font-weight: 500;
+  color: var(--fg);
+  border-radius: 8px;
+  padding: 4px 6px;
+  margin-left: -6px;
+  transition: background-color 150ms ease;
+}
+.rpan .phd.crumb .csep {
+  color: var(--faint);
+  font-size: 16px;
+  line-height: 1;
+}
+.rpan .phd.crumb .cur {
+  font-size: 14.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.rpan .phd.crumb .sp {
+  flex: 1;
+}
+.rpan .ib {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  color: var(--fg2);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 160ms var(--out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .rpan .ib:hover,
+  .rpan .phd.crumb .cr:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+}
+.rpan .ib:active {
+  transform: scale(0.97);
+}
+.rpan .pin > .view {
+  position: relative;
+  inset: auto;
+  flex: 1;
+  min-height: 0;
+  padding: 14px 20px 16px;
+}
+.rpan .pin > .view .end {
+  height: 8px;
+}
+.rpan .pbt {
+  flex: none;
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@keyframes pIn {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+@keyframes pFade {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rpan .pin {
+    animation: pFade 200ms ease;
+  }
+  .scr.sp.pclosed[data-s="project"] .rpan {
+    transform: none;
+  }
+  .scr.sp[data-s="project"] .rpan,
+  .scr.sp[data-s="project"] .main > .view,
+  .scr.sp[data-s="project"] .main > .bottom,
+  .scr.sp[data-s="project"] .main > .mtop {
+    transition: none;
+  }
+}
+
+/* Ordinateur : boutons du haut en icônes simples, sans rond ni tuile */
+html[data-dev="desk"] .scr.wide .mtop .gb,
+html[data-dev="desk"] .scr.wide .dtop .gb {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  color: var(--fg2);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 160ms var(--out);
+}
+@media (hover: hover) and (pointer: fine) {
+  html[data-dev="desk"] .scr.wide .mtop .gb:hover,
+  html[data-dev="desk"] .scr.wide .dtop .gb:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+}
+html[data-dev="desk"] .scr.wide .mtop .ctr {
+  flex-direction: row;
+  gap: 4px;
+}
+html[data-dev="desk"] .scr.wide .mtop .pava,
+html[data-dev="desk"] .scr.wide .mtop .plabel,
+html[data-dev="desk"] .scr.wide .mtop .ttl {
+  background: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+html[data-dev="desk"] .scr.wide .mtop .pava {
+  width: auto;
+  height: 32px;
+  padding: 0 2px;
+}
+html[data-dev="desk"] .scr.wide .mtop .pava svg {
+  width: 18px;
+  height: 18px;
+}
+html[data-dev="desk"] .scr.wide .mtop .plabel {
+  height: 32px;
+  margin: 0;
+  padding: 0 4px;
+  font-size: 14.5px;
+  font-weight: 500;
+}
+.scr.sp[data-s="project"] .main > .bottom .sugm {
+  right: calc(50% + 6px);
+  left: max(24px, calc((50% - 720px) / 2));
+}
+.scr.sp.pclosed[data-s="project"] .main > .bottom .sugm {
+  right: max(24px, calc((100% - 760px) / 2));
+  left: max(24px, calc((100% - 760px) / 2));
+}

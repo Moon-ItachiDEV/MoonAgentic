@@ -24,7 +24,7 @@ import { ProjectRequests, projectRequests } from "./components/ProjectRequests.t
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { PairGate } from "./components/PairGate.tsx";
-import { CoordinatorStart, ProjectOverview, ProjectThreads } from "./components/ProjectPage.tsx";
+import { CoordinatorStart, ProjectOverview } from "./components/ProjectPage.tsx";
 import { ProjectIcon } from "./components/ProjectIcon.tsx";
 import { PullRequests } from "./components/PullRequests.tsx";
 import { steady, useSame } from "./steady.tsx";
@@ -145,6 +145,11 @@ export function App() {
 
   /** On a narrow screen, what the project's page shows: the coordinator or the threads. */
   const [projectTab, setProjectTab] = useState<"chat" | "overview">("chat");
+  /**
+   * On a computer's wide screen the project's page is split: the coordinator on the left,
+   * the « Vue d'ensemble » on the right, where a thread opens too.
+   */
+  const [pane, setPane] = useState<{ open: boolean; threadId?: string }>({ open: true });
   const [projectSetup, setProjectSetup] = useState(false);
   // Loaded the first time it is opened, then kept: it slides away when closed.
   const [projectSetupSeen, setProjectSetupSeen] = useState(false);
@@ -175,7 +180,10 @@ export function App() {
   const lastPage = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!pageProjectId) return;
-    if (lastPage.current && lastPage.current !== pageProjectId) setProjectTab("chat");
+    if (lastPage.current && lastPage.current !== pageProjectId) {
+      setProjectTab("chat");
+      setPane((was) => ({ open: was.open }));
+    }
     lastPage.current = pageProjectId;
   }, [pageProjectId]);
 
@@ -190,6 +198,12 @@ export function App() {
   // A project's page shows that project; elsewhere, the open thread's or the one last picked.
   const routeProject =
     route.name === "project" ? state.projects.find((p) => p.id === route.projectId) : undefined;
+  /** The computer's split project page: coordinator, then the overview or a thread. */
+  const split = !!routeProject && !routeProject.locked && screen.sp;
+  const paneThread =
+    split && pane.threadId
+      ? state.threads.find((t) => t.id === pane.threadId && t.projectId === routeProject?.id)
+      : undefined;
   // A locked project is never the one new conversations start in.
   const openProjects = state.projects.filter((p) => !p.locked);
   const looseHome = loose && route.name === "home";
@@ -273,6 +287,11 @@ export function App() {
   /** Opens a thread where it lives: a coordinator on its project's page. */
   const openThread = (id: string) => {
     const target = state.threads.find((t) => t.id === id);
+    // Split page: a thread of this project opens beside its coordinator.
+    if (split && target && target.kind !== "coordinator" && target.projectId === routeProject?.id) {
+      setPane({ open: true, threadId: id });
+      return;
+    }
     if (target?.kind === "coordinator") {
       setProjectTab("chat");
       go({ name: "project", projectId: target.projectId });
@@ -559,7 +578,7 @@ export function App() {
     route.name === "home"
       ? "home"
       : route.name === "project"
-        ? projectTab === "overview" && routeProject && !routeProject.locked
+        ? projectTab === "overview" && routeProject && !routeProject.locked && !split
           ? "overview"
           : "project"
         : route.name === "planner"
@@ -619,7 +638,7 @@ export function App() {
           onLock={() => lockApp(state.lockPin)}
         />
       </>
-    ) : route.name === "project" && projectTab === "overview" && routeProject ? (
+    ) : route.name === "project" && projectTab === "overview" && routeProject && !split ? (
       <>
         <button
           className="gb glass press"
@@ -659,7 +678,10 @@ export function App() {
           <button
             className="gb glass press"
             aria-label="Vue d'ensemble"
-            onClick={() => setProjectTab("overview")}
+            aria-expanded={split ? pane.open : undefined}
+            onClick={() =>
+              split ? setPane((was) => ({ open: !was.open })) : setProjectTab("overview")
+            }
           >
             <I n="list" s={21} />
             {waitingCount(state.threads, routeProject.id) > 0 && <span className="dot" />}
@@ -748,14 +770,14 @@ export function App() {
       // A locked project's page has nothing to write to until the code is given; under
       // « Fils » the coordinator's conversation is out of sight, and so is its composer.
       !routeProject?.locked &&
-      projectTab === "chat" ? (
+      (projectTab === "chat" || split) ? (
       coordinatorDock
     ) : null;
 
   return (
     <div
       id="scr"
-      className={`scr${screenClasses(screen)}${drawerOpen ? " open" : ""}${route.name === "home" ? " tabs" : ""}${tabPop && route.name === "home" ? " tp" : ""}${threadMenu ? " tm" : ""}${flags ? ` ${flags}` : ""}`}
+      className={`scr${screenClasses(screen)}${drawerOpen ? " open" : ""}${route.name === "home" ? " tabs" : ""}${tabPop && route.name === "home" ? " tp" : ""}${threadMenu ? " tm" : ""}${split && !pane.open ? " pclosed" : ""}${flags ? ` ${flags}` : ""}`}
       data-s={screenName}
     >
       <Sprite />
@@ -852,7 +874,7 @@ export function App() {
                 )}
               </div>
             </div>
-          ) : projectTab === "overview" ? (
+          ) : projectTab === "overview" && !split ? (
             <ProjectOverview
               key={routeProject.id}
               project={routeProject}
@@ -1034,13 +1056,69 @@ export function App() {
         {route.name === "home" && !screen.wide && (
           <TabBar state={listed} pop={tabPop} onPop={setTabPop} />
         )}
-        {route.name === "project" && routeProject && !routeProject.locked && screen.xl && (
-          <aside className="rpan" id="rpan" aria-label="Fils du projet">
-            <ProjectThreads
-              project={routeProject}
-              threads={state.threads}
-              {...projectThreadActions(routeProject)}
-            />
+        {split && routeProject && (
+          <aside
+            className="rpan"
+            id="rpan"
+            aria-label="Fils du projet"
+            aria-hidden={!pane.open}
+            inert={!pane.open}
+          >
+            {paneThread ? (
+              <div className="pin" key={paneThread.id}>
+                <div className="phd crumb">
+                  <button className="cr press" onClick={() => setPane({ open: true })}>
+                    Fils de discussion
+                  </button>
+                  <span className="csep" aria-hidden>
+                    ›
+                  </span>
+                  <span className="cur">{paneThread.title}</span>
+                  <span className="sp" />
+                  <button
+                    className="ib press"
+                    aria-label="Ouvrir le fil en pleine page"
+                    onClick={() => go({ name: "thread", threadId: paneThread.id })}
+                  >
+                    <I n="ext" s={17} />
+                  </button>
+                  <button
+                    className="ib press"
+                    aria-label="Fermer le panneau"
+                    onClick={() => setPane({ open: false })}
+                  >
+                    <I n="x" s={18} />
+                  </button>
+                </div>
+                <ThreadView
+                  thread={paneThread}
+                  items={state.items[paneThread.id]}
+                  held={state.held[paneThread.id]}
+                  agents={state.agents}
+                  threads={state.threads}
+                  onOpenThread={openThread}
+                />
+                <div className="pbt">{composerFor(paneThread, "Orienter ce fil")}</div>
+              </div>
+            ) : (
+              <ProjectOverview
+                key={routeProject.id}
+                pane={{ onClose: () => setPane({ open: false }) }}
+                project={routeProject}
+                threads={state.threads}
+                agents={state.agents}
+                schedules={state.schedules}
+                coordinator={coordinator}
+                online={state.status === "open"}
+                settings={state.coordinator}
+                onOpenSettings={() => go({ name: "settings", section: "coordinator" })}
+                onOpenArtifacts={() => go({ name: "artifacts" })}
+                onSchedule={(schedule) =>
+                  setScheduling(schedule ? { text: "", schedule } : { text: "" })
+                }
+                {...projectThreadActions(routeProject)}
+              />
+            )}
           </aside>
         )}
         <div className="veil" id="veil" onClick={() => setDrawer(false)} />
