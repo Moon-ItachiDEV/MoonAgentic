@@ -1599,6 +1599,18 @@ a.it {
   pointer-events: none;
   animation: up 320ms var(--out) both;
 }
+/* The server saves nothing (a full disk, a held database): the same pill, in the colour of an
+   error, and on two lines where a phone's width asks for it. */
+.offp.unsaved {
+  height: auto;
+  min-height: 36px;
+  max-width: calc(100% - 32px);
+  width: max-content;
+  padding: 8px 14px;
+  white-space: normal;
+  text-align: center;
+  color: var(--err-tx);
+}
 .sbody > .mga + .ins {
   margin-top: 14px;
 }

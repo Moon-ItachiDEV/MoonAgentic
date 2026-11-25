@@ -130,17 +130,30 @@ export interface VapidKeys {
 }
 
 export function vapidKeys(storage: PushStorage): VapidKeys {
-  let jwk = storage.getSetting<{ x: string; y: string; d: string } | null>(VAPID_SETTING, null);
-  if (!jwk) {
-    const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-    const exported = privateKey.export({ format: "jwk" });
-    jwk = { x: exported.x!, y: exported.y!, d: exported.d! };
-    storage.setSetting(VAPID_SETTING, jwk);
+  const saved = keysOf(storage.getSetting<unknown>(VAPID_SETTING, undefined));
+  if (saved) return saved;
+  // None yet, or one that cannot be read (a damaged file, an edit made by hand): a new pair.
+  // Browsers subscribed with the old one subscribe again, as after a new install.
+  const { privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const exported = privateKey.export({ format: "jwk" });
+  const jwk = { x: exported.x!, y: exported.y!, d: exported.d! };
+  storage.setSetting(VAPID_SETTING, jwk);
+  return keysOf(jwk)!;
+}
+
+/** The key pair a saved value holds; nothing when it does not hold a sound one. */
+function keysOf(jwk: unknown): VapidKeys | undefined {
+  if (typeof jwk !== "object" || jwk === null) return undefined;
+  const { x, y, d } = jwk as { x?: unknown; y?: unknown; d?: unknown };
+  if (typeof x !== "string" || typeof y !== "string" || typeof d !== "string") return undefined;
+  try {
+    return {
+      publicKey: b64(Buffer.concat([Buffer.from([4]), unb64(x), unb64(y)])),
+      privateKey: createPrivateKey({ key: { kty: "EC", crv: "P-256", x, y, d }, format: "jwk" }),
+    };
+  } catch {
+    return undefined;
   }
-  return {
-    publicKey: b64(Buffer.concat([Buffer.from([4]), unb64(jwk.x), unb64(jwk.y)])),
-    privateKey: createPrivateKey({ key: { kty: "EC", crv: "P-256", ...jwk }, format: "jwk" }),
-  };
 }
 
 /** The `Authorization` header for one push service, signed with the server's key. */
@@ -272,7 +285,12 @@ export class Push {
     const was = this.seen.get(thread.id);
     this.seen.set(thread.id, thread);
     if (!was || this.quiet(thread.projectId)) return;
-    for (const notice of noticesFor([was], [thread])) void this.deliver(notice, thread.projectId);
+    // Sent from wherever a thread changes: a notice that fails is said, and nothing else.
+    for (const notice of noticesFor([was], [thread])) {
+      this.deliver(notice, thread.projectId).catch((error: unknown) =>
+        console.error("Notifications :", error instanceof Error ? error.message : error),
+      );
+    }
   }
 
   threadRemoved(threadId: string): void {

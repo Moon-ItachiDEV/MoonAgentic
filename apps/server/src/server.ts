@@ -181,6 +181,10 @@ if (process.send) process.once("disconnect", () => void stop(0));
 // An error nothing caught leaves the server in a state no one knows: it says what happened,
 // stops its agents, and ends with a failure, for its supervisor to start it again.
 const crash = (error: unknown) => {
+  // A write the database refused because the disk is full, or another program holds the file,
+  // leaves nothing to put right by starting again: every agent would be cut, and the start
+  // would fail on the same cause. The server stays up and its screens say so.
+  if (hub.storageFailed(error)) return;
   console.error("Erreur imprévue, MoonAgentic redémarre :", error);
   void stop(1);
 };

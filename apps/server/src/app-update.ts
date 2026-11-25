@@ -455,7 +455,13 @@ export class AppUpdates {
         : u.state === "ready" || u.state === "available";
     if (!info.notify || !u.version || !readyToTell) return;
     if (this.options.settings.getSetting<string>(NOTIFIED, "") === u.version) return;
-    this.options.settings.setSetting(NOTIFIED, u.version);
+    try {
+      this.options.settings.setSetting(NOTIFIED, u.version);
+    } catch (error) {
+      // Not kept, it would be told again at each check: better not at all until it is.
+      console.error(error);
+      return;
+    }
     this.options.notify(
       info.kind === "git" ? "Nouvelle version sur main" : `Mise à jour ${u.version} prête`,
       info.kind === "windows"

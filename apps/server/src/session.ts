@@ -45,6 +45,32 @@ export interface SessionHandlers {
   onConfig?(config: { model: ModelOption | undefined; settings: AgentSetting[] }): void;
 }
 
+// The SDK checks what an agent sends on its own, not what it answers to a request: an answer
+// is read here only as far as it has the shape the code relies on.
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const isText = (value: unknown): value is string => typeof value === "string";
+/** A description as the screens take it: a text, or none. */
+const note = (value: unknown): { description?: string } =>
+  isText(value) && value ? { description: value } : {};
+
+const isChoice = (value: unknown): boolean =>
+  isRecord(value) && isText(value.value) && isText(value.name);
+
+/** One setting of a session: any kind the protocol has, and its choices when it is a list. */
+const isConfigOption = (value: unknown): value is acp.SessionConfigOption =>
+  isRecord(value) &&
+  isText(value.id) &&
+  (value.category === undefined || value.category === null || isText(value.category)) &&
+  (value.type !== "select" ||
+    (isText(value.currentValue) &&
+      Array.isArray(value.options) &&
+      value.options.every((o) =>
+        isRecord(o) && "group" in o
+          ? Array.isArray(o.options) && o.options.every(isChoice)
+          : isChoice(o),
+      )));
+
 export interface ModelOption {
   /** The config option to set, or LEGACY_MODEL for agents still on `session/set_model`. */
   configId: string;
@@ -54,19 +80,16 @@ export interface ModelOption {
 
 /** Reads the model selector out of an agent's session settings, if it has one. */
 export function modelOption(options: acp.SessionConfigOption[]): ModelOption | undefined {
+  const known = options.filter(isConfigOption);
   const option =
-    options.find((o) => o.category === "model" && o.type === "select") ??
-    options.find((o) => o.id === "model" && o.type === "select");
+    known.find((o) => o.category === "model" && o.type === "select") ??
+    known.find((o) => o.id === "model" && o.type === "select");
   if (!option || option.type !== "select") return undefined;
   const flat = option.options.flatMap((o) => ("group" in o ? o.options : [o]));
   return {
     configId: option.id,
     current: option.currentValue,
-    choices: flat.map((o) => ({
-      id: o.value,
-      name: o.name,
-      ...(o.description ? { description: o.description } : {}),
-    })),
+    choices: flat.map((o) => ({ id: o.value, name: o.name, ...note(o.description) })),
   };
 }
 
@@ -88,7 +111,7 @@ function settingKind(option: acp.SessionConfigOption): AgentSetting["kind"] | un
 
 /** Reads the agent's mode and reasoning effort selectors, if it has them. */
 export function settingOptions(options: acp.SessionConfigOption[]): AgentSetting[] {
-  return options.flatMap((o): AgentSetting[] => {
+  return options.filter(isConfigOption).flatMap((o): AgentSetting[] => {
     const kind = settingKind(o);
     if (!kind || o.type !== "select") return [];
     const flat = o.options.flatMap((c) => ("group" in c ? c.options : [c]));
@@ -97,11 +120,7 @@ export function settingOptions(options: acp.SessionConfigOption[]): AgentSetting
         id: o.id,
         kind,
         current: o.currentValue,
-        choices: flat.map((c) => ({
-          id: c.value,
-          name: c.name,
-          ...(c.description ? { description: c.description } : {}),
-        })),
+        choices: flat.map((c) => ({ id: c.value, name: c.name, ...note(c.description) })),
       },
     ];
   });
@@ -116,16 +135,26 @@ interface LegacyModels {
 export const LEGACY_MODEL = "session/set_model";
 
 function legacyModels(response: unknown): LegacyModels | undefined {
-  const models = (response as { models?: LegacyModels } | null | undefined)?.models;
-  return Array.isArray(models?.availableModels) ? models : undefined;
+  const models = (response as { models?: unknown } | null | undefined)?.models;
+  return isRecord(models) &&
+    isText(models.currentModelId) &&
+    Array.isArray(models.availableModels) &&
+    models.availableModels.every((m) => isRecord(m) && isText(m.modelId) && isText(m.name))
+    ? (models as unknown as LegacyModels)
+    : undefined;
 }
 
 /** Agents without config options may list their modes in a `modes` field instead. */
 export const LEGACY_MODE = "session/set_mode";
 
 function legacyModes(response: unknown): acp.SessionModeState | undefined {
-  const modes = (response as { modes?: acp.SessionModeState | null } | null | undefined)?.modes;
-  return Array.isArray(modes?.availableModes) ? modes : undefined;
+  const modes = (response as { modes?: unknown } | null | undefined)?.modes;
+  return isRecord(modes) &&
+    isText(modes.currentModeId) &&
+    Array.isArray(modes.availableModes) &&
+    modes.availableModes.every((m) => isRecord(m) && isText(m.id) && isText(m.name))
+    ? (modes as unknown as acp.SessionModeState)
+    : undefined;
 }
 
 interface SessionState {
@@ -134,13 +163,39 @@ interface SessionState {
   modes: acp.SessionModeState | undefined;
 }
 
-/** Keeps what the agent already sent when a response leaves a field out. */
-function absorb(state: SessionState, response: unknown): void {
-  const options = (response as { configOptions?: acp.SessionConfigOption[] | null } | null)
-    ?.configOptions;
-  if (options) state.options = options;
-  state.legacy = legacyModels(response) ?? state.legacy;
-  state.modes = legacyModes(response) ?? state.modes;
+/**
+ * Keeps what the agent already sent when a response leaves a field out, and when the field
+ * is not what the protocol says: kept as it came, it stopped the server the next time the
+ * session's model was read. False when some settings came in a shape that cannot be read.
+ * As a session opens, the settings that can be read are taken, as the SDK does with what an
+ * agent sends on its own. The answer to a change (`whole`) is taken whole or not at all:
+ * half of it would show a model or an effort the agent may not be on.
+ */
+function absorb(state: SessionState, response: unknown, whole = false): boolean {
+  const options = (response as { configOptions?: unknown } | null | undefined)?.configOptions;
+  const known = Array.isArray(options) ? options.filter(isConfigOption) : undefined;
+  // No settings at all is readable (the agent leaves them as they were), a list is when each
+  // of its settings is, and anything else is not.
+  const readable =
+    options === undefined ||
+    (options === null && !whole) ||
+    (Array.isArray(options) && known!.length === options.length);
+  if (known && (readable || !whole)) state.options = known;
+  if (readable || !whole) {
+    state.legacy = legacyModels(response) ?? state.legacy;
+    state.modes = legacyModes(response) ?? state.modes;
+  }
+  return readable;
+}
+
+/** The agent answered a change of model or setting with settings that cannot be read. */
+export class UnreadableAnswer extends Error {
+  constructor() {
+    super(
+      "L'agent a répondu à ce changement dans un format inattendu : il n'est pas pris en compte.",
+    );
+    this.name = "UnreadableAnswer";
+  }
 }
 
 function modelOf(state: SessionState): ModelOption | undefined {
@@ -153,7 +208,7 @@ function modelOf(state: SessionState): ModelOption | undefined {
     choices: legacy.availableModels.map((m) => ({
       id: m.modelId,
       name: m.name,
-      ...(m.description ? { description: m.description } : {}),
+      ...note(m.description),
     })),
   };
 }
@@ -170,7 +225,7 @@ function settingsOf(state: SessionState): AgentSetting[] {
       choices: modes.availableModes.map((m) => ({
         id: m.id,
         name: m.name,
-        ...(m.description ? { description: m.description } : {}),
+        ...note(m.description),
       })),
     },
     ...settings,
@@ -436,6 +491,11 @@ export class AgentSession {
     this.quietMs = options.quietMs;
   }
 
+  /** True once the connection to the agent is closed: nothing more can be asked of it. */
+  get closed(): boolean {
+    return this.connection.signal.aborted;
+  }
+
   get model(): ModelOption | undefined {
     return modelOf(this.state);
   }
@@ -460,7 +520,7 @@ export class AgentSession {
         value,
       }),
     );
-    absorb(this.state, response);
+    if (!absorb(this.state, response, true)) throw new UnreadableAnswer();
   }
 
   /** The agent's mode and reasoning effort settings, with their current values. */
@@ -486,7 +546,7 @@ export class AgentSession {
         value,
       }),
     );
-    absorb(this.state, response);
+    if (!absorb(this.state, response, true)) throw new UnreadableAnswer();
   }
 
   static async start(options: {
@@ -653,6 +713,24 @@ export class AgentSession {
       })();
       return killed;
     };
+    // A connection that closed on its own (a message past the protocol's size limit, a
+    // stream that broke) leaves a process nobody can talk to any more. One that is not on
+    // its way out by itself is stopped, so the thread's next message starts a new agent
+    // instead of failing on this one. Its exit is told as any other it did not ask for.
+    void connection.closed.then(() => {
+      if (exited || stopping) return;
+      // Its input closes now: an agent that reads it ends on its own, as it does at a stop.
+      try {
+        child.stdin?.end();
+      } catch {
+        // Already closed.
+      }
+      setTimeout(() => {
+        if (exited || stopping) return;
+        void killTree(child, "SIGTERM");
+        setTimeout(() => exited || void killTree(child, "SIGKILL"), KILL_GRACE_MS).unref();
+      }, KILL_GRACE_MS).unref();
+    });
 
     const aborted = new Promise<never>((_, reject) => {
       const stop = () =>
@@ -735,7 +813,12 @@ export class AgentSession {
         }
         if (!sessionId) {
           const created = await connection.agent.request("session/new", { cwd, mcpServers });
-          sessionId = created.sessionId;
+          // An answer the SDK does not check: an id that is not a text would be kept as one.
+          const id: unknown = (created as { sessionId?: unknown } | null)?.sessionId;
+          if (typeof id !== "string" || !id) {
+            throw new Error("L'agent a ouvert une session sans identifiant lisible.");
+          }
+          sessionId = id;
           absorb(state, created);
           return true;
         }

@@ -1,4 +1,5 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { DatabaseSync } from "node:sqlite";
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -21,6 +22,7 @@ import {
   TOKEN_RENEWED,
 } from "../src/http.ts";
 import { Devices } from "../src/devices.ts";
+import { Store } from "../src/store.ts";
 import { CoordinatorRefused, type Hub } from "../src/hub.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -45,8 +47,10 @@ async function serve(
   const images = new Attachments(path.join(webDir, "..", `${path.basename(webDir)}-images`));
   const links = new ArtifactLinks(() => undefined);
   const push = { forget: vi.fn() };
+  const storageFailed = vi.fn();
   const hub = {
     attachments: images,
+    storageFailed,
     artifactLinks: links,
     push,
     lockedThread: (threadId: string) => threadId === "verrouille",
@@ -101,6 +105,7 @@ async function serve(
     images,
     links,
     push,
+    storageFailed,
   };
 }
 
@@ -760,5 +765,128 @@ describe("the HTTP server", () => {
       (await fetch(`http://${origin}/api/auth`, { headers: { authorization: `Bearer ${TOKEN}` } }))
         .status,
     ).toBe(204);
+  });
+});
+
+describe("a database that refuses a write behind a route", () => {
+  /** A real database, held by another program: its writes are refused at once. */
+  const heldStore = () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-http-db-"));
+    const file = path.join(dir, "state.sqlite");
+    const store = new Store(file);
+    store.waitOnHold(false);
+    let other: DatabaseSync | undefined;
+    cleanups.push(() => {
+      other?.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    return {
+      file,
+      store,
+      hold: () => {
+        other = new DatabaseSync(file);
+        other.exec("BEGIN IMMEDIATE");
+      },
+      release: () => {
+        other?.exec("ROLLBACK");
+        other?.close();
+        other = undefined;
+      },
+    };
+  };
+  const caller =
+    (origin: string) =>
+    (url: string, init: { method?: string; token?: string; body?: unknown } = {}) =>
+      fetch(`http://${origin}${url}`, {
+        method: init.method ?? "GET",
+        headers: {
+          ...(init.token ? { authorization: `Bearer ${init.token}` } : {}),
+          "content-type": "application/json",
+        },
+        ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+        // On main this request was never answered.
+        signal: AbortSignal.timeout(5_000),
+      });
+
+  it("answers a revocation it could not write, and keeps the device as the database does", async () => {
+    const db = heldStore();
+    const devices = new Devices(db.store);
+    const { origin, storageFailed } = await serve({ devices });
+    const call = caller(origin);
+    const { code } = (await (
+      await call("/api/pair/start", { method: "POST", token: TOKEN })
+    ).json()) as { code: string };
+    const paired = await call("/api/pair", { method: "POST", body: { code, name: "iPhone" } });
+    const { token: phone, device } = (await paired.json()) as {
+      token: string;
+      device: { id: string };
+    };
+
+    db.hold();
+    const refused = await call("/api/devices/revoke", {
+      method: "POST",
+      token: TOKEN,
+      body: { id: device.id },
+    });
+    db.release();
+
+    expect(refused.status).toBe(500);
+    expect(((await refused.json()) as { message: string }).message).toBe(
+      "Base verrouillée par un autre programme : rien n'a été enregistré.",
+    );
+    expect(storageFailed).toHaveBeenCalled();
+    // Still paired, here as in the database: it does not come back at the next start
+    // after the computer was told it was gone.
+    expect((await call("/api/auth", { token: phone })).status).toBe(204);
+    expect(new Devices(db.store).list().map((d) => d.id)).toEqual([device.id]);
+    // Once the database writes again, the revocation goes through.
+    const revoked = await call("/api/devices/revoke", {
+      method: "POST",
+      token: TOKEN,
+      body: { id: device.id },
+    });
+    expect(revoked.status).toBe(200);
+    expect(new Devices(db.store).list()).toEqual([]);
+  });
+
+  it("gives the new token even when forgetting the old one's notifications is refused", async () => {
+    const { origin, push, renewed } = await serve();
+    push.forget.mockImplementation(() => {
+      const failure = new Error("database is locked") as Error & { code: string; errcode: number };
+      failure.code = "ERR_SQLITE_ERROR";
+      failure.errcode = 5;
+      throw failure;
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const answer = await caller(origin)("/api/remote/token", { method: "POST", token: TOKEN });
+
+    // The new token is the one in use from here: without it, the window that asked is locked out.
+    expect(answer.status).toBe(200);
+    const { token } = (await answer.json()) as { token: string };
+    expect(renewed).toEqual([token]);
+    expect((await caller(origin)("/api/auth", { token })).status).toBe(204);
+  });
+
+  it("still lets a paired device in when noting when it was last seen is refused", async () => {
+    const db = heldStore();
+    let now = 1_000;
+    const devices = new Devices(db.store, () => now);
+    const { origin } = await serve({ devices });
+    const call = caller(origin);
+    const { code } = (await (
+      await call("/api/pair/start", { method: "POST", token: TOKEN })
+    ).json()) as { code: string };
+    const { token: phone } = (await (
+      await call("/api/pair", { method: "POST", body: { code, name: "iPhone" } })
+    ).json()) as { token: string };
+
+    now += 24 * 3_600_000;
+    db.hold();
+    const ticket = await call("/api/ws-ticket", { method: "POST", token: phone });
+    db.release();
+
+    expect(ticket.status).toBe(200);
   });
 });

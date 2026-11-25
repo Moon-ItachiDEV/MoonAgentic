@@ -33,7 +33,6 @@ import type {
   CustomAgentInput,
   FavoriteRef,
   Defaults,
-  TeamPreset,
   AgentSetting,
   ClientMessage,
   ImageRef,
@@ -128,7 +127,8 @@ import { TurnLine } from "./turn-line.ts";
 import { sweepWorktrees } from "./worktree-sweep.ts";
 import { AppUpdates, type GitSource, type ShellChannel } from "./app-update.ts";
 import { backupBeforeUpdate } from "./backups.ts";
-import type { Store } from "./store.ts";
+import { isTeamPreset } from "./saved-shapes.ts";
+import { isRecord, type Store, StorageRefused, storageTrouble } from "./store.ts";
 import {
   forecastFor,
   listedWorktreeFile,
@@ -169,6 +169,11 @@ const INDEX_PAUSE_MS = 50;
 
 /** How the ACP connection says the agent's process went away. */
 const CONNECTION_CLOSED = /\bconnection closed\b/i;
+
+/** How often a write is tried again while the database refuses them. */
+const STORAGE_RETRY_MS = 5_000;
+/** How a turn ended: what its thread is left with. */
+type TurnEnd = { status: "idle" | "error"; error?: string | null };
 
 /** A thread's error when its agent stopped mid-turn: plain words first, the detail after. */
 const stoppedError = (detail: string): string => {
@@ -232,6 +237,8 @@ export interface HubOptions {
   appGit?: GitSource;
   /** Where the database is copied before an update; beside the worktrees unless given. */
   backupsDir?: string;
+  /** How often a write is tried again while the database refuses them. */
+  storageRetryMs?: number;
 }
 
 /** The setting that lists the projects kept at the top. */
@@ -432,6 +439,22 @@ export class Hub {
   >();
   private closed = false;
   private indexTimer: ReturnType<typeof setTimeout> | undefined;
+  /**
+   * Why the database refuses writes right now, in the user's words, while a cause outside
+   * the server lasts (a full disk, another program holding the file). The server goes on:
+   * stopping would cut every agent, and it could not start again either.
+   */
+  private storageDown: string | undefined;
+  private storageTimer: NodeJS.Timeout | undefined;
+  private readonly storageRetryMs: number;
+  /**
+   * What an agent sent that the database refused (its text, its tools, its questions), by
+   * item, in the order it came: written in that order once writes pass again, and shown
+   * meanwhile as if it were written.
+   */
+  private readonly unsaved = new Map<string, { threadId: string; item: Item }>();
+  /** How the turns whose end could not be written ended, by thread, to write then too. */
+  private readonly unsettled = new Map<string, TurnEnd>();
 
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
@@ -456,7 +479,7 @@ export class Hub {
 
   constructor(store: Store, agents: Agents, options: HubOptions) {
     this.store = store;
-    this.locks = new ProjectLocks(store);
+    this.locks = new ProjectLocks(store, undefined, () => store.listProjects().map((p) => p.id));
     this.agents = agents;
     this.dataDir = options.dataDir;
     this.worktreesDir = options.worktreesDir;
@@ -464,6 +487,7 @@ export class Hub {
       options.attachmentsDir ?? path.join(path.dirname(options.worktreesDir), "attachments"),
     );
     this.forceStopMs = options.forceStopMs ?? FORCE_STOP_MS;
+    this.storageRetryMs = options.storageRetryMs ?? STORAGE_RETRY_MS;
     this.pool = new AgentPool({
       idleMs: options.idleMs,
       maxLiveAgents: options.maxLiveAgents,
@@ -501,8 +525,13 @@ export class Hub {
         console.log(`Copie de la base avant la mise à jour : ${file}`);
       },
       // Said of no project: a locked one keeps its secrets.
-      notify: (title, body) =>
-        void this.push.deliver({ tag: "app-update", threadId: "", title, body }, ""),
+      notify: (title, body) => {
+        this.push
+          .deliver({ tag: "app-update", threadId: "", title, body }, "")
+          .catch((error: unknown) =>
+            console.error("Notifications :", error instanceof Error ? error.message : error),
+          );
+      },
       // Tasks due while the app is replaced start after, as after any stop.
       pause: () => this.scheduler.close(),
       resume: () => {
@@ -768,8 +797,10 @@ export class Hub {
 
   snapshot(pairedDevice = false): Snapshot {
     const mcpSecretsError = this.catalog.mcpSecretsError();
-    const defaults = this.store.getSetting<Defaults | null>(DEFAULTS, null);
-    const presets = this.store.getSetting<TeamPreset[] | null>(TEAM_PRESETS_SETTING, null);
+    const defaults = this.store.getSetting<Defaults | null>(DEFAULTS, null, "object");
+    const presets = this.store
+      .getSetting<unknown[] | null>(TEAM_PRESETS_SETTING, null, "array")
+      ?.filter(isTeamPreset);
     return {
       coordinator: this.coordinators.coordinatorSettings(),
       favorites: this.catalog.favorites(),
@@ -780,7 +811,7 @@ export class Hub {
       ...(mcpSecretsError ? { mcpSecretsError } : {}),
       agents: this.catalog.list(),
       projects: this.store.listProjects().map((p) => this.withGit(p)),
-      threads: this.store.listThreads(),
+      threads: this.store.listThreads().map((t) => this.asEnded(t)),
       quotas: this.quotas.list(),
       plan: this.planner.list(),
       schedules: this.scheduler.list(),
@@ -789,6 +820,7 @@ export class Hub {
       ...(defaults ? { defaults } : {}),
       ...(presets ? { teamPresets: presets } : {}),
       app: this.app.info(),
+      ...(this.storageDown ? { storageError: this.storageNotice()! } : {}),
     };
   }
 
@@ -916,7 +948,18 @@ export class Hub {
     }
   }
 
+  /** Does what a screen asks. A write the database refuses is said in the user's words. */
   async handle(client: Client, message: ClientMessage): Promise<void> {
+    try {
+      await this.dispatch(client, message);
+    } catch (error) {
+      const refused = storageTrouble(error);
+      if (!refused || !this.storageFailed(error)) throw error;
+      throw new Error(`${refused} : rien n'a été enregistré.`, { cause: error });
+    }
+  }
+
+  private async dispatch(client: Client, message: ClientMessage): Promise<void> {
     if (client.deviceId && COMPUTER_ONLY_MESSAGES.has(message.type)) {
       throw new Error(ONLY_ON_COMPUTER);
     }
@@ -1075,9 +1118,9 @@ export class Hub {
         return;
       case "thread.open":
         watch(client, message.threadId);
-        // Opened: read.
+        // Opened: read. A refused note of it does not keep the thread from opening.
         if (this.store.getThread(message.threadId)?.unread) {
-          this.updateThread(message.threadId, { unread: false });
+          this.wrote(() => this.updateThread(message.threadId, { unread: false }));
         }
         client.send(
           this.changesSince(message.threadId, message.since) ?? this.opening(message.threadId),
@@ -1148,7 +1191,7 @@ export class Hub {
         return;
       case "item.get": {
         this.requireThread(message.threadId);
-        const item = this.store.getItem(message.threadId, message.itemId);
+        const item = this.itemOf(message.threadId, message.itemId);
         if (!item) throw new Error("Cet élément n'est plus dans le fil.");
         client.send({
           type: "fullItem",
@@ -1202,7 +1245,7 @@ export class Hub {
         return;
       }
       case "defaults.set": {
-        const current = this.store.getSetting<Defaults | null>(DEFAULTS, null);
+        const current = this.store.getSetting<Defaults | null>(DEFAULTS, null, "object");
         const defaults: Defaults = {
           permissionMode: message.permissionMode ?? current?.permissionMode ?? "supervised",
           isolated: message.isolated ?? current?.isolated ?? true,
@@ -2495,6 +2538,8 @@ export class Hub {
   ): void {
     const thread = this.requireLiveThread(threadId);
     if (this.turns.has(threadId)) throw new Error("L'agent travaille encore sur ce fil.");
+    // A turn whose message could not be kept is not started: the user sends it again later.
+    if (this.storageDown) throw new StorageRefused(this.storageDown);
     // Nothing new starts while the app is replaced: it would be cut off a moment later.
     if (this.app.switching) {
       throw new Error("MoonAgentic installe sa mise à jour : réessaie après le redémarrage.");
@@ -2516,31 +2561,57 @@ export class Hub {
       at: Date.now(),
     });
     this.updateThread(threadId, { status: "running", error: null });
+    // This turn's own end is the one that counts from here.
+    this.unsettled.delete(threadId);
     this.turnIds.set(threadId, randomUUID());
     this.cancelled.delete(threadId);
     this.pool.clearIdle(threadId);
     const queued = !!(byTeam || from || auto);
-    const turn = this.runTurn(thread, text, itemId, context, queued, images).finally(() => {
-      const cancelled = this.cancelled.has(threadId);
-      this.turns.delete(threadId);
-      this.diagnostics?.onActivityChanged();
-      // What was said in this turn can be searched for without waiting on a search.
-      this.indexSearchSoon();
-      // A place is free for the first turn in line.
-      if (!this.closed) this.admit();
-      this.turnIds.delete(threadId);
-      this.cancelled.delete(threadId);
-      this.toolNames.delete(threadId);
-      this.flushText(threadId);
-      // An agent killed in a quiet stretch could not say it was over.
+    const turn = this.runTurn(thread, text, itemId, context, queued, images)
+      .catch((error: unknown) => {
+        // A write the database refused where the turn did not expect it: the turn is over all
+        // the same, and nothing waits on its promise to say so. Any other failure stays one.
+        const refused = storageTrouble(error);
+        if (!refused || !this.storageFailed(error)) throw error;
+        this.settleTurn(threadId, {
+          status: "error",
+          error: `${refused} : ce tour n'a pas pu aller au bout.`,
+        });
+      })
+      .finally(() => this.afterTurn(threadId));
+    this.turns.set(threadId, turn);
+    this.diagnostics?.onActivityChanged();
+  }
+
+  /**
+   * What the end of a turn sets going, whatever its end. Each write stands alone: one the
+   * database refuses (see `wrote`) keeps neither the next from being tried nor the thread
+   * from going on.
+   */
+  private afterTurn(threadId: string): void {
+    const cancelled = this.cancelled.has(threadId);
+    this.turns.delete(threadId);
+    this.diagnostics?.onActivityChanged();
+    // What was said in this turn can be searched for without waiting on a search.
+    this.indexSearchSoon();
+    // A place is free for the first turn in line.
+    if (!this.closed) this.admit();
+    this.turnIds.delete(threadId);
+    this.cancelled.delete(threadId);
+    this.toolNames.delete(threadId);
+    this.flushText(threadId);
+    // An agent killed in a quiet stretch could not say it was over.
+    this.wrote(() => {
       if (this.store.getThread(threadId)?.quietSince) {
         this.updateThread(threadId, { quietSince: null });
       }
-      this.pool.leftIdle(threadId);
-      if (!this.closed) {
-        // What the turn used shows in the agent's figures soon after.
-        const agentId = this.store.getThread(threadId)?.agentId;
-        if (agentId) this.quotas.afterTurn(agentId);
+    });
+    this.pool.leftIdle(threadId);
+    if (!this.closed) {
+      // What the turn used shows in the agent's figures soon after.
+      const agentId = this.store.getThread(threadId)?.agentId;
+      if (agentId) this.quotas.afterTurn(agentId);
+      this.wrote(() => {
         const summary = summaryOf(this.lastReply(threadId));
         const now = this.store.getThread(threadId);
         if (summary && now && now.summary !== summary) this.updateThread(threadId, { summary });
@@ -2550,39 +2621,42 @@ export class Hub {
         if (summary && now && !seen && !cancelled && !now.parentId && now.kind !== "coordinator") {
           this.updateThread(threadId, { unread: true });
         }
-      }
-      // Last, so the team can give the thread its next message. A server stopping leaves
-      // its teams as they are, for the next start to find them cut short.
+      });
+    }
+    // Last, so the team can give the thread its next message. A server stopping leaves
+    // its teams as they are, for the next start to find them cut short.
+    try {
+      if (!this.closed) this.teams.turnEnded(threadId, cancelled);
+    } catch (error) {
+      console.error("Équipe :", error);
+    }
+    try {
+      if (!this.closed) this.reviews.turnEnded(threadId, cancelled);
+    } catch (error) {
+      console.error("Revue :", error);
+    }
+    // What the user said with a refusal is their next message, now that the agent can
+    // take one. A turn they stopped starts nothing, so the words go with it.
+    const followUp = this.followUps.get(threadId);
+    this.followUps.delete(threadId);
+    if (followUp && !this.closed && !cancelled && !this.turns.has(threadId)) {
       try {
-        if (!this.closed) this.teams.turnEnded(threadId, cancelled);
+        this.send(threadId, followUp);
       } catch (error) {
-        console.error("Équipe :", error);
+        if (!this.storageFailed(error)) console.error("Message après un refus :", error);
       }
-      try {
-        if (!this.closed) this.reviews.turnEnded(threadId, cancelled);
-      } catch (error) {
-        console.error("Revue :", error);
-      }
-      // What the user said with a refusal is their next message, now that the agent can
-      // take one. A turn they stopped starts nothing, so the words go with it.
-      const followUp = this.followUps.get(threadId);
-      this.followUps.delete(threadId);
-      if (followUp && !this.closed && !cancelled && !this.turns.has(threadId)) {
-        try {
-          this.send(threadId, followUp);
-        } catch (error) {
-          console.error("Message après un refus :", error);
-        }
-      }
-      // A turn the user stopped starts nothing by itself: what waits goes after the next one.
-      // One that ended on an error holds the user's own messages back: they look at it first.
-      // Unless they stopped it for a message that waits to go now.
-      const failed = this.store.getThread(threadId)?.status === "error";
-      const atOnce = this.sendAfterStop.delete(threadId);
-      // A fix of the pull request whose words after a refusal go on in a new turn is pushed
-      // when that one ends.
-      if (this.prFixing.has(threadId) && this.turns.has(threadId)) return;
-      const fixing = this.prFixing.delete(threadId);
+    }
+    // A turn the user stopped starts nothing by itself: what waits goes after the next one.
+    // One that ended on an error holds the user's own messages back: they look at it first.
+    // Unless they stopped it for a message that waits to go now.
+    const now = this.store.getThread(threadId);
+    const failed = !!now && this.asEnded(now).status === "error";
+    const atOnce = this.sendAfterStop.delete(threadId);
+    // A fix of the pull request whose words after a refusal go on in a new turn is pushed
+    // when that one ends.
+    if (this.prFixing.has(threadId) && this.turns.has(threadId)) return;
+    const fixing = this.prFixing.delete(threadId);
+    this.wrote(() => {
       // The goal learns what this turn said, unless the turn was the pull request's fix;
       // it goes on after the messages that wait.
       if (!this.closed && !fixing) this.settleGoal(threadId, cancelled && !atOnce, failed);
@@ -2595,8 +2669,6 @@ export class Hub {
       }
       this.goOn(threadId, cancelled, failed, atOnce);
     });
-    this.turns.set(threadId, turn);
-    this.diagnostics?.onActivityChanged();
   }
 
   /**
@@ -2721,7 +2793,7 @@ export class Hub {
       const choices = session?.model?.choices ?? this.store.getAgentModels(thread.agentId)?.models;
       if (!choices?.some((c) => c.id === model)) throw new Error("Modèle inconnu.");
       if (session?.model) {
-        if (await this.frozeOnSetting(threadId, () => session!.setModel(model))) {
+        if (await this.frozeOnSetting(threadId, session, (s) => s.setModel(model))) {
           session = undefined;
         } else {
           // A new model can bring other effort levels, for the picker too.
@@ -2741,13 +2813,17 @@ export class Hub {
    * is stopped, and true is returned: the change is kept for the thread, and its next agent
    * starts with it, instead of the thread waiting on a frozen one.
    */
-  private async frozeOnSetting(threadId: string, change: () => Promise<void>): Promise<boolean> {
+  private async frozeOnSetting(
+    threadId: string,
+    session: AgentSession,
+    change: (session: AgentSession) => Promise<void>,
+  ): Promise<boolean> {
     try {
-      await change();
+      await change(session);
       return false;
     } catch (error) {
       // An agent that went away takes the change with it: the next one starts with it.
-      if (CONNECTION_CLOSED.test(describe(error))) {
+      if (CONNECTION_CLOSED.test(describe(error)) || session.closed) {
         await this.pool.stop(threadId);
         return true;
       }
@@ -2769,7 +2845,7 @@ export class Hub {
       const setting = offered?.find((s) => s.id === settingId);
       if (!setting?.choices.some((c) => c.id === value)) throw new Error("Réglage inconnu.");
       if (session) {
-        if (await this.frozeOnSetting(threadId, () => session!.setSetting(settingId, value))) {
+        if (await this.frozeOnSetting(threadId, session, (s) => s.setSetting(settingId, value))) {
           session = undefined;
         } else {
           this.catalog.learn(thread.agentId, session.model, session.settings, false);
@@ -3075,7 +3151,11 @@ export class Hub {
   }
 
   private pendingRestores(): Record<string, PendingRestore> {
-    return this.store.getSetting<Record<string, PendingRestore>>("pendingRestores", {});
+    return this.store.recordSetting(
+      "pendingRestores",
+      (r): r is PendingRestore =>
+        isRecord(r) && typeof r.itemId === "string" && typeof r.tree === "string",
+    );
   }
 
   private setPendingRestore(threadId: string, restore: PendingRestore | undefined): void {
@@ -3126,6 +3206,9 @@ export class Hub {
       this.setPendingRestore(threadId, undefined);
       return { removed, thread };
     });
+    // What waited to be written came after the message gone back to: it goes with the rest,
+    // and so does the end of a turn that waited, which would put the thread back as it was.
+    this.dropHeld(threadId);
     // The images of the messages taken out go too: the composer got them back to send again.
     this.attachments.remove(
       threadId,
@@ -3263,6 +3346,7 @@ export class Hub {
       this.coordinators.forget(threadId);
       this.attachments.forget(threadId);
       this.store.deleteThread(threadId);
+      this.dropHeld(threadId);
       this.broadcast({ type: "threadRemoved", threadId });
       this.planner.threadDeleted(threadId);
       this.scheduler.threadDeleted(threadId);
@@ -3396,7 +3480,7 @@ export class Hub {
   /** Every permission request still waiting for the user, oldest first. */
   private pendingRequests(): PendingRequest[] {
     return [...this.pendingPermissions].flatMap(([itemId, pending]): PendingRequest[] => {
-      const item = this.store.getItem(pending.threadId, itemId);
+      const item = this.itemOf(pending.threadId, itemId);
       if (item?.kind !== "permission" || item.outcome !== null) return [];
       return [
         {
@@ -3414,7 +3498,7 @@ export class Hub {
   private pendingQuestions(): PendingQuestion[] {
     return [...this.pendingForms.keys()].flatMap((itemId): PendingQuestion[] => {
       const threadId = this.pendingPermissions.get(itemId)?.threadId;
-      const item = threadId ? this.store.getItem(threadId, itemId) : undefined;
+      const item = threadId ? this.itemOf(threadId, itemId) : undefined;
       if (!threadId || item?.kind !== "tool" || item.form !== "open" || !item.questions) return [];
       return [{ threadId, itemId, questions: item.questions, at: item.at }];
     });
@@ -3443,17 +3527,19 @@ export class Hub {
    */
   respondToPermission(threadId: string, itemId: string, optionId: string, followUp?: string): void {
     const pending = this.pendingPermissions.get(itemId);
-    const item = this.store.getItem(threadId, itemId);
+    const item = this.itemOf(threadId, itemId);
     if (!pending || pending.threadId !== threadId || item?.kind !== "permission") {
       throw new Error("Cette demande n'attend plus de réponse.");
     }
     if (!item.options.some((o) => o.optionId === optionId)) throw new Error("Choix inconnu.");
     this.pendingPermissions.delete(itemId);
     if (followUp?.trim() && this.turns.has(threadId)) this.followUps.set(threadId, followUp.trim());
-    this.putItem(threadId, { ...item, outcome: optionId });
+    // The answer is given: the agent gets it even when the database refuses to write it,
+    // which is then kept to be written later. A turn never waits on a lost answer.
+    this.putItem(threadId, { ...item, outcome: optionId }, true);
     this.broadcastRequests();
     if (![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)) {
-      this.updateThread(threadId, { status: "running" });
+      this.wrote(() => this.updateThread(threadId, { status: "running" }));
     }
     pending.resolve({ outcome: { outcome: "selected", optionId } });
   }
@@ -3462,7 +3548,7 @@ export class Hub {
   respondToQuestion(threadId: string, itemId: string, answers: QuestionAnswer[]): void {
     const pending = this.pendingPermissions.get(itemId);
     const asked = this.pendingForms.get(itemId);
-    const item = this.store.getItem(threadId, itemId);
+    const item = this.itemOf(threadId, itemId);
     if (!pending || !asked || pending.threadId !== threadId || item?.kind !== "tool") {
       throw new Error("Cette question n'attend plus de réponse.");
     }
@@ -3472,17 +3558,22 @@ export class Hub {
     }
     this.pendingPermissions.delete(itemId);
     this.pendingForms.delete(itemId);
-    this.putItem(threadId, {
-      ...item,
-      form: "answered",
-      status: "completed",
-      answers: asked.form.fields.map((f) =>
-        [content[f.key] ?? [], f.custom ? (content[f.custom] ?? []) : []].flat().join(", "),
-      ),
-    });
+    // As for a permission: the answer goes to the agent whatever the database does with it.
+    this.putItem(
+      threadId,
+      {
+        ...item,
+        form: "answered",
+        status: "completed",
+        answers: asked.form.fields.map((f) =>
+          [content[f.key] ?? [], f.custom ? (content[f.custom] ?? []) : []].flat().join(", "),
+        ),
+      },
+      true,
+    );
     this.broadcastRequests();
     if (![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)) {
-      this.updateThread(threadId, { status: "running" });
+      this.wrote(() => this.updateThread(threadId, { status: "running" }));
     }
     asked.answer({ action: "accept", content });
   }
@@ -3546,6 +3637,7 @@ export class Hub {
     clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
     clearInterval(this.sweepTimer);
+    clearInterval(this.storageTimer);
     this.app.close();
     this.quotas.close();
     this.scheduler.close();
@@ -3578,6 +3670,14 @@ export class Hub {
     await upTo(Promise.all([...this.steps].map((step) => step.catch(() => undefined))));
     // A turn that ended meanwhile armed no timer (closed), but leaves nothing behind either.
     this.pool.clear();
+    // What the database refused is tried a last time: its cause may be gone by now.
+    this.storageDown = undefined;
+    try {
+      this.writeWaiting();
+    } catch (error) {
+      this.storageFailed(error);
+      console.error("Base de données : ce qui attendait n'a pas pu être écrit.", error);
+    }
     // Text an agent sent after its turn ended is still written down.
     for (const threadId of this.drafts.keys()) this.flushText(threadId);
   }
@@ -3591,6 +3691,7 @@ export class Hub {
     queued?: boolean,
     images: readonly ImageRef[] = [],
   ): Promise<void> {
+    let session: AgentSession | undefined;
     try {
       // Behind those already in line, so none is overtaken.
       if (queued && (this.line.size > 0 || this.turnsAtWork() >= this.maxTurns())) {
@@ -3598,15 +3699,16 @@ export class Hub {
         await this.line.wait(thread.id);
         if (this.store.getThread(thread.id)) this.updateThread(thread.id, { inLine: null });
         if (this.cancelled.has(thread.id)) {
-          this.updateThread(thread.id, { status: "idle" });
+          this.settleTurn(thread.id, { status: "idle" });
           return;
         }
       }
-      const continuing = this.pool.has(thread.id);
-      const session = await this.session(thread);
+      // A pooled session whose connection already closed is replaced, not continued.
+      const continuing = this.pool.has(thread.id) && !this.pool.isDead(thread.id);
+      session = await this.session(thread);
       await this.checkpoint(thread.id, itemId);
       if (this.cancelled.has(thread.id)) {
-        this.updateThread(thread.id, { status: "idle" });
+        this.settleTurn(thread.id, { status: "idle" });
         return;
       }
       // A new session knows nothing of the project's shared memory or earlier thread messages:
@@ -3645,25 +3747,33 @@ export class Hub {
             : stopReason === "max_turn_requests"
               ? "L'agent a atteint son nombre maximal d'étapes pour ce tour. Envoie « continue » pour qu'il reprenne."
               : null;
-      this.updateThread(thread.id, error ? { status: "error", error } : { status: "idle" });
+      this.settleTurn(thread.id, error ? { status: "error", error } : { status: "idle" });
     } catch (error) {
       this.settlePermissions(thread.id);
-      if (needsSignIn(error)) this.catalog.recordCheck(thread.agentId, { ok: false, error });
+      // A write the database refused is no failure of the agent: the screens are told why.
+      const refused = storageTrouble(error);
+      if (refused) this.storageFailed(error);
+      else if (needsSignIn(error)) {
+        this.wrote(() => this.catalog.recordCheck(thread.agentId, { ok: false, error }));
+      }
       // Stopping an agent that was still starting is what the user asked for, not a failure.
       if (this.cancelled.has(thread.id)) {
-        this.updateThread(thread.id, { status: "idle", error: null });
+        this.settleTurn(thread.id, { status: "idle", error: null });
         return;
       }
       // An agent that crashed already left its own reason, which beats "connection closed".
-      const said = describe(error);
+      const said = refused ? `${refused} : ce tour n'a pas pu aller au bout.` : describe(error);
       // An agent whose connection closed is of no more use, even if its process lingers:
-      // it goes, so a change of model and the next message start a new one.
-      if (CONNECTION_CLOSED.test(said)) await this.pool.stop(thread.id).catch(() => undefined);
+      // it goes, so a change of model and the next message start a new one. The connection
+      // itself tells: its error does not always say « connection closed » (a message past
+      // the protocol's size limit says something else).
+      const closed = CONNECTION_CLOSED.test(said) || !!session?.closed;
+      if (closed) await this.pool.stop(thread.id).catch(() => undefined);
       if (this.store.getThread(thread.id)?.status !== "error") {
         // Its process went away mid-turn: said plainly, with the technical detail under it.
-        this.updateThread(thread.id, {
+        this.settleTurn(thread.id, {
           status: "error",
-          error: CONNECTION_CLOSED.test(said) ? stoppedError(said) : said,
+          error: closed ? stoppedError(said) : said,
         });
       }
     }
@@ -3702,6 +3812,9 @@ export class Hub {
   }
 
   private session(thread: Thread): Promise<AgentSession> {
+    // An agent whose connection closed while it waited (a line too long, a broken stream)
+    // is let go, and the new one starts once its process is gone.
+    this.pool.dropDead(thread.id);
     const existing = this.pool.get(thread.id);
     if (existing) return existing;
     const project = this.store.getProject(thread.projectId);
@@ -3712,7 +3825,14 @@ export class Hub {
       ),
     );
     started.then(
-      (s) => this.store.setSessionId(thread.id, s.sessionId),
+      // Only what lets a later start continue the session: a refused write just loses that.
+      (s) => {
+        try {
+          this.wrote(() => this.store.setSessionId(thread.id, s.sessionId));
+        } catch (error) {
+          console.error("Session de l'agent non retenue :", error);
+        }
+      },
       () => undefined,
     );
     return started;
@@ -3888,10 +4008,13 @@ export class Hub {
       mcpServers: [...userMcp, ...coordinatorMcp],
       signal: AbortSignal.any([stop, AbortSignal.timeout(START_TIMEOUT_MS)]),
       handlers: {
-        onUpdate: (update) => this.applyUpdate(thread.id, update),
+        // The agent's connection keeps to itself an error thrown here: a refused write must
+        // still be said, and what it would have written kept.
+        onUpdate: (update) => void this.wrote(() => this.applyUpdate(thread.id, update)),
+        // Told from a timer, where nothing catches a write the database refuses.
         onQuiet: (since) => {
           if (this.closed || !this.store.getThread(thread.id)) return;
-          this.updateThread(thread.id, { quietSince: since ?? null });
+          this.wrote(() => this.updateThread(thread.id, { quietSince: since ?? null }));
         },
         requestPermission: (request, signal) => this.requestPermission(thread.id, request, signal),
         elicit: (request, signal) => this.requestForm(thread.id, request, signal),
@@ -3910,20 +4033,27 @@ export class Hub {
             );
           }
           if (reason && this.turns.has(thread.id) && !this.cancelled.has(thread.id)) {
-            this.updateThread(thread.id, { status: "error", error: stoppedError(reason) });
+            // Told as the process exits, where nothing catches either: the turn's own end
+            // says it again if this write is refused.
+            this.wrote(() =>
+              this.updateThread(thread.id, { status: "error", error: stoppedError(reason) }),
+            );
           }
         },
+        // Told from the agent's connection, which keeps an error to itself.
         onConfig: ({ model, settings }) => {
           if (!ready) return;
-          this.catalog.learn(thread.agentId, model, settings, false);
-          const current = this.store.getThread(thread.id);
-          if (model && model.current !== current?.model) {
-            this.updateThread(thread.id, { model: model.current });
-          }
-          const values = settingValues(settings);
-          if (values && JSON.stringify(values) !== JSON.stringify(current?.settings)) {
-            this.updateThread(thread.id, { settings: values });
-          }
+          this.wrote(() => {
+            this.catalog.learn(thread.agentId, model, settings, false);
+            const current = this.store.getThread(thread.id);
+            if (model && model.current !== current?.model) {
+              this.updateThread(thread.id, { model: model.current });
+            }
+            const values = settingValues(settings);
+            if (values && JSON.stringify(values) !== JSON.stringify(current?.settings)) {
+              this.updateThread(thread.id, { settings: values });
+            }
+          });
         },
       },
     });
@@ -3935,8 +4065,11 @@ export class Hub {
         startMs,
       );
     }
-    this.catalog.recordCheck(thread.agentId, { ok: true, version: session.agentVersion });
     try {
+      // Inside: an agent started and then left running unseen, on any failure from here.
+      this.wrote(() =>
+        this.catalog.recordCheck(thread.agentId, { ok: true, version: session.agentVersion }),
+      );
       this.catalog.learn(thread.agentId, session.model, session.settings, session.fresh);
       const model = session.model;
       if (model) {
@@ -4014,7 +4147,8 @@ export class Hub {
             : before?.cost;
         const usage = { used: update.used, size: update.size, ...(cost ? { cost } : {}) };
         if (JSON.stringify(before) === JSON.stringify(usage)) return;
-        this.updateThread(threadId, { usage });
+        // Figures the next update brings again: one the database refuses is let go.
+        this.wrote(() => this.updateThread(threadId, { usage }));
         return;
       }
       case "available_commands_update": {
@@ -4026,25 +4160,29 @@ export class Hub {
           canCompact !== !!thread.canCompact ||
           JSON.stringify(commands) !== JSON.stringify(thread.commands ?? [])
         ) {
-          this.updateThread(threadId, { canCompact, commands });
+          this.wrote(() => this.updateThread(threadId, { canCompact, commands }));
         }
-        this.catalog.rememberCommands(thread.agentId, commands);
+        this.wrote(() => this.catalog.rememberCommands(thread.agentId, commands));
         return;
       }
       case "plan": {
         const id = `plan:${this.turnIds.get(threadId) ?? "late"}`;
-        const before = this.store.getItem(threadId, id);
+        const before = this.itemOf(threadId, id);
         const now = Date.now();
-        this.putItem(threadId, {
-          id,
-          kind: "plan",
-          entries: mergePlan(
-            before?.kind === "plan" ? before.entries : undefined,
-            update.entries.map((e) => ({ content: e.content, status: e.status })),
-            now,
-          ),
-          at: before?.at ?? now,
-        });
+        this.putItem(
+          threadId,
+          {
+            id,
+            kind: "plan",
+            entries: mergePlan(
+              before?.kind === "plan" ? before.entries : undefined,
+              update.entries.map((e) => ({ content: e.content, status: e.status })),
+              now,
+            ),
+            at: before?.at ?? now,
+          },
+          true,
+        );
         return;
       }
       default:
@@ -4061,14 +4199,21 @@ export class Hub {
     let draft = this.drafts.get(threadId);
     if (draft?.item.kind !== kind) {
       this.flushText(threadId);
-      const last = this.store.lastItem(threadId);
+      // What the agent said last, written or still waiting to be: text that waits goes on
+      // where it is, not from what the database holds of it.
+      const last = this.lastItemOf(threadId);
       if (last?.kind !== kind) {
         const item: TextItem = { id: `${kind}:${randomUUID()}`, kind, text, at: Date.now() };
-        this.putItem(threadId, item);
-        this.drafts.set(threadId, { item, dirty: false });
+        this.putItem(threadId, item, true);
+        const held = this.unsaved.get(item.id);
+        // Refused: the text is the stream's own from here, written with its next words.
+        if (held) this.unsaved.delete(item.id);
+        this.drafts.set(threadId, { item, dirty: !!held });
         return;
       }
-      draft = { item: last, dirty: false };
+      const held = this.unsaved.get(last.id);
+      if (held) this.unsaved.delete(last.id);
+      draft = { item: last, dirty: !!held };
       this.drafts.set(threadId, draft);
     }
     draft.item = { ...draft.item, text: draft.item.text + text };
@@ -4084,9 +4229,144 @@ export class Hub {
     if (!draft) return;
     clearTimeout(draft.timer);
     draft.timer = undefined;
-    if (draft.dirty && this.store.getThread(threadId)) this.store.putItem(threadId, draft.item);
-    draft.dirty = false;
+    if (draft.dirty && this.store.getThread(threadId)) {
+      // While the database refuses writes, the text waits in memory: trying it four times a
+      // second would wait on another program's hold each time.
+      const written =
+        !this.storageDown && this.wrote(() => this.store.putItem(threadId, draft.item));
+      if (written) draft.dirty = false;
+      // Text that ends here has no later write to count on: it is written with what waits.
+      else if (end) this.hold(threadId, draft.item);
+    } else {
+      draft.dirty = false;
+    }
     if (end) this.drafts.delete(threadId);
+  }
+
+  /**
+   * Takes note of a write the database refused for a cause outside the server: a full disk,
+   * another program holding the file. Every screen is told, and a write is tried again now
+   * and then until one passes. False for any other error, which stays its caller's.
+   */
+  storageFailed(error: unknown): boolean {
+    const reason = storageTrouble(error);
+    if (!reason) return false;
+    if (this.closed) {
+      // Stopping: the writes left fail at once, rather than each wait on the same hold and
+      // hold the stop up with them.
+      if (!this.storageDown) {
+        this.storageDown = reason;
+        try {
+          this.store.waitOnHold(false);
+        } catch {
+          // The database is closing too.
+        }
+      }
+      return true;
+    }
+    if (this.storageDown !== reason) {
+      this.storageDown = reason;
+      // From here writes fail at once instead of each waiting on the same hold.
+      this.store.waitOnHold(false);
+      const detail = error instanceof Error ? error.message : String(error);
+      console.error(
+        `Base de données : ${reason.toLowerCase()}, plus rien n'est enregistré (${detail}).`,
+      );
+      this.broadcast({ type: "storage", error: this.storageNotice()! });
+    }
+    if (!this.storageTimer) {
+      this.storageTimer = setInterval(() => this.retryStorage(), this.storageRetryMs);
+      this.storageTimer.unref();
+    }
+    return true;
+  }
+
+  /** What the screens say while nothing is saved. */
+  private storageNotice(): string | undefined {
+    return this.storageDown && `${this.storageDown} : plus rien n'est enregistré`;
+  }
+
+  /**
+   * Runs a write. False when the database refused it for a cause outside the server, which
+   * the screens are then told instead of the error being thrown: for writes made where
+   * nothing catches (the end of a turn, a timer, an agent's exit), which stopped the whole
+   * server. Any other failure is thrown as before.
+   */
+  private wrote(write: () => void): boolean {
+    try {
+      write();
+      return true;
+    } catch (error) {
+      if (this.storageFailed(error)) return false;
+      throw error;
+    }
+  }
+
+  /** Tries a write again; once one passes, writes what waited and tells the screens. */
+  private retryStorage(): void {
+    if (this.closed || !this.storageDown) return;
+    try {
+      this.store.tryWrite();
+      this.writeWaiting();
+      // Text still being streamed waited too: written before the screens are told, so a
+      // little room freed on the disk does not make the notice come and go.
+      for (const [threadId, draft] of this.drafts) {
+        if (!draft.dirty || !this.store.getThread(threadId)) continue;
+        this.store.putItem(threadId, draft.item);
+        draft.dirty = false;
+      }
+    } catch (error) {
+      if (!this.storageFailed(error)) console.error("Base de données :", error);
+      return;
+    }
+    clearInterval(this.storageTimer);
+    this.storageTimer = undefined;
+    this.storageDown = undefined;
+    this.store.waitOnHold(true);
+    console.log("Base de données : les écritures passent de nouveau.");
+    this.broadcast({ type: "storage", error: null });
+  }
+
+  /** Writes the text and the ends of turns that the database refused; throws if it still does. */
+  private writeWaiting(): void {
+    for (const [itemId, { threadId, item }] of this.unsaved) {
+      if (this.store.getThread(threadId)) {
+        const seq = this.store.putItem(threadId, item);
+        // Screens get it with its place, and one that comes back later finds it changed.
+        const rev = this.log(threadId).touch(item.id);
+        this.sendToViewers(threadId, { type: "item", threadId, item: light(item), seq, rev });
+      }
+      this.unsaved.delete(itemId);
+    }
+    for (const [threadId, end] of this.unsettled) {
+      // A turn started since writes the thread's state itself.
+      if (this.store.getThread(threadId) && !this.turns.has(threadId)) {
+        this.updateThread(threadId, end);
+      }
+      this.unsettled.delete(threadId);
+    }
+  }
+
+  /**
+   * Writes how a turn ended. When the database refuses it, the end is kept to be written once
+   * writes pass again, and the screens get it now: the thread does not look at work for good.
+   */
+  private settleTurn(threadId: string, end: TurnEnd): void {
+    if (this.wrote(() => this.updateThread(threadId, end))) {
+      this.unsettled.delete(threadId);
+      return;
+    }
+    this.unsettled.set(threadId, end);
+    const thread = this.store.getThread(threadId);
+    if (thread) this.broadcast({ type: "thread", thread: this.asEnded(thread) });
+  }
+
+  /** The thread as its last turn left it, when that could not be written yet. */
+  private asEnded(thread: Thread): Thread {
+    const end = this.unsettled.get(thread.id);
+    if (!end) return thread;
+    const { error: _was, ...rest } = thread;
+    return { ...rest, status: end.status, ...(end.error ? { error: end.error } : {}) };
   }
 
   private flushAll(): void {
@@ -4097,7 +4377,7 @@ export class Hub {
   private items(threadId: string): Item[] {
     // Written down, but kept open: the agent may still be adding to it.
     this.flushText(threadId, false);
-    return this.store.listItems(threadId);
+    return this.withHeld(threadId, this.store.listItems(threadId), true);
   }
 
   private log(threadId: string): TimelineLog {
@@ -4117,7 +4397,8 @@ export class Hub {
     return {
       type: "items",
       threadId,
-      items: page.items.map(light),
+      // What waits to be written too: a screen that opens meanwhile sees what others see.
+      items: this.withHeld(threadId, page.items, true).map(light),
       first: page.first,
       earlier: page.earlier,
       epoch: this.epoch,
@@ -4139,11 +4420,23 @@ export class Hub {
     const ids = log.since(since.rev);
     if (!ids) return undefined;
     this.flushText(threadId, false);
+    const heldList = this.heldItems(threadId);
+    const held = new Map(heldList.map((item, index) => [item.id, { item, index }]));
     const items = ids
-      .map((id) => this.store.getItemAt(threadId, id))
+      .map((id) => {
+        const found = this.store.getItemAt(threadId, id);
+        const waiting = held.get(id);
+        if (!waiting) return found && { ...found, order: found.seq };
+        return {
+          item: waiting.item,
+          seq: found?.seq ?? Number.MAX_SAFE_INTEGER,
+          // New held items stay in their creation order rather than last-touched order.
+          order: found?.seq ?? Number.MAX_SAFE_INTEGER - heldList.length + waiting.index,
+        };
+      })
       .filter((found) => found !== undefined && found.seq >= since.first)
-      .map((found) => ({ item: light(found!.item), seq: found!.seq }))
-      .sort((a, b) => a.seq - b.seq);
+      .sort((a, b) => a!.order - b!.order)
+      .map((found) => ({ item: light(found!.item), seq: found!.seq }));
     return { type: "changes", threadId, items, rev: log.rev };
   }
 
@@ -4157,7 +4450,7 @@ export class Hub {
     // Agents may number their tool calls from scratch on every turn or session, so the turn
     // is part of the item's id: a later call never replaces an earlier turn's card.
     const id = `tool:${this.turnIds.get(threadId) ?? "late"}:${update.toolCallId}`;
-    const existing = this.store.getItem(threadId, id) as ToolItem | undefined;
+    const existing = this.itemOf(threadId, id) as ToolItem | undefined;
     const content = update.content ? toolContent(update.content) : undefined;
     const questions = toolQuestions(update.rawInput) ?? existing?.questions;
     const images = [
@@ -4168,29 +4461,33 @@ export class Hub {
     // A new call joins the step of the agent's plan it is on.
     if (!existing && title) {
       const planId = `plan:${this.turnIds.get(threadId) ?? "late"}`;
-      const plan = this.store.getItem(threadId, planId);
+      const plan = this.itemOf(threadId, planId);
       const entries = plan?.kind === "plan" ? noteTool(plan.entries, title) : undefined;
-      if (plan?.kind === "plan" && entries) this.putItem(threadId, { ...plan, entries });
+      if (plan?.kind === "plan" && entries) this.putItem(threadId, { ...plan, entries }, true);
     }
-    this.putItem(threadId, {
-      id,
-      kind: "tool",
-      title: title || existing?.title || "Outil",
-      toolKind: update.kind ?? existing?.toolKind ?? "other",
-      status: update.status ?? existing?.status ?? "pending",
-      content: content ?? existing?.content ?? [],
-      ...(images.length ? { images } : {}),
-      ...(questions ? { questions } : {}),
-      // A question the agent holds its turn on keeps what the form asked and its answer.
-      ...(existing?.form
-        ? {
-            form: existing.form,
-            questions: existing.questions ?? questions ?? [],
-            ...(existing.answers ? { answers: existing.answers } : {}),
-          }
-        : {}),
-      at: existing?.at ?? Date.now(),
-    });
+    this.putItem(
+      threadId,
+      {
+        id,
+        kind: "tool",
+        title: title || existing?.title || "Outil",
+        toolKind: update.kind ?? existing?.toolKind ?? "other",
+        status: update.status ?? existing?.status ?? "pending",
+        content: content ?? existing?.content ?? [],
+        ...(images.length ? { images } : {}),
+        ...(questions ? { questions } : {}),
+        // A question the agent holds its turn on keeps what the form asked and its answer.
+        ...(existing?.form
+          ? {
+              form: existing.form,
+              questions: existing.questions ?? questions ?? [],
+              ...(existing.answers ? { answers: existing.answers } : {}),
+            }
+          : {}),
+        at: existing?.at ?? Date.now(),
+      },
+      true,
+    );
   }
 
   /** Keeps the name an agent gives the tool of a call, when it says it (Claude Code does). */
@@ -4246,20 +4543,26 @@ export class Hub {
         return Promise.resolve({ outcome: { outcome: "selected", optionId: allow.optionId } });
     }
     const id = `permission:${randomUUID()}`;
-    this.putItem(threadId, {
-      id,
-      kind: "permission",
-      // What the user decides by reads as it is written: no character in it reorders or hides.
-      title: plainLabel(request.toolCall.title ?? "") || "L'agent demande une autorisation",
-      options: request.options.map((o) => ({
-        optionId: o.optionId,
-        name: plainLabel(o.name),
-        kind: o.kind,
-      })),
-      outcome: null,
-      at: Date.now(),
-    });
-    this.updateThread(threadId, { status: "waiting" });
+    this.putItem(
+      threadId,
+      {
+        id,
+        kind: "permission",
+        // What the user decides by reads as it is written: no character in it reorders or hides.
+        title: plainLabel(request.toolCall.title ?? "") || "L'agent demande une autorisation",
+        options: request.options.map((o) => ({
+          optionId: o.optionId,
+          name: plainLabel(o.name),
+          kind: o.kind,
+        })),
+        outcome: null,
+        at: Date.now(),
+      },
+      true,
+    );
+    // Asked from the agent's connection, which keeps an error to itself: a refused write
+    // must not leave the question unasked.
+    this.wrote(() => this.updateThread(threadId, { status: "waiting" }));
     // Waiting for the user takes no place: the next turn in line may start.
     this.admit();
     return new Promise((resolve) => {
@@ -4289,22 +4592,24 @@ export class Hub {
       typeof asked.toolCallId === "string"
         ? `tool:${this.turnIds.get(threadId) ?? "late"}:${asked.toolCallId}`
         : undefined;
-    const existing = call
-      ? (this.store.getItem(threadId, call) as ToolItem | undefined)
-      : undefined;
+    const existing = call ? (this.itemOf(threadId, call) as ToolItem | undefined) : undefined;
     const id = existing?.kind === "tool" && call ? call : `tool:ask:${randomUUID()}`;
-    this.putItem(threadId, {
-      id,
-      kind: "tool",
-      title: existing?.title ?? "Question",
-      toolKind: existing?.toolKind ?? "other",
-      status: "pending",
-      content: existing?.content ?? [],
-      questions: form.questions,
-      form: "open",
-      at: existing?.at ?? Date.now(),
-    });
-    this.updateThread(threadId, { status: "waiting" });
+    this.putItem(
+      threadId,
+      {
+        id,
+        kind: "tool",
+        title: existing?.title ?? "Question",
+        toolKind: existing?.toolKind ?? "other",
+        status: "pending",
+        content: existing?.content ?? [],
+        questions: form.questions,
+        form: "open",
+        at: existing?.at ?? Date.now(),
+      },
+      true,
+    );
+    this.wrote(() => this.updateThread(threadId, { status: "waiting" }));
     // Waiting for the user takes no place: the next turn in line may start.
     this.admit();
     return new Promise((resolve) => {
@@ -4441,11 +4746,15 @@ export class Hub {
     const pending = this.pendingPermissions.get(itemId);
     if (!pending) return;
     this.pendingPermissions.delete(itemId);
-    const item = this.store.getItem(pending.threadId, itemId);
-    if (item?.kind === "permission")
-      this.putItem(pending.threadId, { ...item, outcome: "cancelled" });
-    if (this.pendingForms.delete(itemId) && item?.kind === "tool")
-      this.putItem(pending.threadId, { ...item, form: "cancelled", status: "failed" });
+    const form = this.pendingForms.delete(itemId);
+    // The agent gets its answer even when the database refuses to write it down.
+    this.wrote(() => {
+      const item = this.itemOf(pending.threadId, itemId);
+      if (item?.kind === "permission")
+        this.putItem(pending.threadId, { ...item, outcome: "cancelled" }, true);
+      if (form && item?.kind === "tool")
+        this.putItem(pending.threadId, { ...item, form: "cancelled", status: "failed" }, true);
+    });
     pending.resolve({ outcome: { outcome: "cancelled" } });
     this.broadcastRequests();
   }
@@ -4463,16 +4772,103 @@ export class Hub {
     return thread;
   }
 
-  private putItem(threadId: string, item: Item): void {
+  /**
+   * Writes an item and shows it. With `hold`, for what an agent sends, an item the database
+   * refuses is kept to be written once writes pass again, and shown all the same: the agent
+   * goes on, and nothing it said is lost. Without, the refusal is thrown, as for the user's
+   * own message, which then changes nothing.
+   */
+  private putItem(threadId: string, item: Item, hold = false): void {
     // Another item ends the text being streamed, which keeps its place before it.
     if (this.drafts.get(threadId)?.item.id !== item.id) this.flushText(threadId);
-    const seq = this.store.putItem(threadId, item);
+    let seq: number;
+    if (hold && (this.storageDown || this.heldIn(threadId))) {
+      // Written after what waits before it, never ahead of it.
+      seq = this.hold(threadId, item);
+    } else {
+      // Nothing is written ahead of what waits: the timeline keeps its order.
+      if (this.heldIn(threadId)) throw new StorageRefused(this.storageDown ?? "Base de données");
+      try {
+        seq = this.store.putItem(threadId, item);
+      } catch (error) {
+        if (!hold || !this.storageFailed(error)) throw error;
+        seq = this.hold(threadId, item);
+      }
+    }
     const rev = this.log(threadId).touch(item.id);
     this.sendToViewers(threadId, { type: "item", threadId, item: light(item), seq, rev });
   }
 
+  /** Keeps an item the database refused in place when already held; gives its place in the timeline. */
+  private hold(threadId: string, item: Item): number {
+    this.unsaved.set(item.id, { threadId, item });
+    // Its own place when it was written before, else after everything: it comes last.
+    return this.store.getItemAt(threadId, item.id)?.seq ?? Number.MAX_SAFE_INTEGER;
+  }
+
+  /** Whether some of the thread's items wait to be written. */
+  private heldIn(threadId: string): boolean {
+    for (const held of this.unsaved.values()) if (held.threadId === threadId) return true;
+    return false;
+  }
+
+  /** The thread's items not written yet: those refused, then its text being streamed. */
+  private heldItems(threadId: string): Item[] {
+    const held = [...this.unsaved.values()].filter((h) => h.threadId === threadId);
+    const items = held.map((h) => h.item);
+    const draft = this.drafts.get(threadId);
+    if (draft?.dirty) {
+      const at = items.findIndex((i) => i.id === draft.item.id);
+      if (at === -1) items.push(draft.item);
+      else items[at] = draft.item;
+    }
+    return items;
+  }
+
+  /** An item of the thread as it stands, written or not yet. */
+  private itemOf(threadId: string, itemId: string): Item | undefined {
+    const draft = this.drafts.get(threadId);
+    if (draft?.item.id === itemId) return draft.item;
+    const held = this.unsaved.get(itemId);
+    if (held?.threadId === threadId) return held.item;
+    return this.store.getItem(threadId, itemId);
+  }
+
+  /** The thread's last item as it stands, written or not yet. */
+  private lastItemOf(threadId: string): Item | undefined {
+    const held = this.heldItems(threadId);
+    // An update to an earlier item already in the database does not move it past what followed.
+    const added = held.findLast((item) => !this.store.getItemAt(threadId, item.id));
+    if (added) return added;
+    const last = this.store.lastItem(threadId);
+    return last ? (held.find((item) => item.id === last.id) ?? last) : undefined;
+  }
+
+  /** `items`, read from the database, with what is not written yet; `atEnd` adds what is new. */
+  private withHeld(threadId: string, items: Item[], atEnd: boolean): Item[] {
+    const held = this.heldItems(threadId);
+    if (!held.length) return items;
+    const byId = new Map(held.map((i) => [i.id, i]));
+    const merged = items.map((i) => byId.get(i.id) ?? i);
+    if (atEnd) {
+      const known = new Set(items.map((i) => i.id));
+      merged.push(...held.filter((i) => !known.has(i.id)));
+    }
+    return merged;
+  }
+
+  /** Forgets what waits to be written for a thread removed, or whose timeline was cut. */
+  private dropHeld(threadId: string): void {
+    for (const [id, held] of this.unsaved) if (held.threadId === threadId) this.unsaved.delete(id);
+    this.unsettled.delete(threadId);
+  }
+
   private updateThread(threadId: string, patch: Parameters<Store["updateThread"]>[1]): void {
-    const thread = this.store.updateThread(threadId, patch);
+    const saved = this.store.updateThread(threadId, patch);
+    // A state written now replaces the end that waited to be written.
+    if (patch.status) this.unsettled.delete(threadId);
+    // A turn's end that waits to be written still shows over a change of anything else.
+    const thread = patch.status ? saved : this.asEnded(saved);
     this.broadcast({ type: "thread", thread });
     // A card that follows this thread moves with it.
     this.planner.syncThread(thread);

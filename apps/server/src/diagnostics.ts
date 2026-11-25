@@ -399,16 +399,28 @@ export class DiagnosticsMonitor {
     if (lagMs > 0) {
       this.histogram = monitorEventLoopDelay({ resolution: 20 });
       this.histogram.enable();
-      this.lagTimer = setInterval(() => this.checkLag(), lagMs);
+      this.lagTimer = setInterval(() => this.watch(() => this.checkLag()), lagMs);
       this.lagTimer.unref();
     }
 
     const sampleMs = options.sampleIntervalMs ?? SAMPLE_INTERVAL_MS;
     if (sampleMs > 0) {
-      this.sampleTimer = setInterval(() => {
-        void this.tick();
-      }, sampleMs);
+      this.sampleTimer = setInterval(() => this.watch(() => this.tick()), sampleMs);
       this.sampleTimer.unref();
+    }
+  }
+
+  /**
+   * Runs one of the monitor's own measures from a timer. One that fails is said and dropped:
+   * the monitor only watches, and what it reads (an agent's settings, the process table) must
+   * never be what stops the server.
+   */
+  private watch(measure: () => void | Promise<void>): void {
+    const failed = (error: unknown) => this.logError(`[perf] mesure abandonnée : ${String(error)}`);
+    try {
+      void Promise.resolve(measure()).catch(failed);
+    } catch (error) {
+      failed(error);
     }
   }
 
@@ -450,7 +462,7 @@ export class DiagnosticsMonitor {
     this.activityTimer = setTimeout(() => {
       this.activityTimer = undefined;
       if (this.closed) return;
-      void this.captureActivityPeak();
+      this.watch(() => this.captureActivityPeak());
     }, ACTIVITY_DEBOUNCE_MS);
     this.activityTimer.unref();
   }

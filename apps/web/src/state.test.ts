@@ -232,6 +232,32 @@ describe("client state", () => {
     // Replies to requests change nothing by themselves.
     expect(reduce(state, { type: "files", requestId: "r", files: ["a"] })).toBe(state);
   });
+
+  it("knows when the server saves nothing, from the snapshot or from the news of it", () => {
+    const full = "Disque plein : plus rien n'est enregistré";
+    const snapshot = {
+      coordinator: { routes: {} },
+      favorites: {},
+      requests: [],
+      questions: [],
+      mcpServers: [],
+      agents: [],
+      projects: [],
+      threads: [],
+      plan: [],
+      schedules: [],
+      quotas: [],
+    };
+    expect(initialState.storageError).toBeNull();
+    let state = reduce(initialState, { type: "storage", error: full });
+    expect(state.storageError).toBe(full);
+    state = reduce(state, { type: "storage", error: null });
+    expect(state.storageError).toBeNull();
+    // A screen that connects meanwhile learns it from its snapshot, and a later one unlearns it.
+    state = reduce(state, { type: "snapshot", snapshot: { ...snapshot, storageError: full } });
+    expect(state.storageError).toBe(full);
+    expect(reduce(state, { type: "snapshot", snapshot }).storageError).toBeNull();
+  });
 });
 
 describe("githubLogin", () => {

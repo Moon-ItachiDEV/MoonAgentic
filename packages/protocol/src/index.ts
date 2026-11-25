@@ -1155,6 +1155,11 @@ export interface Snapshot {
   teamPresets?: TeamPreset[];
   /** This MoonAgentic's version and what it knows of a newer one. */
   app?: AppInfo;
+  /**
+   * Set while the database refuses writes for a cause outside MoonAgentic (a full disk, another
+   * program holding the file): what to tell the user, as nothing is saved meanwhile.
+   */
+  storageError?: string;
 }
 
 /** What a new thread starts with unless chosen otherwise, kept by the server for every device. */
@@ -1242,6 +1247,8 @@ export type ServerMessage =
   | { type: "defaults"; defaults: Defaults }
   /** The app's version, settings or update changed. */
   | { type: "app"; app: AppInfo }
+  /** The database refuses writes (see `Snapshot.storageError`), or takes them again (`null`). */
+  | { type: "storage"; error: string | null }
   | { type: "teamPresets"; presets: TeamPreset[] | null }
   | { type: "projectSetup"; requestId: string; projectId: string; setup: ProjectSetup }
   | { type: "thread"; thread: Thread }

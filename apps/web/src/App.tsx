@@ -1174,6 +1174,12 @@ export function App() {
         </div>
       </Sheet>
       <AppLock threads={state.threads} hasPin={state.lockPin} ready={state.ready} />
+      {/* The server saves nothing meanwhile: said on every page too, under no other notice. */}
+      {state.status !== "closed" && state.storageError && (
+        <div className="offp glass unsaved" role="alert">
+          {state.storageError}
+        </div>
+      )}
       {state.notice && (
         <div className="toast on" role="status">
           <span>{state.notice}</span>
