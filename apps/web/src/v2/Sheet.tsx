@@ -17,6 +17,10 @@ export function Sheet(props: {
   onClose: () => void;
   /** Its title, in its header. Without one, the sheet draws its own content only. */
   title?: string;
+  /** A second, smaller line under the title: where the titled thing is. */
+  sub?: string;
+  /** One level down in the sheet: its header gets a way back, and still closes on the right. */
+  onBack?: () => void;
   /** What names it for a screen reader, when it has no title. */
   label?: string;
   /** Takes the whole height (a list to read, a form), not only what it holds. */
@@ -111,10 +115,28 @@ export function Sheet(props: {
             onPointerCancel={up}
           >
             <div className="grab" />
-            <h3>{props.title}</h3>
-            <button className="gb glass x press" aria-label="Fermer" onClick={onClose}>
-              <I n="x" s={18} />
-            </button>
+            {props.sub ? (
+              <h3 className="two">
+                <span>{props.title}</span>
+                <small className="mono dfd">{props.sub}</small>
+              </h3>
+            ) : (
+              <h3>{props.title}</h3>
+            )}
+            {props.onBack ? (
+              <>
+                <button className="gb glass x press" aria-label="Retour" onClick={props.onBack}>
+                  <I n="back" s={20} />
+                </button>
+                <button className="gb glass xr press" aria-label="Fermer" onClick={onClose}>
+                  <I n="x" s={18} />
+                </button>
+              </>
+            ) : (
+              <button className="gb glass x press" aria-label="Fermer" onClick={onClose}>
+                <I n="x" s={18} />
+              </button>
+            )}
             {props.right}
           </div>
         )}

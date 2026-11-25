@@ -1,17 +1,12 @@
 /* The styles from before the v2 redesign, kept below it until each screen is ported. */
 @layer reset, legacy;
 @import "./styles.css" layer(legacy);
-@import "./review.css" layer(legacy);
-@import "./review-sync.css" layer(legacy);
-@import "./worktree-files.css" layer(legacy);
 @import "./branch-cleanup.css" layer(legacy);
 @import "./settings.css" layer(legacy);
 @import "./sidebar.css" layer(legacy);
 @import "./github.css" layer(legacy);
 @import "./pairing.css" layer(legacy);
 @import "./pull-request.css" layer(legacy);
-@import "./pr-watch.css" layer(legacy);
-@import "./pr-remarks.css" layer(legacy);
 @import "./composer.css" layer(legacy);
 @import "./mascot.css" layer(legacy);
 @import "./decision.css" layer(legacy);

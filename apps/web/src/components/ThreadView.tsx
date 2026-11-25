@@ -34,6 +34,7 @@ import { Clamp } from "./Clamp.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MessageImages } from "./MessageImages.tsx";
+import { PrCard } from "./PrCard.tsx";
 import { ReviewCard } from "./ReviewCard.tsx";
 import { TeamPanel } from "./TeamPanel.tsx";
 import { withoutTeamJson } from "../team-json.ts";
@@ -444,6 +445,8 @@ function Conversation({
             !(above?.kind === "item" && items![above.index]?.kind === "agent");
           return renderItem(block.index, block.clamp, showBy);
         })}
+        {/* Its branch's pull request, as it is now: a team shows its own in its card. */}
+        {thread.workspace?.base && !thread.team && <PrCard key={thread.id} thread={thread} />}
         {/* The live line of the stretch at work says what the agent does: no second line. */}
         {thread.status === "running" && thread.inLine && (
           <div className="live" role="status">
@@ -639,7 +642,7 @@ const FeedItem = memo(function FeedItem({
           <I n="hook" s={18} className="hk" />
           <span className="t">{opened.title}</span>
           <span
-            className={`st${group === "waiting" ? " w" : group === "running" ? " ac" : group === "failed" ? " er" : ""}`}
+            className={`st${opened.status === "error" ? " er" : group === "waiting" ? " w" : group === "running" ? " ac" : ""}`}
           >
             {group === "running" && !opened.held && !opened.inLine && <Glyph />}
             {opened.held || opened.inLine ? "En file" : why || GROUP_LABEL[group]}

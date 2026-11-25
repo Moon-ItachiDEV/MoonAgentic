@@ -9,10 +9,9 @@ import {
   type PrRow,
   prSteps,
 } from "../pr-board.ts";
-import { mergeWarning } from "../pull-request.ts";
 import { Glyph, I } from "../v2/I.tsx";
-import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
-import { usePullRequest } from "./PullRequestStatus.tsx";
+import { MergeSheet } from "./PrCard.tsx";
+import { usePullRequest } from "../use-pull-request.ts";
 
 const STEP_CLASS = { done: "ok", failed: "err", running: "run", yours: "cur", next: "" } as const;
 
@@ -21,7 +20,7 @@ function Card(props: { row: PrRow; onOpenThread: (id: string) => void }) {
   const { row } = props;
   const { thread } = row;
   const { pr, error, merge } = usePullRequest(thread, thread.pr);
-  const [confirm, setConfirm] = useState<Confirmation | null>(null);
+  const [merging, setMerging] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
   const busy = thread.status === "running";
   const failed = pr?.checks.some((c) => c.state === "failed");
@@ -111,22 +110,14 @@ function Card(props: { row: PrRow; onOpenThread: (id: string) => void }) {
           </button>
         )}
         {pr && canMerge(pr) && (
-          <button
-            className="b2 ink press"
-            onClick={() =>
-              setConfirm({
-                title: `Fusionner la pull request #${pr.number} ?`,
-                text: mergeWarning(pr),
-                action: "Fusionner",
-                run: merge,
-              })
-            }
-          >
+          <button className="b2 ink press" onClick={() => setMerging(true)}>
             Fusionner
           </button>
         )}
       </div>
-      {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
+      {pr && (
+        <MergeSheet open={merging} pr={pr} onMerge={merge} onClose={() => setMerging(false)} />
+      )}
     </div>
   );
 }

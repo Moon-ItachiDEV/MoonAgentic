@@ -1,5 +1,10 @@
 // How a pull request is described to the user: pure, so it is easy to test.
-import type { PrWatch, PullRequestCheck, PullRequestInfo } from "@moonagentic/protocol";
+import type {
+  PrWatch,
+  PullRequestCheck,
+  PullRequestInfo,
+  PullRequestRemark,
+} from "@moonagentic/protocol";
 
 /** The address of a pull request on github.com, without what may follow its number. */
 export function pullRequestUrl(href: string): { url: string; number: number } | undefined {
@@ -84,4 +89,18 @@ export function watchLabel(watch: PrWatch | undefined, max: number): string {
     return `Surveillée : l'agent corrigera la CI ou les conflits, ${watch.max} fois au plus.`;
   const what = watch.last === "conflict" ? "conflits" : "CI";
   return `${watch.tries} correction${watch.tries > 1 ? "s" : ""} sur ${watch.max} (dernière : ${what}).`;
+}
+
+/** Where a remark is: its file and line, or the review it belongs to. */
+export function remarkPlace(remark: PullRequestRemark): string {
+  if (remark.path) return remark.line ? `${remark.path}:${remark.line}` : remark.path;
+  return remark.changes ? "Relecture · changements demandés" : "Relecture";
+}
+
+/** « Corriger tout seul », in a few words: where its fixes stand. Nothing while none was asked. */
+export function watchShort(watch: PrWatch | undefined): string | undefined {
+  if (!watch) return undefined;
+  if (watch.exhausted) return `${watch.max} sur ${watch.max} · à toi`;
+  if (!watch.tries) return undefined;
+  return `${watch.tries} sur ${watch.max}`;
 }

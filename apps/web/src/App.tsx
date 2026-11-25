@@ -67,7 +67,6 @@ import { I, Sprite } from "./v2/I.tsx";
 import type { IconName } from "./v2/sprite.ts";
 import { Ring } from "./v2/Ring.tsx";
 import { useScrFlags } from "./v2/scr.ts";
-import { Sheet } from "./v2/Sheet.tsx";
 import { screenClasses, useScreen } from "./v2/use-screen.ts";
 
 export { ErrorBoundary };
@@ -1041,18 +1040,15 @@ export function App() {
         )}
         <div className="veil" id="veil" onClick={() => setDrawer(false)} />
       </section>
-      <Sheet open={reviewing} onClose={() => setReviewOpen(false)} title="Modifications" tall>
-        {thread?.workspace && !thread.archived && (
-          <div className="legacy legacy-sheet">
-            <ReviewPanel
-              key={thread.id}
-              thread={thread}
-              review={state.reviews[thread.id]}
-              onClose={() => setReviewOpen(false)}
-            />
-          </div>
-        )}
-      </Sheet>
+      {thread?.workspace && !thread.archived && (
+        <ReviewPanel
+          key={thread.id}
+          open={reviewing}
+          thread={thread}
+          review={state.reviews[thread.id]}
+          onClose={() => setReviewOpen(false)}
+        />
+      )}
       {route.name === "project" && routeProject && !routeProject.locked && projectSetupSeen && (
         <Suspense fallback={null}>
           <ProjectSettings

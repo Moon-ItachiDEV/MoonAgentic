@@ -1024,7 +1024,7 @@ export function Composer(props: {
       className="cw"
       ref={root}
       // Only the text opens the composer: its « + » works from the folded line too.
-      onFocus={(e) => e.target === input.current && setFocused(true)}
+      onFocus={(e) => (e.target as Element) === input.current && setFocused(true)}
       onPointerDownCapture={() => {
         pressedInside.current = true;
       }}

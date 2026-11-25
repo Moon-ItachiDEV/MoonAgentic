@@ -1114,16 +1114,6 @@ button.tmc.tmlk {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* Until « Modifications » is ported, its own .rvc (a comment on a line) must not show here. */
-.tmc .rvc {
-  margin: 0;
-  max-width: none;
-  border: 0;
-  border-radius: 0;
-  background: none;
-  font: inherit;
-  white-space: normal;
-}
 .tmh .ppill {
   flex: none;
   white-space: nowrap;
@@ -1155,4 +1145,185 @@ button.tmc.tmlk {
 }
 .rvsh .it.fva .prn {
   flex: none;
+}
+
+/* A sheet one level down: its title over where the thing is, a way back on the left. */
+.shd h3.two {
+  flex-direction: column;
+  line-height: 1.2;
+  padding: 0 60px;
+}
+.shd h3.two > * {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* « Modifications » */
+.sheet.dsh .sbody {
+  flex: 1;
+}
+.dsum .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dtabs {
+  margin: 0 0 12px;
+}
+.dtabs .cnt {
+  margin-left: 6px;
+}
+.dsy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 16px;
+  background: var(--group);
+  font-size: 14px;
+  color: var(--fg2);
+}
+.dsy .tx {
+  flex: 1;
+  min-width: 0;
+}
+.dsy .b2 {
+  flex: none;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 18px;
+  font-size: 14px;
+}
+.dfo small.mer {
+  color: var(--err-tx);
+}
+.dfo .cnt.w {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--on-ink);
+  background: var(--ink);
+}
+.dfo .dfd {
+  flex: none;
+}
+.sbody > .rvw {
+  margin: 10px 6px 0;
+}
+.dship {
+  margin-top: 14px;
+}
+.dship .ppill {
+  justify-self: start;
+}
+.dbt .b2 {
+  flex: 1;
+}
+.dbar {
+  gap: 8px;
+}
+.dbar .b2 {
+  flex: 1;
+}
+.dbar.in {
+  margin-top: 14px;
+}
+.dlg {
+  display: grid;
+}
+button.dl {
+  width: 100%;
+  border-radius: 0;
+}
+button.dl:disabled {
+  cursor: default;
+}
+html[data-dev="desk"] button.dl:not(:disabled):hover {
+  box-shadow: inset 3px 0 0 var(--track);
+}
+.dl.hk {
+  min-height: 26px;
+  background: var(--sunken);
+}
+.dl.hk .dt {
+  color: var(--faint);
+}
+.dce .dct {
+  height: auto;
+  min-height: 72px;
+  padding: 12px 14px;
+  line-height: 1.4;
+  resize: none;
+}
+button.dcm {
+  text-align: left;
+}
+.dcm.lost {
+  margin: 10px 0 0;
+}
+.dcm.lost .b2 {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 17px;
+  font-size: 13.5px;
+}
+.drj {
+  margin-top: 18px;
+  padding: 0 16px;
+}
+/* « Fichiers » : the folder as it is now, and a file read with its line numbers. */
+.wff {
+  margin-bottom: 10px;
+}
+.wft button.tf {
+  width: 100%;
+  text-align: left;
+}
+.wft .dpl {
+  margin-left: auto;
+  padding-left: 8px;
+}
+.wfc .dl {
+  grid-template-columns: 48px 4px 1fr;
+}
+.wfc {
+  margin: 0 -16px;
+}
+
+/* A pull request in its thread */
+.prk .stp a {
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-dev="desk"] .prk .stp a:hover {
+  text-decoration: underline;
+}
+.prk > .prm {
+  width: 100%;
+}
+.prm.prw small {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.prm.prw small.mer {
+  color: var(--err-tx);
+}
+.prm.prw .tog {
+  flex: none;
+}
+.rmh a {
+  color: var(--faint);
+  display: inline-grid;
 }
