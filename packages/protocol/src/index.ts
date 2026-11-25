@@ -318,7 +318,10 @@ export interface Workspace {
    * the agent works in that folder of the worktree.
    */
   subdir?: string;
-  /** While the thread is archived: the files it had, uncommitted ones included, as a tree. */
+  /**
+   * While the thread is archived, or its folder could only be removed in part: the files it
+   * had, uncommitted ones included, as a tree. They come back when its folder is made again.
+   */
   archivedTree?: string;
   /** The pull request, or the page to open one, after the last push. */
   prUrl?: string;
