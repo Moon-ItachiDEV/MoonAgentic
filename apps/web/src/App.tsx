@@ -1,6 +1,16 @@
-import type { Item, Project, Schedule, Thread } from "@moonagentic/protocol";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Composer as PlainComposer, useNarrow } from "./components/Composer.tsx";
+import type { AgentInfo, Item, Project, Schedule, Thread } from "@moonagentic/protocol";
+import {
+  Fragment,
+  lazy,
+  Suspense,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import { Composer as PlainComposer } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { AppUpdateHostOnDemand } from "./components/AppUpdatePill.tsx";
@@ -9,14 +19,7 @@ import { Artifacts } from "./components/Artifacts.tsx";
 import { Home } from "./components/Home.tsx";
 import {
   IconBack,
-  IconCode,
   IconClock,
-  IconCheck,
-  IconExpand,
-  IconShield,
-  IconArrowLeft,
-  IconMenu,
-  IconSidebar,
   IconCompose,
   IconFile,
   IconArchive,
@@ -32,31 +35,39 @@ import { LockSheet } from "./components/LockSheet.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { McpDialog } from "./components/McpDialog.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
-import { type QuickAction, QuickSearch } from "./components/QuickSearch.tsx";
+import type { QuickAction } from "./components/QuickSearch.tsx";
 import { ProjectRequests, projectRequests } from "./components/ProjectRequests.tsx";
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { PairGate } from "./components/PairGate.tsx";
 import { ProjectPage } from "./components/ProjectPage.tsx";
-import { HomeCards } from "./components/HomeCards.tsx";
+import { ProjectIcon } from "./components/ProjectIcon.tsx";
+import { SidePullRequests } from "./components/SidePullRequests.tsx";
 import { steady, useSame } from "./steady.tsx";
 import { coordinatorOf, listedThreads } from "./project-threads.ts";
 import { Sidebar as PlainSidebar } from "./components/Sidebar.tsx";
-import { TabBar } from "./components/TabBar.tsx";
+import { TabBar, type TabPop, TabPopover } from "./components/TabBar.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
-import { ThreadMenu } from "./components/ThreadMenu.tsx";
 import { TeamDialog } from "./components/TeamDialog.tsx";
 import { ReviewDialog } from "./components/ReviewDialog.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { DecisionCard } from "./components/DecisionCard.tsx";
 import { connection, newId } from "./connection.ts";
 import { downloadMarkdown, exportFileName, threadMarkdown } from "./export.ts";
-import { isDiscussionsProject, isLooseHome } from "./default-models.ts";
+import { isDiscussionsProject, isLooseHome, looseDefault } from "./default-models.ts";
 import { waits } from "./decision.ts";
 import { focusItem } from "./focus.ts";
 import { askUnlock, lockProject } from "./lock.ts";
 import { readPref, writePref } from "./prefs.ts";
+import { tightest } from "./quotas.ts";
 import { navigate, useRoute } from "./router.ts";
+import { useQuotas } from "./use-quotas.ts";
+import { I, Sprite } from "./v2/I.tsx";
+import type { IconName } from "./v2/sprite.ts";
+import { Ring } from "./v2/Ring.tsx";
+import { useScrFlags } from "./v2/scr.ts";
+import { Sheet } from "./v2/Sheet.tsx";
+import { screenClasses, useScreen } from "./v2/use-screen.ts";
 
 export { ErrorBoundary };
 
@@ -71,18 +82,6 @@ const SettingsPage = lazy(() =>
   import("./components/Settings.tsx").then((m) => ({ default: m.SettingsPage })),
 );
 
-/** Wide enough for a project's threads beside its coordinator's conversation. */
-const WIDE = "(min-width: 1180px)";
-const wideQuery = typeof matchMedia === "function" ? matchMedia(WIDE) : undefined;
-const useWide = () =>
-  useSyncExternalStore(
-    (changed) => {
-      wideQuery?.addEventListener("change", changed);
-      return () => wideQuery?.removeEventListener("change", changed);
-    },
-    () => wideQuery?.matches ?? true,
-  );
-
 // While an agent writes, the page is told sixty times a second: the side bar and the
 // composer show none of that text, and stay as they are.
 const Sidebar = steady(PlainSidebar);
@@ -92,25 +91,22 @@ export function App() {
   const state = useSyncExternalStore(connection.subscribe, connection.getState);
   const route = useRoute();
   const [drawer, setDrawer] = useState(false);
-  // The phone's home page: live conversations above the composer, tabs below it.
-  const narrow = useNarrow();
-  // On a computer, the side bar can be folded away, as in the mockup.
-  const [sideOff, setSideOff] = useState(() => readPref("sideOff") === "true");
-  // The home page's overview, unless the user folded it away on this device.
-  const [overviewShown, setOverviewShown] = useState(() => readPref("homeOverview") !== "off");
-  const foldSide = (off: boolean) => {
-    setSideOff(off);
-    writePref("sideOff", String(off));
-  };
+  /** The list open above one of the phone's tabs, on the home page. */
+  const [tabPop, setTabPop] = useState<TabPop>(null);
+  /** The open thread's « … » menu. */
+  const [threadMenu, setThreadMenu] = useState(false);
+  // The layout follows the window's width: phone, iPad, computer.
+  const screen = useScreen();
+  const flags = useScrFlags();
   const [creatingProject, setCreatingProject] = useState(false);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
-  const [requestsOpen, setRequestsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pickedProjectId, setPickedProjectId] = useState(() => readPref("project"));
   /** « Nouvelle discussion » outside any project: a question or a search, in « Discussions ». */
   const [loose, setLoose] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
+  /** The search, in place of the menu. */
+  const [searching, setSearching] = useState(false);
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const [teamTask, setTeamTask] = useState<string | null>(null);
   // « /revue » : the pull request typed after it, while its dialog is open.
@@ -123,7 +119,7 @@ export function App() {
     const open = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && !event.altKey && event.key.toLowerCase() === "k") {
         event.preventDefault();
-        setSearchOpen((o) => !o);
+        setSearching((o) => !o);
       }
     };
     document.addEventListener("keydown", open);
@@ -147,7 +143,6 @@ export function App() {
     return () => document.removeEventListener("keydown", lock);
   }, []);
 
-  const wide = useWide();
   /** On a narrow screen, what the project's page shows: the coordinator or the threads. */
   const [projectTab, setProjectTab] = useState<"chat" | "threads">("chat");
   // Lists show every thread but the coordinators.
@@ -207,28 +202,11 @@ export function App() {
   const coordinator = routeProject ? coordinatorOf(state.threads, routeProject.id) : undefined;
   /** The thread the composer writes to. */
   const spoken = thread ?? coordinator;
-  // One of the project's threads, open beside its coordinator: both stay in sight.
-  const beside =
-    coordinator && route.name === "project" && route.threadId
-      ? state.threads.find(
-          (t) =>
-            t.id === route.threadId &&
-            t.projectId === coordinator.projectId &&
-            t.id !== coordinator.id,
-        )
-      : undefined;
   /** Locks it; a thread of it open here goes, as nothing of it is shown any more. */
   const lockOne = (p: Project) =>
     lockProject(p, state.lockPin, () => {
       if (route.name === "thread" && thread?.projectId === p.id) go({ name: "home" });
     });
-  const toggleLockOf = (id: string) => {
-    const p = state.projects.find((x) => x.id === id);
-    if (!p) return;
-    setDrawer(false);
-    if (p.locked) askUnlock(p);
-    else lockOne(p);
-  };
   lockShortcut.current = () => {
     if (project?.locked) askUnlock(project);
     else if (project) lockOne(project);
@@ -263,24 +241,13 @@ export function App() {
   // Any other way home (back, a deleted thread…) is the usual home, in the project last picked.
   const go = (next: Parameters<typeof navigate>[0]) => {
     setDrawer(false);
+    setSearching(false);
+    setTabPop(null);
+    setThreadMenu(false);
     setReviewOpen(false);
     setLoose(false);
     navigate(next);
   };
-  /** The phone's tabs, on the home page and on « Artefacts ». */
-  const tabBar = (current: "new" | "artifacts") => (
-    <TabBar
-      state={state}
-      current={current}
-      onNew={newLoose}
-      onProjects={() => setDrawer(true)}
-      onCode={(id) => {
-        go({ name: "thread", threadId: id });
-        setReviewOpen(true);
-      }}
-      onArtifacts={() => go({ name: "artifacts" })}
-    />
-  );
   /** Opens the planner on its board or its timeline, the one last looked at on this device. */
   const openPlanner = () =>
     go(
@@ -294,9 +261,6 @@ export function App() {
     if (target?.kind === "coordinator") {
       setProjectTab("chat");
       go({ name: "project", projectId: target.projectId });
-    } else if (coordinator && target?.projectId === coordinator.projectId) {
-      // From its project's page, a thread opens beside the coordinator.
-      go({ name: "project", projectId: target.projectId, threadId: id });
     } else go({ name: "thread", threadId: id });
   };
   const togglePin = (id: string, pinned: boolean) =>
@@ -349,18 +313,42 @@ export function App() {
       },
     });
   };
-  const threadActions = thread
+  const threadActions: {
+    label: string;
+    icon: IconName;
+    run: () => void;
+    danger?: boolean;
+    /** A line above it: what follows ends or removes the thread. */
+    sep?: boolean;
+  }[] = thread
     ? [
         {
           label: thread.pinned ? "Désépingler" : "Épingler",
+          icon: "star",
           run: () => togglePin(thread.id, !thread.pinned),
         },
-        { label: "Exporter en Markdown", run: () => exportThread() },
+        ...(thread.archived
+          ? []
+          : [
+              {
+                label: thread.unread ? "Marquer comme lu" : "Marquer comme non lu",
+                icon: "dot" as const,
+                run: () =>
+                  connection.send({
+                    type: "thread.setUnread",
+                    threadId: thread.id,
+                    unread: !thread.unread,
+                  }),
+              },
+            ]),
+        { label: "Exporter en Markdown", icon: "file", run: () => exportThread() },
         {
           label: thread.archived ? "Rouvrir" : "Marquer résolu",
+          icon: "check",
+          sep: true,
           run: () => setArchived(thread.id, !thread.archived),
         },
-        { label: "Supprimer…", danger: true, run: () => askDeleteThread(thread) },
+        { label: "Supprimer…", icon: "x", danger: true, run: () => askDeleteThread(thread) },
       ]
     : [];
   const quickActions: QuickAction[] = [
@@ -377,7 +365,7 @@ export function App() {
     {
       label: `À traiter${state.requests.length ? ` (${state.requests.length})` : ""}`,
       icon: <IconInbox size={15} />,
-      run: () => setRequestsOpen(true),
+      run: () => go({ name: "inbox" }),
     },
     { label: "Planner", icon: <IconBoard size={15} />, run: openPlanner },
     ...(project && !project.locked
@@ -425,18 +413,24 @@ export function App() {
   ];
 
   /** What a conversation is written from: its composer, or the way to reopen it once resolved. */
-  const composerFor = (t: Thread | undefined, placeholder?: string) =>
-    t?.archived ? (
-      <div className="archived-bar" role="status">
-        <IconArchive />
-        <span>Cette discussion est résolue.</span>
-        <button className="btn sm" onClick={() => setArchived(t.id, false)}>
-          Rouvrir
-        </button>
-      </div>
-    ) : (
-      <>
-        {t && (
+  const composerFor = (t: Thread | undefined, placeholder?: string) => (
+    <>
+      {t?.archived && (
+        <div className="res" role="status">
+          <span className="ok">
+            <I n="check" s={13} />
+          </span>
+          <span className="tx">
+            <b>Ce fil est résolu</b>
+            <small>Envoie un message pour le rouvrir.</small>
+          </span>
+          <button className="reopen press" onClick={() => setArchived(t.id, false)}>
+            Rouvrir
+          </button>
+        </div>
+      )}
+      {t && !t.archived && (
+        <div className="legacy">
           <DecisionCard
             waits={waits({
               thread: t,
@@ -454,703 +448,776 @@ export function App() {
               openThread(id);
             }}
           />
-        )}
-        <Composer
-          key={t?.id ?? "new"}
-          agents={state.agents}
-          favorites={state.favorites}
-          thread={t}
-          project={project}
-          {...(placeholder ? { placeholder } : {})}
-          onNewProject={() => setCreatingProject(true)}
-          {...(state.ready && !t && looseHome && !discussions
-            ? { onNeedProject: needLoose }
-            : state.ready && !state.projects.length
-              ? { onNeedProject: needDiscussions }
-              : {})}
-          loose={!t && looseConversation}
-          projects={codeProjects}
-          onPickProject={pickProject}
-          onPickLoose={newLoose}
-          mcpServers={state.mcpServers}
-          onMcp={() => setMcpOpen(true)}
-          onCreated={(id) => navigate({ name: "thread", threadId: id })}
-          onExport={() => exportThread(t)}
-          onSearch={() => setSearchOpen(true)}
-          onRequests={() => setRequestsOpen(true)}
-          onConnections={() => setConnectionsOpen(true)}
-          onArchive={() => t && setArchived(t.id, true)}
-          onDelete={() => t && askDeleteThread(t)}
-          onTeam={(task) => setTeamTask(task)}
-          onReview={(pr) => setReviewPr(pr)}
-          onLock={lockOne}
-          onSchedule={(text) => setScheduling({ text })}
-          onSettings={() => go({ name: "settings", section: "general" })}
-          onSubscriptions={() => go({ name: "settings", section: "subscriptions" })}
-        />
-      </>
-    );
+        </div>
+      )}
+      <Composer
+        key={t?.id ?? "new"}
+        agents={state.agents}
+        favorites={state.favorites}
+        thread={t}
+        project={project}
+        {...(placeholder ? { placeholder } : {})}
+        onNewProject={() => setCreatingProject(true)}
+        {...(state.ready && !t && looseHome && !discussions
+          ? { onNeedProject: needLoose }
+          : state.ready && !state.projects.length
+            ? { onNeedProject: needDiscussions }
+            : {})}
+        loose={!t && looseConversation}
+        projects={codeProjects}
+        onPickProject={pickProject}
+        onPickLoose={newLoose}
+        mcpServers={state.mcpServers}
+        onMcp={() => setMcpOpen(true)}
+        onCreated={(id) => navigate({ name: "thread", threadId: id })}
+        onExport={() => exportThread(t)}
+        onSearch={() => setSearching(true)}
+        onRequests={() => go({ name: "inbox" })}
+        onConnections={() => setConnectionsOpen(true)}
+        onArchive={() => t && setArchived(t.id, true)}
+        onDelete={() => t && askDeleteThread(t)}
+        onTeam={(task) => setTeamTask(task)}
+        onReview={(pr) => setReviewPr(pr)}
+        onLock={lockOne}
+        onSchedule={(text) => setScheduling({ text })}
+        onSettings={() => go({ name: "settings", section: "general" })}
+        onSubscriptions={() => go({ name: "settings", section: "subscriptions" })}
+      />
+    </>
+  );
 
   /** Under the coordinator's conversation: what its project's threads wait for, then its composer. */
   const coordinatorDock = coordinator && routeProject && (
     <>
       {!coordinator.archived && (
-        <ProjectRequests
-          requests={projectRequests(state.requests, state.threads, routeProject.id)}
-          threads={state.threads}
-          onOpenThread={(id, itemId) => {
-            focusItem(id, itemId);
-            openThread(id);
-          }}
-        />
+        <div className="legacy">
+          <ProjectRequests
+            requests={projectRequests(state.requests, state.threads, routeProject.id)}
+            threads={state.threads}
+            onOpenThread={(id, itemId) => {
+              focusItem(id, itemId);
+              openThread(id);
+            }}
+          />
+        </div>
       )}
-      {composerFor(coordinator, "Pose une question ou demande une tâche…")}
+      {composerFor(coordinator, "Écrire au coordinateur")}
     </>
   );
 
+  // On a phone the search takes the menu's place: the menu opens with it.
+  const drawerOpen = drawer || searching;
+  /** The agent the home page's composer starts on, whose subscription the ring shows. */
+  const homeAgentId = looseConversation
+    ? looseDefault(state.agents)?.agentId
+    : (
+        state.agents.find((a) => a.id === readPref("agent") && a.available) ??
+        state.agents.find((a) => a.available)
+      )?.id;
   const reviewing = reviewOpen && !!thread?.workspace && !thread.archived;
   const reviewCount = thread ? state.reviews[thread.id]?.files?.length : undefined;
 
+  /** The name the page goes by in the mockup's layout rules. */
+  const screenName =
+    route.name === "home"
+      ? "home"
+      : route.name === "project"
+        ? "project"
+        : route.name === "planner"
+          ? route.view === "planifiees"
+            ? "sched"
+            : "planner"
+          : route.name === "artifacts"
+            ? "arts"
+            : route.name;
+  const menuPage =
+    route.name === "inbox"
+      ? "inbox"
+      : route.name === "planner"
+        ? route.view === "planifiees"
+          ? "schedules"
+          : "planner"
+        : route.name === "artifacts"
+          ? "artifacts"
+          : route.name === "prs"
+            ? "prs"
+            : undefined;
+  const pageTitle =
+    route.name === "inbox"
+      ? "À traiter"
+      : route.name === "planner"
+        ? route.view === "planifiees"
+          ? "Tâches planifiées"
+          : "Planner"
+        : route.name === "artifacts"
+          ? "Artefacts"
+          : route.name === "prs"
+            ? "Pull requests"
+            : route.name === "settings"
+              ? "Réglages"
+              : undefined;
+  const menuButton = (dot = false) => (
+    <button
+      className="gb glass press"
+      data-a="drawer"
+      aria-label="Menu"
+      onClick={() => setDrawer(true)}
+    >
+      <I n="menu2" />
+      {dot && <span className="dot" />}
+    </button>
+  );
+  const threadAgent = thread && state.agents.find((a) => a.id === thread.agentId);
+  const topBar =
+    route.name === "home" ? (
+      <>
+        {menuButton(state.requests.length > 0)}
+        <span />
+        <HomeCapsule
+          agents={state.agents}
+          agentId={homeAgentId}
+          onUsage={() => go({ name: "settings", section: "subscriptions" })}
+          {...(project && !project.locked ? { onLock: () => lockOne(project) } : {})}
+        />
+      </>
+    ) : route.name === "project" ? (
+      <>
+        {menuButton()}
+        <div className="ctr">
+          {routeProject && (
+            <>
+              <span
+                className={`pava glass${routeProject.color ? ` pc-${routeProject.color}` : ""}`}
+              >
+                <ProjectIcon project={routeProject} size={22} />
+              </span>
+              <span className="plabel glass">{routeProject.name}</span>
+            </>
+          )}
+        </div>
+        {coordinator ? (
+          <button
+            className="gb glass press"
+            aria-label={projectTab === "chat" ? "Fils du projet" : "Coordinateur"}
+            aria-pressed={projectTab === "threads"}
+            onClick={() => setProjectTab(projectTab === "chat" ? "threads" : "chat")}
+          >
+            <I n={projectTab === "chat" ? "list" : "bubble"} s={21} />
+          </button>
+        ) : (
+          <span />
+        )}
+      </>
+    ) : route.name === "thread" ? (
+      <>
+        <button
+          className="gb glass press"
+          aria-label="Retour"
+          onClick={() =>
+            thread && codeProjects.some((p) => p.id === thread.projectId)
+              ? go({ name: "project", projectId: thread.projectId })
+              : go({ name: "home" })
+          }
+        >
+          <I n="back" />
+        </button>
+        <div className="ctr">
+          {thread && (
+            <div className="ttl glass">
+              <b>
+                {thread.pinned && (
+                  <i className="tpn" role="img" aria-label="Épinglé">
+                    <I n="star" s={12} />
+                  </i>
+                )}
+                {thread.title}
+              </b>
+              <span>{thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}</span>
+            </div>
+          )}
+        </div>
+        {thread ? (
+          <div className="gcap glass">
+            {thread.workspace && !thread.archived && (
+              <button
+                aria-label={
+                  reviewCount ? `Modifications : ${reviewCount} à revoir` : "Modifications"
+                }
+                aria-pressed={reviewing}
+                onClick={() => setReviewOpen(!reviewing)}
+              >
+                <I n="code" s={20} />
+              </button>
+            )}
+            <button
+              className={threadMenu ? "act" : undefined}
+              aria-label="Actions du fil"
+              aria-haspopup="menu"
+              aria-expanded={threadMenu}
+              onClick={() => setThreadMenu(!threadMenu)}
+            >
+              <I n="dots" s={20} />
+            </button>
+          </div>
+        ) : (
+          <span />
+        )}
+      </>
+    ) : (
+      <>
+        {menuButton()}
+        <div className="ctr">
+          <div className="ttl glass">
+            <b>{pageTitle}</b>
+          </div>
+        </div>
+        <span />
+      </>
+    );
+
+  /** A page not ported to the new design yet: it keeps its old styles, untouched by the new ones. */
+  const legacyPage = (content: React.ReactNode) => (
+    <div className={`legacy legacy-main center${bottom ? " with-bottom" : ""}`}>{content}</div>
+  );
+  /** What is written from, floating at the bottom of the page: none where there is nothing to write to. */
+  const bottom =
+    route.name === "home"
+      ? composerFor(undefined)
+      : route.name === "thread"
+        ? thread && composerFor(thread)
+        : route.name === "project" &&
+            // A locked project's page has nothing to write to until the code is given; under
+            // « Fils » the coordinator's conversation is out of sight, and so is its composer.
+            !routeProject?.locked &&
+            projectTab === "chat"
+          ? coordinatorDock
+          : null;
+
   return (
     <div
-      className={`app${drawer ? " drawer" : ""}${sideOff && route.name !== "settings" ? " side-off" : ""}${route.name === "home" ? " home-route" : ""}${route.name === "thread" ? " in-thread" : ""}${reviewing ? " reviewing" : ""}`}
+      id="scr"
+      className={`scr${screenClasses(screen)}${drawerOpen ? " open" : ""}${route.name === "home" ? " tabs" : ""}${tabPop && route.name === "home" ? " tp" : ""}${threadMenu ? " tm" : ""}${flags ? ` ${flags}` : ""}`}
+      data-s={screenName}
     >
-      {route.name === "settings" ? (
-        <ErrorBoundary
-          key="settings-nav"
-          fallback={(_error, reload) => (
-            <aside className="side set-side" aria-label="Réglages">
-              <button className="set-back" onClick={() => go({ name: "home" })}>
-                <IconBack />
-                Retour
-              </button>
-              <div className="empty-note">
-                <p>Impossible d'afficher le menu.</p>
-                <button className="btn sm" type="button" onClick={reload}>
-                  Recharger
-                </button>
-              </div>
-            </aside>
-          )}
-        >
-          {/* Until the settings arrive, an empty side bar keeps the layout in place. */}
-          <Suspense fallback={<aside className="side set-side" aria-label="Réglages" />}>
-            <SettingsNav
-              section={route.section}
-              onPick={(section) => go({ name: "settings", section })}
-              onBack={() => go({ name: "home" })}
-            />
-          </Suspense>
-        </ErrorBoundary>
-      ) : (
-        <Sidebar
-          state={sideState}
-          activeThreadId={thread?.id}
-          activeProjectId={project?.id}
-          onPlanner={route.name === "planner" && route.view !== "planifiees"}
-          onSchedules={route.name === "planner" && route.view === "planifiees"}
-          onProject={route.name === "project"}
-          onOpenPlanner={openPlanner}
-          onArtifacts={route.name === "artifacts"}
-          onOpenArtifacts={() => go({ name: "artifacts" })}
-          onOpenSchedules={() => go({ name: "planner", view: "planifiees" })}
-          onNewThread={newLoose}
-          onNewProject={() => {
-            setDrawer(false);
-            setCreatingProject(true);
-          }}
-          onOpenConnections={() => {
-            setDrawer(false);
-            setConnectionsOpen(true);
-          }}
-          onOpenRequests={() => {
-            setDrawer(false);
-            setRequestsOpen(true);
-          }}
-          onPickProject={(id) => {
-            pickProject(id);
-            // On the planner, picking a project shows that project's planner; anywhere else,
-            // its page, with its conversations grouped by state.
-            if (route.name === "planner") go(route);
-            else go({ name: "project", projectId: id });
-          }}
-          onNewInProject={(id) => {
-            pickProject(id);
-            go({ name: "home" });
-          }}
-          onOpenThread={(id) => go({ name: "thread", threadId: id })}
-          onTogglePin={togglePin}
-          onSetArchived={setArchived}
-          onDeleteThread={(t) => {
-            setDrawer(false);
-            askDeleteThread(t);
-          }}
-          onRemoveProject={(id) => {
-            setDrawer(false);
-            askRemoveProject(id);
-          }}
-          onToggleLock={toggleLockOf}
-          onOpenSettings={() => go({ name: "settings", section: "general" })}
-          onOpenSubscriptions={() => {
-            setDrawer(false);
-            go({ name: "settings", section: "subscriptions" });
-          }}
-          onOpenSearch={() => {
-            setDrawer(false);
-            setSearchOpen(true);
-          }}
-          onCollapse={() => foldSide(true)}
-        />
-      )}
-      <div className="side-scrim" onClick={() => setDrawer(false)} />
-      <main className={`center${beside && wide ? " with-thread" : ""}`}>
-        <header className="top">
-          <button
-            className="ib mobile-only menu-btn"
-            aria-label="Menu"
-            onClick={() => setDrawer(true)}
-          >
-            <IconMenu />
-          </button>
-          {route.name === "thread" && (
-            <button
-              className="ib back-home"
-              aria-label="Retour"
-              title="Retour"
-              onClick={() => go({ name: "home" })}
-            >
-              <IconArrowLeft />
-            </button>
-          )}
-          {sideOff && route.name !== "settings" && (
-            <button
-              className="ib open-side"
-              aria-label="Afficher la barre latérale"
-              title="Afficher la barre latérale"
-              onClick={() => foldSide(false)}
-            >
-              <IconSidebar />
-            </button>
-          )}
-          <div className="ttl">
-            {route.name === "settings"
-              ? "Réglages"
-              : route.name === "artifacts"
-                ? "Artefacts"
-                : route.name === "project"
-                  ? (routeProject?.name ?? "")
-                  : (thread?.title ?? "")}
-          </div>
-          {state.requests.length > 0 && (
-            <button
-              className="inbbtn"
-              aria-label={`${state.requests.length} ${
-                state.requests.length > 1 ? "demandes" : "demande"
-              } à traiter`}
-              title="À traiter"
-              onClick={() => setRequestsOpen(true)}
-            >
-              <IconShield size={14} />
-              <span>{state.requests.length}</span>
-            </button>
-          )}
-          {thread?.workspace && !thread.archived && (
-            <button
-              className={`review-btn codebtn${reviewing ? " on" : ""}`}
-              aria-label={reviewCount ? `Code : ${reviewCount} à revoir` : "Code"}
-              aria-pressed={reviewing}
-              title="Code et modifications"
-              onClick={() => setReviewOpen(!reviewing)}
-            >
-              <IconCode />
-              <span className="lbl">Code</span>
-              {!!reviewCount && <span className="cnt">{reviewCount}</span>}
-            </button>
-          )}
-          {thread && <ThreadMenu actions={threadActions} />}
-          {route.name === "thread" ? (
-            <button
-              className="ib"
-              aria-label="Nouvelle discussion"
-              title="Nouvelle discussion"
-              onClick={newLoose}
-            >
-              <IconCompose size={17} />
-            </button>
-          ) : (
-            <span className="spacer mobile-only" />
-          )}
-        </header>
+      <Sprite />
+      <aside className="drawer" id="drawer" aria-label="Menu" inert={!screen.wide && !drawerOpen}>
         {route.name === "settings" ? (
-          <ErrorBoundary key="settings">
-            <Suspense fallback={<div className="view" />}>
-              <SettingsPage
-                section={route.section}
-                agents={state.agents}
-                favorites={state.favorites}
-                coordinator={state.coordinator}
-                projects={state.projects}
-                lockPin={state.lockPin}
-                projectId={project?.id}
-                mcpServers={state.mcpServers}
-                mcpSecretsError={state.mcpSecretsError}
-                onPickProject={pickProject}
-                onOpenConnections={() => setConnectionsOpen(true)}
-                onOpenMcp={() => setMcpOpen(true)}
-              />
-            </Suspense>
-          </ErrorBoundary>
+          <div className="legacy legacy-side">
+            <ErrorBoundary
+              key="settings-nav"
+              fallback={(_error, reload) => (
+                <aside className="side set-side" aria-label="Réglages">
+                  <button className="set-back" onClick={() => go({ name: "home" })}>
+                    <IconBack />
+                    Retour
+                  </button>
+                  <div className="empty-note">
+                    <p>Impossible d'afficher le menu.</p>
+                    <button className="btn sm" type="button" onClick={reload}>
+                      Recharger
+                    </button>
+                  </div>
+                </aside>
+              )}
+            >
+              {/* Until the settings arrive, an empty side bar keeps the layout in place. */}
+              <Suspense fallback={<aside className="side set-side" aria-label="Réglages" />}>
+                <SettingsNav
+                  section={route.section}
+                  onPick={(section) => go({ name: "settings", section })}
+                  onBack={() => go({ name: "home" })}
+                />
+              </Suspense>
+            </ErrorBoundary>
+          </div>
+        ) : (
+          <Sidebar
+            state={sideState}
+            activeThreadId={thread?.id}
+            activeProjectId={route.name === "project" ? route.projectId : undefined}
+            page={menuPage}
+            searching={searching}
+            onSearching={setSearching}
+            onListActions={() => quickActions}
+            onOpenInbox={() => go({ name: "inbox" })}
+            onOpenPlanner={openPlanner}
+            onOpenSchedules={() => go({ name: "planner", view: "planifiees" })}
+            onOpenArtifacts={() => go({ name: "artifacts" })}
+            onOpenPrs={() => go({ name: "prs" })}
+            onNewThread={newLoose}
+            onNewProject={() => {
+              setDrawer(false);
+              setCreatingProject(true);
+            }}
+            onPickProject={(id) => {
+              pickProject(id);
+              go({ name: "project", projectId: id });
+            }}
+            onOpenThread={(id, itemId) => {
+              if (itemId) focusItem(id, itemId);
+              go({ name: "thread", threadId: id });
+            }}
+            onTogglePin={togglePin}
+            onSetArchived={setArchived}
+            onDeleteThread={(t) => {
+              setDrawer(false);
+              askDeleteThread(t);
+            }}
+            onOpenSettings={() => go({ name: "settings", section: "general" })}
+          />
+        )}
+      </aside>
+      <section className="main" id="main">
+        {route.name === "home" ? (
+          <Home loading={!state.ready} />
+        ) : route.name === "settings" ? (
+          legacyPage(
+            <ErrorBoundary key="settings">
+              <Suspense fallback={<div className="view" />}>
+                <SettingsPage
+                  section={route.section}
+                  agents={state.agents}
+                  favorites={state.favorites}
+                  coordinator={state.coordinator}
+                  projects={state.projects}
+                  lockPin={state.lockPin}
+                  projectId={project?.id}
+                  mcpServers={state.mcpServers}
+                  mcpSecretsError={state.mcpSecretsError}
+                  onPickProject={pickProject}
+                  onOpenConnections={() => setConnectionsOpen(true)}
+                  onOpenMcp={() => setMcpOpen(true)}
+                />
+              </Suspense>
+            </ErrorBoundary>,
+          )
         ) : route.name === "thread" ? (
-          thread ? (
-            <ThreadView
-              thread={thread}
-              items={state.items[thread.id]}
-              held={state.held[thread.id]}
-              agents={state.agents}
-              threads={state.threads}
-              onOpenThread={(id) => navigate({ name: "thread", threadId: id })}
-            />
-          ) : (
-            <div className="view">
-              <div className="home">
-                <p className="greet-sub">
-                  {!state.ready
-                    ? "Chargement…"
-                    : state.projects.some((p) => p.locked)
-                      ? "Ce fil n'existe plus, ou son projet est verrouillé."
-                      : "Ce fil n'existe plus."}
-                </p>
+          legacyPage(
+            thread ? (
+              <ThreadView
+                thread={thread}
+                items={state.items[thread.id]}
+                held={state.held[thread.id]}
+                agents={state.agents}
+                threads={state.threads}
+                onOpenThread={(id) => navigate({ name: "thread", threadId: id })}
+              />
+            ) : (
+              <div className="view">
+                <div className="home">
+                  <p className="greet-sub">
+                    {!state.ready
+                      ? "Chargement…"
+                      : state.projects.some((p) => p.locked)
+                        ? "Ce fil n'existe plus, ou son projet est verrouillé."
+                        : "Ce fil n'existe plus."}
+                  </p>
+                </div>
               </div>
-            </div>
+            ),
           )
         ) : route.name === "project" ? (
-          routeProject?.locked ? (
-            <div className="view">
-              <div className="lk-page">
-                <span className="lk-ic">
-                  <IconLock size={20} />
-                </span>
-                <b className="lk-ttl">{routeProject.name} est verrouillé</b>
-                <p>
-                  Les agents continuent de travailler. Ses discussions, ses cartes et ses fichiers
-                  restent masqués sur tous tes appareils tant que le code n'est pas saisi.
-                </p>
-                <button className="btn" onClick={() => askUnlock(routeProject)}>
-                  Déverrouiller
-                </button>
+          legacyPage(
+            routeProject?.locked ? (
+              <div className="view">
+                <div className="lk-page">
+                  <span className="lk-ic">
+                    <IconLock size={20} />
+                  </span>
+                  <b className="lk-ttl">{routeProject.name} est verrouillé</b>
+                  <p>
+                    Les agents continuent de travailler. Ses discussions, ses cartes et ses fichiers
+                    restent masqués sur tous tes appareils tant que le code n'est pas saisi.
+                  </p>
+                  <button className="btn" onClick={() => askUnlock(routeProject)}>
+                    Déverrouiller
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : routeProject ? (
-            (() => {
-              const page = (panel: boolean) => (
-                <ProjectPage
-                  // Another project starts afresh: a name being typed never follows to the next.
-                  key={routeProject.id}
-                  panel={panel}
-                  project={routeProject}
-                  threads={state.threads}
-                  agents={state.agents}
-                  ready={state.ready}
-                  onOpenThread={openThread}
-                  onNewThread={() => {
-                    pickProject(routeProject.id);
-                    go({ name: "home" });
-                  }}
-                  onTogglePin={togglePin}
-                  onSetResolved={setArchived}
-                  onDeleteThread={askDeleteThread}
-                  onOpenPlanner={() => {
-                    pickProject(routeProject.id);
-                    openPlanner();
-                  }}
-                  onRemoveProject={() => askRemoveProject(routeProject.id)}
-                  onLock={() => lockOne(routeProject)}
-                  coordinator={coordinator}
-                  settings={state.coordinator}
-                  onOpenSettings={() => go({ name: "settings", section: "coordinator" })}
-                  onStartCoordinator={
-                    coordinator
-                      ? undefined
-                      : async (pick) => {
-                          await connection.request({
-                            type: "coordinator.open",
-                            requestId: newId(),
-                            projectId: routeProject.id,
-                            agentId: pick.agentId,
-                            ...(pick.model ? { model: pick.model } : {}),
-                          });
-                        }
-                  }
-                  favorites={state.favorites}
-                />
-              );
-              if (!coordinator) return page(false);
-              // The thread last at work in the project, to pick up where things were left.
-              const recent = listed.threads
-                .filter((t) => t.projectId === routeProject.id && !t.archived && !t.parentId)
-                .sort((a, b) => b.updatedAt - a.updatedAt)[0];
-              const chat = (
-                <ThreadView
-                  intro={
-                    <div className="pp-hello">
-                      <p>
-                        Prêt à travailler sur le projet « {routeProject.name} ». Quelques façons de
-                        démarrer :
-                      </p>
-                      <div className="pp-starts">
-                        {recent && (
-                          <button onClick={() => openThread(recent.id)}>
-                            <IconClock size={13} />
-                            Reprendre le travail récent
-                          </button>
-                        )}
-                        <button
-                          onClick={() => {
-                            pickProject(routeProject.id);
-                            go({ name: "planner" });
-                          }}
-                        >
-                          <IconBoard size={13} />
-                          Établir un plan
-                        </button>
-                        <button onClick={() => setScheduling({ text: "" })}>
-                          <IconClock size={13} />
-                          Planifier une tâche
-                        </button>
-                        <button onClick={() => setConnectionsOpen(true)}>
-                          <IconPlug size={13} />
-                          Utiliser mes outils
-                        </button>
-                      </div>
-                    </div>
-                  }
-                  key={coordinator.id}
-                  thread={coordinator}
-                  items={state.items[coordinator.id]}
-                  held={state.held[coordinator.id]}
-                  agents={state.agents}
-                  threads={state.threads}
-                  onOpenThread={openThread}
-                />
-              );
-              // The thread picked in the list takes the list's place, a way back above it.
-              const pane = beside && (
-                <section className="pp-thread" aria-label={beside.title}>
-                  <header className="pp-crumb">
-                    <button
-                      className="pp-crumb-back"
-                      onClick={() => go({ name: "project", projectId: routeProject.id })}
-                    >
-                      Fils de discussion
-                    </button>
-                    <span className="pp-crumb-sep" aria-hidden="true">
-                      ›
-                    </span>
-                    <span className="pp-crumb-t" title={beside.title}>
-                      {beside.title}
-                    </span>
-                    <button
-                      className="ib"
-                      aria-label={beside.archived ? "Rouvrir" : "Marquer résolu"}
-                      title={beside.archived ? "Rouvrir" : "Marquer résolu"}
-                      aria-pressed={!!beside.archived}
-                      onClick={() => setArchived(beside.id, !beside.archived)}
-                    >
-                      <IconCheck size={15} />
-                    </button>
-                    <button
-                      className="ib"
-                      aria-label="Ouvrir en grand"
-                      title="Ouvrir en grand, avec le code"
-                      onClick={() => go({ name: "thread", threadId: beside.id })}
-                    >
-                      <IconExpand />
-                    </button>
-                    <ThreadMenu
-                      actions={[
-                        {
-                          label: beside.pinned ? "Désépingler" : "Épingler",
-                          run: () => togglePin(beside.id, !beside.pinned),
-                        },
-                        { label: "Exporter en Markdown", run: () => exportThread(beside) },
-                        { label: "Supprimer…", danger: true, run: () => askDeleteThread(beside) },
-                      ]}
-                    />
-                  </header>
+            ) : routeProject ? (
+              (() => {
+                const page = (panel: boolean) => (
+                  <ProjectPage
+                    // Another project starts afresh: a name being typed never follows to the next.
+                    key={routeProject.id}
+                    panel={panel}
+                    project={routeProject}
+                    threads={state.threads}
+                    agents={state.agents}
+                    ready={state.ready}
+                    onOpenThread={openThread}
+                    onNewThread={() => {
+                      pickProject(routeProject.id);
+                      go({ name: "home" });
+                    }}
+                    onTogglePin={togglePin}
+                    onSetResolved={setArchived}
+                    onDeleteThread={askDeleteThread}
+                    onOpenPlanner={() => {
+                      pickProject(routeProject.id);
+                      openPlanner();
+                    }}
+                    onRemoveProject={() => askRemoveProject(routeProject.id)}
+                    onLock={() => lockOne(routeProject)}
+                    coordinator={coordinator}
+                    settings={state.coordinator}
+                    onOpenSettings={() => go({ name: "settings", section: "coordinator" })}
+                    onStartCoordinator={
+                      coordinator
+                        ? undefined
+                        : async (pick) => {
+                            await connection.request({
+                              type: "coordinator.open",
+                              requestId: newId(),
+                              projectId: routeProject.id,
+                              agentId: pick.agentId,
+                              ...(pick.model ? { model: pick.model } : {}),
+                            });
+                          }
+                    }
+                    favorites={state.favorites}
+                  />
+                );
+                if (!coordinator) return page(false);
+                // The thread last at work in the project, to pick up where things were left.
+                const recent = listed.threads
+                  .filter((t) => t.projectId === routeProject.id && !t.archived && !t.parentId)
+                  .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+                const chat = (
                   <ThreadView
-                    key={beside.id}
-                    thread={beside}
-                    items={state.items[beside.id]}
-                    held={state.held[beside.id]}
+                    intro={
+                      <div className="pp-hello">
+                        <p>
+                          Prêt à travailler sur le projet « {routeProject.name} ». Quelques façons
+                          de démarrer :
+                        </p>
+                        <div className="pp-starts">
+                          {recent && (
+                            <button onClick={() => openThread(recent.id)}>
+                              <IconClock size={13} />
+                              Reprendre le travail récent
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              pickProject(routeProject.id);
+                              go({ name: "planner" });
+                            }}
+                          >
+                            <IconBoard size={13} />
+                            Établir un plan
+                          </button>
+                          <button onClick={() => setScheduling({ text: "" })}>
+                            <IconClock size={13} />
+                            Planifier une tâche
+                          </button>
+                          <button onClick={() => setConnectionsOpen(true)}>
+                            <IconPlug size={13} />
+                            Utiliser mes outils
+                          </button>
+                        </div>
+                      </div>
+                    }
+                    key={coordinator.id}
+                    thread={coordinator}
+                    items={state.items[coordinator.id]}
+                    held={state.held[coordinator.id]}
                     agents={state.agents}
                     threads={state.threads}
                     onOpenThread={openThread}
                   />
-                  <div className="dock pp-dock">
-                    {composerFor(beside, "Oriente ce fil de discussion…")}
-                  </div>
-                </section>
-              );
-              // Wide enough: the conversation, the threads beside it. Else one at a time.
-              if (wide) {
-                return (
-                  <div className="pp-split">
-                    <div className="pp-main">
-                      {chat}
-                      <div className="dock">{coordinatorDock}</div>
-                    </div>
-                    {pane || page(true)}
-                  </div>
                 );
-              }
-              if (pane) return pane;
-              return (
-                <div className="pp-stack">
-                  <div className="pp-tabs" role="tablist" aria-label="Page du projet">
-                    <button
-                      role="tab"
-                      aria-selected={projectTab === "chat"}
-                      onClick={() => setProjectTab("chat")}
-                    >
-                      Coordinateur
-                    </button>
-                    <button
-                      role="tab"
-                      aria-selected={projectTab === "threads"}
-                      onClick={() => setProjectTab("threads")}
-                    >
-                      Fils
-                    </button>
-                  </div>
-                  {projectTab === "chat" ? chat : page(false)}
+                return projectTab === "chat" ? chat : page(false);
+              })()
+            ) : (
+              <div className="view">
+                <div className="home">
+                  <p className="greet-sub">
+                    {state.ready ? "Ce projet n'existe plus." : "Chargement…"}
+                  </p>
                 </div>
-              );
-            })()
-          ) : (
-            <div className="view">
-              <div className="home">
-                <p className="greet-sub">
-                  {state.ready ? "Ce projet n'existe plus." : "Chargement…"}
-                </p>
               </div>
-            </div>
+            ),
           )
         ) : route.name === "artifacts" ? (
-          <ErrorBoundary key="artifacts">
-            <Artifacts
-              threads={state.threads}
-              projects={state.projects}
-              onOpenThread={(id) => go({ name: "thread", threadId: id })}
-            />
-          </ErrorBoundary>
-        ) : route.name === "planner" ? (
-          <ErrorBoundary key={`planner:${project?.id ?? ""}`}>
-            <Suspense fallback={<div className="view" />}>
-              <Planner
-                key={project?.id}
-                project={project}
-                view={route.view}
-                onView={(view) => go(view ? { name: "planner", view } : { name: "planner" })}
-                plan={state.plan}
-                schedules={state.schedules}
-                onSchedule={(schedule) =>
-                  setScheduling(schedule ? { text: "", schedule } : { text: "" })
-                }
+          legacyPage(
+            <ErrorBoundary key="artifacts">
+              <Artifacts
                 threads={state.threads}
-                agents={state.agents}
+                projects={state.projects}
                 onOpenThread={(id) => go({ name: "thread", threadId: id })}
-                onNewProject={() => setCreatingProject(true)}
               />
-            </Suspense>
-          </ErrorBoundary>
-        ) : (
-          <Home
-            state={state}
-            project={project}
-            onNewProject={() => setCreatingProject(true)}
-            overview={{
-              shown: overviewShown,
-              narrow,
-              onToggle: (shown) => {
-                setOverviewShown(shown);
-                writePref("homeOverview", shown ? "on" : "off");
-              },
-              onOpenThread: (t) =>
-                go(
-                  t.kind === "coordinator"
-                    ? { name: "project", projectId: t.projectId }
-                    : { name: "thread", threadId: t.id },
-                ),
-              onOpenPlanner: openPlanner,
-              onOpenSubscriptions: () => go({ name: "settings", section: "subscriptions" }),
-            }}
-          />
-        )}
-        {route.name === "artifacts" && narrow && (
-          <div className="dock tab-dock">{tabBar("artifacts")}</div>
-        )}
-        {route.name !== "settings" &&
-          route.name !== "planner" &&
-          route.name !== "artifacts" &&
-          // A locked project's page has nothing to write to until the code is given.
-          !routeProject?.locked &&
-          // A project's own composer speaks to its coordinator only: none until it has one.
-          !(routeProject && !coordinator) &&
-          // Under the « Fils » tab the coordinator's conversation is out of sight: so is its composer.
-          // A thread shown alone on a narrow screen brings its own.
-          // Beside its threads, the coordinator's is under its own conversation.
-          !(coordinator && (wide || projectTab === "threads" || beside)) && (
-            <div className="dock">
-              {route.name === "home" && (narrow || sideOff) && !overviewShown && (
-                <HomeCards
-                  state={state}
-                  agents={state.agents}
-                  onOpen={(t) =>
-                    // A coordinator lives on its project's page, not as a thread of its own.
-                    go(
-                      t.kind === "coordinator"
-                        ? { name: "project", projectId: t.projectId }
-                        : { name: "thread", threadId: t.id },
-                    )
+            </ErrorBoundary>,
+          )
+        ) : route.name === "planner" ? (
+          legacyPage(
+            <ErrorBoundary key={`planner:${project?.id ?? ""}`}>
+              <Suspense fallback={<div className="view" />}>
+                <Planner
+                  key={project?.id}
+                  project={project}
+                  view={route.view}
+                  onView={(view) => go(view ? { name: "planner", view } : { name: "planner" })}
+                  plan={state.plan}
+                  schedules={state.schedules}
+                  onSchedule={(schedule) =>
+                    setScheduling(schedule ? { text: "", schedule } : { text: "" })
                   }
+                  threads={state.threads}
+                  agents={state.agents}
+                  onOpenThread={(id) => go({ name: "thread", threadId: id })}
+                  onNewProject={() => setCreatingProject(true)}
                 />
-              )}
-              {coordinator ? coordinatorDock : composerFor(spoken)}
-              {route.name === "home" && narrow && tabBar("new")}
-            </div>
-          )}
-      </main>
-      {reviewOpen && thread?.workspace && !thread.archived && (
-        <ReviewPanel
-          key={thread.id}
-          thread={thread}
-          review={state.reviews[thread.id]}
-          onClose={() => setReviewOpen(false)}
-        />
-      )}
-      <Presence show={teamTask !== null && !!project}>
-        {teamTask !== null && project && (
-          <TeamDialog
-            project={project}
-            agents={state.agents}
-            favorites={state.favorites}
-            task={teamTask}
-            onClose={() => setTeamTask(null)}
-            onStarted={(id) => {
-              setTeamTask(null);
-              navigate({ name: "thread", threadId: id });
-            }}
-          />
+              </Suspense>
+            </ErrorBoundary>,
+          )
+        ) : route.name === "inbox" ? (
+          legacyPage(
+            <RequestsDialog
+              page
+              requests={state.requests}
+              threads={state.threads}
+              onOpenThread={(id, itemId) => {
+                focusItem(id, itemId);
+                openThread(id);
+              }}
+              onClose={() => go({ name: "home" })}
+            />,
+          )
+        ) : (
+          legacyPage(
+            <div className="view">
+              <SidePullRequests threads={state.threads} onOpenThread={openThread} />
+            </div>,
+          )
         )}
-      </Presence>
-      <Presence show={reviewPr !== null && !!project}>
-        {reviewPr !== null && project && (
-          <ReviewDialog
-            project={project}
-            agents={state.agents}
-            favorites={state.favorites}
-            saved={state.coordinator.review}
-            savedJudge={state.coordinator.reviewJudge}
-            pr={reviewPr}
-            onClose={() => setReviewPr(null)}
-            onStarted={(id) => {
-              setReviewPr(null);
-              navigate({ name: "thread", threadId: id });
-            }}
-          />
-        )}
-      </Presence>
-      <Presence show={scheduling !== null && !!project}>
-        {scheduling && project && (
-          <ScheduleDialog
-            project={project}
-            agents={state.agents}
-            favorites={state.favorites}
-            text={scheduling.text}
-            schedule={scheduling.schedule}
-            onClose={() => setScheduling(null)}
-            onSaved={() => {
-              setScheduling(null);
-              // The planned tasks are listed in the planner, at their own address.
-              go({ name: "planner", view: "planifiees" });
-            }}
-          />
-        )}
-      </Presence>
-      <Presence show={creatingProject}>
-        <NewProjectDialog
-          onClose={() => setCreatingProject(false)}
-          onCreated={(id) => {
-            setCreatingProject(false);
-            pickProject(id);
-            go({ name: "home" });
-          }}
-        />
-      </Presence>
-      <Presence show={connectionsOpen}>
-        <ConnectionsDialog
-          agents={state.agents}
-          mcpServers={state.mcpServers}
-          mcpSecretsError={state.mcpSecretsError}
-          onOpenMcp={() => {
-            setConnectionsOpen(false);
-            setMcpOpen(true);
-          }}
-          onClose={() => setConnectionsOpen(false)}
-        />
-      </Presence>
-      <Presence show={requestsOpen}>
-        <RequestsDialog
-          requests={state.requests}
-          threads={state.threads}
-          onOpenThread={(id, itemId) => {
-            setRequestsOpen(false);
-            focusItem(id, itemId);
-            openThread(id);
-          }}
-          onClose={() => setRequestsOpen(false)}
-        />
-      </Presence>
-      <LockSheet />
-      <AppUpdateHostOnDemand />
-      <Presence show={!!confirm}>
-        {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
-      </Presence>
-      <Presence show={mcpOpen}>
-        <McpDialog
-          servers={state.mcpServers}
-          projects={state.projects}
-          secretsError={state.mcpSecretsError}
-          onClose={() => setMcpOpen(false)}
-        />
-      </Presence>
-      {searchOpen && (
-        <QuickSearch
-          state={listed}
-          actions={quickActions}
-          onClose={() => setSearchOpen(false)}
-          onOpenThread={(id, itemId) => {
-            if (itemId) focusItem(id, itemId);
-            openThread(id);
-          }}
-          onPickProject={(id) => {
-            pickProject(id);
-            go({ name: "home" });
-          }}
-        />
-      )}
-      {/* Shown on every page, the phone's included, where the sidebar's own line is out of sight. */}
-      {state.status === "closed" && (
-        <div className="offline" role="status">
-          <span className="spin" aria-hidden />
-          Reconnexion au serveur…
+        <div className="tfade" />
+        {bottom && <div className="bfade" />}
+        <div className="mtop" id="top">
+          {topBar}
         </div>
-      )}
+        {bottom && <Bottom>{bottom}</Bottom>}
+        <div
+          className="tpscrim"
+          onClick={() => {
+            setTabPop(null);
+            setThreadMenu(false);
+          }}
+        />
+        {route.name === "home" && tabPop && !screen.wide && (
+          <TabPopover
+            state={listed}
+            pop={tabPop}
+            onPickProject={(id) => {
+              pickProject(id);
+              go({ name: "project", projectId: id });
+            }}
+            onNewProject={() => {
+              setTabPop(null);
+              setCreatingProject(true);
+            }}
+            onOpenThread={(id) => go({ name: "thread", threadId: id })}
+            onNewThread={() => {
+              setTabPop(null);
+              const first = codeProjects[0];
+              if (first) pickProject(first.id);
+              else setCreatingProject(true);
+            }}
+            onOpenArtifacts={() => go({ name: "artifacts" })}
+          />
+        )}
+        {threadMenu && thread && (
+          <div className="pmenu tmn" role="menu" aria-label="Actions du fil">
+            {threadActions.map((a, i) => (
+              <Fragment key={a.label}>
+                {a.sep && <div className="psep" style={{ "--i": i } as React.CSSProperties} />}
+                <button
+                  className={`pi2${a.danger ? " dng" : ""}`}
+                  role="menuitem"
+                  style={{ "--i": i } as React.CSSProperties}
+                  onClick={() => {
+                    setThreadMenu(false);
+                    a.run();
+                  }}
+                >
+                  <I n={a.icon} s={20} />
+                  <span className="nm">{a.label}</span>
+                </button>
+              </Fragment>
+            ))}
+          </div>
+        )}
+        {route.name === "home" && !screen.wide && (
+          <TabBar state={listed} pop={tabPop} onPop={setTabPop} />
+        )}
+        <div className="veil" id="veil" onClick={() => setDrawer(false)} />
+      </section>
+      <Sheet open={reviewing} onClose={() => setReviewOpen(false)} title="Modifications" tall>
+        {thread?.workspace && !thread.archived && (
+          <div className="legacy legacy-sheet">
+            <ReviewPanel
+              key={thread.id}
+              thread={thread}
+              review={state.reviews[thread.id]}
+              onClose={() => setReviewOpen(false)}
+            />
+          </div>
+        )}
+      </Sheet>
+      <div className="legacy legacy-over">
+        <Presence show={teamTask !== null && !!project}>
+          {teamTask !== null && project && (
+            <TeamDialog
+              project={project}
+              agents={state.agents}
+              favorites={state.favorites}
+              task={teamTask}
+              onClose={() => setTeamTask(null)}
+              onStarted={(id) => {
+                setTeamTask(null);
+                navigate({ name: "thread", threadId: id });
+              }}
+            />
+          )}
+        </Presence>
+        <Presence show={reviewPr !== null && !!project}>
+          {reviewPr !== null && project && (
+            <ReviewDialog
+              project={project}
+              agents={state.agents}
+              favorites={state.favorites}
+              saved={state.coordinator.review}
+              savedJudge={state.coordinator.reviewJudge}
+              pr={reviewPr}
+              onClose={() => setReviewPr(null)}
+              onStarted={(id) => {
+                setReviewPr(null);
+                navigate({ name: "thread", threadId: id });
+              }}
+            />
+          )}
+        </Presence>
+        <Presence show={scheduling !== null && !!project}>
+          {scheduling && project && (
+            <ScheduleDialog
+              project={project}
+              agents={state.agents}
+              favorites={state.favorites}
+              text={scheduling.text}
+              schedule={scheduling.schedule}
+              onClose={() => setScheduling(null)}
+              onSaved={() => {
+                setScheduling(null);
+                // The planned tasks are listed in the planner, at their own address.
+                go({ name: "planner", view: "planifiees" });
+              }}
+            />
+          )}
+        </Presence>
+        <Presence show={creatingProject}>
+          <NewProjectDialog
+            onClose={() => setCreatingProject(false)}
+            onCreated={(id) => {
+              setCreatingProject(false);
+              pickProject(id);
+              go({ name: "project", projectId: id });
+            }}
+          />
+        </Presence>
+        <Presence show={connectionsOpen}>
+          <ConnectionsDialog
+            agents={state.agents}
+            mcpServers={state.mcpServers}
+            mcpSecretsError={state.mcpSecretsError}
+            onOpenMcp={() => {
+              setConnectionsOpen(false);
+              setMcpOpen(true);
+            }}
+            onClose={() => setConnectionsOpen(false)}
+          />
+        </Presence>
+        <LockSheet />
+        <AppUpdateHostOnDemand />
+        <Presence show={!!confirm}>
+          {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
+        </Presence>
+        <Presence show={mcpOpen}>
+          <McpDialog
+            servers={state.mcpServers}
+            projects={state.projects}
+            secretsError={state.mcpSecretsError}
+            onClose={() => setMcpOpen(false)}
+          />
+        </Presence>
+        {/* Shown on every page, the phone's included, where the sidebar's own line is out of sight. */}
+        {state.status === "closed" && (
+          <div className="offline" role="status">
+            <span className="spin" aria-hidden />
+            Reconnexion au serveur…
+          </div>
+        )}
+      </div>
       {state.notice && (
-        <div className="toast" role="status">
-          {state.notice}
+        <div className="toast on" role="status">
+          <span>{state.notice}</span>
           <button onClick={() => connection.dismissNotice()}>Fermer</button>
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * What floats at the bottom of the page: its height is told to the page, which keeps that
+ * much room under its last line.
+ */
+function Bottom({ children }: { children: React.ReactNode }) {
+  const box = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = box.current;
+    const main = el?.parentElement;
+    if (!el || !main) return;
+    const tell = () => main.style.setProperty("--cbh", `${el.offsetHeight + 12}px`);
+    tell();
+    const watch = new ResizeObserver(tell);
+    watch.observe(el);
+    return () => {
+      watch.disconnect();
+      main.style.removeProperty("--cbh");
+    };
+  }, []);
+  return (
+    <div className="bottom" id="bottom" ref={box}>
+      {children}
+    </div>
+  );
+}
+
+/** On the home page's top right: what the composer's agent has used of its subscription, and the lock. */
+function HomeCapsule(props: {
+  agents: AgentInfo[];
+  agentId: string | undefined;
+  onUsage: () => void;
+  onLock?: () => void;
+}) {
+  const quotas = useQuotas();
+  const worst = tightest(quotas.find((q) => q.agentId === props.agentId));
+  const name = props.agents.find((a) => a.id === props.agentId)?.name;
+  if (!worst && !props.onLock) return <span />;
+  return (
+    <div className="gcap glass">
+      {worst && (
+        <button
+          aria-label={`Utilisation de ${name ?? "l'agent"} : ${Math.round(worst.usedPercent)} %`}
+          onClick={props.onUsage}
+        >
+          <Ring percent={worst.usedPercent} />
+        </button>
+      )}
+      {props.onLock && (
+        <button aria-label="Verrouiller" title="Verrouiller (Ctrl Maj L)" onClick={props.onLock}>
+          <I n="lock" s={20} />
+        </button>
       )}
     </div>
   );

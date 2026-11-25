@@ -1,0 +1,303 @@
+/* Jetons et bases du redesign v2 (maquette mobile v72). */
+:root {
+  --bg: #fafafa;
+  --side: #f2f2f4;
+  --surface: #fff;
+  --surface-hi: #fff;
+  --surface-lo: #fbfbfc;
+  --card: #f2f2f4;
+  --sunken: #ececef;
+  --sheet: #f6f6f8;
+  --group: #fff;
+  --chip: var(--card);
+  --hover: #e9e9ec;
+  --press: #e2e2e6;
+  --track: #e3e3e8;
+  --fg: #18181b;
+  --fg2: #3f3f46;
+  --muted: #62626b;
+  --faint: #7a7a83;
+  --ink: #18181b;
+  --on-ink: #fff;
+  --accent: #3a55d6;
+  --accent-soft: rgba(58, 85, 214, 0.09);
+  --accbg: #eceffd;
+  --bubble: #edf0fc;
+  --bubble-fg: #1d2f8a;
+  --ok: #1f8a50;
+  --okbg: #e8f5ee;
+  --ok-tx: #1a7a46;
+  --err-tx: #c23535;
+  --warn: #9a6008;
+  --warnbg: #fbf3e4;
+  --warn-dot: var(--accent);
+  --err: #cc3d3d;
+  --errbg: #fbeeee;
+  --a-claude: #c2563a;
+  --a-ag: #2b7fd1;
+  --a-hermes: #0d9488;
+  --a-codex: #3f3f46;
+  --p1: #5b6ee1;
+  --p2: #1f9d6b;
+  --p3: #d0782a;
+  --p4: #8a5cd6;
+  --edge-hi: rgba(20, 20, 30, 0.06);
+  --edge-lo: rgba(20, 20, 30, 0.13);
+  --edge-focus: rgba(58, 85, 214, 0.3);
+  --cring: rgba(20, 20, 30, 0.075);
+  --cring-f: rgba(20, 20, 30, 0.15);
+  --edge-warn-hi: rgba(212, 144, 28, 0.35);
+  --edge-warn-lo: rgba(212, 144, 28, 0.6);
+  --rim: rgba(255, 255, 255, 0.9);
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-ring: rgba(20, 20, 30, 0.07);
+  --glass-sh:
+    0 0 0 0.5px var(--glass-ring), 0 1px 1px rgba(20, 20, 30, 0.03),
+    0 6px 16px -6px rgba(20, 20, 30, 0.12);
+  --lift:
+    0 0 0 0.5px rgba(20, 20, 30, 0.04), 0 1px 2px rgba(20, 20, 30, 0.04),
+    0 8px 20px -8px rgba(20, 20, 30, 0.12), 0 24px 40px -24px rgba(20, 20, 30, 0.16);
+  --float: 0 0 0 0.5px rgba(24, 24, 40, 0.06), 0 -10px 40px -10px rgba(20, 20, 30, 0.18);
+  --scrim: rgba(14, 14, 18, 0.32);
+  --page: #e9e9ec;
+  --bezel: #141416;
+  --push: -0.5px 0 0 rgba(20, 20, 30, 0.07), -6px 0 18px -12px rgba(20, 20, 30, 0.18);
+  --orb-hi: #ffffff;
+  --orb-lo: #f1f1f3;
+  --orb-rim: #fff;
+  --orb-in: rgba(20, 20, 30, 0.05);
+  --orb-ring: rgba(20, 20, 30, 0.14);
+  --pill-hi: #2c2c2f;
+  --pill-lo: #1d1d1f;
+  --pill-rim: rgba(255, 255, 255, 0.14);
+  --pill-ring: rgba(0, 0, 0, 0.5);
+  --pill-fg: #fff;
+  --pc-moon: #3a55d6;
+  --pc-sky: #1f7fbf;
+  --pc-mint: #17866a;
+  --pc-sun: #a5650b;
+  --pc-coral: #c4502f;
+  --pc-rose: #c23c72;
+  --pc-violet: #7a4fd6;
+  --pc-slate: #5b6170;
+  --tab-on: rgba(58, 85, 214, 0.1);
+  --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --serif: "Newsreader Variable", "Newsreader", "Iowan Old Style", Georgia, serif;
+  --spring: cubic-bezier(0.32, 0.72, 0, 1);
+  --out: cubic-bezier(0.23, 1, 0.32, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #151515;
+    --side: #111111;
+    --surface: #2f2f2f;
+    --surface-hi: #333333;
+    --surface-lo: #2c2c2c;
+    --card: #262626;
+    --sunken: #262626;
+    --sheet: #1a1a1a;
+    --group: #1f1f1f;
+    --chip: #404040;
+    --hover: #2a2a2a;
+    --press: #333333;
+    --track: #363636;
+    --fg: #f3f3f3;
+    --fg2: #d2d2d2;
+    --muted: #9c9c9c;
+    --faint: #7c7c7c;
+    --ink: #f3f3f3;
+    --on-ink: #151515;
+    --accent: #8399ff;
+    --accent-soft: rgba(131, 153, 255, 0.12);
+    --accbg: #1c2140;
+    --bubble: #2a2a2a;
+    --bubble-fg: #f3f3f3;
+    --ok: #52c585;
+    --okbg: #15271d;
+    --ok-tx: #52c585;
+    --err-tx: #f06c6c;
+    --warn: #e2a740;
+    --warnbg: #2a2114;
+    --warn-dot: var(--accent);
+    --err: #f06c6c;
+    --errbg: #2c1818;
+    --a-codex: #71717a;
+    --p1: #8b9bff;
+    --p2: #4fd19c;
+    --p3: #f0a35c;
+    --p4: #b393ff;
+    --edge-hi: rgba(255, 255, 255, 0.12);
+    --edge-lo: rgba(255, 255, 255, 0.04);
+    --edge-focus: rgba(131, 153, 255, 0.45);
+    --cring: rgba(255, 255, 255, 0.07);
+    --cring-f: rgba(255, 255, 255, 0.14);
+    --edge-warn-hi: rgba(226, 167, 64, 0.45);
+    --edge-warn-lo: rgba(226, 167, 64, 0.15);
+    --rim: rgba(255, 255, 255, 0.05);
+    --glass: rgba(42, 42, 42, 0.7);
+    --glass-ring: rgba(255, 255, 255, 0.09);
+    --glass-sh: 0 0 0 0.5px var(--glass-ring), 0 6px 16px -6px rgba(0, 0, 0, 0.6);
+    --lift:
+      0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 8px 20px -8px rgba(0, 0, 0, 0.6),
+      0 24px 40px -24px rgba(0, 0, 0, 0.7);
+    --float: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 -10px 40px -10px rgba(0, 0, 0, 0.7);
+    --scrim: rgba(0, 0, 0, 0.55);
+    --page: #0a0a0a;
+    --tab-on: rgba(131, 153, 255, 0.16);
+    --pc-moon: #8399ff;
+    --pc-sky: #5cb2ec;
+    --pc-mint: #4fc7a2;
+    --pc-sun: #e2a740;
+    --pc-coral: #f08a6a;
+    --pc-rose: #f07aa8;
+    --pc-violet: #a88bf0;
+    --pc-slate: #9aa0ae;
+    --orb-hi: #3a3a3a;
+    --orb-lo: #2a2a2a;
+    --orb-rim: rgba(255, 255, 255, 0.14);
+    --orb-in: rgba(0, 0, 0, 0.3);
+    --orb-ring: rgba(255, 255, 255, 0.1);
+    --pill-hi: #f5f5f5;
+    --pill-lo: #dedede;
+    --pill-rim: #fff;
+    --pill-ring: rgba(255, 255, 255, 0.2);
+    --pill-fg: #151515;
+    --bezel: #2a2a2a;
+    --push: -0.5px 0 0 rgba(255, 255, 255, 0.07), -6px 0 18px -10px rgba(0, 0, 0, 0.55);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #151515;
+  --side: #111111;
+  --surface: #2f2f2f;
+  --surface-hi: #333333;
+  --surface-lo: #2c2c2c;
+  --card: #262626;
+  --sunken: #262626;
+  --sheet: #1a1a1a;
+  --group: #1f1f1f;
+  --chip: #404040;
+  --hover: #2a2a2a;
+  --press: #333333;
+  --track: #363636;
+  --fg: #f3f3f3;
+  --fg2: #d2d2d2;
+  --muted: #9c9c9c;
+  --faint: #7c7c7c;
+  --ink: #f3f3f3;
+  --on-ink: #151515;
+  --accent: #8399ff;
+  --accent-soft: rgba(131, 153, 255, 0.12);
+  --accbg: #1c2140;
+  --bubble: #2a2a2a;
+  --bubble-fg: #f3f3f3;
+  --ok: #52c585;
+  --okbg: #15271d;
+  --ok-tx: #52c585;
+  --err-tx: #f06c6c;
+  --warn: #e2a740;
+  --warnbg: #2a2114;
+  --warn-dot: var(--accent);
+  --err: #f06c6c;
+  --errbg: #2c1818;
+  --a-codex: #71717a;
+  --p1: #8b9bff;
+  --p2: #4fd19c;
+  --p3: #f0a35c;
+  --p4: #b393ff;
+  --edge-hi: rgba(255, 255, 255, 0.12);
+  --edge-lo: rgba(255, 255, 255, 0.04);
+  --edge-focus: rgba(131, 153, 255, 0.45);
+  --cring: rgba(255, 255, 255, 0.07);
+  --cring-f: rgba(255, 255, 255, 0.14);
+  --edge-warn-hi: rgba(226, 167, 64, 0.45);
+  --edge-warn-lo: rgba(226, 167, 64, 0.15);
+  --rim: rgba(255, 255, 255, 0.05);
+  --glass: rgba(42, 42, 42, 0.7);
+  --glass-ring: rgba(255, 255, 255, 0.09);
+  --glass-sh: 0 0 0 0.5px var(--glass-ring), 0 6px 16px -6px rgba(0, 0, 0, 0.6);
+  --lift:
+    0 0 0 0.5px rgba(255, 255, 255, 0.06), 0 8px 20px -8px rgba(0, 0, 0, 0.6),
+    0 24px 40px -24px rgba(0, 0, 0, 0.7);
+  --float: 0 0 0 0.5px rgba(255, 255, 255, 0.07), 0 -10px 40px -10px rgba(0, 0, 0, 0.7);
+  --scrim: rgba(0, 0, 0, 0.55);
+  --page: #0a0a0a;
+  --tab-on: rgba(131, 153, 255, 0.16);
+  --pc-moon: #8399ff;
+  --pc-sky: #5cb2ec;
+  --pc-mint: #4fc7a2;
+  --pc-sun: #e2a740;
+  --pc-coral: #f08a6a;
+  --pc-rose: #f07aa8;
+  --pc-violet: #a88bf0;
+  --pc-slate: #9aa0ae;
+  --orb-hi: #3a3a3a;
+  --orb-lo: #2a2a2a;
+  --orb-rim: rgba(255, 255, 255, 0.14);
+  --orb-in: rgba(0, 0, 0, 0.3);
+  --orb-ring: rgba(255, 255, 255, 0.1);
+  --pill-hi: #f5f5f5;
+  --pill-lo: #dedede;
+  --pill-rim: #fff;
+  --pill-ring: rgba(255, 255, 255, 0.2);
+  --pill-fg: #151515;
+  --bezel: #2a2a2a;
+  --push: -0.5px 0 0 rgba(255, 255, 255, 0.07), -6px 0 18px -10px rgba(0, 0, 0, 0.55);
+  color-scheme: dark;
+}
+
+@layer reset {
+  * {
+    box-sizing: border-box;
+  }
+  [hidden] {
+    display: none !important;
+  }
+  html,
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 400 16px/1.5 var(--sans);
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+    -webkit-text-size-adjust: 100%;
+    overflow: hidden;
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 400 16px/1.5 var(--sans);
+    letter-spacing: -0.01em;
+    -webkit-font-smoothing: antialiased;
+    -webkit-text-size-adjust: 100%;
+    overflow: hidden;
+  }
+  button {
+    font: inherit;
+    color: inherit;
+    letter-spacing: inherit;
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  button:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  svg {
+    flex: none;
+    display: block;
+  }
+  ::selection {
+    background: var(--accent-soft);
+  }
+}

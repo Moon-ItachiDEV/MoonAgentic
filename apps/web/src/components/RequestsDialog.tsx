@@ -16,6 +16,8 @@ export function RequestsDialog(props: {
   threads: Thread[];
   onOpenThread: (threadId: string, itemId: string) => void;
   onClose: () => void;
+  /** Shown as a page of its own, not over another. */
+  page?: boolean;
 }) {
   const { onClose } = props;
   useEffect(() => {
@@ -29,8 +31,16 @@ export function RequestsDialog(props: {
   const now = Date.now();
 
   return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="dialog requests" role="dialog" aria-modal aria-labelledby="rq-title">
+    <div
+      className={props.page ? "view rq-page" : "scrim"}
+      onMouseDown={(e) => !props.page && e.target === e.currentTarget && onClose()}
+    >
+      <div
+        className="dialog requests"
+        role={props.page ? "region" : "dialog"}
+        aria-modal={props.page ? undefined : true}
+        aria-labelledby="rq-title"
+      >
         <h2 id="rq-title">À traiter</h2>
         <p>
           {props.requests.length === 0

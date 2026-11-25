@@ -49,24 +49,16 @@ import { setDefault, useDefaults } from "../defaults.ts";
 import { speakerName } from "../speaker.ts";
 import { quotaWarning, roomiest, tightest } from "../quotas.ts";
 import { dismissQuotaWarning, useQuotas, useQuotaSeen } from "../use-quotas.ts";
-import { AgentBadge } from "./AgentBadge.tsx";
 import { ComposerImages } from "./ComposerImages.tsx";
-import { AccessChip, Tray, type TrayQuota } from "./ComposerTray.tsx";
+import { type ComposerContext, PlusPop, PlusSheet, WhereSheet } from "./ComposerMenus.tsx";
+import type { TrayQuota } from "./ComposerTray.tsx";
 import { GoalBar } from "./GoalBar.tsx";
 import { MessageQueue } from "./MessageQueue.tsx";
-import {
-  IconArrowUp,
-  IconBolt,
-  IconCaret,
-  IconMic,
-  IconQueue,
-  IconSparkle,
-  IconStop,
-} from "./icons.tsx";
 import { Presence } from "./Presence.tsx";
 import { Picker } from "./Picker.tsx";
-import { PlusMenu } from "./PlusMenu.tsx";
 import { type Suggestion, Suggestions } from "./Suggestions.tsx";
+import { I } from "../v2/I.tsx";
+import { useScrFlag } from "../v2/scr.ts";
 
 const NARROW = "(max-width: 860px)";
 const narrowQuery = typeof matchMedia === "function" ? matchMedia(NARROW) : undefined;
@@ -140,9 +132,10 @@ export function Composer(props: {
   const { agents, thread, project } = props;
   const [text, setText] = useState("");
   const [menu, setMenu] = useState(false);
-  const [plusOpen, setPlusOpen] = useState(false);
-  const [accessOpen, setAccessOpen] = useState(false);
-  const [trayMenu, setTrayMenu] = useState<"project" | "branch" | "mcp" | null>(null);
+  const [plusOpen, setPlusOpenNow] = useState(false);
+  /** The sheet open from the « + » menu: the rest of what it offers, or where to work. */
+  const [sheet, setSheet] = useState<"plus" | "where" | null>(null);
+  const [ctxOpen, setCtxOpen] = useState(false);
   /** Messages typed while the agent works: sent one by one once it is done. */
   // A favorite of another agent picked in a thread: its model, once that agent has the thread.
   const [handoffModel, setHandoffModel] = useState<{
@@ -178,7 +171,6 @@ export function Composer(props: {
   } | null>(null);
   /** The caret to restore once a picked suggestion is in the text. */
   const nextCaret = useRef<number | null>(null);
-  const narrow = useNarrow();
   /** Dictation under way: what was typed before it, and what was heard since. */
   const [voice, setVoice] = useState<{ typed: string; heard: Heard; started: number } | null>(null);
   const voiceRef = useRef(voice);
@@ -304,6 +296,39 @@ export function Composer(props: {
       document.removeEventListener("keydown", escape);
     };
   }, [pickerOpen]);
+  // The « + » menu and the context's figures close the same way; the menu shrinks back first.
+  const [plusOut, setPlusOut] = useState(false);
+  const setPlusOpen = (on: boolean) => {
+    if (!on && plusOpen) setPlusOut(true);
+    setPlusOpenNow(on);
+  };
+  useScrFlag("pm", plusOpen);
+  useEffect(() => {
+    if (!plusOpen && !ctxOpen) return;
+    const close = (event: PointerEvent) => {
+      const at = event.target as Element;
+      if (at.closest?.(".pmenu, .ctxp, [data-a='pmenu'], .gz")) return;
+      setPlusOpen(false);
+      setCtxOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setPlusOpen(false);
+      setCtxOpen(false);
+      input.current?.focus();
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [plusOpen, ctxOpen]);
+  useEffect(() => {
+    if (plusOpen) return setPlusOut(false);
+    const timer = setTimeout(() => setPlusOut(false), 230);
+    return () => clearTimeout(timer);
+  }, [plusOpen]);
   useEffect(
     () =>
       onFillComposer((threadId, value, files) => {
@@ -703,6 +728,9 @@ export function Composer(props: {
     const value = submission.text;
     const attachments = images.ready.length ? { attachments: images.ready.map((i) => i.id) } : {};
     if (thread) {
+      // Writing in a resolved thread opens it again.
+      if (thread.archived)
+        connection.send({ type: "thread.setArchived", threadId: thread.id, archived: false });
       if (
         connection.send({ type: "thread.send", threadId: thread.id, text: value, ...attachments })
       ) {
@@ -830,28 +858,19 @@ export function Composer(props: {
     ? "Je t'écoute…"
     : props.placeholder
       ? props.placeholder
-      : thread && running
-        ? narrow
-          ? "Ajouter une consigne…"
-          : `Ajouter une consigne pendant que ${speaker} travaille…`
-        : thread
-          ? `Répondre à ${speaker}…`
-          : narrow
-            ? "Demande à tes agents…"
-            : "Demande n'importe quoi à tes agents…";
+      : thread?.archived
+        ? "Écrire pour rouvrir le fil"
+        : thread && running
+          ? thread.team
+            ? "Ajouter une mission"
+            : "Ajouter une consigne"
+          : thread
+            ? `Répondre à ${speaker}`
+            : `Demander à ${(modelName ?? agent?.name ?? "tes agents").replace(/^Gemini \d+(\.\d+)? /, "")}`;
 
   // On a phone the composer is one line until it is used, as in the mockup.
   const hasImages = images.drafts.length > 0;
-  const open =
-    focused ||
-    !!text ||
-    hasImages ||
-    !!voice ||
-    plusOpen ||
-    pickerOpen ||
-    accessOpen ||
-    !!trayMenu ||
-    suggesting;
+  const open = focused || !!text || hasImages || !!voice || pickerOpen || ctxOpen || suggesting;
   const seconds = voice ? Math.floor((Date.now() - voice.started) / 1000) : 0;
   const heardText = voice ? `${voice.heard.final} ` : "";
   const full = mode === "full";
@@ -889,20 +908,82 @@ export function Composer(props: {
         }
       : undefined;
 
-  const closeMenus = (keep?: "plus" | "access" | "picker" | "tray") => {
+  const closeMenus = (keep?: "plus" | "picker" | "ctx") => {
     if (keep !== "plus") setPlusOpen(false);
-    if (keep !== "access") setAccessOpen(false);
     if (keep !== "picker") setMenu(false);
-    if (keep !== "tray") setTrayMenu(null);
+    if (keep !== "ctx") setCtxOpen(false);
   };
   const hasText = text.trim().length > 0;
+  const hasDraft = hasText || hasImages;
   const agentLabel = agent?.name ?? (thread ? "Agent retiré" : "Aucun agent installé");
+  const effortName = effort?.choices.find((c) => c.id === settings[effort.id])?.name;
+  const noProject = !project && !props.onNeedProject;
+  const context: ComposerContext = {
+    project,
+    ...(!thread && props.projects && props.onPickProject ? { projects: props.projects } : {}),
+    ...(thread?.workspace ? { branch: thread.workspace.branch } : {}),
+    mcpServers: props.mcpServers ?? [],
+  };
+  const openImages = (from: "files" | "camera") => {
+    setPlusOpen(false);
+    (from === "camera" ? camera : filePicker).current?.click();
+  };
+  /** Starts the word the composer already completes: @ files, $ skills, / commands. */
+  const insertWord = (word: "@" | "$" | "/") => {
+    setPlusOpen(false);
+    input.current?.focus();
+    if (word === "/") {
+      // A command is the message's first word.
+      const rest = text.trimStart();
+      putText(rest ? `/ ${rest}` : "/", 1);
+      return;
+    }
+    const before = text.slice(0, caret);
+    const space = before && !/\s$/.test(before) ? " " : "";
+    putText(before + space + word + text.slice(caret), before.length + space.length + word.length);
+  };
+  const openMcp = () => {
+    setPlusOpen(false);
+    (props.onMcp ?? props.onConnections)();
+  };
+  const usage = thread?.usage;
+  const usedShare = usage && usage.size > 0 ? Math.round((usage.used / usage.size) * 100) : 0;
 
+  const plusButton = (size: number) => (
+    <button
+      className={size === 20 ? "cb soft" : "cb"}
+      data-a="pmenu"
+      aria-label="Ajouter"
+      aria-haspopup="menu"
+      aria-expanded={plusOpen}
+      disabled={noProject}
+      title={noProject ? "Crée d'abord un projet" : undefined}
+      onClick={() => {
+        if (!plusOpen) closeMenus("plus");
+        setPlusOpen(!plusOpen);
+      }}
+    >
+      <I n="plus" s={size} />
+    </button>
+  );
+  const micButton = (size: number, soft: boolean) =>
+    canDictate &&
+    !voice &&
+    !hasDraft && (
+      <button
+        className={`cb${soft ? " soft" : ""} mic`}
+        aria-label="Dicter"
+        title="Dicter"
+        onClick={() => startVoice()}
+      >
+        <I n="mic" s={size} />
+      </button>
+    );
   let sendButtons: React.ReactNode;
   if (voice)
     sendButtons = (
-      <button className="send vox" aria-label="Terminer la dictée" onClick={stopVoice}>
-        <span className="vx-sq" />
+      <button className="cb stop vox" aria-label="Terminer la dictée" onClick={stopVoice}>
+        <I n="stop" s={13} />
         <span className="vx-t">
           {Math.floor(seconds / 60)}:{String(seconds % 60).padStart(2, "0")}
         </span>
@@ -913,55 +994,56 @@ export function Composer(props: {
     sendButtons = (
       <>
         <button
-          className={`send stop${hasText ? " soft" : ""}`}
+          className={`cb stop${hasText ? " soft" : ""}`}
           aria-label="Arrêter"
           title="Arrêter"
           onClick={() => thread && connection.send({ type: "thread.cancel", threadId: thread.id })}
         >
-          <IconStop size={10} />
+          <I n="stop" s={13} />
         </button>
         {hasText && (
           <button
-            className="send"
+            className="cb go"
             aria-label="Mettre en file"
             title="Mettre en file : part dès que l'agent a fini (Entrée)"
             onClick={() => enqueue()}
           >
-            <IconQueue />
+            <I n="up" s={19} />
           </button>
         )}
       </>
     );
-  else if (atLimit && roomier && !thread && (hasText || hasImages))
+  else if (atLimit && roomier && !thread && hasDraft)
     sendButtons = (
       <button
-        className="send alt"
+        className="cb go alt"
         aria-label={`Envoyer à ${roomier.name}`}
         disabled={!canSend}
         onClick={() => void submit(roomier.id)}
       >
-        <IconArrowUp />
-        {narrow ? roomier.name : `Envoyer à ${roomier.name}`}
+        <I n="up" s={19} />
+        {roomier.name}
       </button>
     );
   else
-    sendButtons = (
+    sendButtons = hasDraft && (
       <button
-        className="send"
+        className="cb go"
         aria-label="Envoyer"
         title={images.sending ? "L'image finit d'arriver sur le serveur" : undefined}
         disabled={!canSend}
         onClick={() => void submit()}
       >
-        <IconArrowUp />
+        <I n="up" s={19} />
       </button>
     );
 
   return (
     <div
-      className={`cmp${open ? " open" : ""}${voice ? " voice" : ""}${full ? " fullacc" : ""}`}
+      className="cw"
       ref={root}
-      onFocus={() => setFocused(true)}
+      // Only the text opens the composer: its « + » works from the folded line too.
+      onFocus={(e) => e.target === input.current && setFocused(true)}
       onPointerDownCapture={() => {
         pressedInside.current = true;
       }}
@@ -980,49 +1062,50 @@ export function Composer(props: {
         setFocused(false);
       }}
     >
-      {thread?.goal && <GoalBar thread={thread} goal={thread.goal} />}
-      {thread && <MessageQueue thread={thread} />}
-      <div
-        className={`composer${focused ? " focus" : ""}${full ? " full" : ""}${voice ? " vx-on" : ""}${dropping ? " drop" : ""}`}
-      >
-        <div className="cmp-lead">
-          <button
-            aria-label={`Agent : ${agentLabel}${modelName ? `, ${modelName}` : ""}`}
-            disabled={thread ? running : !agent?.available}
-            onClick={() => {
-              closeMenus("picker");
-              setMenu(true);
-            }}
-          >
-            <AgentBadge agent={agent} />
-          </button>
-          {full && (
-            <button
-              aria-label="Accès complet : l'agent agit sans demander"
-              onClick={() => {
-                closeMenus("access");
-                setAccessOpen(true);
-              }}
-            >
-              <IconBolt />
-            </button>
+      {!suggesting && (
+        <div className="dcw">
+          {trayQuota && !voice && (
+            <div className={`updb glass qw ${trayQuota.level}`} role="status">
+              <span className="tx">
+                {trayQuota.text}
+                {trayQuota.when && <small>{trayQuota.when}</small>}
+              </span>
+              {trayQuota.roomier && trayQuota.onSwitch ? (
+                <button className="b2 soft press" onClick={trayQuota.onSwitch}>
+                  Passer à {trayQuota.roomier.name}
+                </button>
+              ) : (
+                trayQuota.onLimits && (
+                  <button className="b2 soft press" onClick={trayQuota.onLimits}>
+                    Voir les limites
+                  </button>
+                )
+              )}
+              <button
+                className="gbt press"
+                aria-label="Masquer cet avertissement"
+                onClick={trayQuota.onDismiss}
+              >
+                <I n="x" s={14} />
+              </button>
+            </div>
+          )}
+          {thread?.goal && (
+            <div className="legacy">
+              <GoalBar thread={thread} goal={thread.goal} />
+            </div>
+          )}
+          {thread && (
+            <div className="legacy">
+              <MessageQueue thread={thread} />
+            </div>
           )}
         </div>
-        {voice && (
-          <div className="vxp">
-            <div className="vxp-t" aria-live="polite">
-              {voice.heard.final || voice.heard.interim ? (
-                <>
-                  {voice.typed && <span className="vxp-typed">{voice.typed} </span>}
-                  {voice.heard.final && heardText}
-                  <span className="vxp-cur">{voice.heard.interim}</span>
-                </>
-              ) : (
-                <span className="vxp-ph">{placeholder}</span>
-              )}
-            </div>
-          </div>
-        )}
+      )}
+      <div
+        className={`cmp${open ? " open" : ""}${focused && !full ? " focus" : ""}${full ? " full" : ""}${hasImages ? " hasatt" : ""}${voice ? " voice" : ""}${dropping ? " drop" : ""}`}
+        id="cmp"
+      >
         <ComposerImages drafts={images.drafts} onRemove={images.remove} />
         {dropping && (
           <div className="cdrop" aria-hidden>
@@ -1047,272 +1130,306 @@ export function Composer(props: {
           aria-label="Prendre une photo"
           onChange={takePicked}
         />
-        <textarea
-          ref={input}
-          hidden={!!voice}
-          rows={1}
-          value={text}
-          placeholder={placeholder}
-          aria-label="Message"
-          role="combobox"
-          aria-autocomplete="list"
-          aria-expanded={suggesting}
-          aria-controls={suggesting ? "composer-suggest" : undefined}
-          aria-activedescendant={suggesting && suggestions.length ? `sg-${highlighted}` : undefined}
-          onChange={(e) => {
-            setText(e.target.value);
-            setCaret(e.target.selectionStart);
-            setActive(0);
-            // Erasing back to the `/`, `@` or `$` opens the list again.
-            if (dismissed !== null && e.target.value.length <= dismissed + 1) setDismissed(null);
-          }}
-          onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
-          onPaste={(e) => {
-            const files = pastedImages(e.clipboardData);
-            if (!files.length) return;
-            e.preventDefault();
-            images.add(files);
-          }}
-          onFocus={() => {
-            // With no project yet, « Discussions » is made as soon as the user comes to write,
-            // so the agent's models, files and commands are there by the time they send.
-            if (!project) void needProject();
-            // Skills or commands added to the folder since show up without a reload.
-            loadCatalog();
-          }}
-          onKeyDown={(e) => {
-            if (suggesting && !e.nativeEvent.isComposing) {
-              const count = suggestions.length;
-              if (e.key === "ArrowDown" && count) {
-                e.preventDefault();
-                setActive((highlighted + 1) % count);
-                return;
-              }
-              if (e.key === "ArrowUp" && count) {
-                e.preventDefault();
-                setActive((highlighted - 1 + count) % count);
-                return;
-              }
-              if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && count) {
-                e.preventDefault();
-                const item = suggestions[highlighted];
-                if (item) pick(item);
-                return;
-              }
-              if (e.key === "Escape") {
-                e.preventDefault();
-                e.stopPropagation();
-                setDismissed(trigger.start);
-                return;
-              }
+        <div className="line">
+          {plusButton(20)}
+          {voice && (
+            <div className="vxp" aria-live="polite">
+              {voice.heard.final || voice.heard.interim ? (
+                <>
+                  {voice.typed && <span className="vxp-typed">{voice.typed} </span>}
+                  {voice.heard.final && heardText}
+                  <span className="vxp-cur">{voice.heard.interim}</span>
+                </>
+              ) : (
+                <span className="vxp-ph">{placeholder}</span>
+              )}
+            </div>
+          )}
+          <textarea
+            ref={input}
+            hidden={!!voice}
+            rows={1}
+            value={text}
+            placeholder={placeholder}
+            aria-label="Message"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={suggesting}
+            aria-controls={suggesting ? "composer-suggest" : undefined}
+            aria-activedescendant={
+              suggesting && suggestions.length ? `sg-${highlighted}` : undefined
             }
-            // Shift+Tab in the text switches the access mode, as the menu's foot says.
-            if (e.key === "Tab" && e.shiftKey) {
-              e.preventDefault();
-              setMode(full ? "supervised" : "full");
-              return;
-            }
-            if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-              e.preventDefault();
-              void submit();
-            }
-          }}
-        />
-        <div className="cbar">
-          <PlusMenu
-            open={plusOpen}
-            disabled={!project && !props.onNeedProject}
-            inThread={!!thread}
-            onToggle={(open) => {
-              setPlusOpen(open);
-              if (open) closeMenus("plus");
+            onChange={(e) => {
+              setText(e.target.value);
+              setCaret(e.target.selectionStart);
+              setActive(0);
+              // Erasing back to the `/`, `@` or `$` opens the list again.
+              if (dismissed !== null && e.target.value.length <= dismissed + 1) setDismissed(null);
             }}
-            onImage={(from) => {
-              setPlusOpen(false);
-              (from === "camera" ? camera : filePicker).current?.click();
+            onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+            onPaste={(e) => {
+              const files = pastedImages(e.clipboardData);
+              if (!files.length) return;
+              e.preventDefault();
+              images.add(files);
             }}
-            onPick={(insert) => {
-              setPlusOpen(false);
-              input.current?.focus();
-              // Starts the word the composer already completes: @ files, $ skills, / commands.
-              if (insert === "/") {
-                // A command is the message's first word.
-                const rest = text.trimStart();
-                putText(rest ? `/ ${rest}` : "/", 1);
+            onFocus={() => {
+              // With no project yet, « Discussions » is made as soon as the user comes to write,
+              // so the agent's models, files and commands are there by the time they send.
+              if (!project) void needProject();
+              // Skills or commands added to the folder since show up without a reload.
+              loadCatalog();
+            }}
+            onKeyDown={(e) => {
+              if (suggesting && !e.nativeEvent.isComposing) {
+                const count = suggestions.length;
+                if (e.key === "ArrowDown" && count) {
+                  e.preventDefault();
+                  setActive((highlighted + 1) % count);
+                  return;
+                }
+                if (e.key === "ArrowUp" && count) {
+                  e.preventDefault();
+                  setActive((highlighted - 1 + count) % count);
+                  return;
+                }
+                if ((e.key === "Enter" || e.key === "Tab") && !e.shiftKey && count) {
+                  e.preventDefault();
+                  const item = suggestions[highlighted];
+                  if (item) pick(item);
+                  return;
+                }
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDismissed(trigger.start);
+                  return;
+                }
+              }
+              // Shift+Tab in the text switches the access mode.
+              if (e.key === "Tab" && e.shiftKey) {
+                e.preventDefault();
+                setMode(full ? "supervised" : "full");
                 return;
               }
-              const before = text.slice(0, caret);
-              const space = before && !/\s$/.test(before) ? " " : "";
-              putText(
-                before + space + insert + text.slice(caret),
-                before.length + space.length + insert.length,
-              );
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                void submit();
+              }
             }}
           />
-          <AccessChip
-            mode={mode}
-            open={accessOpen}
-            narrow={narrow}
-            disabled={!project && !props.onNeedProject}
-            onToggle={(open) => {
-              setAccessOpen(open);
-              if (open) closeMenus("access");
-            }}
-            onPick={(next) => {
-              setMode(next);
-              setAccessOpen(false);
-              input.current?.focus();
-            }}
-          />
-          <span className="grow" />
-          <div className="ag-wrap">
+          {micButton(19, true)}
+          {sendButtons}
+        </div>
+        <div className="bar">
+          {plusButton(22)}
+          <span className="acs">
+            {full && (
+              <button
+                className="accp"
+                aria-label="Accès complet : l'agent agit sans demander"
+                onClick={() => {
+                  closeMenus();
+                  setSheet("plus");
+                }}
+              >
+                <I n="bolt" s={13} />
+                Accès complet
+              </button>
+            )}
+          </span>
+          <span className="sp" />
+          {usage && (
             <button
-              className="agentchip chip"
-              // In a thread whose agent is gone, the picker is how it goes to another one.
-              disabled={thread ? running : !agent?.available}
-              title={
-                thread && running
-                  ? "L'agent et ses réglages se changent entre deux réponses"
-                  : thread && !agent?.available
-                    ? "Cet agent n'est plus disponible : choisis-en un autre pour continuer"
-                    : undefined
-              }
-              aria-label={`Agent : ${agentLabel}${modelName ? `, ${modelName}` : ""}`}
-              aria-haspopup="menu"
-              aria-expanded={pickerOpen}
+              className={`gz${usedShare >= 90 ? " full" : ""}${ctxOpen ? " on" : ""}`}
+              aria-label={`Contexte utilisé : ${usedShare} %`}
+              aria-haspopup="dialog"
+              aria-expanded={ctxOpen}
               onClick={() => {
-                if (!menu) closeMenus("picker");
-                setMenu((m) => !m);
+                if (!ctxOpen) closeMenus("ctx");
+                setCtxOpen(!ctxOpen);
               }}
             >
-              <AgentBadge agent={agent} />
-              <span className="lbl">
-                {!narrow && <span className="nm">{agentLabel}</span>}
-                {modeName && <span className="mode">{modeName}</span>}
-                {modelName && <span className="mdl">{modelName}</span>}
-                {narrow && !modelName && <span className="nm">{agentLabel}</span>}
-              </span>
-              {galaxy && (
-                <span className="gxs" title="Effort Galaxie">
-                  <IconSparkle />
-                </span>
-              )}
-              <IconCaret />
-            </button>
-            <Presence show={pickerOpen}>
-              <Picker
-                agents={agents}
-                agent={agent}
-                model={model}
-                favorites={props.favorites}
-                projectId={(project ?? looseFolder)?.id}
-                inThread={!!thread}
-                agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
-                settings={settings}
-                {...(thread?.usage
-                  ? {
-                      context: {
-                        used: thread.usage.used,
-                        size: thread.usage.size,
-                        ...(thread.canCompact && !running
-                          ? {
-                              onCompact: () => {
-                                setMenu(false);
-                                connection.send({
-                                  type: "thread.send",
-                                  threadId: thread.id,
-                                  text: "/compact",
-                                });
-                              },
-                            }
-                          : {}),
-                      },
-                    }
-                  : {})}
-                onPickSetting={pickSetting}
-                onPickAgent={pickAgent}
-                onPickAgentModel={(id, model, stay) => {
-                  if (thread) {
-                    // The model is set once the new agent has the thread: the server takes one change at a time.
-                    if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
-                    connection.send({
-                      type: "thread.switchAgent",
-                      threadId: thread.id,
-                      agentId: id,
-                    });
-                  } else if (props.loose) {
-                    setLoosePick({ agentId: id, ...(model ? { model } : {}) });
-                  } else {
-                    setPickedAgentId(id);
-                    writePref("agent", id);
-                    if (model) {
-                      setModelPicks((p) => ({ ...p, [id]: model }));
-                      writePref(`model.${id}`, model);
-                    }
-                  }
-                  if (stay) return;
-                  setMenu(false);
-                  input.current?.focus();
-                }}
-                onPickModel={(id, stay) => {
-                  if (thread)
-                    connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
-                  else if (agent && props.loose) setLoosePick({ agentId: agent.id, model: id });
-                  else if (agent) {
-                    setModelPicks((p) => ({ ...p, [agent.id]: id }));
-                    writePref(`model.${agent.id}`, id);
-                  }
-                  if (stay) return;
-                  setMenu(false);
-                  input.current?.focus();
-                }}
-                onClose={() => setMenu(false)}
-              />
-            </Presence>
-          </div>
-          {canDictate && (
-            <button
-              className={`mic-btn${voice ? " rec" : ""}`}
-              aria-label={voice ? "Arrêter la dictée" : "Dicter"}
-              title={voice ? "Arrêter la dictée" : "Dicter"}
-              aria-pressed={!!voice}
-              onClick={() => (voice ? stopVoice() : startVoice())}
-            >
-              <IconMic />
+              <ContextRing share={usedShare} />
             </button>
           )}
+          <button
+            className="mdl"
+            // In a thread whose agent is gone, the picker is how it goes to another one.
+            disabled={thread ? running : !agent?.available}
+            title={
+              thread && running
+                ? "L'agent et ses réglages se changent entre deux réponses"
+                : thread && !agent?.available
+                  ? "Cet agent n'est plus disponible : choisis-en un autre pour continuer"
+                  : undefined
+            }
+            aria-label={`Agent : ${agentLabel}${modelName ? `, ${modelName}` : ""}`}
+            aria-haspopup="menu"
+            aria-expanded={pickerOpen}
+            onClick={() => {
+              if (!menu) closeMenus("picker");
+              setMenu((m) => !m);
+            }}
+          >
+            <span className="mn">{modelName ?? agentLabel}</span>
+            {modeName && <span className="ef">{modeName}</span>}
+            {effortName && <span className={`ef${galaxy ? " gx" : ""}`}>{effortName}</span>}
+            <span className="cv">
+              <I n="down" s={13} />
+            </span>
+          </button>
+          {micButton(20, false)}
           {sendButtons}
         </div>
         <div className="vlevel" aria-hidden>
           <i />
         </div>
-        {suggesting && trigger && (
-          <Suggestions
-            kind={trigger.kind}
-            items={suggestions}
-            active={highlighted}
-            empty={empty}
-            onPick={pick}
-            onHover={setActive}
-          />
-        )}
       </div>
-      <Tray
-        menu={trayMenu}
-        onMenu={(m) => {
-          setTrayMenu(m);
-          if (m) closeMenus("tray");
-        }}
-        narrow={narrow}
-        project={project}
-        {...(!thread && props.projects && props.onPickProject
-          ? {
-              projects: props.projects,
-              onPickProject: props.onPickProject,
-              ...(props.onPickLoose ? { onPickLoose: props.onPickLoose } : {}),
-            }
-          : {})}
-        onNewProject={props.onNewProject}
+      {voice && (
+        <div className="vxh">
+          <button onClick={stopVoice}>
+            <kbd>Entrée</kbd> terminer
+          </button>
+          <button onClick={cancelVoice}>
+            <kbd>Échap</kbd> annuler
+          </button>
+        </div>
+      )}
+      {(plusOpen || plusOut) && (
+        <PlusPop
+          {...context}
+          out={!plusOpen}
+          onImage={openImages}
+          onInsert={insertWord}
+          onWhere={() => {
+            setPlusOpen(false);
+            setSheet("where");
+          }}
+          onMcp={openMcp}
+          onMore={() => {
+            setPlusOpen(false);
+            setSheet("plus");
+          }}
+        />
+      )}
+      {ctxOpen && usage && (
+        <div className="ctxp" role="dialog" aria-label="Contexte de l'agent">
+          <div className="cxh">
+            <b>{usedShare} %</b>
+            <span>
+              {Math.round(usage.used / 1000)} k sur {Math.round(usage.size / 1000)} k jetons
+            </span>
+          </div>
+          <div className="cxb">
+            <i
+              style={{
+                width: `${Math.min(100, usedShare)}%`,
+                ...(usedShare >= 90 ? { background: "var(--err)" } : {}),
+              }}
+            />
+          </div>
+          {thread?.canCompact && !running && (
+            <button
+              className={`b2 ${usedShare >= 90 ? "ink" : "soft"} press`}
+              onClick={() => {
+                setCtxOpen(false);
+                connection.send({ type: "thread.send", threadId: thread.id, text: "/compact" });
+              }}
+            >
+              Compacter
+            </button>
+          )}
+        </div>
+      )}
+      <div className="legacy ag-wrap pick-at">
+        <Presence show={pickerOpen}>
+          <Picker
+            agents={agents}
+            agent={agent}
+            model={model}
+            favorites={props.favorites}
+            projectId={(project ?? looseFolder)?.id}
+            inThread={!!thread}
+            agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
+            settings={settings}
+            {...(thread?.usage
+              ? {
+                  context: {
+                    used: thread.usage.used,
+                    size: thread.usage.size,
+                    ...(thread.canCompact && !running
+                      ? {
+                          onCompact: () => {
+                            setMenu(false);
+                            connection.send({
+                              type: "thread.send",
+                              threadId: thread.id,
+                              text: "/compact",
+                            });
+                          },
+                        }
+                      : {}),
+                  },
+                }
+              : {})}
+            onPickSetting={pickSetting}
+            onPickAgent={pickAgent}
+            onPickAgentModel={(id, model, stay) => {
+              if (thread) {
+                // The model is set once the new agent has the thread: the server takes one change at a time.
+                if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
+                connection.send({
+                  type: "thread.switchAgent",
+                  threadId: thread.id,
+                  agentId: id,
+                });
+              } else if (props.loose) {
+                setLoosePick({ agentId: id, ...(model ? { model } : {}) });
+              } else {
+                setPickedAgentId(id);
+                writePref("agent", id);
+                if (model) {
+                  setModelPicks((p) => ({ ...p, [id]: model }));
+                  writePref(`model.${id}`, model);
+                }
+              }
+              if (stay) return;
+              setMenu(false);
+              input.current?.focus();
+            }}
+            onPickModel={(id, stay) => {
+              if (thread)
+                connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
+              else if (agent && props.loose) setLoosePick({ agentId: agent.id, model: id });
+              else if (agent) {
+                setModelPicks((p) => ({ ...p, [agent.id]: id }));
+                writePref(`model.${agent.id}`, id);
+              }
+              if (stay) return;
+              setMenu(false);
+              input.current?.focus();
+            }}
+            onClose={() => setMenu(false)}
+          />
+        </Presence>
+      </div>
+      {suggesting && trigger && (
+        <Suggestions
+          kind={trigger.kind}
+          items={suggestions}
+          active={highlighted}
+          empty={empty}
+          onPick={pick}
+          onHover={setActive}
+        />
+      )}
+      <PlusSheet
+        {...context}
+        open={sheet === "plus"}
+        onClose={() => setSheet(null)}
+        mode={mode}
+        onMode={setMode}
         {...(!thread && project?.git
           ? {
               isolated: {
@@ -1323,12 +1440,44 @@ export function Composer(props: {
               },
             }
           : {})}
-        {...(thread?.workspace ? { branch: thread.workspace.branch } : {})}
-        mcpServers={props.mcpServers ?? []}
-        onMcp={props.onMcp ?? props.onConnections}
-        {...(trayQuota && !voice ? { quota: trayQuota } : {})}
-        {...(voice ? { voice: { onStop: stopVoice, onCancel: cancelVoice } } : {})}
+        onImage={openImages}
+        onInsert={insertWord}
+        onWhere={() => setSheet("where")}
+        onMcp={openMcp}
       />
+      {!thread && props.projects && props.onPickProject && (
+        <WhereSheet
+          open={sheet === "where"}
+          onClose={() => setSheet(null)}
+          project={project}
+          projects={props.projects}
+          onPickProject={props.onPickProject}
+          {...(props.onPickLoose ? { onPickLoose: props.onPickLoose } : {})}
+          onNewProject={props.onNewProject}
+        />
+      )}
     </div>
+  );
+}
+
+/** How full the agent's context is, as a small ring. */
+function ContextRing({ share }: { share: number }) {
+  const r = 7.2;
+  const around = 2 * Math.PI * r;
+  return (
+    <svg width="20" height="20" viewBox="0 0 18 18" aria-hidden="true">
+      <circle cx="9" cy="9" r={r} fill="none" stroke="var(--track)" strokeWidth="2.2" />
+      <circle
+        cx="9"
+        cy="9"
+        r={r}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+        strokeDasharray={`${((around * Math.min(100, share)) / 100).toFixed(1)} ${around.toFixed(1)}`}
+        transform="rotate(-90 9 9)"
+      />
+    </svg>
   );
 }

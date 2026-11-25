@@ -1,0 +1,365 @@
+/* What the real app needs beyond the mockup: the mockup draws a phone, the app fills the window. */
+html {
+  background: var(--bg);
+}
+#root {
+  height: 100%;
+}
+
+/* A page or a dialog not ported to the new design yet keeps its old styles: inside it, the
+   new ones step back to the old layer. The id-weight selector outranks every new rule. */
+:is(.legacy, #_#_#_) * {
+  all: revert-layer;
+}
+.legacy-over,
+.legacy-side {
+  display: contents;
+}
+.main > .legacy-main {
+  position: absolute;
+  inset: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+  padding-top: calc(var(--st) + 56px);
+  background: var(--bg);
+}
+.legacy-sheet {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The brand, in the menu. */
+.brand {
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
+/* Menu: a line that is open, one that waits, one not read yet. */
+.rc.on,
+.rc[aria-selected="true"].on {
+  background: var(--hover);
+  color: var(--fg);
+}
+.rc .nm {
+  flex: 1;
+  min-width: 0;
+}
+.rc .nm small {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dsearch .rc {
+  height: auto;
+  min-height: 46px;
+  padding-block: 6px;
+}
+.rc > .ud {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  margin-left: 10px;
+  background: var(--warn-dot);
+}
+.rc > .nr {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  margin-left: 10px;
+  background: var(--fg2);
+}
+.rc.unread {
+  color: var(--fg);
+  font-weight: 500;
+}
+.rc.more {
+  color: var(--muted);
+  font-size: 14px;
+}
+.rc .wi2.err .ud {
+  background: var(--err);
+}
+.pj .lk {
+  color: var(--faint);
+  display: grid;
+}
+.pmenu.rowm {
+  position: fixed;
+  z-index: 130;
+  left: min(var(--x), calc(100vw - 248px));
+  top: min(var(--y), calc(100vh - 230px));
+  transform-origin: 0 0;
+}
+
+/* A project's icon: its coloured folder, or the emoji or letters set in its settings. */
+.pj-fold,
+.pj-ico {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--pc, var(--pc-moon));
+}
+.pj-ico {
+  border-radius: 7px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--pc, var(--pc-moon)) 16%, transparent);
+}
+.pc-moon {
+  --pc: var(--pc-moon);
+}
+.pc-sky {
+  --pc: var(--pc-sky);
+}
+.pc-mint {
+  --pc: var(--pc-mint);
+}
+.pc-sun {
+  --pc: var(--pc-sun);
+}
+.pc-coral {
+  --pc: var(--pc-coral);
+}
+.pc-rose {
+  --pc: var(--pc-rose);
+}
+.pc-violet {
+  --pc: var(--pc-violet);
+}
+.pc-slate {
+  --pc: var(--pc-slate);
+}
+.pava {
+  color: var(--pc, var(--pc-moon));
+}
+
+/* Tab lists: what leads a line. */
+.pi2 .lead {
+  flex: none;
+  color: var(--muted);
+}
+.pi2 .ud.lead {
+  margin: 0 6px;
+}
+.pi2 .lk {
+  color: var(--faint);
+}
+
+/* The notice at the top: what the server says, with a way to close it. */
+.toast.on button {
+  margin-left: 6px;
+  font-weight: 500;
+  opacity: 0.75;
+}
+
+/* A page of the old design leaves room for what floats at the bottom. */
+.main > .legacy-main.with-bottom {
+  padding-bottom: calc(var(--cbh, 120px) - 12px);
+}
+
+/* The bottom of the page: what waits above the composer, then the composer and what opens from it. */
+.bottom > .res,
+.bottom > .legacy {
+  display: block;
+}
+.bottom > .res {
+  display: flex;
+}
+.cw {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cw > .dcw {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cw > .dcw:empty {
+  display: none;
+}
+.cw > .dcw > .legacy:empty {
+  display: none;
+}
+.cw > .dcw > .updb {
+  margin: 0;
+}
+.updb.qw .tx {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.updb.qw .b2 {
+  flex: none;
+  height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+}
+.updb.qw.full .tx {
+  color: var(--err-tx);
+}
+.cw > .pmenu {
+  left: 0;
+  bottom: calc(100% + 8px);
+}
+.cw > .sugm {
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+}
+.cw > .ctxp {
+  right: 0;
+  bottom: calc(100% + 8px);
+}
+.scr.pm .bottom {
+  z-index: 23;
+  opacity: 1;
+  filter: none;
+}
+.pi2.ro {
+  cursor: default;
+}
+.pi2 .pk {
+  width: 20px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--fg2);
+  flex: none;
+}
+.pi2 .rt.mono {
+  font: 400 13px var(--mono);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmp .cb:disabled,
+.cmp .mdl:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.cmp .mdl {
+  max-width: 62%;
+  overflow: hidden;
+}
+.cmp .mdl .mn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmp .cb.stop.soft {
+  background: var(--chip);
+  color: var(--fg);
+}
+.cmp .cb.go.alt,
+.cmp .cb.stop.vox {
+  width: auto;
+  padding: 0 14px 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.cmp .cb.go:disabled {
+  opacity: 0.5;
+}
+.cmp .line .cb.go,
+.cmp .line .cb.stop {
+  animation: pop 260ms var(--spring);
+}
+.att {
+  margin: 0;
+  list-style: none;
+}
+.att .th {
+  background: var(--card);
+}
+.att .th img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
+}
+.att .th.sending img {
+  opacity: 0.5;
+}
+.att .th-wait {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--track);
+  border-top-color: var(--fg2);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cmp.drop {
+  box-shadow:
+    0 0 0 1.5px var(--accent),
+    var(--lift);
+}
+.cmp .cdrop {
+  padding: 12px 16px 0;
+  font-size: 14px;
+  color: var(--accent);
+}
+.cmp .vxp {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 6px;
+  font-size: 16px;
+  line-height: 22px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.cmp .vxp-ph,
+.cmp .vxp-cur {
+  color: var(--faint);
+}
+.cmp .vlevel {
+  display: none;
+}
+.vxh {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.vxh kbd {
+  font: 500 12px var(--mono);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--card);
+}
+html[data-dev="touch"] .vxh {
+  display: none;
+}
+/* The old model menu, until the wheel replaces it: it opens above the composer's right edge. */
+.cw > .pick-at {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  width: 0;
+  height: 0;
+}

@@ -1,7 +1,6 @@
 // The sheet that asks for the /lock code: six digits typed on the keyboard, or on the pad
 // shown on touch screens. The server checks it; nothing of it is kept on this device.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import "../lock.css";
 import { connection, newId } from "../connection.ts";
 import { type Asked, type LockAsk, fullPin, lockSheet } from "../lock.ts";
 import { IconLock } from "./icons.tsx";
