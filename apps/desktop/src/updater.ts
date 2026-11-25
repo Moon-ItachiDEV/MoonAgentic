@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import {
   createReadStream,
   createWriteStream,
+  existsSync,
   mkdirSync,
   readdirSync,
   renameSync,
@@ -23,6 +24,10 @@ const MAX_NOTES = 20;
 const ASK_TIMEOUT_MS = 30_000;
 /** A download that stalls this long gives up, to be tried again at the next look. */
 const STALL_MS = 60_000;
+/** Retry interval while a newly published Windows release is still missing its .exe or sums. */
+export const INCOMPLETE_RETRY_MS = 3 * 60_000;
+/** Cap on quick retries for the same incomplete release (covers CI build without looping forever). */
+export const MAX_INCOMPLETE_RETRIES = 6;
 
 export interface UpdateNote {
   title: string;
@@ -169,6 +174,8 @@ export interface UpdaterOptions {
   onState: (state: ShellUpdate) => void;
   fetch?: typeof fetch;
   now?: () => number;
+  /** Retry delay while a Windows release is missing its .exe or SHA256SUMS.txt; 0 disables it. */
+  incompleteRetryMs?: number;
 }
 
 const describe = (error: unknown) =>
@@ -181,6 +188,9 @@ export class Updater {
   private running: Promise<void> | undefined;
   /** The installer downloaded and checked, for the version it is ready with. */
   private file: string | undefined;
+  private retryVersion: string | undefined;
+  private retryCount = 0;
+  private retryTimer: NodeJS.Timeout | undefined;
 
   constructor(options: UpdaterOptions) {
     this.options = options;
@@ -204,6 +214,11 @@ export class Updater {
     return this.running;
   }
 
+  /** Stops any pending retry timer. */
+  close(): void {
+    this.clearRetry();
+  }
+
   /** Says why installing could not go on, keeping what was found. */
   fail(error: string): void {
     this.set({ ...this.current, state: "failed", error });
@@ -216,6 +231,34 @@ export class Updater {
 
   private now(): number {
     return (this.options.now ?? Date.now)();
+  }
+
+  private clearRetry(): void {
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
+    this.retryVersion = undefined;
+    this.retryCount = 0;
+  }
+
+  /**
+   * Schedules a bounded short retry when a Windows release is published before CI has finished
+   * uploading both the .exe installer and SHA256SUMS.txt, avoiding a 6-hour wait.
+   */
+  private scheduleIncompleteRetry(version: string): void {
+    const delay = this.options.incompleteRetryMs ?? INCOMPLETE_RETRY_MS;
+    if (delay <= 0) return;
+    if (this.retryVersion !== version) {
+      this.retryVersion = version;
+      this.retryCount = 0;
+    }
+    if (this.retryCount >= MAX_INCOMPLETE_RETRIES) return;
+    this.retryCount += 1;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = undefined;
+      void this.check();
+    }, delay);
+    this.retryTimer.unref();
   }
 
   private async ask(url: string): Promise<Response> {
@@ -235,7 +278,10 @@ export class Updater {
     try {
       const res = await this.ask(LATEST);
       // No release published yet.
-      if (res.status === 404) return this.set({ state: "none", checkedAt: this.now() });
+      if (res.status === 404) {
+        this.clearRetry();
+        return this.set({ state: "none", checkedAt: this.now() });
+      }
       if (!res.ok) throw new Error(`GitHub a répondu ${res.status}.`);
       release = readRelease(await res.json());
       if (!release) throw new Error("La dernière version publiée n'est pas lisible.");
@@ -244,6 +290,7 @@ export class Updater {
       return this.set({ ...was, state: "failed", checkedAt: this.now(), error: describe(error) });
     }
     if (!isNewer(release.version, this.options.current)) {
+      this.clearRetry();
       this.clean();
       return this.set({ state: "none", checkedAt: this.now() });
     }
@@ -255,22 +302,40 @@ export class Updater {
       url: release.page,
     };
     // macOS: an unsigned app cannot replace itself. The page to download it from is given.
-    if (this.options.platform !== "win32") return this.set(found);
+    if (this.options.platform !== "win32") {
+      this.clearRetry();
+      return this.set(found);
+    }
     const installer = installerOf(release, this.options.platform);
     // A release published from GitHub while CI is still building the Windows installer has no
     // .exe yet: wait for it rather than showing a broken « ready » card or burning the notice.
     if (!installer) {
+      this.scheduleIncompleteRetry(release.version);
       if (ready) return this.set({ ...was, checkedAt: this.now() });
       return this.set({ state: "none", checkedAt: this.now() });
     }
     try {
-      await this.download(release, installer, found);
+      await this.download(release, installer, found, ready);
+      this.clearRetry();
     } catch (error) {
+      // `gh release upload` uploads files in parallel: the .exe can briefly appear before
+      // SHA256SUMS.txt. Retry shortly and never clobber an already-ready installer on disk.
+      if (!release.assets.some((a) => a.name === SUMS)) {
+        this.scheduleIncompleteRetry(release.version);
+      }
+      if (ready && this.file && existsSync(this.file)) {
+        return this.set({ ...was, checkedAt: this.now() });
+      }
       this.set({ ...found, state: "failed", size: installer.size, error: describe(error) });
     }
   }
 
-  private async download(release: Release, installer: Asset, found: ShellUpdate) {
+  private async download(
+    release: Release,
+    installer: Asset,
+    found: ShellUpdate,
+    keepReady: boolean,
+  ) {
     if (installer.size > MAX_INSTALLER_BYTES) throw new Error("L'installeur publié est trop gros.");
     const sums = release.assets.find((a) => a.name === SUMS);
     if (!sums) throw new Error(`La version ${release.version} n'a pas d'empreinte publiée.`);
@@ -293,8 +358,10 @@ export class Updater {
       this.clean(installer.name);
       return this.set({ ...base, state: "ready" });
     }
-    this.clean();
-    this.set({ ...base, state: "downloading", progress: 0 });
+    if (!keepReady) {
+      this.clean();
+      this.set({ ...base, state: "downloading", progress: 0 });
+    }
     const partial = `${file}.part`;
     const controller = new AbortController();
     let stall = setTimeout(() => controller.abort(), STALL_MS);
@@ -317,7 +384,7 @@ export class Updater {
           hash.update(chunk);
           if (!out.write(chunk)) await new Promise<void>((r) => out.once("drain", () => r()));
           const progress = installer.size ? got / installer.size : 0;
-          if (progress - shown >= 0.02) {
+          if (!keepReady && progress - shown >= 0.02) {
             shown = progress;
             this.set({ ...base, state: "downloading", progress });
           }
@@ -339,6 +406,7 @@ export class Updater {
       clearTimeout(stall);
     }
     this.file = file;
+    this.clean(installer.name);
     this.set({ ...base, state: "ready" });
   }
 
