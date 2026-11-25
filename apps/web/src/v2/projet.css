@@ -426,9 +426,9 @@ a.prl:active {
   }
 }
 
-/* Ordinateur : boutons du haut en icônes simples, sans rond ni tuile */
-html[data-dev="desk"] .scr.wide .mtop .gb,
-html[data-dev="desk"] .scr.wide .dtop .gb {
+/* Ordinateur et iPad : boutons du haut en icônes simples, sans rond ni tuile */
+.scr.roomy .mtop .gb,
+.scr.roomy .dtop .gb {
   width: 34px;
   height: 34px;
   border-radius: 9px;
@@ -443,34 +443,34 @@ html[data-dev="desk"] .scr.wide .dtop .gb {
     transform 160ms var(--out);
 }
 @media (hover: hover) and (pointer: fine) {
-  html[data-dev="desk"] .scr.wide .mtop .gb:hover,
-  html[data-dev="desk"] .scr.wide .dtop .gb:hover {
+  .scr.roomy .mtop .gb:hover,
+  .scr.roomy .dtop .gb:hover {
     background: var(--hover);
     color: var(--fg);
   }
 }
-html[data-dev="desk"] .scr.wide .mtop .ctr {
+.scr.roomy .mtop .ctr {
   flex-direction: row;
   gap: 4px;
 }
-html[data-dev="desk"] .scr.wide .mtop .pava,
-html[data-dev="desk"] .scr.wide .mtop .plabel,
-html[data-dev="desk"] .scr.wide .mtop .ttl {
+.scr.roomy .mtop .pava,
+.scr.roomy .mtop .plabel,
+.scr.roomy .mtop .ttl {
   background: none;
   box-shadow: none;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
-html[data-dev="desk"] .scr.wide .mtop .pava {
+.scr.roomy .mtop .pava {
   width: auto;
   height: 32px;
   padding: 0 2px;
 }
-html[data-dev="desk"] .scr.wide .mtop .pava svg {
+.scr.roomy .mtop .pava svg {
   width: 18px;
   height: 18px;
 }
-html[data-dev="desk"] .scr.wide .mtop .plabel {
+.scr.roomy .mtop .plabel {
   height: 32px;
   margin: 0;
   padding: 0 4px;
@@ -690,4 +690,15 @@ html[data-dev="desk"] .scr.wide .mtop .plabel {
 .rv .rvmore .fd {
   padding: 5px 0;
   line-height: 1.4;
+}
+/* Au doigt (iPad), la zone de toucher reste à 40 px */
+html:not([data-dev="desk"]) .scr.roomy .mtop .gb,
+html:not([data-dev="desk"]) .scr.roomy .dtop .gb {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
+html:not([data-dev="desk"]) .scr.roomy .mtop .gb:active,
+html:not([data-dev="desk"]) .scr.roomy .dtop .gb:active {
+  background: var(--hover);
 }
