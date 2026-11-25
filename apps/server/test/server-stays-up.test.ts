@@ -1,7 +1,7 @@
 // What used to stop the whole server, and every agent at work with it (audit of 2026-11-25:
 // N2, N3, N12, N18, N21, N22): a write the database refuses, an agent that leaves the
 // protocol, saved values the server did not write, a stray line from Codex.
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -153,8 +153,23 @@ const model = (current, choices) => ({
     { value: "m2", name: "M2" },
   ],
 });
+const update = (update) => out({ method: "session/update", params: { sessionId: "s1", update } });
+// What the agent asked the app, waiting for its answer.
+const asked = new Map();
+let asks = 1000;
+const ask = (method, params) =>
+  new Promise((answer) => {
+    const id = ++asks;
+    asked.set(id, answer);
+    void out({ id, method, params });
+  });
 createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", async (line) => {
-  const { id, method, params } = JSON.parse(line);
+  const { id, method, params, result } = JSON.parse(line);
+  if (!method && asked.has(id)) {
+    asked.get(id)(result);
+    asked.delete(id);
+    return;
+  }
   if (method === "initialize") {
     await out({ id, result: { protocolVersion: 1, agentCapabilities: {} } });
   } else if (method === "session/new") {
@@ -169,12 +184,28 @@ createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", async 
             { ...ask, options: [{ value: "ask", name: "Demander" }] },
             model("m1"),
           ]
-        : [model("m1")];
-    await out({ id, result: { sessionId: "s1", configOptions } });
+        : mode === "categorie-objet"
+          ? [
+              {
+                id: "drole",
+                name: "Drôle",
+                category: { toString: 1, valueOf: 1 },
+                type: "select",
+                currentValue: "a",
+                options: [{ value: "a", name: "A" }],
+              },
+              model("m1"),
+            ]
+          : [model("m1")];
+    // Out of the protocol: an id that is not a text.
+    await out({ id, result: { sessionId: mode === "id-bizarre" ? true : "s1", configOptions } });
   } else if (method === "session/set_config_option") {
     // Out of the protocol: the choices are texts where records are expected.
     const answer = mode === "mauvais-changement" ? model(params.value, ["m1", "m2"]) : model(params.value);
-    await out({ id, result: { configOptions: [answer] } });
+    // Out of the protocol: a record, or a number, where the list of options is expected.
+    if (mode === "options-objet") await out({ id, result: { configOptions: {} } });
+    else if (mode === "options-nombre") await out({ id, result: { configOptions: 42 } });
+    else await out({ id, result: { configOptions: [answer] } });
   } else if (method === "session/prompt") {
     const text = params.prompt.map((block) => block.text ?? "").join("\\n");
     const turn = [...text.matchAll(/TOUR:(\\S+)/g)].at(-1)?.[1];
@@ -187,6 +218,31 @@ createInterface({ input: process.stdin, crlfDelay: Infinity }).on("line", async 
         await say("mot" + word + " ");
         await sleep(150);
       }
+    } else if (turn === "alpha-beta-gamma") {
+      // Text, a tool between two of its pieces, then text again.
+      await say("ALPHA ");
+      await sleep(250);
+      await say("BETA ");
+      await sleep(250);
+      await update({ sessionUpdate: "tool_call", toolCallId: "t1", title: "Lecture", kind: "read", status: "in_progress" });
+      await sleep(250);
+      await say("GAMMA");
+      await sleep(250);
+    } else if (turn === "permission") {
+      await say("Je demande. ");
+      const answer = await ask("session/request_permission", {
+        sessionId: "s1",
+        toolCall: { toolCallId: "t2", title: "Écrire", kind: "edit", status: "pending" },
+        options: [{ optionId: "oui", name: "Oui", kind: "allow_once" }],
+      });
+      await say("Réponse : " + (answer?.outcome?.optionId ?? "aucune") + ".");
+    } else if (turn === "repos-34mo") {
+      await say("Bonjour.");
+      await out({ id, result: { stopReason: "end_turn" } });
+      // At rest, the turn over: one line over the 32 MiB the connection accepts.
+      await sleep(200);
+      await say("x".repeat(34 * 1024 * 1024));
+      return;
     } else {
       await say("Bonjour.");
     }
@@ -275,6 +331,84 @@ describe("a write the database refuses", () => {
     expect(storageTrouble(mistake)).toBeUndefined();
     expect(storageTrouble(new Error("database or disk is full"))).toBeUndefined();
   });
+
+  it("names a database file that cannot be opened as a write that is impossible", () => {
+    let failure: unknown;
+    try {
+      new DatabaseSync(path.join(tmp(), "absent", "state.sqlite"));
+    } catch (error) {
+      failure = error;
+    }
+    expect(storageTrouble(failure)).toBe("Écriture impossible sur le disque");
+  });
+
+  it("waits for another program that holds a database not yet in WAL mode, as it opens", async () => {
+    const dir = tmp();
+    const file = path.join(dir, "state.sqlite");
+    const before = new DatabaseSync(file);
+    before.exec("PRAGMA journal_mode = DELETE; CREATE TABLE autre (x)");
+    before.close();
+    const other = spawn(
+      process.execPath,
+      [
+        "-e",
+        `const { DatabaseSync } = require("node:sqlite");
+         const db = new DatabaseSync(process.argv[1]);
+         db.exec("BEGIN IMMEDIATE");
+         console.log("tenu");
+         setTimeout(() => { db.exec("ROLLBACK"); db.close(); }, 500);`,
+        file,
+      ],
+      { stdio: ["ignore", "pipe", "ignore"], windowsHide: true },
+    );
+    cleanups.push(() => other.kill());
+    await new Promise<void>((held, failed) => {
+      other.stdout.once("data", () => held());
+      other.once("exit", () => failed(new Error("L'autre programme n'a pas pris la base.")));
+    });
+
+    const store = new Store(file);
+    cleanups.push(() => store.close());
+
+    expect(store.db.prepare("PRAGMA journal_mode").get()).toEqual({ journal_mode: "wal" });
+  });
+
+  it("answers, then stops its agent, when the database refuses to note the agent works", async () => {
+    const { dir, store, hub, projectId } = setup();
+    const pids = path.join(dir, "pids.txt");
+    writeFileSync(pids, "");
+    const agentId = hub.addCustomAgent({
+      name: "Vérifié",
+      command: process.execPath,
+      args: [strayAgent(dir), "", pids],
+    });
+    const write = store.setSetting.bind(store);
+    store.setSetting = (key, value) => {
+      if (key === "agentChecks") throw diskFull();
+      write(key, value);
+    };
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    let threadId = "";
+    const seen = await escaped(async () => {
+      threadId = hub.createThread({ projectId, agentId, permissionMode: "full", text: "bonjour" });
+      await hub.whenIdle(threadId);
+    });
+
+    expect(seen).toEqual([]);
+    // Only a note of the check: the turn goes on without it.
+    expect(store.getThread(threadId)?.status).toBe("idle");
+    expect(agentText(store.listItems(threadId))).toBe("Bonjour.");
+    await hub.close();
+    const started = (await import("node:fs"))
+      .readFileSync(pids, "utf8")
+      .split("\n")
+      .filter(Boolean);
+    expect(started.length).toBeGreaterThan(0);
+    for (const pid of started.map(Number)) {
+      await expect.poll(() => isRunning(pid), { timeout: 10_000 }).toBe(false);
+    }
+  }, 20_000);
 
   it("reports what stopped a transaction, not the rollback that had nothing left to undo", () => {
     const dir = tmp();
@@ -527,6 +661,25 @@ describe("an agent that leaves the protocol", () => {
     expect(session.settings).toEqual([]);
   });
 
+  it.each(["options-objet", "options-nombre"])(
+    "refuses an answer to a change of model that is not a list (%s)",
+    async (mode) => {
+      const session = await start(mode);
+      await expect(session.setModel("m2")).rejects.toThrow(/format inattendu/);
+      expect(session.model?.current).toBe("m1");
+    },
+  );
+
+  it("leaves out a setting whose kind is not a text, and keeps the others", async () => {
+    let session: AgentSession | undefined;
+    const seen = await escaped(async () => {
+      session = await start("categorie-objet");
+    });
+    expect(seen).toEqual([]);
+    expect(session?.model?.current).toBe("m1");
+    expect(session?.settings).toEqual([]);
+  });
+
   it("takes the settings it can read when a session opens, and leaves out the others", async () => {
     const session = await start("mauvais-depart");
 
@@ -712,6 +865,19 @@ describe("saved values the server did not write itself", () => {
       [null, 42, {}, server],
       (seen) => expect(seen.mcpServers.map((m) => m.id)).toEqual(["mcp-garde"]),
     ],
+    // Sound outside, damaged inside.
+    [
+      "mcpServers",
+      [{ ...server, id: "mcp-abime", projectIds: 42 }, server],
+      (seen) => expect(seen.mcpServers.map((m) => m.id)).toEqual(["mcp-garde"]),
+    ],
+    ["coordinator", { routes: null }, (seen) => expect(seen.coordinator).toEqual({ routes: {} })],
+    [
+      "coordinator",
+      { routes: { default: 42, code: { agentId: "demo" } }, team: {}, parallel: "3" },
+      (seen) => expect(seen.coordinator).toEqual({ routes: { code: { agentId: "demo" } } }),
+    ],
+    ["teamPresets", [null, {}], (seen) => expect(seen.teamPresets).toEqual([])],
   ])("starts and opens a screen with « %s » saved as %j", async (key, value, check) => {
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     const seen = await escaped(async () => {
@@ -735,6 +901,73 @@ describe("saved values the server did not write itself", () => {
       await sleep(60);
     });
     expect(seen).toEqual([]);
+  });
+
+  it("leaves out the damaged entries of an agent's saved models", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const seen = await escaped(async () => {
+      const { hub, store } = setup((store) => {
+        store.db.prepare(`INSERT INTO agent_models (agent_id, data) VALUES ('demo', ?)`).run(
+          JSON.stringify({
+            models: [null, { id: "m1", name: "M1" }],
+            current: "m1",
+            settings: [null, 42],
+            modelSettings: { m1: [{}], m2: "texte" },
+          }),
+        );
+      });
+      await hub.recovered;
+      expect(store.getAgentModels("demo")).toEqual({
+        models: [{ id: "m1", name: "M1" }],
+        current: "m1",
+        settings: [],
+        modelSettings: { m1: [] },
+      });
+      expect(hub.snapshot().agents.map((a) => a.id)).toContain("demo");
+    });
+    expect(seen).toEqual([]);
+  });
+
+  it("leaves out an item of a thread that is not a sound item, and goes on with the thread", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let threadId = "";
+    const seen = await escaped(async () => {
+      const { hub, store, projectId } = setup();
+      threadId = hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        text: "un",
+      });
+      await hub.whenIdle(threadId);
+      hub.send(threadId, "deux");
+      await hub.whenIdle(threadId);
+      const [first, second] = store.listItems(threadId);
+      // An edit made by hand: SQLite takes them, as they are sound JSON.
+      store.db.prepare(`UPDATE items SET data = 'null' WHERE id = ?`).run(first!.id);
+      store.db.prepare(`UPDATE items SET data = '{"kind":"user"}' WHERE id = ?`).run(second!.id);
+
+      expect(store.listItems(threadId).map((i) => i.id)).not.toContain(first!.id);
+      expect(() => store.searchItems("deux")).not.toThrow();
+      expect(() => store.searchProjectItems(projectId, "deux")).not.toThrow();
+      expect(() => store.pageItems(threadId)).not.toThrow();
+      hub.send(threadId, "trois");
+      await hub.whenIdle(threadId);
+      expect(store.getThread(threadId)?.status).toBe("idle");
+    });
+    expect(seen).toEqual([]);
+  });
+
+  it("searches a project whose threads include one with damaged state", () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { store } = setup((store, dir) => {
+      store.addProject({ id: "p1", name: "projet", path: dir, createdAt: 1 });
+      store.addThread(thread("abime", { pinned: true }));
+      store.putItem("abime", { id: "i1", kind: "user", text: "cherche-moi", at: 1 });
+      store.db.prepare(`UPDATE threads SET extra = '{"pinned":tru' WHERE id = 'abime'`).run();
+    }, false);
+
+    expect(() => store.searchProjectItems("p1", "cherche")).not.toThrow();
   });
 
   it("keeps every project locked when the list of locked projects cannot be read", async () => {
@@ -834,4 +1067,307 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     expect(seen).toEqual([]);
     expect(answers).toEqual({ "account/read": { account: { type: "chatgpt" } } });
   });
+});
+
+describe("a write refused in the middle of a turn", () => {
+  /** The database refuses every write of an agent's text while `full`, from the `after`-th on. */
+  const refuseText = (store: Store, after = 0) => {
+    const write = store.putItem.bind(store);
+    const state = { full: true, written: 0 };
+    store.putItem = (threadId, item) => {
+      if (state.full && item.kind === "agent" && ++state.written > after) throw diskFull();
+      return write(threadId, item);
+    };
+    return state;
+  };
+  /** The agent's text a screen reads in the thread now, written or still waiting to be. */
+  const shown = async (hub: Hub, threadId: string) => {
+    const reader = new Screen();
+    await hub.handle(reader, { type: "thread.read", requestId: "lu", threadId });
+    const timeline = reader.messages.find((m) => m.type === "timeline");
+    return timeline?.type === "timeline" ? agentText(timeline.items) : "";
+  };
+
+  it("keeps an answer whose very first words the database refused", async () => {
+    const { store, hub, screen, projectId } = setup();
+    const disk = refuseText(store);
+    let threadId = "";
+
+    const seen = await escaped(async () => {
+      threadId = hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        text: "/flux",
+      });
+      await hub.whenIdle(threadId);
+    });
+
+    expect(seen).toEqual([]);
+    // Said as soon as the first words were refused, not at the end of the turn.
+    expect(screen.storage).toEqual(["Disque plein : plus rien n'est enregistré"]);
+    expect(await shown(hub, threadId)).toContain("## Partie 12");
+    expect(agentText(store.listItems(threadId))).toBe("");
+
+    disk.full = false;
+    await expect.poll(() => screen.storage.at(-1), { timeout: 5_000 }).toBeNull();
+    const kept = agentText(store.listItems(threadId));
+    expect(kept).toContain("## Partie 1\n");
+    expect(kept).toContain("## Partie 12");
+  });
+
+  it("loses no words when a tool comes between two pieces of text the database refused", async () => {
+    const { dir, store, hub, screen, projectId } = setup();
+    const agentId = hub.addCustomAgent({
+      name: "Outil",
+      command: process.execPath,
+      args: [strayAgent(dir), ""],
+    });
+    // « ALPHA » is written; the disk is full for « BETA », the tool and « GAMMA ».
+    const disk = refuseText(store, 1);
+
+    const seen = await escaped(async () => {
+      const threadId = hub.createThread({
+        projectId,
+        agentId,
+        permissionMode: "full",
+        text: "TOUR:alpha-beta-gamma",
+      });
+      await hub.whenIdle(threadId);
+      disk.full = false;
+      await expect.poll(() => screen.storage.at(-1), { timeout: 5_000 }).toBeNull();
+      expect(agentText(store.listItems(threadId))).toBe("ALPHA BETA GAMMA");
+      expect(store.listItems(threadId).some((i) => i.kind === "tool")).toBe(true);
+    });
+    expect(seen).toEqual([]);
+  }, 20_000);
+
+  it("gives the agent the user's answer to a permission the database refused to write", async () => {
+    const { dir, store, hub, screen, projectId } = setup();
+    const agentId = hub.addCustomAgent({
+      name: "Demande",
+      command: process.execPath,
+      args: [strayAgent(dir), ""],
+    });
+    const threadId = hub.createThread({
+      projectId,
+      agentId,
+      permissionMode: "supervised",
+      text: "TOUR:permission",
+    });
+    await expect.poll(() => store.getThread(threadId)?.status, { timeout: 10_000 }).toBe("waiting");
+    const asked = store.listItems(threadId).find((i) => i.kind === "permission")!;
+    const write = store.putItem.bind(store);
+    const update = store.updateThread.bind(store);
+    let full = true;
+    store.putItem = (id, item) => {
+      if (full) throw diskFull();
+      return write(id, item);
+    };
+    store.updateThread = (id, patch) => {
+      if (full) throw diskFull();
+      return update(id, patch);
+    };
+
+    await hub.handle(screen, {
+      type: "permission.respond",
+      threadId,
+      itemId: asked.id,
+      optionId: "oui",
+    });
+    // The turn goes on and ends: it does not wait for ever on an answer that was lost.
+    await expect.poll(() => hub.runningTurnCount, { timeout: 10_000 }).toBe(0);
+    expect(await shown(hub, threadId)).toContain("Réponse : oui.");
+
+    full = false;
+    await expect.poll(() => screen.storage.at(-1), { timeout: 5_000 }).toBeNull();
+    expect(agentText(store.listItems(threadId))).toContain("Réponse : oui.");
+    expect(store.listItems(threadId).find((i) => i.id === asked.id)).toMatchObject({
+      outcome: "oui",
+    });
+    expect(store.getThread(threadId)?.status).toBe("idle");
+  }, 20_000);
+
+  it("brings a screen that opened during the outage up to date once writes pass again", async () => {
+    const { store, hub, screen, projectId } = setup();
+    const disk = refuseText(store, 1);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "/flux",
+    });
+    await hub.whenIdle(threadId);
+
+    // A phone opens the thread while the database still refuses the text.
+    const late = new Screen();
+    hub.connect(late);
+    await hub.handle(late, { type: "thread.open", threadId });
+    const opened = late.messages.find((m) => m.type === "items");
+    if (opened?.type !== "items") throw new Error("Le fil ne s'est pas ouvert.");
+    expect(agentText(opened.items)).toContain("## Partie 12");
+
+    disk.full = false;
+    await expect.poll(() => screen.storage.at(-1), { timeout: 5_000 }).toBeNull();
+    // It comes back with what it holds: it is sent what changed since.
+    late.messages.length = 0;
+    await hub.handle(late, {
+      type: "thread.open",
+      threadId,
+      since: { epoch: opened.epoch, rev: opened.rev, first: opened.first },
+    });
+    const changes = late.messages.find((m) => m.type === "changes" || m.type === "items");
+    const items = new Map(opened.items.map((item) => [item.id, item]));
+    if (changes?.type === "changes") for (const { item } of changes.items) items.set(item.id, item);
+    if (changes?.type === "items") for (const item of changes.items) items.set(item.id, item);
+    expect(agentText([...items.values()])).toBe(agentText(store.listItems(threadId)));
+    expect(agentText(store.listItems(threadId))).toContain("## Partie 12");
+  });
+
+  it("does not bring back what a step back took away during the outage", async () => {
+    const { dir, store, hub, screen } = setup(undefined, false);
+    const repo = path.join(dir, "repo");
+    mkdirSync(repo);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "test@example.com");
+    git("config", "user.name", "Test");
+    git("config", "commit.gpgsign", "false");
+    writeFileSync(path.join(repo, "README.md"), "# Demo\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "init");
+    const projectId = hub.createProject("repo", repo);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: true,
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    const disk = refuseText(store);
+    hub.send(threadId, "/flux");
+    await hub.whenIdle(threadId);
+    expect(screen.storage).toEqual(["Disque plein : plus rien n'est enregistré"]);
+
+    const second = store.listItems(threadId).filter((i) => i.kind === "user")[1]!;
+    await hub.restore(threadId, second.id);
+
+    disk.full = false;
+    await expect.poll(() => screen.storage.at(-1), { timeout: 5_000 }).toBeNull();
+    await sleep(200);
+    expect(agentText(store.listItems(threadId))).not.toContain("## Partie");
+    expect(store.listItems(threadId).some((i) => i.id === second.id)).toBe(false);
+    expect(store.getThread(threadId)?.status).toBe("idle");
+  }, 30_000);
+
+  it("does not bring back the text of a thread deleted during the outage", async () => {
+    const { store, hub, screen, projectId } = setup();
+    const disk = refuseText(store, 1);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "/flux",
+    });
+    await hub.whenIdle(threadId);
+    await hub.handle(screen, { type: "thread.delete", requestId: "r1", threadId });
+
+    disk.full = false;
+    await expect.poll(() => screen.storage.at(-1), { timeout: 5_000 }).toBeNull();
+    expect(store.getThread(threadId)).toBeUndefined();
+    expect(store.listItems(threadId)).toEqual([]);
+  });
+
+  it("stops quickly on a held database, whatever text waits to be written", async () => {
+    const { dir, file, store, hub, projectId } = setup();
+    const agentId = hub.addCustomAgent({
+      name: "Lent",
+      command: process.execPath,
+      args: [strayAgent(dir), ""],
+    });
+    const threads = [1, 2, 3].map(() =>
+      hub.createThread({ projectId, agentId, permissionMode: "full", text: "TOUR:lent" }),
+    );
+    await expect
+      .poll(() => threads.every((id) => agentText(store.listItems(id)).length > 0), {
+        timeout: 15_000,
+      })
+      .toBe(true);
+    await sleep(100);
+
+    const release = hold(file);
+    cleanups.push(release);
+    const started = Date.now();
+    await hub.close();
+    // One wait on the hold, not one per thread.
+    expect(Date.now() - started).toBeLessThan(4_500);
+  }, 30_000);
+
+  it("opens an unread thread and finds what was written while the database is held", async () => {
+    const { file, store, hub, screen, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "bonjour",
+    });
+    await hub.whenIdle(threadId);
+    store.updateThread(threadId, { unread: true });
+
+    const release = hold(file);
+    cleanups.push(release);
+    await hub.handle(screen, { type: "thread.open", threadId });
+    const opened = screen.messages.find((m) => m.type === "items" && m.threadId === threadId);
+    expect(opened).toBeDefined();
+    // Searching reads the index there is, without writing to it first.
+    expect(() => store.searchItems("bonjour")).not.toThrow();
+    expect(() => store.searchProjectItems(projectId, "bonjour")).not.toThrow();
+  });
+});
+
+describe("an agent at rest whose connection closed", () => {
+  it("is replaced by a new one for the next message", async () => {
+    const { dir, hub, store, projectId } = setup();
+    const agentId = hub.addCustomAgent({
+      name: "Bavard au repos",
+      command: process.execPath,
+      args: [strayAgent(dir), ""],
+    });
+    const threadId = hub.createThread({
+      projectId,
+      agentId,
+      permissionMode: "full",
+      text: "TOUR:repos-34mo",
+    });
+    await hub.whenIdle(threadId);
+    // Its line too long is read: the connection closes, its process lives a little longer.
+    await sleep(1_500);
+
+    hub.send(threadId, "TOUR:bonjour");
+    await hub.whenIdle(threadId);
+
+    const after = store.getThread(threadId);
+    expect(after?.error).toBeUndefined();
+    expect(after?.status).toBe("idle");
+    expect(agentText(store.listItems(threadId))).toBe("Bonjour.Bonjour.");
+  }, 30_000);
+
+  it("ends the turn in words when the agent opens a session with an id that is not a text", async () => {
+    const { dir, hub, store, projectId } = setup();
+    const agentId = hub.addCustomAgent({
+      name: "Identifiant",
+      command: process.execPath,
+      args: [strayAgent(dir), "id-bizarre"],
+    });
+    let threadId = "";
+    const seen = await escaped(async () => {
+      threadId = hub.createThread({ projectId, agentId, permissionMode: "full", text: "bonjour" });
+      await hub.whenIdle(threadId);
+    });
+
+    expect(seen).toEqual([]);
+    expect(store.getThread(threadId)?.status).toBe("error");
+    expect(store.getThread(threadId)?.error).toMatch(/sans identifiant lisible/);
+  }, 20_000);
 });

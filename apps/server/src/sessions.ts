@@ -52,6 +52,11 @@ export class AgentPool {
     return this.sessions.get(threadId);
   }
 
+  /** Whether the thread's agent is there but its connection closed: nothing can be asked of it. */
+  isDead(threadId: string): boolean {
+    return !!this.resolved.get(threadId)?.closed;
+  }
+
   has(threadId: string): boolean {
     return this.sessions.has(threadId);
   }

@@ -16,6 +16,7 @@ import { Devices } from "./devices.ts";
 import type { DiagnosticsMonitor } from "./diagnostics.ts";
 import { type Client, CoordinatorRefused, type Hub } from "./hub.ts";
 import { findRemoteAccess } from "./remote.ts";
+import { storageTrouble } from "./store.ts";
 
 /** How often each connection is pinged. */
 const HEARTBEAT_MS = 30_000;
@@ -29,6 +30,13 @@ const DEFAULT_MAX_AUTH_FAILURES = 20;
 const DEFAULT_MAX_API_REQUESTS = 240;
 const DEFAULT_MAX_COORDINATOR_REQUESTS = 240;
 const DEFAULT_MAX_WS_UPGRADES = 120;
+
+/** What to say of a failure; a write the database refused is said in the user's words. */
+const refusal = (error: unknown): string => {
+  const trouble = storageTrouble(error);
+  if (trouble) return `${trouble} : rien n'a été enregistré.`;
+  return error instanceof Error ? error.message : String(error);
+};
 
 /** A fresh access token: long enough that it cannot be guessed. */
 export const newToken = () => randomBytes(24).toString("base64url");
@@ -650,8 +658,14 @@ export function createHttpServer(options: {
         // So do the addresses given to show artifacts, which the old token was enough to get.
         hub.artifactLinks.forget((deviceId) => deviceId === undefined);
         // And the browsers it subscribed to Web Push: the computer's own say so again when they
-        // connect with the new token.
-        hub.push.forget((deviceId) => deviceId === undefined);
+        // connect with the new token. The new token is in use from here: a database that
+        // refuses this must not keep it from the window that asked for it.
+        try {
+          hub.push.forget((deviceId) => deviceId === undefined);
+        } catch (error) {
+          hub.storageFailed(error);
+          console.error("Notifications des fenêtres de l'ancien jeton :", refusal(error));
+        }
         const old = [...sockets].filter(([, w]) => w.owner).map(([socket]) => socket);
         res.once("close", () => {
           for (const socket of old) socket.close(TOKEN_RENEWED, "token renewed");
@@ -702,15 +716,19 @@ export function createHttpServer(options: {
         dropRest(req);
         return json(res, 415, { message: "Rapport d'erreur attendu en JSON." });
       }
-      void readJson(req, MAX_CLIENT_ERROR_BODY).then((body) => {
-        if (diagnostics && body) {
-          const device = who.owner
-            ? "ordinateur"
-            : (devices.list().find((d) => d.id === who.deviceId)?.name ?? "appareil jumelé");
-          diagnostics.recordClientError(body, device);
-        }
-        if (!res.writableEnded) res.writeHead(204).end();
-      });
+      void readJson(req, MAX_CLIENT_ERROR_BODY)
+        .then((body) => {
+          if (diagnostics && body) {
+            const device = who.owner
+              ? "ordinateur"
+              : (devices.list().find((d) => d.id === who.deviceId)?.name ?? "appareil jumelé");
+            diagnostics.recordClientError(body, device);
+          }
+          if (!res.writableEnded) res.writeHead(204).end();
+        })
+        .catch(() => {
+          if (!res.writableEnded) res.writeHead(500).end();
+        });
       return;
     }
     if (req.url === "/api/pair") {
@@ -748,9 +766,8 @@ export function createHttpServer(options: {
         try {
           paired = devices.pair(code, name);
         } catch (error) {
-          return json(res, 409, {
-            message: error instanceof Error ? error.message : String(error),
-          });
+          hub.storageFailed(error);
+          return json(res, 409, { message: refusal(error) });
         }
         if (!paired) {
           authFailures.record(clientKey);
@@ -774,13 +791,18 @@ export function createHttpServer(options: {
         return json(res, 200, { devices: devices.list() });
       }
       if (req.url === "/api/devices/revoke" && req.method === "POST") {
-        void readJson(req, MAX_PAIR_BODY).then((body) => {
-          const id = typeof body?.id === "string" ? body.id : "";
-          if (!devices.revoke(id))
-            return json(res, 404, { message: "Cet appareil n'est plus là." });
-          shutOut(ofDevice(id), DEVICE_REVOKED, "device revoked");
-          json(res, 200, { devices: devices.list() });
-        });
+        void readJson(req, MAX_PAIR_BODY)
+          .then((body) => {
+            const id = typeof body?.id === "string" ? body.id : "";
+            if (!devices.revoke(id))
+              return json(res, 404, { message: "Cet appareil n'est plus là." });
+            shutOut(ofDevice(id), DEVICE_REVOKED, "device revoked");
+            json(res, 200, { devices: devices.list() });
+          })
+          .catch((error: unknown) => {
+            hub.storageFailed(error);
+            if (!res.writableEnded) json(res, 500, { message: refusal(error) });
+          });
         return;
       }
       const known = ["/api/pair/start", "/api/devices", "/api/devices/revoke"];

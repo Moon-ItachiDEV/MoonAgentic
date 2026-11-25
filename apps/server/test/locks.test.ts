@@ -845,3 +845,100 @@ describe("a project's settings", () => {
     expect(store.getProjectMemory(secret).text).toBe("");
   });
 });
+
+describe("locks kept in a real database", () => {
+  const realStore = () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-locks-db-"));
+    const store = new Store(path.join(dir, "state.sqlite"));
+    cleanups.push(() => {
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+    return store;
+  };
+  /** What node:sqlite throws on a full disk. */
+  const diskFull = () => {
+    const failure = new Error("database or disk is full") as Error & {
+      code: string;
+      errcode: number;
+    };
+    failure.code = "ERR_SQLITE_ERROR";
+    failure.errcode = 13;
+    return failure;
+  };
+
+  it("keeps counting wrong codes saved in the older list format across a restart", () => {
+    const store = realStore();
+    let now = 10 * TRIES_WINDOW_MS;
+    new ProjectLocks(store, () => now).setPin("482913");
+    // What an earlier version saved: the times of the wrong codes, as a list.
+    store.setSetting(
+      "lock.failures",
+      Array.from({ length: MAX_TRIES }, (_, n) => now - n),
+    );
+
+    const restarted = new ProjectLocks(store, () => now);
+    now += 1;
+
+    expect(() => restarted.setPin("111111", "482913")).toThrow(/Trop de codes faux/);
+  });
+
+  it("keeps a project locked when the database refuses to write that it is open", () => {
+    const store = realStore();
+    const locks = new ProjectLocks(store);
+    locks.setPin("482913");
+    locks.lock("p1");
+    const write = store.setSetting.bind(store);
+    store.setSetting = (key, value) => {
+      if (key === "lock.projects") throw diskFull();
+      write(key, value);
+    };
+
+    expect(() => locks.unlock("p1", "482913")).toThrow(/database or disk is full/);
+    // What a screen that connects now is shown: the same as the database.
+    expect(locks.isLocked("p1")).toBe(true);
+    expect(() => locks.lock("p2")).toThrow(/database or disk is full/);
+    expect(locks.isLocked("p2")).toBe(false);
+    expect(() => locks.reset()).toThrow(/database or disk is full/);
+    expect(locks.lockedProjects()).toEqual(["p1"]);
+  });
+
+  it("stays locked when both the code and the list are damaged", () => {
+    const store = realStore();
+    const locks = new ProjectLocks(store);
+    locks.setPin("482913");
+    locks.lock("p1");
+    store.db.prepare(`UPDATE settings SET value = '{"salt":"AAA' WHERE key = 'lock.pin'`).run();
+    store.db.prepare(`UPDATE settings SET value = '["p1"' WHERE key = 'lock.projects'`).run();
+    const said: unknown[] = [];
+    const error = console.error;
+    console.error = (...line: unknown[]) => void said.push(line);
+    try {
+      const restarted = new ProjectLocks(store, Date.now, () => ["p1", "p2"]);
+      expect(restarted.hasPin()).toBe(true);
+      expect(restarted.lockedProjects()).toEqual(["p1", "p2"]);
+      // No code opens it: only a reset on the computer.
+      expect(() => restarted.unlock("p1", "482913")).toThrow(/illisible/);
+      restarted.reset();
+      expect(restarted.lockedProjects()).toEqual([]);
+      expect(restarted.hasPin()).toBe(false);
+    } finally {
+      console.error = error;
+    }
+  });
+
+  it.each<[string, unknown]>([
+    ["a text", "bad"],
+    ["an empty record", {}],
+    ["a hash of the wrong size", { salt: "AAAA", hash: "AAAA" }],
+  ])("refuses every code, in words, when the saved code is %s", (_, saved) => {
+    const store = realStore();
+    store.setSetting("lock.pin", saved);
+    const locks = new ProjectLocks(store);
+
+    expect(locks.hasPin()).toBe(true);
+    expect(() => locks.unlock("p1", "482913")).toThrow(
+      "Le code de verrouillage enregistré est illisible : réinitialise-le depuis l'ordinateur.",
+    );
+  });
+});

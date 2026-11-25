@@ -32,6 +32,8 @@ const RATE_LIMIT_BASE_BACKOFF_MS = 2 * 60_000;
 const MAX_BACKOFF_MS = 15 * 60_000;
 /** Maximum bytes of stderr retained from `codex app-server` for diagnostics. */
 const MAX_STDERR_CHARS = 4_096;
+/** A line of an agent's answer about its usage, past which it is not read: none is so long. */
+const MAX_LINE_CHARS = 4 * 1024 * 1024;
 
 class TransientError extends Error {}
 
@@ -465,6 +467,10 @@ export function askCodex(
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
       buffer += chunk;
+      if (buffer.length > MAX_LINE_CHARS && !buffer.includes("\n")) {
+        finish(new TransientError("Codex a répondu par une ligne trop longue."));
+        return;
+      }
       let end: number;
       while ((end = buffer.indexOf("\n")) !== -1) {
         const line = buffer.slice(0, end).trim();
@@ -829,6 +835,8 @@ export async function startAgyServer(
   child.stdout.on("data", (chunk: string) => {
     if (listed) return;
     buffer += chunk;
+    // A line that never ends is not the hello being waited for.
+    if (buffer.length > MAX_LINE_CHARS && !buffer.includes("\n")) buffer = "";
     let end: number;
     while ((end = buffer.indexOf("\n")) !== -1) {
       const line = buffer.slice(0, end);

@@ -33,6 +33,7 @@ import {
 } from "./coordinator-tools.ts";
 import type { Hub } from "./hub.ts";
 import type { McpServerRecord } from "./mcp.ts";
+import { coordinatorSettingsOf, isTeamPreset } from "./saved-shapes.ts";
 import { fold, type Store } from "./store.ts";
 
 /** Threads a coordinator may open while answering one message, so a mistake cannot flood. */
@@ -189,7 +190,7 @@ export class Coordinators {
 
   /** How coordinators route work, as set in the settings. */
   coordinatorSettings(): CoordinatorSettings {
-    return this.store.getSetting<CoordinatorSettings>("coordinator", { routes: {} });
+    return coordinatorSettingsOf(this.store.getSetting<unknown>("coordinator", undefined));
   }
 
   /**
@@ -288,9 +289,8 @@ export class Coordinators {
 
   /** The teams the user set up in the settings, if ever. */
   private savedPresets(): TeamPreset[] | undefined {
-    return (
-      this.store.getSetting<TeamPreset[] | null>(TEAM_PRESETS_SETTING, null, "array") ?? undefined
-    );
+    const saved = this.store.getSetting<unknown[] | null>(TEAM_PRESETS_SETTING, null, "array");
+    return saved ? saved.filter(isTeamPreset) : undefined;
   }
 
   /** Forgets every access given to a coordinator's bridge so far. */

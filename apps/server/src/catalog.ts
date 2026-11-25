@@ -47,6 +47,9 @@ const isMcpServer = (value: unknown): value is McpServerRecord => {
   if (!isRecord(value) || typeof value.id !== "string" || typeof value.name !== "string") {
     return false;
   }
+  if (value.enabled !== undefined && typeof value.enabled !== "boolean") return false;
+  if (value.projectIds !== undefined && !isStrings(value.projectIds)) return false;
+  if (value.allRoles !== undefined && typeof value.allRoles !== "boolean") return false;
   const t = value.transport;
   if (!isRecord(t)) return false;
   return t.type === "stdio"

@@ -61,6 +61,7 @@ const isChoice = (value: unknown): boolean =>
 const isConfigOption = (value: unknown): value is acp.SessionConfigOption =>
   isRecord(value) &&
   isText(value.id) &&
+  (value.category === undefined || value.category === null || isText(value.category)) &&
   (value.type !== "select" ||
     (isText(value.currentValue) &&
       Array.isArray(value.options) &&
@@ -173,8 +174,12 @@ interface SessionState {
 function absorb(state: SessionState, response: unknown, whole = false): boolean {
   const options = (response as { configOptions?: unknown } | null | undefined)?.configOptions;
   const known = Array.isArray(options) ? options.filter(isConfigOption) : undefined;
+  // No settings at all is readable (the agent leaves them as they were), a list is when each
+  // of its settings is, and anything else is not.
   const readable =
-    options === undefined || options === null || known?.length === (options as unknown[]).length;
+    options === undefined ||
+    (options === null && !whole) ||
+    (Array.isArray(options) && known!.length === options.length);
   if (known && (readable || !whole)) state.options = known;
   if (readable || !whole) {
     state.legacy = legacyModels(response) ?? state.legacy;
@@ -714,6 +719,12 @@ export class AgentSession {
     // instead of failing on this one. Its exit is told as any other it did not ask for.
     void connection.closed.then(() => {
       if (exited || stopping) return;
+      // Its input closes now: an agent that reads it ends on its own, as it does at a stop.
+      try {
+        child.stdin?.end();
+      } catch {
+        // Already closed.
+      }
       setTimeout(() => {
         if (exited || stopping) return;
         void killTree(child, "SIGTERM");
@@ -802,7 +813,12 @@ export class AgentSession {
         }
         if (!sessionId) {
           const created = await connection.agent.request("session/new", { cwd, mcpServers });
-          sessionId = created.sessionId;
+          // An answer the SDK does not check: an id that is not a text would be kept as one.
+          const id: unknown = (created as { sessionId?: unknown } | null)?.sessionId;
+          if (typeof id !== "string" || !id) {
+            throw new Error("L'agent a ouvert une session sans identifiant lisible.");
+          }
+          sessionId = id;
           absorb(state, created);
           return true;
         }

@@ -126,7 +126,13 @@ export class Devices {
     const now = this.now();
     if (!row.lastSeen || now - row.lastSeen >= TOUCH_EVERY_MS) {
       row.lastSeen = now;
-      this.storage.touchDevice(row.id, now);
+      // Only a note of when it was last seen: a database that refuses it must not refuse
+      // the device its connection.
+      try {
+        this.storage.touchDevice(row.id, now);
+      } catch {
+        // Written again on a later connection.
+      }
     }
     return row.id;
   }
@@ -141,8 +147,10 @@ export class Devices {
   revoke(id: string): boolean {
     for (const [key, row] of this.byHash) {
       if (row.id === id) {
-        this.byHash.delete(key);
+        // Removed from the database first: a removal it refuses leaves the device as it was,
+        // and the computer is told, instead of a device that comes back at the next start.
         this.storage.removeDevice(id);
+        this.byHash.delete(key);
         return true;
       }
     }

@@ -249,13 +249,25 @@ export async function githubRepos(): Promise<GithubRepo[]> {
   return out
     .split("\n")
     .filter(Boolean)
-    .map(
-      (line) => JSON.parse(line) as { f: string; p: boolean; d: string | null; t: string | null },
-    )
-    .map((r) => ({
-      fullName: r.f,
-      private: r.p,
-      ...(r.d ? { description: r.d } : {}),
-      ...(r.t ? { pushedAt: Date.parse(r.t) } : {}),
-    }));
+    .flatMap((line) => {
+      // A line gh did not write as asked is left out, not the whole list.
+      let r: unknown;
+      try {
+        r = JSON.parse(line);
+      } catch {
+        return [];
+      }
+      if (typeof r !== "object" || r === null || typeof (r as { f?: unknown }).f !== "string") {
+        return [];
+      }
+      const { f, p, d, t } = r as { f: string; p?: unknown; d?: unknown; t?: unknown };
+      return [
+        {
+          fullName: f,
+          private: p === true,
+          ...(typeof d === "string" && d ? { description: d } : {}),
+          ...(typeof t === "string" && t ? { pushedAt: Date.parse(t) } : {}),
+        },
+      ];
+    });
 }
