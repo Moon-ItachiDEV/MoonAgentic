@@ -41,6 +41,8 @@ import {
 import { connection, newId } from "../connection.ts";
 import { carriesFiles, IMAGE_ACCEPT, pastedImages } from "../images.ts";
 import { useImageDrafts } from "../use-image-drafts.ts";
+import { type PrLink, prKey, takePrLinks, withPrLinks } from "../pr-links.ts";
+import { PrChip } from "./PrChip.tsx";
 import { readPref, writePref } from "../prefs.ts";
 import { looseDefault } from "../default-models.ts";
 import { modelNameOf } from "../model-label.ts";
@@ -130,6 +132,8 @@ export function Composer(props: {
 }) {
   const { agents, thread, project } = props;
   const [text, setText] = useState("");
+  /** Pull request links typed or pasted: shown as chips, sent in full. */
+  const [prs, setPrs] = useState<PrLink[]>([]);
   const [menu, setMenu] = useState(false);
   const [plusOpen, setPlusOpenNow] = useState(false);
   /** The sheet open from the « + » menu: the rest of what it offers, or where to work. */
@@ -332,7 +336,7 @@ export function Composer(props: {
   );
 
   const canSend =
-    (text.trim().length > 0 || images.ready.length > 0) &&
+    (text.trim().length > 0 || prs.length > 0 || images.ready.length > 0) &&
     !images.sending &&
     !busy &&
     !running &&
@@ -682,7 +686,7 @@ export function Composer(props: {
 
   /** Sends what is written; `goal`: a new thread starts with that goal instead. */
   const submit = async (to?: string, goal?: string) => {
-    const typed = goal ?? text.trim();
+    const typed = goal ?? withPrLinks(text.trim(), prs);
     if ((!typed && !images.drafts.length) || busy) return;
     // MoonAgentic's own commands run here, even while the agent works; the rest of the line
     // stays in the composer.
@@ -702,6 +706,7 @@ export function Composer(props: {
         return;
       }
       enqueue(submission.text);
+      setPrs([]);
       return;
     }
     const sendTo = to ?? agentId;
@@ -716,6 +721,7 @@ export function Composer(props: {
         connection.send({ type: "thread.send", threadId: thread.id, text: value, ...attachments })
       ) {
         setText("");
+        setPrs([]);
         images.sent();
       }
       return;
@@ -746,6 +752,7 @@ export function Composer(props: {
         ...(goal === undefined ? {} : { goal: {} }),
       });
       setText("");
+      setPrs([]);
       images.sent();
       // Gone to another page while the thread was being made: it is not pulled back from
       // there. The thread is in the lists, at work.
@@ -896,7 +903,7 @@ export function Composer(props: {
     if (keep !== "picker") setMenu(false);
     if (keep !== "ctx") setCtxOpen(false);
   };
-  const hasText = text.trim().length > 0;
+  const hasText = text.trim().length > 0 || prs.length > 0;
   const hasDraft = hasText || hasImages;
   const agentLabel = agent?.name ?? (thread ? "Agent retiré" : "Aucun agent installé");
   const effortName = effort?.choices.find((c) => c.id === settings[effort.id])?.name;
@@ -1110,6 +1117,17 @@ export function Composer(props: {
           aria-label="Prendre une photo"
           onChange={takePicked}
         />
+        {prs.length > 0 && (
+          <div className="cprs">
+            {prs.map((l) => (
+              <PrChip
+                key={prKey(l)}
+                link={l}
+                onRemove={() => setPrs((had) => had.filter((h) => prKey(h) !== prKey(l)))}
+              />
+            ))}
+          </div>
+        )}
         <div className="line">
           {plusButton(20)}
           {voice && (
@@ -1140,6 +1158,15 @@ export function Composer(props: {
               suggesting && suggestions.length ? `sg-${highlighted}` : undefined
             }
             onChange={(e) => {
+              const taken = takePrLinks(e.target.value);
+              if (taken.links.length) {
+                setText(taken.text);
+                setPrs((had) => [
+                  ...had,
+                  ...taken.links.filter((l) => !had.some((h) => prKey(h) === prKey(l))),
+                ]);
+                return;
+              }
               setText(e.target.value);
               setCaret(e.target.selectionStart);
               setActive(0);

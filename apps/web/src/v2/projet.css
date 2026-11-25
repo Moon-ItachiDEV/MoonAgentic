@@ -143,3 +143,100 @@
     animation: none;
   }
 }
+
+/* Pastille « PR 155 » : composer, bulles */
+.prl {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px 0 6px;
+  margin: 0 1px;
+  border-radius: 7px;
+  vertical-align: baseline;
+  background: var(--surface);
+  box-shadow: 0 0 0 0.5px var(--cring);
+  font: 500 14px/24px var(--sans);
+  letter-spacing: -0.01em;
+  color: var(--fg);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color 150ms ease,
+    transform 160ms var(--out);
+}
+a.prl:active {
+  transform: scale(0.97);
+}
+@media (hover: hover) and (pointer: fine) {
+  a.prl:hover {
+    background: var(--hover);
+  }
+}
+.prl svg {
+  color: var(--muted);
+  flex: none;
+}
+.prl.open svg {
+  color: var(--ok);
+}
+.prl.merged svg {
+  color: var(--pc-violet);
+}
+.prl.closed svg,
+.prl.failed svg {
+  color: var(--err);
+}
+.prl .rp {
+  color: var(--muted);
+  font-weight: 400;
+}
+.prl .x {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin: 0 -4px 0 1px;
+  border-radius: 5px;
+  color: var(--muted);
+  transition: background-color 150ms ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .prl .x:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+}
+.u .prl {
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--bubble-fg);
+  box-shadow: none;
+}
+:root[data-theme="dark"] .u .prl {
+  background: var(--chip);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .u .prl {
+    background: var(--chip);
+  }
+}
+.cprs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px 0;
+}
+.cprs .prl {
+  animation: prIn 220ms var(--out);
+}
+@keyframes prIn {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cprs .prl {
+    animation: none;
+  }
+}

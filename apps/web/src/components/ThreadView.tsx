@@ -30,6 +30,8 @@ import type { Held } from "../state.ts";
 import { AgentPlan } from "./AgentPlan.tsx";
 import { Glyph, I } from "../v2/I.tsx";
 import { GROUP_LABEL, threadLine } from "../project-threads.ts";
+import { prParts } from "../pr-links.ts";
+import { PrChip } from "./PrChip.tsx";
 import { Clamp } from "./Clamp.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -845,7 +847,9 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
                 {part.text}
               </span>
             ) : (
-              part.text
+              prParts(part.text).map((bit, j) =>
+                "link" in bit ? <PrChip key={`${i}-${j}`} link={bit.link} /> : bit.text,
+              )
             ),
           )}
         </div>
