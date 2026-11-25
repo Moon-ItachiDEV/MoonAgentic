@@ -1474,7 +1474,7 @@ export class Hub {
         return;
       case "files.search": {
         const dir = this.folderOf(message.projectId, message.threadId);
-        const files = searchFiles(await listFiles(dir), message.query);
+        const files = searchFiles(await listFiles(dir), message.query, message.limit);
         client.send({ type: "files", requestId: message.requestId, files });
         return;
       }

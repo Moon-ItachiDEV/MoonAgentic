@@ -531,3 +531,279 @@ html[data-dev="touch"] .vxh {
   letter-spacing: 0.12em;
   color: var(--fg);
 }
+
+/* A project's conversations: what leads a line, and what it says. */
+.it.thr {
+  gap: 12px;
+}
+.it.thr > .gl,
+.it.thr > .ud,
+.it.thr > .idl,
+.it.thr > svg.ok {
+  flex: none;
+  width: 18px;
+  justify-self: center;
+}
+.it.thr > .ud,
+.trow .ld .ud {
+  width: 8px;
+  height: 8px;
+  margin: 0 5px;
+  border-radius: 4px;
+  background: var(--warn-dot);
+}
+.it.thr > .ud.err,
+.trow .ld .ud.err {
+  background: var(--err);
+}
+.it.thr > .idl,
+.trow .ld .idl {
+  width: 6px;
+  height: 6px;
+  margin: 0 6px;
+  border-radius: 3px;
+  background: var(--faint);
+}
+.it.thr svg.ok,
+.trow .ld svg.ok {
+  color: var(--ok);
+}
+.it.thr .tx {
+  min-width: 0;
+}
+.it.thr .tx small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.it small.acc {
+  color: var(--accent);
+}
+.it.thr.unread .tx {
+  font-weight: 600;
+}
+.rpan .sbody > div + div {
+  margin-top: 0;
+}
+
+/* « Vue d'ensemble ». */
+.trow .ld {
+  display: grid;
+  justify-items: center;
+}
+.trow .s.w {
+  color: var(--warn);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+.trow.unread .t {
+  font-weight: 600;
+}
+button.ovh {
+  align-self: flex-start;
+}
+.ovg {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.ovg > div:not(.ovh) {
+  display: grid;
+}
+.thumb.ic {
+  place-items: center;
+  align-content: center;
+  color: var(--faint);
+}
+.view > .ins.ovins {
+  flex: none;
+}
+.view > .newth {
+  flex: none;
+}
+.ovh .mono {
+  font: 400 13px var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tree .tf {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding-left: 24px;
+  color: var(--fg2);
+}
+.tree .tf svg {
+  color: var(--faint);
+  flex: none;
+}
+.tree .sub .tf {
+  padding-left: 24px;
+}
+.tree .tf .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A project with no coordinator yet, and what its conversation starts with. */
+.empty.cst .ins {
+  width: min(360px, 100%);
+  text-align: left;
+}
+.pstarts {
+  justify-content: flex-start;
+}
+.pstarts .ppill {
+  gap: 6px;
+  cursor: pointer;
+}
+.ppill.err {
+  color: var(--err-tx);
+}
+
+/* Project settings. */
+.fld > .pj-fold,
+.fld > .pj-ico {
+  flex: none;
+}
+button.ico-pick {
+  width: 100%;
+  text-align: left;
+}
+.ico-pick .tx {
+  flex: 1;
+  min-width: 0;
+}
+.ico-pick .tx small {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ico-pick > svg {
+  color: var(--faint);
+}
+.icp {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px 12px;
+}
+.icp input {
+  width: 96px;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  outline: 0;
+  border-radius: 12px;
+  background: var(--card);
+  font: 400 15px var(--sans);
+  color: var(--fg);
+}
+.icp button {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 6px;
+  border-radius: 12px;
+  font-size: 18px;
+}
+.icp button[aria-pressed="true"] {
+  background: var(--card);
+}
+.icp button.icd {
+  font-size: 14px;
+  color: var(--accent);
+  padding: 0 10px;
+}
+.icp small {
+  flex-basis: 100%;
+  font-size: 13px;
+}
+.fld .mono {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+.pse .cfa {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+.it.ro > .mpick {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  min-height: inherit;
+}
+.it .tx .mono {
+  font: 500 14px var(--mono);
+}
+.snone.mer,
+.it .tx.mer {
+  color: var(--err-tx);
+}
+.it.thr .tx {
+  flex: 1;
+  overflow: hidden;
+}
+.it.thr .tx .thn {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.it.thr > svg:last-child {
+  flex: none;
+}
+.trow .chip {
+  max-width: 100%;
+  min-width: 0;
+}
+.trow .chip svg {
+  flex: none;
+}
+.trow .chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ovh > span:first-child {
+  flex: none;
+}
+.trow .s.e {
+  color: var(--err-tx);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+/* Above the coordinator's composer: what the project's conversations wait for. */
+.bottom > .dcw {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.updb.pra {
+  margin: 0;
+  height: auto;
+  min-height: 52px;
+  padding-block: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  animation: none;
+}
+.updb.pra .tx {
+  text-align: left;
+  white-space: normal;
+  flex: 1 1 160px;
+}
+.updb.pra .tx small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

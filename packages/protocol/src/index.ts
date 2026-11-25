@@ -255,6 +255,8 @@ export const PROJECT_COLORS = [
 export type ProjectColor = (typeof PROJECT_COLORS)[number];
 /** At most this many characters for a project's icon: an emoji with its modifiers fits. */
 export const MAX_PROJECT_ICON = 16;
+/** At most this many files in one answer to `files.search`. */
+export const MAX_FILE_RESULTS = 5000;
 /** At most this many bytes for a setup file edited from the app (AGENTS.md, a skill…). */
 export const MAX_SETUP_FILE = 256 * 1024;
 
@@ -1996,13 +1998,18 @@ export const ClientMessage = z.discriminatedUnion("type", [
     projectId: id,
     branches: z.array(z.string().min(1).max(300)).min(1).max(500),
   }),
-  /** Looks for project files to mention with `@`, in the thread's folder when given. */
+  /**
+   * Looks for project files to mention with `@`, in the thread's folder when given. `limit`
+   * asks for more than the few a menu shows: with no query, the project's files from the
+   * shallowest, for its tree.
+   */
   z.object({
     type: z.literal("files.search"),
     requestId: id,
     projectId: id,
     threadId: id.optional(),
     query: z.string().max(500),
+    limit: z.number().int().min(1).max(MAX_FILE_RESULTS).optional(),
   }),
   /** Lists the skills and project commands of the thread's folder, or the project's. */
   z.object({

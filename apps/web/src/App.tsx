@@ -39,11 +39,13 @@ import { ProjectRequests, projectRequests } from "./components/ProjectRequests.t
 import { RequestsDialog } from "./components/RequestsDialog.tsx";
 import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { PairGate } from "./components/PairGate.tsx";
-import { ProjectPage } from "./components/ProjectPage.tsx";
+import { CoordinatorStart, ProjectOverview, ProjectThreads } from "./components/ProjectPage.tsx";
+import { ProjectSettings } from "./components/ProjectSettings.tsx";
 import { ProjectIcon } from "./components/ProjectIcon.tsx";
 import { SidePullRequests } from "./components/SidePullRequests.tsx";
 import { steady, useSame } from "./steady.tsx";
-import { coordinatorOf, listedThreads } from "./project-threads.ts";
+import { modelNameOf } from "./model-label.ts";
+import { coordinatorOf, listedThreads, waitingCount } from "./project-threads.ts";
 import { Sidebar as PlainSidebar } from "./components/Sidebar.tsx";
 import { TabBar, type TabPop, TabPopover } from "./components/TabBar.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
@@ -140,7 +142,8 @@ export function App() {
   }, []);
 
   /** On a narrow screen, what the project's page shows: the coordinator or the threads. */
-  const [projectTab, setProjectTab] = useState<"chat" | "threads">("chat");
+  const [projectTab, setProjectTab] = useState<"chat" | "overview">("chat");
+  const [projectSetup, setProjectSetup] = useState(false);
   // Lists show every thread but the coordinators.
   const listedThreadsNow = useMemo(() => listedThreads(state.threads), [state.threads]);
   const listed = useMemo(
@@ -490,20 +493,30 @@ export function App() {
     </>
   );
 
+  /** What a project's lists of conversations can do with one. */
+  const projectThreadActions = (p: Project) => ({
+    onOpenThread: openThread,
+    onNewThread: () => {
+      pickProject(p.id);
+      go({ name: "home" });
+    },
+    onTogglePin: togglePin,
+    onSetArchived: setArchived,
+    onDeleteThread: askDeleteThread,
+  });
+
   /** Under the coordinator's conversation: what its project's threads wait for, then its composer. */
   const coordinatorDock = coordinator && routeProject && (
     <>
       {!coordinator.archived && (
-        <div className="legacy">
-          <ProjectRequests
-            requests={projectRequests(state.requests, state.threads, routeProject.id)}
-            threads={state.threads}
-            onOpenThread={(id, itemId) => {
-              focusItem(id, itemId);
-              openThread(id);
-            }}
-          />
-        </div>
+        <ProjectRequests
+          requests={projectRequests(state.requests, state.threads, routeProject.id)}
+          threads={state.threads}
+          onOpenThread={(id, itemId) => {
+            focusItem(id, itemId);
+            openThread(id);
+          }}
+        />
       )}
       {composerFor(coordinator, "Écrire au coordinateur")}
     </>
@@ -526,7 +539,9 @@ export function App() {
     route.name === "home"
       ? "home"
       : route.name === "project"
-        ? "project"
+        ? projectTab === "overview" && routeProject && !routeProject.locked
+          ? "overview"
+          : "project"
         : route.name === "planner"
           ? route.view === "planifiees"
             ? "sched"
@@ -584,29 +599,50 @@ export function App() {
           {...(project && !project.locked ? { onLock: () => lockOne(project) } : {})}
         />
       </>
+    ) : route.name === "project" && projectTab === "overview" && routeProject ? (
+      <>
+        <button
+          className="gb glass press"
+          aria-label="Retour"
+          onClick={() => setProjectTab("chat")}
+        >
+          <I n="back" />
+        </button>
+        <div className="ctr">
+          <div className="ttl glass">
+            <b>Vue d'ensemble</b>
+            <span>{routeProject.name}</span>
+          </div>
+        </div>
+        <span />
+      </>
     ) : route.name === "project" ? (
       <>
         {menuButton()}
         <div className="ctr">
-          {routeProject && (
+          {routeProject && !routeProject.locked && (
             <>
-              <span
-                className={`pava glass${routeProject.color ? ` pc-${routeProject.color}` : ""}`}
+              <button
+                className={`pava glass press${routeProject.color ? ` pc-${routeProject.color}` : ""}`}
+                aria-label="Réglages du projet"
+                onClick={() => setProjectSetup(true)}
               >
                 <ProjectIcon project={routeProject} size={22} />
-              </span>
-              <span className="plabel glass">{routeProject.name}</span>
+              </button>
+              <button className="plabel glass" onClick={() => setProjectSetup(true)}>
+                {routeProject.name}
+              </button>
             </>
           )}
         </div>
-        {coordinator ? (
+        {routeProject && !routeProject.locked ? (
           <button
             className="gb glass press"
-            aria-label={projectTab === "chat" ? "Fils du projet" : "Coordinateur"}
-            aria-pressed={projectTab === "threads"}
-            onClick={() => setProjectTab(projectTab === "chat" ? "threads" : "chat")}
+            aria-label="Vue d'ensemble"
+            onClick={() => setProjectTab("overview")}
           >
-            <I n={projectTab === "chat" ? "list" : "bubble"} s={21} />
+            <I n="list" s={21} />
+            {waitingCount(state.threads, routeProject.id) > 0 && <span className="dot" />}
           </button>
         ) : (
           <span />
@@ -772,127 +808,109 @@ export function App() {
             </div>
           )
         ) : route.name === "project" ? (
-          legacyPage(
-            routeProject?.locked ? (
-              <div className="view">
-                <div className="lk-page">
-                  <span className="lk-ic">
-                    <IconLock size={20} />
-                  </span>
-                  <b className="lk-ttl">{routeProject.name} est verrouillé</b>
-                  <p>
-                    Les agents continuent de travailler. Ses discussions, ses cartes et ses fichiers
-                    restent masqués sur tous tes appareils tant que le code n'est pas saisi.
-                  </p>
-                  <button className="btn" onClick={() => askUnlock(routeProject)}>
-                    Déverrouiller
-                  </button>
-                </div>
+          routeProject?.locked ? (
+            <div className="view" id="view">
+              <div className="empty">
+                <span className="ei">
+                  <I n="lock" s={24} />
+                </span>
+                <b>{routeProject.name} est verrouillé</b>
+                <button className="newth press" onClick={() => askUnlock(routeProject)}>
+                  Déverrouiller
+                </button>
               </div>
-            ) : routeProject ? (
-              (() => {
-                const page = (panel: boolean) => (
-                  <ProjectPage
-                    // Another project starts afresh: a name being typed never follows to the next.
-                    key={routeProject.id}
-                    panel={panel}
-                    project={routeProject}
-                    threads={state.threads}
-                    agents={state.agents}
-                    ready={state.ready}
-                    onOpenThread={openThread}
-                    onNewThread={() => {
-                      pickProject(routeProject.id);
-                      go({ name: "home" });
-                    }}
-                    onTogglePin={togglePin}
-                    onSetResolved={setArchived}
-                    onDeleteThread={askDeleteThread}
-                    onOpenPlanner={() => {
-                      pickProject(routeProject.id);
-                      openPlanner();
-                    }}
-                    onRemoveProject={() => askRemoveProject(routeProject.id)}
-                    onLock={() => lockOne(routeProject)}
-                    coordinator={coordinator}
-                    settings={state.coordinator}
-                    onOpenSettings={() => go({ name: "settings", section: "coordinator" })}
-                    onStartCoordinator={
-                      coordinator
-                        ? undefined
-                        : async (pick) => {
-                            await connection.request({
-                              type: "coordinator.open",
-                              requestId: newId(),
-                              projectId: routeProject.id,
-                              agentId: pick.agentId,
-                              ...(pick.model ? { model: pick.model } : {}),
-                            });
-                          }
-                    }
-                    favorites={state.favorites}
-                  />
-                );
-                if (!coordinator) return page(false);
+            </div>
+          ) : !routeProject ? (
+            <div className="view" id="view">
+              <div className="empty">
+                {state.ready && (
+                  <>
+                    <span className="ei">
+                      <I n="folder" s={24} />
+                    </span>
+                    <b>Ce projet n'existe plus</b>
+                  </>
+                )}
+              </div>
+            </div>
+          ) : projectTab === "overview" ? (
+            <ProjectOverview
+              key={routeProject.id}
+              project={routeProject}
+              threads={state.threads}
+              agents={state.agents}
+              schedules={state.schedules}
+              coordinator={coordinator}
+              settings={state.coordinator}
+              onOpenSettings={() => go({ name: "settings", section: "coordinator" })}
+              onOpenArtifacts={() => go({ name: "artifacts" })}
+              onSchedule={(schedule) =>
+                setScheduling(schedule ? { text: "", schedule } : { text: "" })
+              }
+              {...projectThreadActions(routeProject)}
+            />
+          ) : coordinator ? (
+            <ThreadView
+              intro={(() => {
                 // The thread last at work in the project, to pick up where things were left.
                 const recent = listed.threads
                   .filter((t) => t.projectId === routeProject.id && !t.archived && !t.parentId)
                   .sort((a, b) => b.updatedAt - a.updatedAt)[0];
-                const chat = (
-                  <ThreadView
-                    intro={
-                      <div className="pp-hello">
-                        <p>
-                          Prêt à travailler sur le projet « {routeProject.name} ». Quelques façons
-                          de démarrer :
-                        </p>
-                        <div className="pp-starts">
-                          {recent && (
-                            <button onClick={() => openThread(recent.id)}>
-                              <IconClock size={13} />
-                              Reprendre le travail récent
-                            </button>
-                          )}
-                          <button
-                            onClick={() => {
-                              pickProject(routeProject.id);
-                              go({ name: "planner" });
-                            }}
-                          >
-                            <IconBoard size={13} />
-                            Établir un plan
-                          </button>
-                          <button onClick={() => setScheduling({ text: "" })}>
-                            <IconClock size={13} />
-                            Planifier une tâche
-                          </button>
-                          <button onClick={() => setConnectionsOpen(true)}>
-                            <IconPlug size={13} />
-                            Utiliser mes outils
-                          </button>
-                        </div>
-                      </div>
-                    }
-                    key={coordinator.id}
-                    thread={coordinator}
-                    items={state.items[coordinator.id]}
-                    held={state.held[coordinator.id]}
-                    agents={state.agents}
-                    threads={state.threads}
-                    onOpenThread={openThread}
-                  />
+                return (
+                  <div className="chips wrap pstarts">
+                    {recent && (
+                      <button className="ppill" onClick={() => openThread(recent.id)}>
+                        <I n="clock" s={14} />
+                        Reprendre le travail récent
+                      </button>
+                    )}
+                    <button
+                      className="ppill"
+                      onClick={() => {
+                        pickProject(routeProject.id);
+                        go({ name: "planner" });
+                      }}
+                    >
+                      <I n="grid" s={14} />
+                      Établir un plan
+                    </button>
+                    <button className="ppill" onClick={() => setScheduling({ text: "" })}>
+                      <I n="clock" s={14} />
+                      Planifier une tâche
+                    </button>
+                    <button className="ppill" onClick={() => setConnectionsOpen(true)}>
+                      <I n="plug" s={14} />
+                      Utiliser mes outils
+                    </button>
+                  </div>
                 );
-                return projectTab === "chat" ? chat : page(false);
-              })()
-            ) : (
-              <div className="view">
-                <div className="home">
-                  <p className="greet-sub">
-                    {state.ready ? "Ce projet n'existe plus." : "Chargement…"}
-                  </p>
-                </div>
-              </div>
-            ),
+              })()}
+              key={coordinator.id}
+              thread={coordinator}
+              items={state.items[coordinator.id]}
+              held={state.held[coordinator.id]}
+              agents={state.agents}
+              threads={state.threads}
+              onOpenThread={openThread}
+            />
+          ) : (
+            <CoordinatorStart
+              key={routeProject.id}
+              project={routeProject}
+              agents={state.agents}
+              favorites={state.favorites}
+              ready={state.ready}
+              onOpenConnections={() => setConnectionsOpen(true)}
+              onStart={async (pick) => {
+                await connection.request({
+                  type: "coordinator.open",
+                  requestId: newId(),
+                  projectId: routeProject.id,
+                  agentId: pick.agentId,
+                  ...(pick.model ? { model: pick.model } : {}),
+                });
+              }}
+            />
           )
         ) : route.name === "artifacts" ? (
           legacyPage(
@@ -1005,6 +1023,15 @@ export function App() {
         {route.name === "home" && !screen.wide && (
           <TabBar state={listed} pop={tabPop} onPop={setTabPop} />
         )}
+        {route.name === "project" && routeProject && !routeProject.locked && screen.xl && (
+          <aside className="rpan" id="rpan" aria-label="Fils du projet">
+            <ProjectThreads
+              project={routeProject}
+              threads={state.threads}
+              {...projectThreadActions(routeProject)}
+            />
+          </aside>
+        )}
         <div className="veil" id="veil" onClick={() => setDrawer(false)} />
       </section>
       <Sheet open={reviewing} onClose={() => setReviewOpen(false)} title="Modifications" tall>
@@ -1019,6 +1046,31 @@ export function App() {
           </div>
         )}
       </Sheet>
+      {route.name === "project" && routeProject && !routeProject.locked && (
+        <ProjectSettings
+          key={routeProject.id}
+          project={routeProject}
+          open={projectSetup}
+          unread={state.threads.some((t) => t.projectId === routeProject.id && t.unread)}
+          coordinator={
+            coordinator
+              ? (modelNameOf(
+                  state.agents.find((a) => a.id === coordinator.agentId)?.models,
+                  coordinator.model,
+                ) ?? state.agents.find((a) => a.id === coordinator.agentId)?.name)
+              : undefined
+          }
+          onClose={() => setProjectSetup(false)}
+          onOpenCoordinator={() => go({ name: "settings", section: "coordinator" })}
+          onOpenUsage={() => go({ name: "settings", section: "subscriptions" })}
+          onOpenPlanner={() => {
+            pickProject(routeProject.id);
+            openPlanner();
+          }}
+          onLock={() => lockOne(routeProject)}
+          onRemove={() => askRemoveProject(routeProject.id)}
+        />
+      )}
       {route.name === "settings" && (
         <ErrorBoundary key="settings" resetKey={route.section}>
           <Suspense fallback={null}>
