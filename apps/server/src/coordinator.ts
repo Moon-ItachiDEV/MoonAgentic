@@ -3,9 +3,11 @@ import { fileURLToPath } from "node:url";
 import {
   DEFAULT_PARALLEL,
   defaultTeam,
+  MAX_PROJECT_MEMORY,
   type TeamPreset,
   teamPresets,
   threadGroup,
+  utf8Bytes,
 } from "@moonagentic/protocol";
 import type {
   CoordinatorSettings,
@@ -20,20 +22,29 @@ import type {
 import type { AgentCatalog } from "./catalog.ts";
 import {
   BRIDGE_BOOTSTRAP_ENV,
+  BRIDGE_MODE_ENV,
   BRIDGE_URL_ENV,
+  type BridgeMode,
   COORDINATOR_TOOLS,
+  MEMORY_MODES,
   MESSAGE_MODES,
   THREAD_KINDS,
+  toolsForBridgeMode,
 } from "./coordinator-tools.ts";
 import type { Hub } from "./hub.ts";
 import type { McpServerRecord } from "./mcp.ts";
-import type { Store } from "./store.ts";
+import { fold, type Store } from "./store.ts";
 
 /** Threads a coordinator may open while answering one message, so a mistake cannot flood. */
 const MAX_OPENED_PER_TURN = 4;
-/** Messages of a thread shown to the coordinator that reads it, and characters of each. */
+/** Messages of a thread shown by default when reading it, max per page, and characters of each. */
 const READ_MESSAGES = 8;
+const MAX_READ_MESSAGES = 20;
 const READ_CLIP = 1_500;
+/** Threads returned by default and at most by `search_threads`, and snippets per thread. */
+const SEARCH_DEFAULT_LIMIT = 10;
+const SEARCH_MAX_LIMIT = 20;
+const SEARCH_SNIPPETS_PER_THREAD = 3;
 
 /** The user's own words, joined to the brief of a thread opened for them. */
 const withOrigin = (brief: string, asked: string | undefined) =>
@@ -52,16 +63,32 @@ const PRESET_DISCOVERY_MS = 20_000;
 const FROM_COORDINATOR =
   "Le message qui suit vient du coordinateur du projet : un agent qui répartit les demandes de l'utilisateur, pas l'utilisateur lui-même. Seule la partie « Message d'origine de l'utilisateur », quand elle est là, est de sa main.";
 
-/** The coordinator's tools that change something: only while it answers the user. */
-const WRITES = new Set(["open_thread", "start_team", "message_thread", "resolve_thread"]);
+/** Tools that change MoonAgentic state: only allowed while the calling thread is answering. */
+const WRITES = new Set([
+  "open_thread",
+  "start_team",
+  "message_thread",
+  "resolve_thread",
+  "save_memory",
+]);
 const BRIDGE = fileURLToPath(new URL("./coordinator-bridge.ts", import.meta.url));
+
+type BridgeScope = { projectId: string; threadId: string; mode: BridgeMode };
+
+const bridgeModeOf = (thread: Thread): BridgeMode =>
+  thread.kind === "coordinator"
+    ? "coordinator"
+    : thread.role === "reviewer" || thread.role === "tester" || thread.role === "merger"
+      ? "readonly"
+      : "thread";
 
 /** What a coordinator is told before each message: its part, and how it acts. */
 export const coordinatorPrompt = (project: string) =>
   `Tu es le coordinateur du projet « ${project} » dans MoonAgentic. L'utilisateur te parle de tout le projet ; chaque sujet de travail vit dans son propre fil, avec son agent et sa branche.
 
 Ce que tu fais :
-- Une question rapide ou un point d'avancement : tu réponds toi-même, en quelques phrases. Pour l'avancement, lis l'état réel avec list_threads, puis read_thread si on te demande le détail d'un fil. N'invente jamais un état.
+- Une question rapide ou un point d'avancement : tu réponds toi-même, en quelques phrases. Pour l'avancement, lis l'état réel avec list_threads, puis read_thread si on te demande le détail d'un fil. Pour retrouver une décision ou un sujet passé, utilise search_threads. N'invente jamais un état.
+- Pour la mémoire durable du projet (partagée entre tous les agents, fils et branches), utilise read_memory et save_memory pour noter les décisions, conventions ou pièges durables.
 - Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne complète, car l'agent du fil ne voit pas cette conversation. Donne toujours kind : les réglages de l'utilisateur en déduisent l'agent. Si l'outil répond que le fil est en file, dis-le : il démarrera seul.
 - Une tâche trop grosse pour un seul fil, avec plusieurs morceaux indépendants, ou quand l'utilisateur demande une équipe : start_team.
 - Un sujet qui a déjà son fil : tu le relances avec message_thread plutôt que d'en ouvrir un second. Si son agent travaille, ton message attend la fin de son tour ; mode steer seulement pour une correction urgente, car il coupe le travail en cours.
@@ -71,7 +98,7 @@ Si un outil échoue, dis-le tout de suite à l'utilisateur en une phrase, avec c
 
 Après un outil, dis en une phrase ce que tu as fait. Reste bref : pas de plan, pas de récapitulatif. Réponds dans la langue de l'utilisateur.`;
 
-/** A coordinator's call that came with no token of this server's: answered 401. */
+/** A bridge's call that came with no valid token of this server's: answered 401. */
 export class CoordinatorRefused extends Error {
   constructor() {
     super("Accès refusé.");
@@ -99,6 +126,11 @@ export interface CoordinatorHost extends Pick<
   checkAgent(agentId: string): void;
   /** Whether the project is being removed. */
   removing(projectId: string): boolean;
+  /**
+   * Whether the project is « Discussions »: conversations started outside any project, with
+   * nothing in common but where they are kept. They share no memory and do not read each other.
+   */
+  outsideProjects(projectId: string): boolean;
   /** Whether a turn is running on the thread. */
   running(threadId: string): boolean;
   /** A team's real state, for a message to its lead. */
@@ -117,22 +149,32 @@ export interface CoordinatorHost extends Pick<
     task: string,
     signal?: AbortSignal,
   ): Promise<PermissionMode | null>;
+  /**
+   * Asks the user before a thread outside full access writes the project's shared memory,
+   * with the same card as an agent's own requests. False when refused or cancelled.
+   */
+  confirmMemoryWrite(
+    threadId: string,
+    content: string,
+    replace: boolean,
+    signal?: AbortSignal,
+  ): Promise<boolean>;
 }
 
 /**
- * The projects' coordinators: their settings, the bridge their agents call tools through,
- * the threads they open, and the line of those waiting for a place.
+ * The projects' coordinators and per-project MCP bridges: their settings, the bridge their
+ * agents call tools through, the threads coordinators open, and the line waiting for a place.
  */
 export class Coordinators {
   private readonly store: Store;
   private readonly host: CoordinatorHost;
-  /** What each coordinator's bridge may reach, by its token: one project, kept in memory only. */
-  private readonly tokens = new Map<string, { projectId: string; threadId: string }>();
+  /** What each bridge may reach, by its token: one project and one role, kept in memory only. */
+  private readonly tokens = new Map<string, BridgeScope>();
   /** What each bridge was started with: traded once for a token, then worth nothing. */
-  private readonly bootstraps = new Map<string, { projectId: string; threadId: string }>();
+  private readonly bootstraps = new Map<string, BridgeScope>();
   /** Threads each coordinator opened while answering the current message. */
   private readonly openedThisTurn = new Map<string, number>();
-  /** Where this server answers a coordinator's bridge, once it listens. */
+  /** Where this server answers a bridge, once it listens. */
   url: string | undefined;
 
   constructor(store: Store, host: CoordinatorHost) {
@@ -257,14 +299,19 @@ export class Coordinators {
   }
 
   /**
-   * The MCP server given to a coordinator's agent. Its environment only holds what the
-   * bridge trades, once, for its token: a command the agent runs later finds nothing to use.
+   * The MCP server given to a thread's agent. Its environment only holds what the bridge
+   * trades, once, for its token: a command the agent runs later finds nothing to use.
+   * Regular threads only receive read-only project context + shared memory tools; read-only
+   * team roles only receive read tools; only a project's coordinator can orchestrate threads.
+   * A conversation outside any project gets none: there is no project to share.
    */
   coordinatorServer(thread: Thread): McpServerRecord[] {
-    if (thread.kind !== "coordinator" || !this.url) return [];
+    if (!this.url) return [];
+    if (thread.kind !== "coordinator" && this.host.outsideProjects(thread.projectId)) return [];
     this.dropCoordinatorAccess(thread.id);
+    const mode = bridgeModeOf(thread);
     const bootstrap = randomBytes(32).toString("base64url");
-    this.bootstraps.set(bootstrap, { projectId: thread.projectId, threadId: thread.id });
+    this.bootstraps.set(bootstrap, { projectId: thread.projectId, threadId: thread.id, mode });
     return [
       {
         id: "moonagentic",
@@ -277,6 +324,7 @@ export class Coordinators {
           env: [
             { name: BRIDGE_URL_ENV, value: this.url },
             { name: BRIDGE_BOOTSTRAP_ENV, value: bootstrap },
+            { name: BRIDGE_MODE_ENV, value: mode },
             // In the desktop app, this program is Electron, which acts as Node only when told:
             // said here too, for agents that start MCP servers with only the variables given.
             ...(process.env.ELECTRON_RUN_AS_NODE
@@ -291,7 +339,10 @@ export class Coordinators {
   /** The bridge's first call: what it was started with, once, for the token of its project. */
   coordinatorExchange(bootstrap: string): string {
     const scope = this.bootstraps.get(bootstrap);
-    if (!scope) throw new CoordinatorRefused();
+    const thread = scope && this.store.getThread(scope.threadId);
+    // A locked project is out of sight, not stopped: its agents keep their tools, which
+    // never reach beyond their own project anyway.
+    if (!scope || !thread || thread.projectId !== scope.projectId) throw new CoordinatorRefused();
     this.dropCoordinatorAccess(scope.threadId);
     const token = randomBytes(32).toString("base64url");
     this.tokens.set(token, scope);
@@ -347,8 +398,12 @@ export class Coordinators {
     }
   }
 
-  /** What a coordinator is shown of a thread: its real state, nothing made up. */
-  private threadForCoordinator(t: Thread, all = this.store.listThreads()) {
+  /** What a bridge caller is shown of a thread: its real state, nothing made up. */
+  private threadForCoordinator(
+    t: Thread,
+    all = this.store.listThreads(),
+    currentThreadId?: string,
+  ) {
     // A team shows what its members wait for, as the project's page does.
     const members = all.filter((m) => m.parentId === t.id);
     const asking = [t, ...members].some((m) => m.status === "waiting");
@@ -356,6 +411,7 @@ export class Coordinators {
     return {
       id: t.id,
       title: t.title,
+      ...(currentThreadId && t.id === currentThreadId ? { current: true } : {}),
       state: t.held
         ? "en file"
         : { waiting: "en attente", running: "en cours", idle: "inactif", resolved: "résolu" }[
@@ -393,8 +449,10 @@ export class Coordinators {
   }
 
   /**
-   * One tool call of a coordinator, from its bridge. The token says which project it may
-   * touch: a thread of another project, a team's member or a coordinator is never reached.
+   * One tool call from a thread's or coordinator's bridge. The token fixes both its project
+   * and its role: another project, a team's sub-member, a coordinator, or any tool outside
+   * the thread's role is never reached. A lock changes nothing here: the project's agents
+   * keep working behind it, and what they read stays in threads the lock hides.
    */
   async coordinatorCall(
     token: string,
@@ -403,12 +461,30 @@ export class Coordinators {
     signal?: AbortSignal,
   ): Promise<unknown> {
     const scope = this.tokens.get(token);
-    const coordinator = scope && this.store.getThread(scope.threadId);
-    if (!scope || coordinator?.kind !== "coordinator") throw new CoordinatorRefused();
-    if (!COORDINATOR_TOOLS.some((t) => t.name === tool)) throw new Error(`Outil inconnu : ${tool}`);
-    // It acts for the message it is answering: a bridge left behind changes nothing later.
-    if (WRITES.has(tool) && !this.host.running(coordinator.id))
-      throw new Error("Le coordinateur n'agit que pendant qu'il répond à l'utilisateur.");
+    const caller = scope && this.store.getThread(scope.threadId);
+    if (!scope || !caller || caller.projectId !== scope.projectId) throw new CoordinatorRefused();
+    const mode = bridgeModeOf(caller);
+    if (mode !== scope.mode) throw new CoordinatorRefused();
+    const allowed = toolsForBridgeMode(mode);
+    if (!allowed.some((t) => t.name === tool)) {
+      if (COORDINATOR_TOOLS.some((t) => t.name === tool)) {
+        throw new Error(
+          mode === "readonly"
+            ? `L'outil « ${tool} » n'est pas autorisé en lecture seule.`
+            : `L'outil « ${tool} » est réservé au coordinateur.`,
+        );
+      }
+      throw new Error(`Outil inconnu : ${tool}`);
+    }
+    // State changes only happen while the calling thread is answering: a stray bridge does nothing.
+    if (WRITES.has(tool) && !this.host.running(caller.id)) {
+      throw new Error(
+        mode === "coordinator"
+          ? "Le coordinateur n'agit que pendant qu'il répond à l'utilisateur."
+          : "Cet outil n'est utilisable que pendant une réponse en cours.",
+      );
+    }
+    const coordinator = caller;
     const input =
       typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
     const str = (key: string, max: number) => {
@@ -421,6 +497,14 @@ export class Coordinators {
     const need = (key: string, max: number) => {
       const value = str(key, max);
       if (!value) throw new Error(`« ${key} » est requis.`);
+      return value;
+    };
+    const int = (key: string, min: number, max: number) => {
+      const value = input[key];
+      if (value === undefined || value === null) return undefined;
+      if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > max) {
+        throw new Error(`« ${key} » doit être un entier entre ${min} et ${max}.`);
+      }
       return value;
     };
     const mine = () =>
@@ -436,23 +520,92 @@ export class Coordinators {
     switch (tool) {
       case "list_threads": {
         const all = this.store.listThreads();
-        return mine().map((t) => this.threadForCoordinator(t, all));
+        return mine().map((t) => this.threadForCoordinator(t, all, scope.threadId));
+      }
+      case "search_threads": {
+        const query = need("query", 200);
+        const limit = int("limit", 1, SEARCH_MAX_LIMIT) ?? SEARCH_DEFAULT_LIMIT;
+        const includeCurrent = input.include_current === true;
+        if (input.include_current !== undefined && typeof input.include_current !== "boolean") {
+          throw new Error("« include_current » doit être un booléen.");
+        }
+        const excludeId = includeCurrent ? undefined : scope.threadId;
+        const all = this.store.listThreads();
+        const threads = mine().filter((t) => !excludeId || t.id !== excludeId);
+        const byId = new Map(threads.map((t) => [t.id, t]));
+        const grouped = new Map<
+          string,
+          { thread: Thread; matches: { from: "utilisateur" | "agent"; snippet: string }[] }
+        >();
+        // The store gives each thread its own few matches: a thread that names the words
+        // often takes no other thread's place.
+        for (const hit of this.store.searchProjectItems(
+          scope.projectId,
+          query,
+          limit,
+          SEARCH_SNIPPETS_PER_THREAD,
+          excludeId,
+        )) {
+          const thread = byId.get(hit.threadId);
+          if (!thread) continue;
+          let entry = grouped.get(thread.id);
+          if (!entry) {
+            if (grouped.size >= limit) continue;
+            entry = { thread, matches: [] };
+            grouped.set(thread.id, entry);
+          }
+          if (entry.matches.length < SEARCH_SNIPPETS_PER_THREAD) {
+            entry.matches.push({
+              from: hit.kind === "agent" ? "agent" : "utilisateur",
+              snippet: hit.snippet,
+            });
+          }
+        }
+        if (grouped.size < limit) {
+          const terms = [...new Set(fold(query).trim().split(/\s+/).filter(Boolean))].slice(0, 6);
+          const byRecent = [...threads].sort((a, b) => b.updatedAt - a.updatedAt);
+          for (const thread of byRecent) {
+            if (grouped.size >= limit) break;
+            if (grouped.has(thread.id)) continue;
+            const hay = fold(`${thread.title} ${thread.summary ?? ""}`);
+            if (terms.length && terms.every((term) => hay.includes(term))) {
+              grouped.set(thread.id, { thread, matches: [] });
+            }
+          }
+        }
+        return [...grouped.values()].map(({ thread, matches }) => {
+          const info = this.threadForCoordinator(thread, all, scope.threadId);
+          return {
+            thread_id: thread.id,
+            title: info.title,
+            state: info.state,
+            ...(info.current ? { current: true } : {}),
+            ...(info.branch ? { branch: info.branch } : {}),
+            updated: info.updated,
+            matches,
+          };
+        });
       }
       case "read_thread": {
         const thread = one();
-        const messages = this.host
-          .items(thread.id)
-          .flatMap((i) =>
-            (i.kind === "user" && !i.byTeam) || i.kind === "agent"
-              ? [
-                  {
-                    from: i.kind === "agent" ? "agent" : i.from ? "coordinateur" : "utilisateur",
-                    text: i.text.length > READ_CLIP ? `${i.text.slice(0, READ_CLIP)}…` : i.text,
-                  },
-                ]
-              : [],
-          )
-          .slice(-READ_MESSAGES);
+        const limit = int("limit", 1, MAX_READ_MESSAGES) ?? READ_MESSAGES;
+        const offset = int("offset", 0, 100_000);
+        const allMessages = this.host.items(thread.id).flatMap((i) =>
+          (i.kind === "user" && !i.byTeam) || i.kind === "agent"
+            ? [
+                {
+                  from: i.kind === "agent" ? "agent" : i.from ? "coordinateur" : "utilisateur",
+                  text: i.text.length > READ_CLIP ? `${i.text.slice(0, READ_CLIP)}…` : i.text,
+                },
+              ]
+            : [],
+        );
+        const start =
+          offset !== undefined
+            ? Math.min(offset, allMessages.length)
+            : Math.max(0, allMessages.length - limit);
+        const end = Math.min(allMessages.length, start + limit);
+        const messages = allMessages.slice(start, end);
         const team = new Set([
           thread.id,
           ...this.store
@@ -465,9 +618,78 @@ export class Coordinators {
           .filter((r) => team.has(r.threadId))
           .map((r) => r.title);
         return {
-          ...this.threadForCoordinator(thread),
+          ...this.threadForCoordinator(thread, undefined, scope.threadId),
           ...(asks.length ? { asks_permission_for: asks } : {}),
+          total_messages: allMessages.length,
+          ...(start > 0 || end < allMessages.length ? { showing_from: start } : {}),
           last_messages: messages,
+        };
+      }
+      case "read_memory": {
+        const record = this.store.getProjectMemory(scope.projectId);
+        return record.text
+          ? {
+              memory: record.text,
+              ...(record.updatedAt ? { updated: new Date(record.updatedAt).toISOString() } : {}),
+              bytes: utf8Bytes(record.text),
+              max_bytes: MAX_PROJECT_MEMORY,
+            }
+          : {
+              memory: "",
+              empty: true,
+              bytes: 0,
+              max_bytes: MAX_PROJECT_MEMORY,
+            };
+      }
+      case "save_memory": {
+        const saveMode = str("mode", 20) ?? "append";
+        if (!(MEMORY_MODES as readonly string[]).includes(saveMode)) {
+          throw new Error(`« mode » doit être l'un de : ${MEMORY_MODES.join(", ")}.`);
+        }
+        const raw = input.content;
+        if (typeof raw !== "string") throw new Error("« content » doit être un texte.");
+        const normalized = raw.replace(/\r\n/g, "\n").trim();
+        if (saveMode === "append" && !normalized) {
+          throw new Error("« content » est requis en mode append.");
+        }
+        const written = () => {
+          const current = this.store.getProjectMemory(scope.projectId).text;
+          const next =
+            saveMode === "replace"
+              ? normalized
+              : current
+                ? `${current}\n${normalized}`
+                : normalized;
+          if (utf8Bytes(next) > MAX_PROJECT_MEMORY) {
+            throw new Error(
+              `La mémoire du projet dépasserait ${MAX_PROJECT_MEMORY} octets : lis-la avec read_memory puis condense-la avec mode « replace ».`,
+            );
+          }
+          return next;
+        };
+        // What cannot be saved is refused before the user is asked anything.
+        written();
+        // Outside full access the user agrees to what is written. Asked here rather than left
+        // to the agent, which may call its tools without asking first; the coordinator acts
+        // on its own, as for its other tools.
+        if (mode !== "coordinator" && caller.permissionMode !== "full") {
+          const agreed = await this.host.confirmMemoryWrite(
+            caller.id,
+            normalized,
+            saveMode === "replace",
+            signal,
+          );
+          if (!agreed) {
+            throw new Error("L'utilisateur a refusé d'enregistrer dans la mémoire du projet.");
+          }
+        }
+        // The memory may have changed while the user was deciding.
+        const saved = this.store.setProjectMemory(scope.projectId, written());
+        return {
+          saved: true,
+          empty: !saved.text,
+          bytes: utf8Bytes(saved.text),
+          max_bytes: MAX_PROJECT_MEMORY,
         };
       }
       case "open_thread": {

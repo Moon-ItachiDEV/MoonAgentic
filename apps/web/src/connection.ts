@@ -206,6 +206,7 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
                                   : T extends
                                         | "project.setup"
                                         | "project.saveRules"
+                                        | "project.saveMemory"
                                         | "project.linkClaude"
                                         | "project.saveCommand"
                                         | "project.removeCommand"

@@ -106,6 +106,15 @@ describe("a project's settings", () => {
     expect(readFileSync(path.join(repo, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
     if (shots) await page.screenshot({ path: path.join(shots, "projet-consignes.png") });
 
+    await dialog.getByRole("tab", { name: "Mémoire" }).click();
+    await dialog
+      .getByLabel("Mémoire partagée du projet")
+      .fill("- Toujours lancer pnpm test avant une PR.");
+    await dialog.getByRole("button", { name: "Enregistrer" }).click();
+    await dialog.getByText("Enregistré").waitFor();
+    // Shared memory lives in MoonAgentic, not git, so no uncommitted warning is shown on this tab.
+    expect(await dialog.getByText("Pas encore commité").count()).toBe(0);
+
     await dialog.getByRole("tab", { name: "Commandes" }).click();
     await dialog.getByRole("button", { name: "Nouvelle commande" }).click();
     await dialog.getByLabel("Nom").fill("deploy");
