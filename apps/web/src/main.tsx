@@ -47,16 +47,13 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { AppFailed, ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { startUpdateBanner } from "./components/UpdateBanner.tsx";
-import { installGlobalErrorHandlers } from "./diagnostics.ts";
+import { installGlobalErrorHandlers, reportUiError } from "./diagnostics.ts";
 import { startNotifications } from "./notifications.ts";
 import { startPush } from "./push.ts";
 import { applyTheme } from "./theme.ts";
 
 installGlobalErrorHandlers();
 applyTheme();
-startNotifications();
-startPush();
-startUpdateBanner();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
@@ -65,3 +62,17 @@ createRoot(document.getElementById("root")!).render(
     </ErrorBoundary>
   </StrictMode>,
 );
+
+// What runs beside the page never keeps it from showing: a browser missing one of these
+// (an iPhone app on the home screen has its own) loses that part alone.
+for (const [name, start] of [
+  ["notifications", startNotifications],
+  ["push", startPush],
+  ["update", startUpdateBanner],
+] as const) {
+  try {
+    start();
+  } catch (error) {
+    reportUiError(`start.${name}`, error);
+  }
+}
