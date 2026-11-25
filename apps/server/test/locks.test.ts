@@ -768,7 +768,7 @@ describe("a project's settings", () => {
   });
 
   it("writes its AGENTS.md from the app, but nothing of a locked project", async () => {
-    const { dir, hub, client, secret, open } = setup();
+    const { dir, store, hub, client, secret, open } = setup();
     await hub.handle(client, {
       type: "project.saveRules",
       requestId: "w1",
@@ -779,6 +779,17 @@ describe("a project's settings", () => {
       requestId: "w1",
       projectId: open,
       setup: { rules: { text: "Règles partagées", exists: true }, claude: "missing" },
+    });
+    await hub.handle(client, {
+      type: "project.saveMemory",
+      requestId: "m1",
+      projectId: open,
+      text: "- Utiliser pnpm test",
+    });
+    expect(client.last("projectSetup")).toMatchObject({
+      requestId: "m1",
+      projectId: open,
+      setup: { memory: { text: "- Utiliser pnpm test" } },
     });
     await hub.handle(client, { type: "lock.setPin", requestId: "r1", pin: "123456" });
     await hub.handle(client, { type: "lock.project", requestId: "r2", projectId: secret });
@@ -793,6 +804,15 @@ describe("a project's settings", () => {
         text: "Non",
       }),
     ).rejects.toThrow(/verrouillé/);
+    await expect(
+      hub.handle(client, {
+        type: "project.saveMemory",
+        requestId: "m2",
+        projectId: secret,
+        text: "Secret",
+      }),
+    ).rejects.toThrow(/verrouillé/);
     expect(existsSync(path.join(dir, "secret", "AGENTS.md"))).toBe(false);
+    expect(store.getProjectMemory(secret).text).toBe("");
   });
 });

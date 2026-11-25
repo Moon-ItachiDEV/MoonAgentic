@@ -257,6 +257,8 @@ export type ProjectColor = (typeof PROJECT_COLORS)[number];
 export const MAX_PROJECT_ICON = 16;
 /** At most this many bytes for a setup file edited from the app (AGENTS.md, a skill…). */
 export const MAX_SETUP_FILE = 256 * 1024;
+/** At most this many bytes for a project's shared memory notes (injected on fresh sessions). */
+export const MAX_PROJECT_MEMORY = 16 * 1024;
 
 /** A skill kept in the project, with its text, for its settings. */
 export interface ProjectSkill {
@@ -269,8 +271,9 @@ export interface ProjectSkill {
 }
 
 /**
- * What a project gives its agents, read from its folder for its settings: the shared
- * instructions (`AGENTS.md`), whether Claude Code reads them too, its commands and skills.
+ * What a project gives its agents, read from its folder and MoonAgentic for its settings:
+ * the shared instructions (`AGENTS.md`), whether Claude Code reads them too, its shared
+ * memory notes, its commands and skills.
  */
 export interface ProjectSetup {
   /** `AGENTS.md` at the project's root; empty while there is none. */
@@ -285,6 +288,14 @@ export interface ProjectSetup {
    * `AGENTS.md` (or a link to it), or a separate file.
    */
   claude: "missing" | "imports" | "separate";
+  /**
+   * Durable notes shared across every agent and every worktree of the project, kept in
+   * MoonAgentic rather than in git. Empty while nothing has been noted yet.
+   */
+  memory: {
+    text: string;
+    updatedAt?: number;
+  };
   commands: ProjectCommand[];
   skills: ProjectSkill[];
   /**
@@ -1430,6 +1441,11 @@ const setupText = z
   .string()
   .max(MAX_SETUP_FILE)
   .refine((t) => utf8Bytes(t) <= MAX_SETUP_FILE, "Texte trop long.");
+/** A project's shared memory notes, within {@link MAX_PROJECT_MEMORY} bytes once in UTF-8. */
+const memoryText = z
+  .string()
+  .max(MAX_PROJECT_MEMORY)
+  .refine((t) => utf8Bytes(t) <= MAX_PROJECT_MEMORY, "Mémoire trop longue (16 Ko max).");
 /** A command's or a skill's name: lower case, digits, `-` and `_`, as a file name too. */
 const setupName = z
   .string()
@@ -1874,6 +1890,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
     requestId: id,
     projectId: id,
     text: setupText,
+  }),
+  /** Saves the project's shared memory notes, kept in MoonAgentic across agents and worktrees. */
+  z.object({
+    type: z.literal("project.saveMemory"),
+    requestId: id,
+    projectId: id,
+    text: memoryText,
   }),
   /** Has Claude Code read `AGENTS.md` too: `CLAUDE.md` imports it, made if need be. */
   z.object({ type: z.literal("project.linkClaude"), requestId: id, projectId: id }),

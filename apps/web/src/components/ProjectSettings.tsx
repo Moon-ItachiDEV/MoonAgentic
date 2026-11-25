@@ -13,16 +13,18 @@ import {
   fits,
   ICON_PICKS,
   iconProblem,
+  memoryFits,
   oneLine,
   skillProblem,
 } from "../project-setup.ts";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 
-type Tab = "look" | "rules" | "commands" | "skills";
+type Tab = "look" | "rules" | "memory" | "commands" | "skills";
 const TABS: [Tab, string][] = [
   ["look", "Apparence"],
   ["rules", "Consignes"],
+  ["memory", "Mémoire"],
   ["commands", "Commandes"],
   ["skills", "Skills"],
 ];
@@ -41,8 +43,8 @@ const COLOR_NAME: Record<ProjectColor, string> = {
 const why = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
- * A project's settings: its icon and tint, and what it gives its agents, read from and
- * written to its own folder: `AGENTS.md`, its `/` commands and its skills.
+ * A project's settings: its icon and tint, its shared memory, and what it gives its agents,
+ * read from and written to its own folder: `AGENTS.md`, its `/` commands and its skills.
  */
 export function ProjectSettings(props: { project: Project; onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("look");
@@ -97,12 +99,14 @@ export function ProjectSettings(props: { project: Project; onClose: () => void }
           <p className="ps-quiet">Lecture du dossier du projet…</p>
         ) : tab === "rules" ? (
           <RulesTab setup={setup} projectId={projectId} change={change} />
+        ) : tab === "memory" ? (
+          <MemoryTab setup={setup} projectId={projectId} change={change} />
         ) : tab === "commands" ? (
           <CommandsTab setup={setup} projectId={projectId} change={change} onConfirm={setConfirm} />
         ) : (
           <SkillsTab setup={setup} projectId={projectId} change={change} onConfirm={setConfirm} />
         )}
-        {tab !== "look" && setup?.uncommitted && (
+        {tab !== "look" && tab !== "memory" && setup?.uncommitted && (
           <p className="ps-note">
             Pas encore commité : <span className="mono">{setup.uncommitted.join(", ")}</span>. Un
             fil sur sa propre branche part du dernier commit et ne le voit pas encore.
@@ -124,6 +128,7 @@ type SetupRequest = Extract<
   {
     type:
       | "project.saveRules"
+      | "project.saveMemory"
       | "project.linkClaude"
       | "project.saveCommand"
       | "project.removeCommand"
@@ -310,6 +315,74 @@ function RulesTab(props: { setup: ProjectSetup; projectId: string; change: Chang
         )}
       </div>
       {action && props.setup.rules.exists && <small className="ps-quiet">{action}</small>}
+      {error && <p className="error">{error}</p>}
+    </div>
+  );
+}
+
+function MemoryTab(props: { setup: ProjectSetup; projectId: string; change: Change }) {
+  const saved = props.setup.memory.text;
+  const [text, setText] = useState(saved);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [done, setDone] = useState(false);
+  const save = async (next: string) => {
+    setBusy(true);
+    setError(undefined);
+    setDone(false);
+    try {
+      await props.change({
+        type: "project.saveMemory",
+        requestId: newId(),
+        projectId: props.projectId,
+        text: next,
+      });
+      setText(next.replace(/\r\n/g, "\n").trim());
+      setDone(true);
+    } catch (e) {
+      setError(why(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="ps-body">
+      <p className="ps-quiet">
+        Notes durables gardées par MoonAgentic (hors git), partagées aussitôt entre tous les agents,
+        fils et branches du projet. Les agents les reçoivent au démarrage d'une session et peuvent
+        les compléter.
+      </p>
+      <textarea
+        className="ps-text mono"
+        aria-label="Mémoire partagée du projet"
+        value={text}
+        placeholder={
+          "- Décisions d'architecture, conventions ou pièges connus\n- Commandes de build ou de test validées"
+        }
+        spellCheck={false}
+        onChange={(e) => {
+          setText(e.target.value);
+          setDone(false);
+        }}
+      />
+      {!memoryFits(text) && <small className="ps-err">Mémoire trop longue (16 Ko max).</small>}
+      <div className="ps-acts">
+        {done && text.replace(/\r\n/g, "\n").trim() === saved && (
+          <span className="ps-ok">Enregistré</span>
+        )}
+        {saved && (
+          <button className="btn sm" disabled={busy} onClick={() => void save("")}>
+            Vider
+          </button>
+        )}
+        <button
+          className="btn pri sm"
+          disabled={busy || text.replace(/\r\n/g, "\n").trim() === saved || !memoryFits(text)}
+          onClick={() => void save(text)}
+        >
+          Enregistrer
+        </button>
+      </div>
       {error && <p className="error">{error}</p>}
     </div>
   );

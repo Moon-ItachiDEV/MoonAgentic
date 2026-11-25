@@ -6,14 +6,20 @@
 import { createInterface } from "node:readline";
 import {
   BRIDGE_BOOTSTRAP_ENV,
+  BRIDGE_MODE_ENV,
   BRIDGE_URL_ENV,
+  type BridgeMode,
   COORDINATOR_PATH,
-  COORDINATOR_TOOLS,
+  toolsForBridgeMode,
 } from "./coordinator-tools.ts";
 
 const url = process.env[BRIDGE_URL_ENV];
 const bootstrap = process.env[BRIDGE_BOOTSTRAP_ENV];
+const rawMode = process.env[BRIDGE_MODE_ENV];
 delete process.env[BRIDGE_BOOTSTRAP_ENV];
+delete process.env[BRIDGE_MODE_ENV];
+const mode: BridgeMode = rawMode === "thread" || rawMode === "readonly" ? rawMode : "coordinator";
+const tools = toolsForBridgeMode(mode);
 
 /** The token of this bridge alone, asked for once with what it was started with. */
 const access: Promise<string | undefined> =
@@ -104,11 +110,11 @@ lines.on("line", (line) => {
       reply(id, {});
       return;
     case "tools/list":
-      reply(id, { tools: COORDINATOR_TOOLS });
+      reply(id, { tools });
       return;
     case "tools/call": {
       const name = typeof params.name === "string" ? params.name : "";
-      if (!COORDINATOR_TOOLS.some((t) => t.name === name)) {
+      if (!tools.some((t) => t.name === name)) {
         refuse(id, -32602, `Outil inconnu : ${name}`);
         return;
       }

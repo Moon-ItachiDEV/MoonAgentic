@@ -231,7 +231,10 @@ describe("a project's coordinator", () => {
     expect((await post(token, { tool: "project.remove" })).status).toBe(400);
     expect(COORDINATOR_TOOLS.map((t) => t.name)).toEqual([
       "list_threads",
+      "search_threads",
       "read_thread",
+      "read_memory",
+      "save_memory",
       "open_thread",
       "start_team",
       "message_thread",

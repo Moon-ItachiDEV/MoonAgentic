@@ -108,9 +108,9 @@ import {
 import { type BranchOwner, deleteMergedBranches, projectBranches } from "./branches.ts";
 import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { Coordinators, TEAM_PRESETS_SETTING } from "./coordinator.ts";
-import { historyBefore } from "./history.ts";
+import { historyBefore, projectMemoryContext } from "./history.ts";
 import { cardText, Planner } from "./planner.ts";
-import { COORDINATOR_TOOLS } from "./coordinator-tools.ts";
+import { COORDINATOR_TOOLS, PROJECT_READ_TOOLS } from "./coordinator-tools.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
 import { diffText, shipTarget, Teams, teamStatus } from "./team.ts";
@@ -249,6 +249,9 @@ const LOW_EFFORT = /^(low|bas)$/i;
  */
 const OWN_TOOL = new RegExp(
   `^(?:Run )?mcp_{1,2}moonagentic_{1,2}(?:${COORDINATOR_TOOLS.map((t) => t.name).join("|")})$`,
+);
+const OWN_READ_TOOL = new RegExp(
+  `^(?:Run )?mcp_{1,2}moonagentic_{1,2}(?:${PROJECT_READ_TOOLS.map((t) => t.name).join("|")})$`,
 );
 
 /** A known, open pull request is asked about again this often. */
@@ -563,6 +566,7 @@ export class Hub {
       broadcast: (m) => this.broadcast(m),
       checkAgent: (id) => void this.agents.launch(id),
       removing: (id) => this.removingProjects.has(id),
+      isLocked: (id) => this.locks.isLocked(id),
       running: (id) => this.turns.has(id),
       leadContext: (id) => this.leadContext(id),
       updateThread: (id, patch) => this.updateThread(id, patch),
@@ -1138,6 +1142,7 @@ export class Hub {
       }
       case "project.setup":
       case "project.saveRules":
+      case "project.saveMemory":
       case "project.linkClaude":
       case "project.saveCommand":
       case "project.removeCommand":
@@ -1152,6 +1157,9 @@ export class Hub {
         switch (message.type) {
           case "project.saveRules":
             saveRules(dir, message.text);
+            break;
+          case "project.saveMemory":
+            this.store.setProjectMemory(project.id, message.text);
             break;
           case "project.linkClaude":
             linkClaude(dir);
@@ -1173,7 +1181,11 @@ export class Hub {
           type: "projectSetup",
           requestId: message.requestId,
           projectId: project.id,
-          setup: await readSetup(dir, !!this.withGit(project).git),
+          setup: await readSetup(
+            dir,
+            !!this.withGit(project).git,
+            this.store.getProjectMemory(project.id),
+          ),
         });
         return;
       }
@@ -3473,8 +3485,13 @@ export class Hub {
         this.updateThread(thread.id, { status: "idle" });
         return;
       }
-      // A new session knows nothing of the thread: after a hand-off, a step back, or when
-      // the agent could not resume its earlier session.
+      // A new session knows nothing of the project's shared memory or earlier thread messages:
+      // send the shared memory (when non-empty) and the prior conversation (after a hand-off,
+      // a step back, or when the agent could not resume its earlier session) once on turn 1.
+      const memory =
+        !continuing && session.fresh
+          ? projectMemoryContext(this.store.getProjectMemory(thread.projectId).text)
+          : undefined;
       const history =
         !continuing && session.fresh
           ? historyBefore(
@@ -3482,11 +3499,15 @@ export class Hub {
               itemId,
               this.catalog.name,
               (id) => this.attachments.find(thread.id, id)?.file,
+              this.coordinatorUrl && !thread.parentId && thread.kind !== "coordinator"
+                ? { threadId: thread.id }
+                : undefined,
             )
           : undefined;
+      const preamble = [memory, history].filter(Boolean).join("\n\n") || undefined;
       const said = text.trim() || !images.length ? text : IMAGES_ONLY;
       const prompt = context ? `${context}\n\n${said}` : said;
-      const stopReason = await session.prompt(prompt, history, [
+      const stopReason = await session.prompt(prompt, preamble, [
         ...this.linksFor(session, text),
         ...this.attachments.blocks(thread.id, images, !!session.promptCapabilities.image),
       ]);
@@ -3705,10 +3726,9 @@ export class Hub {
     let ready = false;
     const coordinatorMcp = this.coordinators.coordinatorServer(thread);
     const catalogMcp = mcpServersFor(await this.catalog.mcpServers(), thread);
-    const userMcp =
-      thread.kind === "coordinator"
-        ? catalogMcp.filter((s) => s.name.trim().toLowerCase() !== RESERVED_MCP_NAME)
-        : catalogMcp;
+    const userMcp = coordinatorMcp.length
+      ? catalogMcp.filter((s) => s.name.trim().toLowerCase() !== RESERVED_MCP_NAME)
+      : catalogMcp;
     const startedAt = Date.now();
     const session = await AgentSession.start({
       launch: this.agents.launch(thread.agentId),
@@ -3726,6 +3746,7 @@ export class Hub {
         elicit: (request, signal) => this.requestForm(thread.id, request, signal),
         onExit: (reason) => {
           if (!owns()) return;
+          this.coordinators.dropCoordinatorAccess(thread.id);
           this.pool.exited(thread.id);
           this.settlePermissions(thread.id);
           if (reason && !this.closed && !this.cancelled.has(thread.id)) {
@@ -4049,18 +4070,19 @@ export class Hub {
           ? REVIEWER_ALLOWED
           : undefined;
     const readOnlyDenied = !!allowed && !allowed.has(request.toolCall.kind ?? "");
-    // MoonAgentic's own tools are the coordinator's work, already limited by the server:
-    // asking the user before each one would make it useless.
+    // MoonAgentic's own tools are already limited by the server: coordinators may use all
+    // their tools, while regular and team threads auto-approve strictly read-only context tools
+    // (list_threads, search_threads, read_thread, read_memory); save_memory follows permissionMode.
     this.noteToolName(threadId, request.toolCall);
     // An agent that does not name the tool is taken at its title, for a call of no known kind:
     // never a change of files nor a command.
     const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
+    const ownPattern = thread.kind === "coordinator" ? OWN_TOOL : OWN_READ_TOOL;
     const own =
-      thread.kind === "coordinator" &&
       !!this.coordinatorUrl &&
       (named !== undefined
-        ? OWN_TOOL.test(named)
-        : OWN_TOOL.test(request.toolCall.title ?? "") &&
+        ? ownPattern.test(named)
+        : ownPattern.test(request.toolCall.title ?? "") &&
           (!request.toolCall.kind || request.toolCall.kind === "other"));
     if ((thread.permissionMode === "full" && !readOnlyDenied) || own) {
       const allow =

@@ -27,7 +27,7 @@ const MAX_WS_TICKETS = 256;
 const DEFAULT_RATE_WINDOW_MS = 60_000;
 const DEFAULT_MAX_AUTH_FAILURES = 20;
 const DEFAULT_MAX_API_REQUESTS = 240;
-const DEFAULT_MAX_COORDINATOR_REQUESTS = 120;
+const DEFAULT_MAX_COORDINATOR_REQUESTS = 240;
 const DEFAULT_MAX_WS_UPGRADES = 120;
 
 /** A fresh access token: long enough that it cannot be guessed. */
