@@ -112,8 +112,13 @@ const hostile = (app: string) =>
     ...APP_LINKS.map(([text, href]) => `<a href="${href.replace("APP", app)}">${text}</a>`),
     `[Ouvre ce lien pour rafraîchir](#token=jeton-pose-par-l-agent)`,
     `<svg width="200" height="40"><a href="https://exemple.invalid/x"><text y="20">Reconnecte-toi</text></a></svg>`,
+    // A piece of a formula carrying an address, which Safari and Firefox follow, and the
+    // app's own mark for a file, written by hand with a token after it.
+    `<math><mi href="${app}/#token=jeton-pose-par-l-agent">Formule</mi></math>`,
+    `<a href="#moon-file:notes.txt&amp;token=jeton-pose-par-l-agent">Ouvrir la pièce jointe</a>`,
     // And what an honest answer links to: a page of another site, a letter to write.
     `[La documentation](https://exemple.invalid/doc)`,
+    `[Le fichier modifié](src/app.ts)`,
     `<a href="mailto:equipe@exemple.invalid">Écrire à l'équipe</a>`,
   ].join("\n\n");
 
@@ -140,6 +145,8 @@ const look = (page: Page) =>
     return {
       classes: [...new Set(pieces.flatMap((e) => [...e.classList]))].filter((c) => !own.has(c)),
       named: pieces
+        // A file the app opens takes the focus and says what it is: set by the app itself.
+        .filter((e) => !e.matches(".md-file"))
         .flatMap((e) => [...e.attributes].map((a) => a.name))
         .filter((n) => /^(id|name|style|role|tabindex|data-state|aria-modal|open)$/.test(n)),
       dialogs: document.querySelectorAll(".md dialog").length,
@@ -164,6 +171,15 @@ const look = (page: Page) =>
       toApp: [...document.querySelectorAll<HTMLAnchorElement>(".md a[href]")].filter(
         (a) => new URL(a.href).origin === location.origin,
       ).length,
+      // Nothing but a link of the text carries an address: no drawing, no piece of a formula.
+      carried: pieces
+        .filter((e) => e.tagName !== "A" && e.localName !== "image")
+        .flatMap((e) => [...e.attributes].filter((a) => a.localName === "href"))
+        .map((a) => a.value),
+      // The files the app opens itself keep no address a browser could follow.
+      files: [...document.querySelectorAll(".md a.md-file")].map(
+        (a) => `${a.textContent}${a.hasAttribute("href") ? " (href)" : ""}`,
+      ),
       // Every link an answer keeps opens outside the app's own page.
       sameTab: [...document.querySelectorAll(".md a, .md area")].filter(
         (a) =>
@@ -184,6 +200,8 @@ const CLEAN = {
   rows: [true, true, true],
   links: ["https://exemple.invalid/doc", "mailto:equipe@exemple.invalid"],
   toApp: 0,
+  carried: [],
+  files: ["Ouvrir la pièce jointe", "Le fichier modifié"],
   sameTab: 0,
 };
 
@@ -224,6 +242,33 @@ describe("agent answers", () => {
     const doc = answer.getByRole("link", { name: "La documentation" });
     expect(await doc.getAttribute("target")).toBe("_blank");
     expect(await doc.getAttribute("rel")).toBe("noopener noreferrer");
+
+    // A file is opened by the app and by nothing else: a middle click, which opened the app
+    // in another tab at the address the link carried, now opens nothing.
+    const file = answer.getByRole("link", { name: "Le fichier modifié" });
+    for (const text of ["Ouvrir la pièce jointe", "Le fichier modifié"]) {
+      await answer.getByText(text).click({ button: "middle" });
+    }
+    expect(page.url()).toBe(thread);
+    expect(context.pages()).toHaveLength(1);
+    // It still reads as a link, and the app opens it on a click as on a key (the viewer says
+    // of this one that it only shows images, PDFs and pages: it is the viewer that matters).
+    const drawn = (link: typeof file) =>
+      link.evaluate((a) => {
+        const style = getComputedStyle(a);
+        return [style.color, style.textDecorationLine, style.cursor];
+      });
+    expect(await drawn(file)).toEqual(await drawn(doc));
+    const viewer = page.getByRole("dialog", { name: "app.ts" });
+    await file.click();
+    await viewer.waitFor();
+    await page.keyboard.press("Escape");
+    await expect.poll(() => viewer.count()).toBe(0);
+    await file.focus();
+    await page.keyboard.press("Enter");
+    await viewer.waitFor();
+    await page.keyboard.press("Escape");
+    await expect.poll(() => viewer.count()).toBe(0);
     await page.close();
   });
 

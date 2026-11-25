@@ -242,7 +242,8 @@ function leadsOut(href: string): boolean {
 DOMPurify.addHook("afterSanitizeAttributes", (node) => {
   // A file of the computer: shown and opened in the app, from an address the server gives.
   const local = markedRef(node.getAttribute(node.tagName === "IMG" ? "src" : "href"));
-  // Only what the Markdown itself marked is opened so: never an attribute the answer wrote.
+  // Only what carries the mark is opened so, never a `data-local` the answer wrote. An answer
+  // can write the mark itself in its HTML: it then names a file, as its Markdown would.
   node.removeAttribute("data-local");
   node.classList.remove("md-img", "md-file");
   if (node.tagName === "IMG") {
@@ -260,40 +261,47 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
     node.setAttribute("data-local", local);
     node.setAttribute("title", local);
     node.classList.add("md-file");
+    // Opened by the app, on a click or a key: it keeps no address of its own. With one, a
+    // middle click, a long press or « open in a new tab » opened the app itself there, and
+    // an answer writes what follows the mark.
+    node.removeAttribute("href");
+    node.setAttribute("tabindex", "0");
+    node.setAttribute("role", "link");
     node.removeAttribute("target");
     node.removeAttribute("rel");
     return;
   }
-  // A link drawn in a picture, or an area of one: only the links of the text are opened
-  // outside the app, so these lead nowhere rather than take the app's own page elsewhere.
-  if (node.localName === "area" || (node.localName === "a" && node.tagName !== "A")) {
-    node.removeAttribute("href");
-    node.removeAttribute("xlink:href");
+  // Only the links of the text lead anywhere. What else can carry an address (a link drawn
+  // in a picture, an area of one, a piece of a formula, which some browsers follow) leads
+  // nowhere rather than take the app's own page elsewhere. A picture in a drawing keeps its
+  // source: it is shown, not followed.
+  if (node.tagName !== "A") {
+    if (node.localName !== "image") {
+      node.removeAttribute("href");
+      node.removeAttribute("xlink:href");
+    }
     return;
   }
-  if (node.tagName === "A") {
-    // A link to the app itself leads nowhere, an answer having neither anchors nor pages of
-    // its own there: followed, it would open the app at an address of the answer's choosing,
-    // where a token or a pairing code is read.
-    if (!leadsOut(node.getAttribute("href") ?? "")) {
-      node.removeAttribute("href");
-      node.removeAttribute("target");
-      node.removeAttribute("rel");
-      return;
-    }
-    node.setAttribute("target", "_blank");
-    node.setAttribute("rel", "noopener noreferrer");
-    // A link to a pull request is drawn as GitHub draws it: its icon, then its number.
-    const pr = pullRequestUrl(node.getAttribute("href") ?? "");
-    node.classList.remove("prchip");
-    node.removeAttribute("data-pr");
-    node.removeAttribute("data-state");
-    if (pr) {
-      node.classList.add("prchip");
-      node.setAttribute("data-pr", pr.url);
-      // A bare address is long and says less than the number it ends with.
-      if (node.textContent?.trim() === node.getAttribute("href"))
-        node.textContent = `#${pr.number}`;
-    }
+  // A link to the app itself leads nowhere, an answer having neither anchors nor pages of
+  // its own there: followed, it would open the app at an address of the answer's choosing,
+  // where a token or a pairing code is read.
+  if (!leadsOut(node.getAttribute("href") ?? "")) {
+    node.removeAttribute("href");
+    node.removeAttribute("target");
+    node.removeAttribute("rel");
+    return;
+  }
+  node.setAttribute("target", "_blank");
+  node.setAttribute("rel", "noopener noreferrer");
+  // A link to a pull request is drawn as GitHub draws it: its icon, then its number.
+  const pr = pullRequestUrl(node.getAttribute("href") ?? "");
+  node.classList.remove("prchip");
+  node.removeAttribute("data-pr");
+  node.removeAttribute("data-state");
+  if (pr) {
+    node.classList.add("prchip");
+    node.setAttribute("data-pr", pr.url);
+    // A bare address is long and says less than the number it ends with.
+    if (node.textContent?.trim() === node.getAttribute("href")) node.textContent = `#${pr.number}`;
   }
 });
