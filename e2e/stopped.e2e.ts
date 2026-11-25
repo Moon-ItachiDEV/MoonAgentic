@@ -106,12 +106,15 @@ describe("agent stopped mid-turn", () => {
     await page.getByRole("button", { name: "Plus", exact: true }).click();
     await page.getByRole("menuitemradio", { name: /Démo rapide/ }).click();
     await page.keyboard.press("Escape");
+    // The composer folds once the focus is out of it, its model with it: it is opened to read it.
+    await composer.click();
     await expect.poll(() => chip.textContent()).toContain("Démo rapide");
 
     await card.getByRole("button", { name: "Reprendre" }).click();
     await card.waitFor({ state: "detached", timeout: 15_000 });
     await page.getByText("Tu as été interrompu : reprends là où tu t'es arrêté.").waitFor();
     // A new session took the thread up, with the model picked after the stop.
+    await composer.click();
     expect(await chip.textContent()).toContain("Démo rapide");
     if (shots) {
       await page.waitForTimeout(400);

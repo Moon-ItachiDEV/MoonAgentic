@@ -63,7 +63,10 @@ afterAll(async () => {
   }
 });
 
-/** The notifications this site has on screen, as the browser lists them. */
+/**
+ * The notifications this site has on screen, as the browser lists them. Never read while one
+ * may be on its way: see `COUNT`.
+ */
 const shown = (page: Page) =>
   page.evaluate(async () => {
     const registration = await navigator.serviceWorker.getRegistration();
@@ -83,6 +86,39 @@ const inFront = (page: Page, yes: boolean) =>
 const waiting = async (page: Page) =>
   (await shown(page)).filter((n) => n.title === "Attend ta réponse");
 
+/**
+ * Chromium forgets a notification for good when its list is read while that notification is
+ * being shown: it is on screen, and no list ever names it again. A test that reads the list
+ * again and again until the notification is there would, now and then, wait for one that was
+ * shown. So the page counts the notifications it shows, and the list is read once it has
+ * shown the one awaited.
+ */
+const COUNT = `(() => {
+  const notices = (window.__notices = { shown: 0, showing: 0 });
+  const show = ServiceWorkerRegistration.prototype.showNotification;
+  ServiceWorkerRegistration.prototype.showNotification = function (...args) {
+    notices.showing += 1;
+    return show.apply(this, args).then(
+      () => {
+        notices.showing -= 1;
+        notices.shown += 1;
+      },
+      (error) => {
+        notices.showing -= 1;
+        throw error;
+      },
+    );
+  };
+})();`;
+/** How many notifications the page has shown since it was loaded; -1 while one is on its way. */
+const shownCount = (page: Page) =>
+  page.evaluate(() => {
+    const { shown, showing } = (
+      window as unknown as { __notices: { shown: number; showing: number } }
+    ).__notices;
+    return showing ? -1 : shown;
+  });
+
 async function pickDemoAgent(page: Page) {
   await pickAgent(page);
 }
@@ -91,6 +127,7 @@ describe("browser notifications", () => {
   it("are asked for in the settings, then tell when a thread waits for an answer", async () => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 820 } });
     await context.addInitScript(FOCUS);
+    await context.addInitScript(COUNT);
     const page = await context.newPage();
     const errors: Error[] = [];
     page.on("pageerror", (err) => errors.push(err));
@@ -116,7 +153,8 @@ describe("browser notifications", () => {
     // The trial button shows a real notification.
     await page.getByRole("button", { name: "Essayer" }).click();
     await page.getByRole("button", { name: "Envoyée" }).waitFor();
-    await expect.poll(async () => (await shown(page)).map((n) => n.title)).toEqual(["MoonAgentic"]);
+    await expect.poll(() => shownCount(page)).toBe(1);
+    expect((await shown(page)).map((n) => n.title)).toEqual(["MoonAgentic"]);
 
     // With MoonAgentic in front of the user, a thread that asks for an agreement shows no
     // notification, even from another screen of the app: the app itself says it.
@@ -129,6 +167,7 @@ describe("browser notifications", () => {
     await page.goBack();
     const allow = page.getByRole("button", { name: "Autoriser" });
     await allow.waitFor();
+    expect(await shownCount(page)).toBe(1);
     expect(await waiting(page)).toEqual([]);
     await allow.click();
 
@@ -141,9 +180,8 @@ describe("browser notifications", () => {
     await composer.fill("Corrige encore");
     await composer.press("Enter");
     // A new thread starts an agent of its own first, which a busy CI machine takes its time over.
-    await expect
-      .poll(() => waiting(page), { timeout: 20_000 })
-      .toMatchObject([{ body: "Corrige encore" }]);
+    await expect.poll(() => shownCount(page), { timeout: 20_000 }).toBe(2);
+    expect(await waiting(page)).toMatchObject([{ body: "Corrige encore" }]);
 
     // Answered in the app, the notification about it goes away by itself.
     await page.getByRole("button", { name: "Autoriser" }).click();
@@ -160,6 +198,7 @@ describe("browser notifications", () => {
     await page.getByRole("button", { name: "Autoriser" }).waitFor();
     // Longer than a background tab waits for the answer of one in front.
     await page.waitForTimeout(600);
+    expect(await shownCount(page)).toBe(2);
     expect(await waiting(page)).toEqual([]);
     await other.close();
 

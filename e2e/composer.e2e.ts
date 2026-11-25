@@ -1185,8 +1185,9 @@ describe("composer", () => {
         .first()
         .click();
       await all.waitFor({ state: "hidden" });
-      await expect.poll(() => pill(page).getAttribute("aria-label")).toContain(model);
+      // Folded, the composer hides its model: it is opened before its label is read.
       await composer(page).click();
+      await expect.poll(() => pill(page).getAttribute("aria-label")).toContain(model);
       await pill(page).click();
       await sheet.getByRole("button", { name: /^Effort : / }).click();
       const slider = sheet.getByRole("slider", { name: `Effort de ${model}` });
