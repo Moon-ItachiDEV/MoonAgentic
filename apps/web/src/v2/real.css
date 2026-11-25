@@ -1373,3 +1373,51 @@ html[data-dev="desk"] .prk .stp a:hover {
     animation: none;
   }
 }
+
+/* Updates */
+.updb .tx small.mer {
+  color: var(--err-tx);
+}
+.updb .dvon {
+  flex: none;
+}
+/* A tab left open across an update: the same bar, above everything, with one tap to reload. */
+.updb.stale {
+  position: fixed;
+  left: 50%;
+  top: calc(12px + env(safe-area-inset-top));
+  transform: translateX(-50%);
+  z-index: 1000;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  margin: 0;
+  animation: none;
+}
+.apcmd code {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: all;
+}
+.apgo {
+  margin-top: 22px;
+}
+.apins .plan {
+  width: 100%;
+  margin-top: 6px;
+}
+.gl2 small {
+  font-weight: 400;
+  color: var(--faint);
+}
+.apins .stp .sp {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--track);
+  border-top-color: var(--accent);
+  animation: rot 700ms linear infinite;
+}
+.ppill > .gl {
+  margin-right: 6px;
+}

@@ -20,9 +20,5 @@
 @import "./quiet.css" layer(legacy);
 @import "./stopped.css" layer(legacy);
 @import "./offline.css" layer(legacy);
-@import "./update.css" layer(legacy);
 @import "./plan.css" layer(legacy);
-@import "./pr-board.css" layer(legacy);
-@import "./app-update.css" layer(legacy);
 @import "./team-presets.css" layer(legacy);
-@import "./lock.css" layer(legacy);

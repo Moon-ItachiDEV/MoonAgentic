@@ -13,7 +13,7 @@ import {
 import { Composer as PlainComposer } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
-import { AppUpdateHostOnDemand } from "./components/AppUpdatePill.tsx";
+import { AppUpdateHostOnDemand, UpdateBar } from "./components/UpdateBar.tsx";
 import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Artifacts } from "./components/Artifacts.tsx";
 import { Home } from "./components/Home.tsx";
@@ -67,6 +67,8 @@ import { useQuotas } from "./use-quotas.ts";
 import { I, Sprite } from "./v2/I.tsx";
 import type { IconName } from "./v2/sprite.ts";
 import { Ring } from "./v2/Ring.tsx";
+import { Sheet } from "./v2/Sheet.tsx";
+import { QuotaList } from "./components/Subscriptions.tsx";
 import { useScrFlags } from "./v2/scr.ts";
 import { screenClasses, useScreen } from "./v2/use-screen.ts";
 
@@ -104,6 +106,7 @@ export function App() {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   const [pickedProjectId, setPickedProjectId] = useState(() => readPref("project"));
   /** « Nouvelle discussion » outside any project: a question or a search, in « Discussions ». */
   const [loose, setLoose] = useState(false);
@@ -613,7 +616,7 @@ export function App() {
         <HomeCapsule
           agents={state.agents}
           agentId={homeAgentId}
-          onUsage={() => go({ name: "settings", section: "subscriptions" })}
+          onUsage={() => setUsageOpen(true)}
           onLock={() => lockApp(state.lockPin)}
         />
       </>
@@ -735,17 +738,20 @@ export function App() {
 
   /** What is written from, floating at the bottom of the page: none where there is nothing to write to. */
   const bottom =
-    route.name === "home"
-      ? composerFor(undefined)
-      : route.name === "thread"
-        ? thread && composerFor(thread)
-        : route.name === "project" &&
-            // A locked project's page has nothing to write to until the code is given; under
-            // « Fils » the coordinator's conversation is out of sight, and so is its composer.
-            !routeProject?.locked &&
-            projectTab === "chat"
-          ? coordinatorDock
-          : null;
+    route.name === "home" ? (
+      <>
+        <UpdateBar />
+        {composerFor(undefined)}
+      </>
+    ) : route.name === "thread" ? (
+      thread && composerFor(thread)
+    ) : route.name === "project" &&
+      // A locked project's page has nothing to write to until the code is given; under
+      // « Fils » the coordinator's conversation is out of sight, and so is its composer.
+      !routeProject?.locked &&
+      projectTab === "chat" ? (
+      coordinatorDock
+    ) : null;
 
   return (
     <div
@@ -1188,6 +1194,11 @@ export function App() {
           </div>
         )}
       </div>
+      <Sheet open={usageOpen} onClose={() => setUsageOpen(false)} title="Utilisation" tall>
+        <div className="sbody">
+          {usageOpen && <QuotaList agents={state.agents} first={homeAgentId} />}
+        </div>
+      </Sheet>
       <AppLock threads={state.threads} hasPin={state.lockPin} ready={state.ready} />
       {state.notice && (
         <div className="toast on" role="status">
