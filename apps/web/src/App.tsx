@@ -18,7 +18,6 @@ import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Artifacts } from "./components/Artifacts.tsx";
 import { Home } from "./components/Home.tsx";
 import {
-  IconBack,
   IconClock,
   IconCompose,
   IconFile,
@@ -75,11 +74,8 @@ export { ErrorBoundary };
 const Planner = lazy(() =>
   import("./components/Planner.tsx").then((m) => ({ default: m.Planner })),
 );
-const SettingsNav = lazy(() =>
-  import("./components/Settings.tsx").then((m) => ({ default: m.SettingsNav })),
-);
-const SettingsPage = lazy(() =>
-  import("./components/Settings.tsx").then((m) => ({ default: m.SettingsPage })),
+const SettingsLayer = lazy(() =>
+  import("./components/Settings.tsx").then((m) => ({ default: m.SettingsLayer })),
 );
 
 // While an agent writes, the page is told sixty times a second: the side bar and the
@@ -239,6 +235,8 @@ export function App() {
     setLoose(true);
   };
   // Any other way home (back, a deleted thread…) is the usual home, in the project last picked.
+  /** On a phone, the settings show their list rather than a section. */
+  const [settingsList, setSettingsList] = useState(false);
   const go = (next: Parameters<typeof navigate>[0]) => {
     setDrawer(false);
     setSearching(false);
@@ -246,8 +244,16 @@ export function App() {
     setThreadMenu(false);
     setReviewOpen(false);
     setLoose(false);
+    setSettingsList(false);
     navigate(next);
   };
+  /** Opens the settings: on a phone their list first, on a wider screen a section beside it. */
+  const openSettings = () => {
+    go({ name: "settings", section: "general" });
+    setSettingsList(true);
+  };
+  /** Leaves the settings for where they were opened from. */
+  const closeSettings = () => go({ name: "home" });
   /** Opens the planner on its board or its timeline, the one last looked at on this device. */
   const openPlanner = () =>
     go(
@@ -699,96 +705,44 @@ export function App() {
     >
       <Sprite />
       <aside className="drawer" id="drawer" aria-label="Menu" inert={!screen.wide && !drawerOpen}>
-        {route.name === "settings" ? (
-          <div className="legacy legacy-side">
-            <ErrorBoundary
-              key="settings-nav"
-              fallback={(_error, reload) => (
-                <aside className="side set-side" aria-label="Réglages">
-                  <button className="set-back" onClick={() => go({ name: "home" })}>
-                    <IconBack />
-                    Retour
-                  </button>
-                  <div className="empty-note">
-                    <p>Impossible d'afficher le menu.</p>
-                    <button className="btn sm" type="button" onClick={reload}>
-                      Recharger
-                    </button>
-                  </div>
-                </aside>
-              )}
-            >
-              {/* Until the settings arrive, an empty side bar keeps the layout in place. */}
-              <Suspense fallback={<aside className="side set-side" aria-label="Réglages" />}>
-                <SettingsNav
-                  section={route.section}
-                  onPick={(section) => go({ name: "settings", section })}
-                  onBack={() => go({ name: "home" })}
-                />
-              </Suspense>
-            </ErrorBoundary>
-          </div>
-        ) : (
-          <Sidebar
-            state={sideState}
-            activeThreadId={thread?.id}
-            activeProjectId={route.name === "project" ? route.projectId : undefined}
-            page={menuPage}
-            searching={searching}
-            onSearching={setSearching}
-            onListActions={() => quickActions}
-            onOpenInbox={() => go({ name: "inbox" })}
-            onOpenPlanner={openPlanner}
-            onOpenSchedules={() => go({ name: "planner", view: "planifiees" })}
-            onOpenArtifacts={() => go({ name: "artifacts" })}
-            onOpenPrs={() => go({ name: "prs" })}
-            onNewThread={newLoose}
-            onNewProject={() => {
-              setDrawer(false);
-              setCreatingProject(true);
-            }}
-            onPickProject={(id) => {
-              pickProject(id);
-              go({ name: "project", projectId: id });
-            }}
-            onOpenThread={(id, itemId) => {
-              if (itemId) focusItem(id, itemId);
-              go({ name: "thread", threadId: id });
-            }}
-            onTogglePin={togglePin}
-            onSetArchived={setArchived}
-            onDeleteThread={(t) => {
-              setDrawer(false);
-              askDeleteThread(t);
-            }}
-            onOpenSettings={() => go({ name: "settings", section: "general" })}
-          />
-        )}
+        <Sidebar
+          state={sideState}
+          activeThreadId={thread?.id}
+          activeProjectId={route.name === "project" ? route.projectId : undefined}
+          page={menuPage}
+          searching={searching}
+          onSearching={setSearching}
+          onListActions={() => quickActions}
+          onOpenInbox={() => go({ name: "inbox" })}
+          onOpenPlanner={openPlanner}
+          onOpenSchedules={() => go({ name: "planner", view: "planifiees" })}
+          onOpenArtifacts={() => go({ name: "artifacts" })}
+          onOpenPrs={() => go({ name: "prs" })}
+          onNewThread={newLoose}
+          onNewProject={() => {
+            setDrawer(false);
+            setCreatingProject(true);
+          }}
+          onPickProject={(id) => {
+            pickProject(id);
+            go({ name: "project", projectId: id });
+          }}
+          onOpenThread={(id, itemId) => {
+            if (itemId) focusItem(id, itemId);
+            go({ name: "thread", threadId: id });
+          }}
+          onTogglePin={togglePin}
+          onSetArchived={setArchived}
+          onDeleteThread={(t) => {
+            setDrawer(false);
+            askDeleteThread(t);
+          }}
+          onOpenSettings={openSettings}
+        />
       </aside>
       <section className="main" id="main">
-        {route.name === "home" ? (
+        {route.name === "home" || route.name === "settings" ? (
           <Home loading={!state.ready} />
-        ) : route.name === "settings" ? (
-          legacyPage(
-            <ErrorBoundary key="settings">
-              <Suspense fallback={<div className="view" />}>
-                <SettingsPage
-                  section={route.section}
-                  agents={state.agents}
-                  favorites={state.favorites}
-                  coordinator={state.coordinator}
-                  projects={state.projects}
-                  lockPin={state.lockPin}
-                  projectId={project?.id}
-                  mcpServers={state.mcpServers}
-                  mcpSecretsError={state.mcpSecretsError}
-                  onPickProject={pickProject}
-                  onOpenConnections={() => setConnectionsOpen(true)}
-                  onOpenMcp={() => setMcpOpen(true)}
-                />
-              </Suspense>
-            </ErrorBoundary>,
-          )
         ) : route.name === "thread" ? (
           thread ? (
             <ThreadView
@@ -1065,6 +1019,34 @@ export function App() {
           </div>
         )}
       </Sheet>
+      {route.name === "settings" && (
+        <ErrorBoundary key="settings" resetKey={route.section}>
+          <Suspense fallback={null}>
+            <SettingsLayer
+              section={route.section}
+              list={settingsList}
+              wide={screen.wide}
+              onPick={(section) => {
+                setSettingsList(false);
+                navigate({ name: "settings", section }, { replace: true });
+              }}
+              onList={() => setSettingsList(true)}
+              onClose={closeSettings}
+              agents={state.agents}
+              favorites={state.favorites}
+              coordinator={state.coordinator}
+              projects={state.projects}
+              lockPin={state.lockPin}
+              projectId={project?.id}
+              mcpServers={state.mcpServers}
+              mcpSecretsError={state.mcpSecretsError}
+              onPickProject={pickProject}
+              onOpenConnections={() => setConnectionsOpen(true)}
+              onOpenMcp={() => setMcpOpen(true)}
+            />
+          </Suspense>
+        </ErrorBoundary>
+      )}
       <div className="legacy legacy-over">
         <Presence show={teamTask !== null && !!project}>
           {teamTask !== null && project && (

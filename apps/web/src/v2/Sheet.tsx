@@ -53,6 +53,8 @@ export function Sheet(props: {
     if (!open || props.modal) return;
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
+      // Sheets stack: only the one on top leaves.
+      if ([...scrRoot().querySelectorAll(".sheet.on")].at(-1) !== sheet.current) return;
       event.preventDefault();
       onClose();
     };

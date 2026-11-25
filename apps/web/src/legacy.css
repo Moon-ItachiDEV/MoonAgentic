@@ -10,7 +10,6 @@
 @import "./settings.css" layer(legacy);
 @import "./sidebar.css" layer(legacy);
 @import "./github.css" layer(legacy);
-@import "./remote.css" layer(legacy);
 @import "./pairing.css" layer(legacy);
 @import "./pull-request.css" layer(legacy);
 @import "./pr-watch.css" layer(legacy);
@@ -27,12 +26,10 @@
 @import "./local-files.css" layer(legacy);
 @import "./mcp-scope.css" layer(legacy);
 @import "./overview.css" layer(legacy);
-@import "./quotas.css" layer(legacy);
 @import "./quiet.css" layer(legacy);
 @import "./stopped.css" layer(legacy);
 @import "./offline.css" layer(legacy);
 @import "./project.css" layer(legacy);
-@import "./phone.css" layer(legacy);
 @import "./update.css" layer(legacy);
 @import "./plan.css" layer(legacy);
 @import "./team-tree.css" layer(legacy);

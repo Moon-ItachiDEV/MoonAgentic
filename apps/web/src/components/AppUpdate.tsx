@@ -25,7 +25,7 @@ import { IconBranch, IconExternal, IconOkCircle, IconRefresh } from "./icons.tsx
 import { MoonMark } from "./MoonMark.tsx";
 import { StateGlyph } from "./StateGlyph.tsx";
 
-const useApp = () => useSyncExternalStore(connection.subscribe, connection.getState);
+export const useApp = () => useSyncExternalStore(connection.subscribe, connection.getState);
 
 /** What the install has done and does now. */
 function Steps(props: { app: AppInfo; connected: boolean }) {
@@ -386,25 +386,23 @@ export function AppUpdateSettings(props: {
   const checked = u.checkedAt ? ` · vérifiée ${seenAgo(u.checkedAt, Date.now())}` : "";
   return (
     <>
-      <h3 className="lk-h">Mise à jour</h3>
-      <div className="set-card">
-        <Row
-          title={app.kind === "git" ? `Version ${app.version}` : `Version ${app.version}`}
-          text={
-            <>
-              {`${where}${app.kind === "other" ? "" : checked}`}
-              {failure && <span className="apu-look-err">{failure}</span>}
-            </>
-          }
-        >
+      <div className="gl2">Mises à jour</div>
+      <div className="ins">
+        <Row title="Version" text={failure ?? (app.kind === "other" ? where : undefined)}>
+          <span className="rt">
+            {app.kind !== "other" && u.state !== "checking" && !updateShown(app) && !failure && (
+              <span className="okp">À jour</span>
+            )}
+            <span className="mono">{app.version}</span>
+          </span>
           {app.kind !== "other" && (
             <button
-              className="btn sm"
+              className="mini press"
               disabled={u.state === "checking" || !!u.phase}
+              title={`${where}${checked}`}
               onClick={() => connection.send({ type: "app.check" })}
             >
-              <IconRefresh size={14} />
-              {u.state === "checking" ? "Recherche…" : "Vérifier maintenant"}
+              {u.state === "checking" ? "Recherche…" : "Vérifier"}
             </button>
           )}
         </Row>
@@ -413,39 +411,27 @@ export function AppUpdateSettings(props: {
             title={app.kind === "git" ? "Nouvelle version sur main" : `MoonAgentic ${u.version}`}
             text={
               u.state === "failed"
-                ? (u.error ?? "Le téléchargement a échoué.")
-                : app.kind === "windows"
-                  ? "Téléchargée en arrière-plan · s'installe seulement quand tu le demandes"
-                  : app.kind === "mac"
-                    ? "À télécharger et installer à la main"
-                    : `${u.behind ?? 0} commit${(u.behind ?? 0) > 1 ? "s" : ""} à récupérer`
+                ? (u.error ?? "Le téléchargement a échoué")
+                : app.kind === "git"
+                  ? `${u.behind ?? 0} commit${(u.behind ?? 0) > 1 ? "s" : ""} à récupérer`
+                  : undefined
             }
           >
-            <button className="btn sm pri" onClick={() => openUpdateCard()}>
+            <button className="mini press" onClick={() => openUpdateCard()}>
               {app.kind === "windows" && u.state === "ready" && !u.install ? "Installer…" : "Voir"}
             </button>
           </Row>
         )}
         {app.kind !== "other" && (
           <>
-            <Row
-              title="Chercher les nouvelles versions"
-              text={
-                app.kind === "git"
-                  ? "Au démarrage puis toutes les 6 h, sur la branche main du dépôt"
-                  : "Au démarrage puis toutes les 6 h, dans les versions publiées du dépôt"
-              }
-            >
+            <Row title="Chercher les nouvelles versions">
               <Toggle
                 label="Chercher les nouvelles versions"
                 on={app.checks}
                 onChange={(on) => set({ checks: on })}
               />
             </Row>
-            <Row
-              title="Prévenir sur mes appareils"
-              text="Une notification quand une version est prête, là où les notifications sont activées"
-            >
+            <Row title="Prévenir sur mes appareils">
               <Toggle
                 label="Prévenir sur mes appareils"
                 on={app.notify}
@@ -457,13 +443,10 @@ export function AppUpdateSettings(props: {
       </div>
       {(app.openAtLogin !== undefined || app.preventSleep !== undefined) && (
         <>
-          <h3 className="lk-h">Démarrage</h3>
-          <div className="set-card">
+          <div className="gl2">Démarrage</div>
+          <div className="ins">
             {app.openAtLogin !== undefined && (
-              <Row
-                title={app.kind === "mac" ? "Ouvrir à la connexion" : "Lancer avec Windows"}
-                text="MoonAgentic démarre à l'ouverture de la session, fenêtre cachée"
-              >
+              <Row title={app.kind === "mac" ? "Ouvrir à la connexion" : "Lancer avec Windows"}>
                 <Toggle
                   label="Lancer à l'ouverture de la session"
                   on={app.openAtLogin}
@@ -472,10 +455,7 @@ export function AppUpdateSettings(props: {
               </Row>
             )}
             {app.preventSleep !== undefined && (
-              <Row
-                title="Empêcher la veille"
-                text="Tant que l'app tourne, l'ordinateur reste joignable"
-              >
+              <Row title="Empêcher la veille">
                 <Toggle
                   label="Empêcher la veille"
                   on={app.preventSleep}

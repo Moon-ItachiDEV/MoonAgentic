@@ -11,6 +11,9 @@ import {
   seenAgo,
   shownCode,
 } from "../remote.ts";
+import { ChoiceRow } from "../v2/ChoiceRow.tsx";
+import { Glyph, I } from "../v2/I.tsx";
+import { Sheet } from "../v2/Sheet.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 
 /** Copies text, also on a page opened over plain HTTP, where the clipboard API is missing. */
@@ -39,7 +42,7 @@ async function copyText(text: string): Promise<boolean> {
 /** A QR code drawn from the link itself, on white so that any camera reads it. */
 function QrCode({ text }: { text: string }) {
   const { size, path } = useMemo(() => {
-    const code = encode(text, { ecc: "M", border: 3 });
+    const code = encode(text, { ecc: "M", border: 0 });
     let d = "";
     code.data.forEach((row, y) => {
       row.forEach((dark, x) => {
@@ -50,14 +53,12 @@ function QrCode({ text }: { text: string }) {
   }, [text]);
   return (
     <svg
-      className="ra-qr"
       viewBox={`0 0 ${size} ${size}`}
       shapeRendering="crispEdges"
       role="img"
       aria-label="QR code d'appairage"
     >
-      <rect width={size} height={size} fill="#fff" />
-      <path d={path} fill="#000" />
+      <path d={path} fill="currentColor" />
     </svg>
   );
 }
@@ -153,212 +154,243 @@ export function RemoteAccess() {
   const about = address ? addressText(address) : null;
   const advice = access ? remoteAdvice(access) : null;
 
+  const copy = (text: string) => void copyText(text).then((ok) => setCopied(ok ? "ok" : "failed"));
+  const canShare = typeof navigator.share === "function";
+
   return (
     <>
-      <div className="set-card">
-        <div className="set-row top">
-          <div className="set-tx">
-            <b>Adresse distante</b>
-            {!access ? (
-              <p>{error ?? "Recherche des adresses de cette machine…"}</p>
-            ) : address && about ? (
-              <>
-                {access.addresses.length > 1 ? (
-                  <label className="set-select ra-pick">
-                    <select
-                      aria-label="Adresse distante"
-                      value={address.url}
-                      onChange={(e) => setPicked(e.target.value)}
-                    >
-                      {access.addresses.map((a) => (
-                        <option key={a.url} value={a.url}>
-                          {addressText(a).label} · {a.url}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : (
-                  <p className="ra-url">
-                    <span className={`set-dot ${about.tone}`} aria-hidden />
-                    {about.label} · <code>{address.url}</code>
-                  </p>
-                )}
-                <p>{about.detail}</p>
-              </>
-            ) : (
-              <p>Aucune adresse ne permet encore d'ouvrir MoonAgentic depuis un autre appareil.</p>
-            )}
-            {access && error && <p className="ra-err">{error}</p>}
+      <div className="ins">
+        {!access ? (
+          <div className="it ro">
+            <span className="tx">Adresse</span>
+            <span className="rt">{error ?? "Recherche…"}</span>
           </div>
-          <div className="set-ctl">
-            <button className="btn sm" disabled={loading} onClick={load}>
-              {loading ? "Recherche…" : "Actualiser"}
-            </button>
-          </div>
-        </div>
-        {owner && address && (
-          <div className="set-row top ra-link">
-            <div className="set-tx">
-              <b>Appairer un appareil</b>
-              {pairing && link ? (
-                <>
-                  <p>
-                    Scanne le QR code avec le téléphone, ou ouvre <code>{address.url}</code> dessus
-                    et tape ce code. Il ne sert qu'une fois, jusqu'à{" "}
-                    {new Date(pairing.expiresAt).toLocaleTimeString("fr-FR", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}{" "}
-                    ({Math.max(0, Math.ceil((pairing.expiresAt - now) / 60_000))} min).
-                  </p>
-                  <code className="ra-pair-code" aria-label="Code d'appairage">
-                    {shownCode(pairing.code)}
-                  </code>
-                  <div className="ra-actions">
-                    <button
-                      className="btn sm"
-                      onClick={() =>
-                        void copyText(link).then((ok) => setCopied(ok ? "ok" : "failed"))
-                      }
-                    >
-                      Copier le lien
-                    </button>
-                    <button className="btn sm quiet" onClick={() => setPairing(null)}>
-                      Masquer
-                    </button>
-                    <span className="set-note" role="status">
-                      {copied === "ok"
-                        ? "Lien copié."
-                        : copied === "failed"
-                          ? "Copie impossible ici : sélectionne le code à la main."
-                          : ""}
-                    </span>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p>
-                    {justPaired ? `« ${justPaired} » est appairé. ` : ""}
-                    Chaque appareil reçoit son propre accès, que tu peux révoquer ici. Le code
-                    affiché ne sert qu'une fois, pendant 5 minutes.
-                  </p>
-                  <div className="ra-actions">
-                    <button className="btn sm" onClick={startPairing}>
-                      Appairer un appareil
-                    </button>
-                  </div>
-                </>
-              )}
-              {pairError && <p className="ra-err">{pairError}</p>}
+        ) : address && about ? (
+          access.addresses.length > 1 ? (
+            <ChoiceRow
+              title="Adresse"
+              label="Adresse distante"
+              value={address.url}
+              shown={address.url.replace(/^https?:\/\//, "")}
+              choices={access.addresses.map((a) => ({
+                value: a.url,
+                label: `${addressText(a).label} · ${a.url.replace(/^https?:\/\//, "")}`,
+              }))}
+              onPick={setPicked}
+            />
+          ) : (
+            <div className="it ro">
+              <span className="tx">
+                Adresse
+                <small>{about.label}</small>
+              </span>
+              <span className="rt">
+                <span className="mono">{address.url.replace(/^https?:\/\//, "")}</span>
+              </span>
             </div>
-            {link && <QrCode text={link} />}
+          )
+        ) : (
+          <div className="it ro">
+            <span className="tx">Adresse</span>
+            <span className="rt">Aucune</span>
           </div>
         )}
-        {devicesError && devices === undefined && (
-          <div className="set-row">
-            <div className="set-tx">
-              <b>Appareils</b>
-              <p className="ra-err">
-                Impossible de savoir quels appareils sont appairés : {devicesError}
-              </p>
-            </div>
+        {address && about && (
+          <div className="it ro">
+            <span className="tx">{address.public ? "Ouvert à tout Internet" : about.label}</span>
+            <span className={about.tone === "ok" ? "okp" : "rt mer"}>
+              {about.tone === "ok" ? "Chiffré" : address.public ? "Funnel" : "Sans chiffrement"}
+            </span>
           </div>
         )}
-        {devices === null && (
-          <div className="set-row">
-            <div className="set-tx">
-              <b>Cet appareil est appairé</b>
-              <p>
-                Pour appairer un autre appareil ou en révoquer un, va sur l'ordinateur où tourne
-                MoonAgentic.
-              </p>
-              {install && <p>{install}</p>}
-            </div>
-          </div>
+        {address && (
+          <button className="it acc" onClick={() => copy(address.url)}>
+            <span className="tx">
+              {copied === "ok" && !pairing
+                ? "Copié"
+                : copied === "failed" && !pairing
+                  ? "Copie impossible"
+                  : "Copier l'adresse"}
+            </span>
+          </button>
         )}
-        {advice && (
-          <div className="set-row">
-            <div className="set-tx">
-              <b>{address ? "Aller plus loin" : "Pour l'activer"}</b>
-              <p>{advice.text}</p>
-              {advice.command && <code className="ra-code">{advice.command}</code>}
-            </div>
+        <button className="it acc" disabled={loading} onClick={load}>
+          <span className="tx">{loading ? "Recherche…" : "Actualiser"}</span>
+        </button>
+        {access && error && (
+          <div className="it ro">
+            <span className="tx">
+              <small className="mer">{error}</small>
+            </span>
           </div>
         )}
       </div>
-      {owner && (
-        <div className="set-card">
-          <div className="set-row top">
-            <div className="set-tx">
-              <b>Appareils appairés</b>
-              {devices.length === 0 ? (
-                <p>Aucun pour l'instant.</p>
-              ) : (
-                <ul className="ra-devices">
-                  {devices.map((d) => (
-                    <li key={d.id}>
-                      <span>
-                        <b>{d.name}</b>
-                        <small>
-                          Appairé le{" "}
-                          {new Date(d.createdAt).toLocaleDateString("fr-FR", {
-                            day: "numeric",
-                            month: "long",
-                          })}
-                          {d.lastSeen ? ` · vu ${seenAgo(d.lastSeen, Date.now())}` : ""}
-                        </small>
-                      </span>
-                      <button
-                        className="btn sm quiet"
-                        onClick={() =>
-                          setConfirm({
-                            title: `Révoquer « ${d.name} » ?`,
-                            text: "Il est déconnecté tout de suite et devra être appairé à nouveau avec un nouveau code.",
-                            action: "Révoquer",
-                            run: async () => setDevices(await connection.revokeDevice(d.id)),
-                          })
-                        }
-                      >
-                        Révoquer
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+      {advice && (
+        <>
+          <div className="gl2">{address ? "Aller plus loin" : "Pour l'activer"}</div>
+          <div className="ins">
+            <div className="it ro">
+              <span className="tx">
+                <small>{advice.text}</small>
+              </span>
             </div>
-          </div>
-        </div>
-      )}
-      {owner && (
-        <div className="set-card">
-          <div className="set-row">
-            <div className="set-tx">
-              <b>Renouveler le jeton de cet ordinateur</b>
-              <p>
-                À faire si le lien affiché au démarrage du serveur a pu fuiter, ou pour couper un
-                appareil ouvert avec un ancien lien de connexion. Les autres fenêtres de cet
-                ordinateur devront rouvrir le nouveau lien ; les appareils appairés gardent leur
-                accès.
-              </p>
-            </div>
-            <div className="set-ctl">
+            {advice.command && (
               <button
-                className="btn sm"
-                onClick={() =>
-                  setConfirm({
-                    title: "Renouveler le jeton ?",
-                    text: "Les autres fenêtres ouvertes avec l'ancien lien seront déconnectées. Le lien affiché au démarrage du serveur change aussi.",
-                    action: "Renouveler",
-                    run: async () => void (await connection.renewToken()),
-                  })
-                }
+                className="it"
+                aria-label={`Copier la commande ${advice.command}`}
+                onClick={() => copy(advice.command!)}
               >
-                Renouveler
+                <span className="tx mono">{advice.command}</span>
+                <I n="copies" s={16} />
               </button>
-            </div>
+            )}
+          </div>
+        </>
+      )}
+      {devicesError && devices === undefined && (
+        <div className="ins">
+          <div className="it ro">
+            <span className="tx">
+              Appareils
+              <small className="mer">{devicesError}</small>
+            </span>
           </div>
         </div>
       )}
+      {devices === null && (
+        <div className="ins">
+          <div className="it ro">
+            <span className="tx">
+              Cet appareil
+              {install && <small>{install}</small>}
+            </span>
+            <span className="okp">Appairé</span>
+          </div>
+        </div>
+      )}
+      {owner && (
+        <>
+          <div className="gl2">Appareils appairés</div>
+          <div className="ins">
+            {devices.length === 0 && !address && (
+              <div className="it ro">
+                <span className="tx">Aucun</span>
+              </div>
+            )}
+            {devices.map((d) => (
+              <div key={d.id} className="it ro">
+                <span className="tx">
+                  {d.name}
+                  <small>
+                    {new Date(d.createdAt).toLocaleDateString("fr-FR", {
+                      day: "numeric",
+                      month: "long",
+                    })}
+                    {d.lastSeen ? ` · vu ${seenAgo(d.lastSeen, Date.now())}` : ""}
+                  </small>
+                </span>
+                <button
+                  className="mini"
+                  aria-label={`Révoquer ${d.name}`}
+                  onClick={() =>
+                    setConfirm({
+                      title: `Révoquer « ${d.name} » ?`,
+                      text: "Il devra être appairé à nouveau",
+                      action: "Révoquer",
+                      run: async () => setDevices(await connection.revokeDevice(d.id)),
+                    })
+                  }
+                >
+                  Révoquer
+                </button>
+              </div>
+            ))}
+            {address && (
+              <button className="it acc" onClick={startPairing}>
+                <I n="plus" s={18} />
+                <span className="tx">Appairer un appareil</span>
+              </button>
+            )}
+            {pairError && (
+              <div className="it ro">
+                <span className="tx">
+                  <small className="mer">{pairError}</small>
+                </span>
+              </div>
+            )}
+          </div>
+          <div className="ins">
+            <button
+              className="it dng"
+              onClick={() =>
+                setConfirm({
+                  title: "Renouveler le jeton ?",
+                  text: "Les autres fenêtres ouvertes avec l'ancien lien sont déconnectées. Les appareils appairés gardent leur accès.",
+                  action: "Renouveler",
+                  run: async () => void (await connection.renewToken()),
+                })
+              }
+            >
+              <span className="tx">Renouveler le jeton de cet ordinateur</span>
+            </button>
+          </div>
+        </>
+      )}
+      <Sheet
+        open={!!(pairing && link) || !!justPaired}
+        onClose={() => {
+          setPairing(null);
+          setJustPaired(null);
+        }}
+        title="Appairer un appareil"
+      >
+        <div className="sbody">
+          {pairing && link ? (
+            <>
+              <div className="qrw">
+                <div className="qrc">
+                  <QrCode text={link} />
+                </div>
+                <code className="pcode" aria-label="Code d'appairage">
+                  {shownCode(pairing.code)}
+                </code>
+                <span className="ppill">
+                  <Glyph />
+                  En attente · {Math.max(0, Math.ceil((pairing.expiresAt - now) / 60_000))} min
+                </span>
+              </div>
+              <div className="rva">
+                <button className="b2 soft press" onClick={() => copy(link)}>
+                  <I n="copies" s={16} />
+                  {copied === "ok"
+                    ? "Copié"
+                    : copied === "failed"
+                      ? "Copie impossible"
+                      : "Copier le lien"}
+                </button>
+                {canShare && (
+                  <button
+                    className="b2 soft press"
+                    onClick={() => void navigator.share({ url: link }).catch(() => undefined)}
+                  >
+                    <I n="share" s={16} />
+                    Partager
+                  </button>
+                )}
+              </div>
+            </>
+          ) : (
+            justPaired && (
+              <div className="pok" role="status">
+                <span className="pokc">
+                  <I n="check" s={30} />
+                </span>
+                <b>{justPaired} appairé</b>
+              </div>
+            )
+          )}
+        </div>
+      </Sheet>
       {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
     </>
   );

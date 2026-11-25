@@ -440,3 +440,94 @@ html[data-dev="touch"] .vxh {
 .sheet.mpk .sbody > .seg {
   margin-bottom: 4px;
 }
+
+/* Settings › Abonnements, and the usage sheet: one group per agent. */
+.qsec + .qsec {
+  margin-top: 22px;
+}
+.uhead button.rd {
+  color: inherit;
+  font: inherit;
+  font-weight: 400;
+  border-radius: 8px;
+}
+.uhead button.rd:disabled {
+  cursor: default;
+}
+.qkv {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px;
+  font-size: 15px;
+  color: var(--fg2);
+  box-shadow: 0 -0.5px 0 var(--glass-ring);
+}
+.qkv b {
+  margin-left: auto;
+  font-weight: 500;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.qnote {
+  margin: 8px 12px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* A confirmation whose consequence does not fit a pill. */
+.cfw .cft {
+  margin: 0;
+  max-width: 320px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.cfw .cft.err {
+  color: var(--err-tx);
+}
+
+/* Settings › Mascottes: the agents' own moons. */
+.mjm moon-mascot {
+  display: block;
+  width: 38px;
+}
+.mprev moon-mascot {
+  display: block;
+  width: 132px;
+}
+.msh {
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+}
+.msh button span moon-mascot {
+  display: block;
+  width: 38px;
+}
+.msh button span {
+  color: var(--faint);
+}
+.mtw button[data-moon] i {
+  background: linear-gradient(160deg, var(--sky-top), var(--sky-bottom));
+}
+.mtw button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Settings › Accès à distance. */
+.it .tx.mono {
+  font: 400 13.5px var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.it small.mer,
+.it .rt.mer {
+  color: var(--err-tx);
+}
+.qrw .pcode {
+  font: 600 22px var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--fg);
+}
