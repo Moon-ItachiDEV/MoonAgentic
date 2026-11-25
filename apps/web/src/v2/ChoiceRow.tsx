@@ -57,7 +57,7 @@ export function ChoiceRow(props: {
       >
         <div className="sbody" role="radiogroup" aria-label={props.label ?? props.title}>
           {groups.map((g, i) => (
-            <div key={g.name ?? i}>
+            <div key={g.name ?? i} {...(g.name ? { role: "group", "aria-label": g.name } : {})}>
               {g.name && <div className="gl2">{g.name}</div>}
               <div className="ins">
                 {g.choices.map((c) => (

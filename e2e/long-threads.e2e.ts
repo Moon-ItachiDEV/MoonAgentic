@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { addProject, pickAgent, setAccess } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Store } from "../apps/server/src/store.ts";
 
@@ -125,20 +126,12 @@ describe("longs fils", () => {
       });
     });
     await page.goto(url);
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(project);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
+    await addProject(page, project);
     const composer = page.getByRole("combobox", { name: "Message" });
     await expect.poll(() => composer.isEnabled()).toBe(true);
     // The demo agent, not a real one that may be installed on this machine.
-    await page.locator(".agentchip").click();
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
-    await page.getByRole("button", { name: "Options", exact: true }).click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-    await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: /Mode d'accès/ }).click();
-    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
+    await pickAgent(page);
+    await setAccess(page, /Accès complet/);
 
     await composer.fill("Lis le gros fichier");
     await composer.press("Enter");
@@ -148,8 +141,8 @@ describe("longs fils", () => {
 
     await page.reload();
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
-    await page.locator(".team-detail-h").last().click();
-    const read = page.locator(".tool", { hasText: "Lire src/app.ts" });
+    await page.locator(".det .fold").last().click();
+    const read = page.locator(".tl", { hasText: "Lire src/app.ts" });
     await read.getByRole("button", { name: /Lire src\/app\.ts/ }).click();
     // A result that could not be fetched says so, and can be asked for again.
     await read.getByRole("alert").getByText("Connexion perdue.").waitFor();
@@ -164,7 +157,7 @@ describe("longs fils", () => {
     await read.getByRole("button", { name: "Afficher tout (800 lignes de plus)" }).click();
     await read.getByText("export const ligne1200 = 1200;").waitFor();
     // A small result came with its line: nothing to wait for.
-    const edit = page.locator(".tool", { hasText: "Modifier src/app.ts" });
+    const edit = page.locator(".tl", { hasText: "Modifier src/app.ts" });
     await edit.getByRole("button", { name: /Modifier src\/app\.ts/ }).click();
     await edit.getByText("+ export const answer = 42;").waitFor();
     await page.close();

@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { addProject, pickAgent, setAccess } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -82,19 +83,11 @@ describe("review against main", () => {
     const errors: Error[] = [];
     page.on("pageerror", (err) => errors.push(err));
     await page.goto(url);
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(repo);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
+    await addProject(page, repo);
     const composer = page.getByRole("combobox", { name: "Message" });
     await expect.poll(() => composer.isEnabled()).toBe(true);
-    await page.locator(".agentchip").click();
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
-    await page.getByRole("button", { name: "Options", exact: true }).click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-    await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: /Mode d'accès/ }).click();
-    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
+    await pickAgent(page);
+    await setAccess(page, /Accès complet/);
     await composer.fill("Corrige la réponse");
     await composer.press("Enter");
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
@@ -108,23 +101,27 @@ describe("review against main", () => {
     execFileSync("git", ["add", "-A"], { cwd: repo });
     execFileSync("git", ["commit", "-q", "-m", "main avance"], { cwd: repo });
 
-    await page.getByRole("button", { name: /^Code/ }).click();
-    const panel = page.getByRole("complementary", { name: "À revoir" });
+    await page.getByRole("button", { name: /^Modifications/ }).click();
+    const panel = page.getByRole("dialog", { name: "Modifications" });
     await panel.getByText("main a avancé de 1 commit · fusion sans conflit").waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "revue-main-avance.png") });
     await panel.getByRole("button", { name: "Synchroniser", exact: true }).click();
-    await panel.getByText("À jour avec main").waitFor();
+    // Up to date, nothing is left to say about main.
+    await expect.poll(() => panel.getByText(/main a avancé/).count(), { timeout: 30_000 }).toBe(0);
     expect(readFileSync(path.join(folder, "autre.md"), "utf8")).toBe("Arrivé sur main.\n");
     // What came from main is not the thread's work: the review still lists one file.
-    const line = panel.getByRole("row").filter({ hasText: "Ligne du fil, plus longue." });
-    await line.waitFor();
+    await panel.getByRole("button", { name: /^notes\.md/ }).waitFor();
     expect(await panel.getByText("autre.md").count()).toBe(0);
+    await panel.getByRole("button", { name: /^notes\.md/ }).click();
+    const file = page.getByRole("dialog", { name: "notes.md" });
+    await file.getByRole("row").filter({ hasText: "Ligne du fil, plus longue." }).waitFor();
 
-    await panel.getByRole("button", { name: "Annuler les changements de notes.md" }).click();
-    await panel.getByText("Remettre ce fichier comme au départ de la branche ?").waitFor();
+    await file.getByRole("button", { name: "Annuler les changements de notes.md" }).click();
+    const sure = page.getByRole("alertdialog");
+    await sure.getByText("Remettre ce fichier comme au départ de la branche ?").waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "revue-annuler.png") });
-    await panel.getByRole("button", { name: "Annuler les changements", exact: true }).click();
-    await panel.getByText("Rien n'a changé sur cette branche pour l'instant.").waitFor();
+    await sure.getByRole("button", { name: "Annuler les changements", exact: true }).click();
+    await panel.getByText("Rien n'a changé sur cette branche").waitFor();
     expect(readFileSync(path.join(folder, "notes.md"), "utf8")).toBe(
       "# Notes\n\nPremière ligne.\n",
     );
@@ -132,18 +129,22 @@ describe("review against main", () => {
     // Every file of the folder, as it is now, to read.
     writeFileSync(path.join(folder, "nouveau.md"), "Écrit par l'agent.\n");
     await panel.getByRole("tab", { name: "Fichiers" }).click();
-    // A changed file's row ends with its letter from the review.
     const row = (name: string) => panel.getByRole("button", { name: new RegExp(`^${name}`) });
     await row("autre.md").waitFor();
     await row("nouveau.md").waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "revue-fichiers.png") });
     await row("autre.md").click();
-    await panel.getByRole("row").filter({ hasText: "Arrivé sur main." }).waitFor();
-    await panel.getByRole("button", { name: "Retour aux fichiers" }).click();
+    const read = (name: string) => page.getByRole("dialog", { name });
+    await read("autre.md").getByRole("row").filter({ hasText: "Arrivé sur main." }).waitFor();
+    await read("autre.md").getByRole("button", { name: "Retour", exact: true }).click();
     await panel.getByRole("searchbox", { name: "Chercher un fichier" }).fill("nouv");
     await row("nouveau.md").click();
-    await panel.getByRole("button", { name: "Voir les changements" }).click();
-    await panel.getByRole("row").filter({ hasText: "Écrit par l'agent." }).waitFor();
+    // A changed file leads to its changes.
+    await read("nouveau.md").getByRole("button", { name: "Voir les changements" }).click();
+    await read("nouveau.md").getByRole("row").filter({ hasText: "Écrit par l'agent." }).waitFor();
+    await read("nouveau.md")
+      .getByRole("button", { name: "Annuler les changements de nouveau.md" })
+      .waitFor();
     expect(errors).toEqual([]);
     await page.close();
   });

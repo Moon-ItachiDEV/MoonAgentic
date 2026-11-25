@@ -75,7 +75,7 @@ export function ModelPill(props: {
             </div>
           )}
           {groups.map((g) => (
-            <div key={g.agent.id}>
+            <div key={g.agent.id} role="group" aria-label={g.agent.name}>
               <div className="gl2">{g.agent.name}</div>
               <div className="ins">
                 {g.options.map((o) => (

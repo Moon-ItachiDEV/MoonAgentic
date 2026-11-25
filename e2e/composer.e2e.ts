@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium, type Page } from "playwright";
+import { addProject, pickAgent, setAccess } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -100,20 +101,11 @@ const shot = async (page: Page, name: string) => {
 };
 
 const composer = (page: Page) => page.getByRole("combobox", { name: "Message" });
-/** Picks an agent from the model sheet: « Tous », then « Options ». */
-async function pickAgent(page: Page, name: RegExp) {
-  await page.locator(".agentchip").click();
-  await page.getByRole("button", { name: "Tous", exact: true }).click();
-  await page.getByRole("button", { name: "Options", exact: true }).click();
-  await page.getByRole("menuitemradio", { name }).click();
-}
-
-/**
- * Waits for the composer to write in this project. The field is usable before any project
- * exists (« Discussions » is made then), so being enabled no longer says the project is there.
- */
-const inProject = (page: Page, name: string) =>
-  expect.poll(() => page.locator(".tray").first().textContent()).toContain(name);
+/** The model pill of the composer, which names who answers. It shows with the composer open. */
+const pill = (page: Page) => page.getByRole("button", { name: /^Agent : / });
+/** The sidebar, and its pages. */
+const menu = (page: Page) => page.getByRole("complementary", { name: "Menu" });
+const pages = (page: Page) => page.getByRole("navigation", { name: "Pages" });
 
 const options = (page: Page) => page.locator("#composer-suggest [role=option]");
 /**
@@ -121,8 +113,7 @@ const options = (page: Page) => page.locator("#composer-suggest [role=option]");
  * before may have left them on full access.
  */
 async function supervised(page: Page) {
-  await page.getByRole("button", { name: /Mode d'accès/ }).click();
-  await page.getByRole("menuitemradio", { name: /Demande d'abord/ }).click();
+  await setAccess(page, /Demande d'abord/);
 }
 
 describe("composer", () => {
@@ -131,18 +122,12 @@ describe("composer", () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
 
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-
-    await page.getByLabel("Dossier", { exact: true }).fill(project);
-
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
-    await inProject(page, "projet");
+    await addProject(page, project);
+    await expect.poll(() => composer(page).isEnabled()).toBe(true);
     // The demo agent, not a real one that may be installed on this machine.
-    await pickAgent(page, /Agent de démo/);
-    await page.keyboard.press("Escape");
-    await expect.poll(() => page.locator(".agentchip").textContent()).toContain("Agent de démo");
+    await pickAgent(page);
+    await composer(page).click();
+    await expect.poll(() => pill(page).textContent()).toContain("Agent de démo");
 
     // `/` lists MoonAgentic's ready-made messages and the project's commands.
     await composer(page).fill("/dep");
@@ -182,27 +167,22 @@ describe("composer", () => {
     await composer(page).press("Tab");
     expect(await composer(page).inputValue()).toBe("Lis @src/app.ts avec $revue ");
 
-    await page.getByRole("button", { name: /Mode d'accès/ }).click();
-    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
+    await setAccess(page, /Accès complet/);
     await composer(page).press("Enter");
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
-    // The agent's plan is one card: every step done, it folds to its title and its footer.
-    const plan = page.locator(".agent-plan").last();
+    // The agent's plan is one card: every step done, with what the agent read on it.
+    const plan = page.locator(".plan.ap").last();
     await plan.getByText("Terminé · 2 sur 2").waitFor();
-    expect(await plan.locator("li").count()).toBe(0);
-    await plan.locator(".agent-plan-h").click();
-    expect(await plan.locator("li.done").count()).toBe(2);
-    // What the agent read on a step is noted on it.
-    await plan.locator("li.done").first().getByText("app.ts").waitFor();
-    await plan.locator(".agent-plan-h").click();
+    expect(await plan.locator('.stp[data-state="done"]').count()).toBe(2);
+    await plan.locator(".stp").first().getByText("app.ts").waitFor();
     // What it said on the way is folded with its steps, under one line.
     expect(await page.getByText("Pièces jointes : app.ts (texte), SKILL.md (texte).").count()).toBe(
       0,
     );
-    await page.locator(".team-detail-h").last().click();
+    await page.locator(".det .fold").last().click();
     // The agent got the file and the skill with the message.
     await page.getByText("Pièces jointes : app.ts (texte), SKILL.md (texte).").waitFor();
-    await page.locator(".team-detail-h").last().click();
+    await page.locator(".det .fold").last().click();
 
     // In the thread, the agent's own commands join in, with who offers them.
     await composer(page).fill("/");
@@ -212,11 +192,11 @@ describe("composer", () => {
     await shot(page, "c4-commandes-agent");
     await composer(page).fill("/epingler");
     await composer(page).press("Enter");
-    await page.getByText("Épinglés").waitFor();
+    await menu(page).getByText("Épinglés").waitFor();
 
     // Ctrl K finds the message, and opens its thread.
     await page.goto(url.replace(/\?.*$/, ""));
-    await page.getByText("Épinglés").waitFor();
+    await menu(page).getByText("Épinglés").waitFor();
     await page.keyboard.press("Control+k");
     await page.getByRole("combobox", { name: "Rechercher" }).fill("Pièces jointes");
     await page.getByRole("option", { name: /Pièces jointes/ }).waitFor();
@@ -230,42 +210,58 @@ describe("composer", () => {
   it("shows each agent's state, adds an agent, and answers a request from À traiter", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
-    await page.getByRole("button", { name: "Connexions" }).click();
-    const dialog = page.getByRole("dialog", { name: "Connexions" });
-    const demo = dialog.locator(".cx-row", { hasText: "Agent de démo" }).first();
+    await menu(page).getByRole("button", { name: "Réglages" }).click();
+    await page
+      .getByRole("navigation", { name: "Réglages" })
+      .getByRole("button", { name: /^Agents/ })
+      .click();
+    const agents = page.getByRole("region", { name: "Agents" });
+    const demoRow = agents.getByRole("button", { name: /^Agent de démo/ });
+    await demoRow.click();
+    const demo = page.getByRole("dialog", { name: "Agent de démo", exact: true });
     await demo.getByRole("button", { name: "Vérifier" }).click();
-    await expect.poll(() => demo.locator(".st").textContent()).toBe("Prêt");
-    await demo.getByText("Version : moonagentic-demo 0.1.0").waitFor();
+    await demo.getByText("Prêt", { exact: true }).waitFor();
+    await demo.getByText("moonagentic-demo 0.1.0").waitFor();
+    await demo.getByRole("button", { name: "Fermer", exact: true }).click();
+    await demoRow.getByText("Prêt").waitFor();
 
     // An agent of the user's own whose command this machine lacks says so.
-    await dialog.getByRole("button", { name: "Ajouter un agent" }).click();
-    await dialog.getByLabel("Nom").fill("Mon agent");
-    await dialog.getByLabel("Commande qui le lance en mode ACP").fill("pas-une-commande-e2e acp");
-    await dialog.getByRole("button", { name: "Ajouter", exact: true }).click();
-    const mine = dialog.locator(".cx-row", { hasText: "Mon agent" });
+    await agents.getByRole("button", { name: "Ajouter un agent" }).click();
+    const adding = page.getByRole("dialog", { name: "Ajouter un agent" });
+    await adding.getByLabel("Nom").fill("Mon agent");
+    await adding.getByLabel("Commande qui le lance en mode ACP").fill("pas-une-commande-e2e acp");
+    await adding.getByRole("button", { name: "Ajouter", exact: true }).click();
+    const mineRow = agents.getByRole("button", { name: /^Mon agent/ });
+    await mineRow.click();
+    const mine = page.getByRole("dialog", { name: "Mon agent" });
     await mine.getByText("Commande introuvable sur cette machine : pas-une-commande-e2e").waitFor();
     await shot(page, "c7-connexions");
-    await mine.getByRole("button", { name: "Retirer Mon agent" }).click();
-    await mine.getByRole("button", { name: "Confirmer le retrait de Mon agent" }).click();
-    await expect.poll(() => mine.count()).toBe(0);
-    await dialog.getByRole("button", { name: "Fermer" }).click();
+    await mine.getByRole("button", { name: "Retirer cet agent" }).click();
+    await page
+      .getByRole("alertdialog")
+      .getByRole("button", { name: "Retirer", exact: true })
+      .click();
+    await expect.poll(() => mineRow.count()).toBe(0);
+    await page.getByRole("button", { name: "Fermer les réglages" }).click();
 
     // A supervised turn waits for the user, who answers from À traiter.
-    await pickAgent(page, /Agent de démo/);
-    await page.keyboard.press("Escape");
+    await pickAgent(page);
     await supervised(page);
     await composer(page).fill("Corrige la réponse");
     await composer(page).press("Enter");
-    const inbox = page.getByRole("button", { name: /À traiter/ });
+    const inbox = pages(page).getByRole("button", { name: /^À traiter/ });
     // The agent starts its process before it asks: more than the poll's usual second on CI.
     await expect.poll(() => inbox.textContent(), { timeout: 15_000 }).toContain("1");
     await inbox.click();
-    const requests = page.getByRole("dialog", { name: "À traiter" });
+    const requests = page.getByRole("region", { name: "À traiter" });
     await requests.getByText("Modifier src/app.ts").waitFor();
     await shot(page, "c8-a-traiter");
     await requests.getByRole("button", { name: "Autoriser" }).click();
-    await requests.getByText("Aucun agent n'attend ta réponse.").waitFor();
-    await requests.getByRole("button", { name: "Fermer" }).click();
+    await requests.getByText("Rien ne t'attend").waitFor();
+    await menu(page)
+      .getByRole("button", { name: /^Corrige la réponse/ })
+      .first()
+      .click();
     await page.getByText("C'est fait, la réponse vaut 42.").last().waitFor();
     await page.close();
   });
@@ -287,10 +283,11 @@ describe("composer", () => {
   it("opens the model sheet inside a phone screen, with or without favorites", async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 780 }, hasTouch: true });
     await page.goto(url);
-    const sheet = page.getByRole("menu", { name: "Modèle" });
+    const wheel = page.getByRole("dialog", { name: "Modèle", exact: true });
+    const all = page.getByRole("dialog", { name: "Tous les modèles" });
     // Whole on the screen, and still there once the composer has finished opening: it used to
     // flash by the composer, then sit above the top of the screen behind a grey veil.
-    const inside = async () => {
+    const inside = async (sheet: typeof wheel) => {
       const box = await sheet.boundingBox();
       return (
         !!box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 390 && box.y + box.height <= 780
@@ -299,30 +296,35 @@ describe("composer", () => {
     const openSheet = async () => {
       // The composer folds back once the sheet closes: it opens again first.
       await composer(page).click();
-      await page.locator(".agentchip").click();
-      await expect.poll(inside).toBe(true);
+      await pill(page).click();
+      await expect.poll(() => inside(wheel)).toBe(true);
       await page.waitForTimeout(600);
-      expect(await inside()).toBe(true);
+      expect(await inside(wheel)).toBe(true);
     };
     await openSheet();
     await shot(page, "c10-modele-mobile");
-    // With a favorite starred from « Tous », the wheel opens in the same place.
-    await sheet.getByRole("button", { name: "Tous" }).click();
-    await expect.poll(inside).toBe(true);
-    const star = sheet.getByRole("button", { name: "Ajouter aux favoris" }).first();
+    // With a favorite starred from « Plus », the wheel opens in the same place.
+    await wheel.getByRole("button", { name: "Plus", exact: true }).click();
+    await expect.poll(() => inside(all)).toBe(true);
+    // The demo agent's models come once it is picked.
+    await all.getByRole("menuitemradio", { name: /^Agent de démo/ }).click();
+    const star = all.getByRole("button", { name: "Ajouter aux favoris" }).first();
     await star.waitFor({ timeout: 30_000 });
     await star.click();
-    await sheet.getByRole("button", { name: "Retirer des favoris" }).first().waitFor();
-    await sheet.getByRole("button", { name: "Retour" }).click();
-    await sheet.getByRole("listbox", { name: "Modèles favoris" }).waitFor();
-    expect(await inside()).toBe(true);
-    await sheet.getByRole("button", { name: "Fermer" }).click();
-    await expect.poll(() => sheet.count()).toBe(0);
+    await all.getByRole("button", { name: "Retirer des favoris" }).first().waitFor();
+    await all.getByRole("button", { name: "Favoris", exact: true }).click();
+    await wheel.getByRole("listbox", { name: "Modèles favoris" }).waitFor();
+    await expect.poll(() => inside(wheel)).toBe(true);
+    await wheel.getByRole("button", { name: "Fermer", exact: true }).click();
+    await expect.poll(() => page.getByRole("dialog").count()).toBe(0);
     await openSheet();
     await shot(page, "c11-modele-mobile-favori");
     // Taken off again, so the other tests keep the wheel they expect.
-    await sheet.getByRole("button", { name: "Tous" }).click();
-    await sheet.getByRole("button", { name: "Retirer des favoris" }).first().click();
+    await wheel.getByRole("button", { name: "Plus", exact: true }).click();
+    await all.getByRole("button", { name: "Retirer des favoris" }).first().click();
+    await expect
+      .poll(() => all.getByRole("button", { name: "Retirer des favoris" }).count())
+      .toBe(0);
     await page.close();
   });
   // The stand-in « gh » is a POSIX shell script that Windows cannot run (the server does not take
@@ -333,24 +335,29 @@ describe("composer", () => {
       const page = await browser.newPage();
       await page.goto(url);
       await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-      // GitHub comes first, signed in here through the user's own `gh`.
+      const sheet = page.getByRole("dialog", { name: "Nouveau projet" });
+      // Signed in here through the user's own `gh`.
+      await sheet.getByRole("radio", { name: "GitHub" }).click();
       // The list arrives: it used to stay on « Chargement de tes dépôts… » forever.
-      const list = page.getByRole("list", { name: "Tes dépôts GitHub" });
+      const list = sheet.getByRole("group", { name: "Tes dépôts GitHub" });
       await expect.poll(() => list.getByRole("button").count()).toBe(2);
-      await page.getByRole("textbox", { name: "Dépôt" }).fill("https://github.com/moon");
-      await page.getByText("C'est l'adresse du compte @moon").waitFor();
-      await expect.poll(() => page.getByRole("button", { name: "Cloner" }).isDisabled()).toBe(true);
-      await page.getByRole("textbox", { name: "Dépôt" }).fill("");
-      await list.getByRole("button", { name: /moon\/site/ }).click();
+      // An account's address names no repository: its repositories stay, nothing to clone yet.
+      const repoField = sheet.getByRole("textbox", { name: "Dépôt" });
+      await repoField.fill("https://github.com/moon");
+      await expect.poll(() => list.getByRole("button").count()).toBe(2);
+      expect(await sheet.getByRole("button", { name: "Cloner" }).isDisabled()).toBe(true);
+      await repoField.fill("https://github.com/personne");
+      await list.getByText("Aucun dépôt de @personne").waitFor();
+      await repoField.fill("");
+      await list.getByRole("button", { name: /^site/ }).click();
       // Picked: where it goes is said, and can be changed.
-      await page.getByText("Sera cloné dans").waitFor();
-      expect(await page.locator(".np-where .mono").textContent()).toMatch(/[\\/]site$/);
-      await page.getByRole("button", { name: "Changer", exact: true }).last().click();
       expect(
-        await page.getByRole("textbox", { name: "Nom du dossier" }).getAttribute("placeholder"),
+        await sheet.getByRole("textbox", { name: "Nom du dossier" }).getAttribute("placeholder"),
       ).toBe("site");
+      await sheet.getByRole("button", { name: /^Emplacement/ }).click();
+      await expect.poll(() => sheet.getByLabel("Cloner dans").inputValue()).not.toBe("");
       await expect
-        .poll(() => page.getByRole("button", { name: "Cloner" }).isDisabled())
+        .poll(() => sheet.getByRole("button", { name: "Cloner" }).isDisabled())
         .toBe(false);
       await page.close();
     },
@@ -358,59 +365,76 @@ describe("composer", () => {
   it("archives a thread, brings it back, deletes it, then removes the project", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
-    await page.getByRole("button", { name: "Corrige la réponse" }).first().click();
-    const menu = page.getByRole("button", { name: "Actions du fil" });
+    const side = menu(page);
+    const line = side.getByRole("button", { name: /^Corrige la réponse/ }).first();
+    await line.click();
+    const actions = page.getByRole("button", { name: "Actions du fil" });
+    const threadMenu = page.getByRole("menu", { name: "Actions du fil" });
+    const resolvedNote = page.getByText("Ce fil est résolu");
 
     // On a phone, the menu opens inside the screen.
     await page.setViewportSize({ width: 390, height: 780 });
-    await menu.click();
-    const box = await page.locator(".menu.thread-menu").boundingBox();
-    expect(box && box.y >= 0 && box.y + box.height <= 780 && box.x >= 0).toBe(true);
-    await menu.click();
+    await actions.click();
+    await threadMenu.getByRole("menuitem", { name: "Marquer résolu" }).waitFor();
+    const box = await threadMenu.boundingBox();
+    expect(
+      box && box.y >= 0 && box.y + box.height <= 780 && box.x >= 0 && box.x + box.width <= 390,
+    ).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect.poll(() => threadMenu.count()).toBe(0);
     await page.setViewportSize({ width: 1280, height: 820 });
 
-    await menu.click();
-    await page.getByRole("menuitem", { name: "Marquer résolu" }).click();
-    await page.getByText("Cette discussion est résolue.").waitFor();
-    await page.getByRole("button", { name: "Résolus (1)" }).click();
+    await actions.click();
+    await threadMenu.getByRole("menuitem", { name: "Marquer résolu" }).click();
+    await resolvedNote.waitFor();
+    await side.getByRole("button", { name: "Résolus (1)" }).click();
     await shot(page, "c9-archive");
-    await page.getByRole("button", { name: "Rouvrir" }).click();
-    await expect.poll(() => composer(page).count()).toBe(1);
+    await page.getByRole("button", { name: "Rouvrir", exact: true }).click();
+    await expect.poll(() => resolvedNote.count()).toBe(0);
 
-    // The same actions from the sidebar, behind « … » on the thread's line.
-    const more = page.getByRole("button", { name: /^Actions de Corrige la réponse/ }).first();
+    // The same actions from the sidebar, with a right click on the thread's line.
     const rowMenu = page.getByRole("menu", { name: /^Actions de Corrige la réponse/ });
-    await more.click();
+    await line.click({ button: "right" });
     await rowMenu.getByRole("menuitem", { name: /pingler$/ }).waitFor();
     if (shots) await page.waitForTimeout(300);
     await shot(page, "c9b-menu-ligne");
     await page.keyboard.press("Escape");
     await expect.poll(() => rowMenu.count()).toBe(0);
-    // A pinned thread is listed twice: the menu belongs to one line, and moves to the other.
-    const twice = page.getByRole("button", { name: /^Actions de Lis/ });
-    expect(await twice.count()).toBe(2);
-    // The lower line first: its menu drops below it, clear of the other line's button.
-    await twice.last().click();
-    await expect.poll(() => page.locator(".thr-row.menu-open").count()).toBe(1);
-    await twice.first().click();
-    await expect.poll(() => twice.first().getAttribute("aria-expanded")).toBe("true");
-    expect(await twice.last().getAttribute("aria-expanded")).toBe("false");
-    expect(await page.locator(".thr-row.menu-open").count()).toBe(1);
+    // One menu at a time: asked on another line, it moves there.
+    const other = side.getByRole("button", { name: /^Lis @src/ }).first();
+    await line.click({ button: "right" });
+    await rowMenu.waitFor();
+    await other.click({ button: "right" });
+    await page.getByRole("menu", { name: /^Actions de Lis/ }).waitFor();
+    await expect.poll(() => page.getByRole("menu").count()).toBe(1);
     await page.keyboard.press("Escape");
-    await expect.poll(() => page.getByRole("menu", { name: /^Actions de Lis/ }).count()).toBe(0);
-    await more.click();
+    await expect.poll(() => page.getByRole("menu").count()).toBe(0);
+    await line.click({ button: "right" });
     await rowMenu.getByRole("menuitem", { name: "Marquer résolu" }).click();
-    await page.getByText("Cette discussion est résolue.").waitFor();
-    await more.click();
+    await resolvedNote.waitFor();
+    await line.click({ button: "right" });
     await rowMenu.getByRole("menuitem", { name: "Rouvrir" }).click();
-    await expect.poll(() => composer(page).count()).toBe(1);
-    // On a phone there is no hover: the button is always there, and the menu is a sheet.
-    // In a conversation, the arrow goes back home, where the « Projets » tab opens the list.
+    await expect.poll(() => resolvedNote.count()).toBe(0);
+    // On a phone there is no right click: a finger held on the line opens the same menu, and
+    // does not open the thread. In a conversation, the arrow goes back first.
     await page.setViewportSize({ width: 390, height: 780 });
     await page.getByRole("button", { name: "Retour", exact: true }).click();
-    await page.locator(".tabbar").getByRole("button", { name: "Projets", exact: true }).click();
-    await more.click();
-    // The sheet slides up: wait until it sits whole on the screen.
+    await page.getByRole("button", { name: "Menu", exact: true }).click();
+    const at = (await line.boundingBox())!;
+    const finger = {
+      pointerType: "touch",
+      bubbles: true,
+      clientX: at.x + 40,
+      clientY: at.y + at.height / 2,
+    };
+    const here = page.url();
+    await expect.poll(() => rowMenu.count()).toBe(0);
+    await line.dispatchEvent("pointerdown", finger);
+    await rowMenu.waitFor();
+    await line.dispatchEvent("pointerup", finger);
+    await line.dispatchEvent("click");
+    expect(page.url()).toBe(here);
+    // Whole on the screen.
     await expect
       .poll(async () => {
         const sheet = await rowMenu.boundingBox();
@@ -422,27 +446,32 @@ describe("composer", () => {
     if (shots) await page.waitForTimeout(400);
     await shot(page, "c9c-menu-ligne-mobile");
     await page.keyboard.press("Escape");
+    await expect.poll(() => rowMenu.count()).toBe(0);
     await page.setViewportSize({ width: 1280, height: 820 });
 
-    await more.click();
+    await line.click({ button: "right" });
     await rowMenu.getByRole("menuitem", { name: "Supprimer…" }).click();
     const confirm = page.getByRole("alertdialog", { name: "Supprimer cette discussion ?" });
     await confirm.getByRole("button", { name: "Supprimer" }).click();
     await expect
-      .poll(() => page.getByRole("button", { name: "Corrige la réponse" }).count())
+      .poll(() => side.getByRole("button", { name: /^Corrige la réponse/ }).count())
       .toBe(0);
 
-    await page.getByRole("button", { name: "Retirer le projet projet" }).click();
+    // The project leaves from its own settings.
+    await side.getByRole("button", { name: /^projet/ }).click();
+    await page.getByRole("button", { name: "Réglages du projet" }).click();
+    await page
+      .getByRole("dialog", { name: "Réglages du projet" })
+      .getByRole("button", { name: "Retirer de MoonAgentic" })
+      .click();
     await page
       .getByRole("alertdialog", { name: "Retirer ce projet ?" })
       .getByRole("button", { name: "Retirer" })
       .click();
-    // With no project left, the « Projets » section is not shown at all.
-    await expect
-      .poll(() =>
-        page.locator(".side-scroll").getByRole("button", { name: "Projets", exact: true }).count(),
-      )
-      .toBe(0);
+    // With no project left, the section only offers to make one.
+    await expect.poll(() => side.getByRole("button", { name: /^projet/ }).count()).toBe(0);
+    await side.getByRole("button", { name: "Nouveau projet" }).waitFor();
+    await page.waitForURL((u) => u.pathname === "/");
     // The folder itself is left alone.
     expect(existsSync(path.join(project, "src/app.ts"))).toBe(true);
     await page.close();
@@ -451,11 +480,8 @@ describe("composer", () => {
   it("gives a task to a team: the lead splits it, coders do the pieces on their own branches", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(repo);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
-    await inProject(page, "equipe");
+    await addProject(page, repo);
+    await expect.poll(() => composer(page).isEnabled()).toBe(true);
 
     await composer(page).fill("/equipe Corrige answer et documente-la");
     await composer(page).press("Enter");
@@ -463,381 +489,410 @@ describe("composer", () => {
     await expect
       .poll(() => dialog.getByLabel("Tâche").inputValue())
       .toBe("Corrige answer et documente-la");
-    // The demo agent for every role, not a real one that may be installed on this machine.
-    await dialog.getByLabel("Chef", { exact: true }).selectOption("demo\n");
-    await dialog.getByLabel("Codeurs", { exact: true }).selectOption("demo\n");
-    await dialog.getByLabel("Relecteur", { exact: true }).selectOption("demo\n");
-    await dialog.getByLabel("Testeur", { exact: true }).selectOption("demo\n");
-    await dialog.getByLabel("Fusionneur", { exact: true }).selectOption("demo\n");
+    /** Who takes a role: the demo agent, not a real one that may be installed here, or no one. */
+    const give = async (role: string, to: "demo" | "none") => {
+      await dialog.getByRole("button", { name: new RegExp(`^${role} : `) }).click();
+      const sheet = page.getByRole("dialog", { name: role, exact: true });
+      const wanted =
+        to === "none"
+          ? sheet.getByRole("radio", { name: "Personne", exact: true })
+          : sheet
+              .getByRole("group", { name: "Agent de démo", exact: true })
+              .getByRole("radio")
+              .first();
+      const all = sheet.getByRole("button", { name: "Tous", exact: true });
+      await expect
+        .poll(async () => {
+          if (await wanted.count()) return true;
+          if (await all.count()) await all.click();
+          return false;
+        })
+        .toBe(true);
+      await wanted.click();
+      await sheet.waitFor({ state: "hidden" });
+    };
+    for (const role of ["Chef", "Codeurs", "Relecture", "Tests", "Fusion"])
+      await give(role, "demo");
     await shot(page, "c10-equipe-lancer");
     // The team opens its pull request at the end unless told not to.
-    const autoShip = dialog.getByLabel(/Ouvrir la PR à la fin/);
-    expect(await autoShip.isChecked()).toBe(true);
+    const autoShip = dialog.getByRole("switch", { name: "Ouvrir la PR à la fin" });
+    expect(await autoShip.getAttribute("aria-checked")).toBe("true");
     await autoShip.scrollIntoViewIfNeeded();
     await shot(page, "c10c-equipe-pr");
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
-    // Every role is on the timeline from the start, the agent and model of each said.
-    const strip = page.getByRole("region", { name: "Frise de l'équipe" });
-    await strip.getByText(/^Fusionneur · Agent de démo/).waitFor();
+    // Every role is on the list from the start, the model of each said.
+    const card = page.getByRole("region", { name: "Équipe", exact: true });
+    await card.getByRole("button", { name: /^Fusion, / }).waitFor();
     await dialog.waitFor({ state: "hidden" });
     await shot(page, "c10b-equipe-depart");
 
-    const card = page.getByRole("region", { name: "Équipe", exact: true });
-    await card.getByText("Terminé : tout est réuni sur une branche").waitFor({ timeout: 30_000 });
-    // One view of the team, its timeline: under it, only what is the user's to do. This
-    // repository has no remote: the team says so, and can try again.
+    await card.getByText("Terminée · 6 sur 6").waitFor({ timeout: 30_000 });
+    expect(await card.locator(".tmr").count()).toBe(6);
+    // Under the list, only what is the user's to do. This repository has no remote: the team
+    // says so, and can try again.
     await card.getByText(/remote/).waitFor();
-    expect(await card.getByRole("button").allTextContents()).toEqual([
-      "Ouvrir la fusion",
-      "Réessayer",
-    ]);
+    await card.getByRole("button", { name: "Réessayer" }).waitFor();
     expect(await page.getByText("Découper la tâche").count()).toBe(0);
-    // The same team as a tree of its agents: the lead, each piece with its reviewer and its
-    // tester, the merge. A card opens what there is to know about its agent.
-    await strip.getByRole("radio", { name: "Arbre" }).click();
-    const tree = strip.locator(".tt");
-    await expect.poll(() => tree.locator(".tt-card").count()).toBe(8);
-    await tree.getByRole("button", { name: /^Chef,/ }).click();
-    await tree.getByRole("button", { name: "Ouvrir son fil" }).waitFor();
-    await shot(page, "c10d-equipe-arbre");
-    await page.keyboard.press("Escape");
-    await strip.getByRole("radio", { name: "Étapes" }).click();
     // The lead's internal prompt and plan stay folded: only « Voir le détail » shows.
     expect(await page.getByText("Tu es le chef d'une équipe").count()).toBe(0);
-    await page.locator(".team-detail-h").first().click();
+    await page.locator(".det .fold").last().click();
     await page.getByText("Tu es le chef d'une équipe").waitFor();
-    await page.locator(".team-detail-h").first().click();
+    await page.locator(".det .fold").last().click();
     // Ctrl K leaves the team's own messages out, and opens the detail that holds a hit.
     await page.keyboard.press("Control+k");
     const search = page.getByRole("combobox", { name: "Rechercher" });
     await search.fill("Tu es le chef d'une équipe");
-    await page.getByText("Aucun résultat.").waitFor();
+    await page.getByText("Aucune discussion ne contient « Tu es le chef d'une équipe ».").waitFor();
     await search.fill("Voici le plan");
     await page.getByRole("option", { name: /Voici le plan/ }).click();
     await page.getByText("Voici le plan.").waitFor();
-    expect(await page.locator(".team-detail.open").count()).toBe(1);
-    await page.locator(".team-detail-h").first().click();
-    // The team is one line of its project in the sidebar; open, its lead shows every member
-    // under it: two coders, their reviewers and testers, and the merge.
-    expect(await page.locator(".thr-row.lead").count()).toBe(1);
-    expect(await page.locator(".thr-row.child").count()).toBe(7);
-    // Its chevron still folds it, though its lead's thread is open; so does the project's.
-    await page.getByRole("button", { name: /^Replier l'équipe/ }).click();
-    expect(await page.locator(".thr-row.child").count()).toBe(0);
-    await page.getByRole("button", { name: /^Replier le projet/ }).click();
-    expect(await page.locator(".thr-row.lead").count()).toBe(0);
-    await page.getByRole("button", { name: /^Déplier le projet/ }).click();
-    await page.getByRole("button", { name: /^Déplier l'équipe/ }).click();
-    // The timeline, drawn from what the team really did: a lane for the lead, each piece
-    // and the merge, ended.
+    expect(await page.locator(".det.open").count()).toBe(1);
+    await page.locator(".det .fold").last().click();
+    // The team is one line in the sidebar: its members are reached from its own list.
+    const side = menu(page);
     expect(
-      await strip
-        .getByRole("button", { name: /^(Chef|Corriger answer|Documenter answer|Fusion) :/ })
-        .count(),
-    ).toBe(4);
-    await strip.getByText(/^Terminée · /).waitFor();
+      await side.getByRole("button", { name: /^Équipe : Corrige answer et documente-la/ }).count(),
+    ).toBe(1);
+    expect(await side.getByRole("button", { name: /^(Corriger|Documenter) answer/ }).count()).toBe(
+      0,
+    );
     await shot(page, "c11-equipe");
-    await card.getByRole("button", { name: "Ouvrir la fusion" }).click();
-    await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).click();
-
-    await strip.getByRole("button", { name: /^Documenter answer :/ }).click();
-    await page.getByRole("button", { name: /Sous-tâche de l'équipe/ }).waitFor();
+    // Each line opens its member's thread, which leads back to the team.
+    await card.getByRole("button", { name: /^Codeur 2, .* : Documenter answer/ }).click();
+    await page.waitForURL(/\/t\//);
+    const back = page.getByRole("button", { name: /Sous-tâche de l'équipe/ });
+    await back.waitFor();
     await shot(page, "c11b-equipe-codeur");
+    await back.click();
+    await card.getByText("Terminée · 6 sur 6").waitFor();
 
     // A piece the reviewer keeps refusing goes back three times, then to the lead, then to the user.
     await composer(page).fill("/equipe Corrige answer, à toujours refuser");
     await composer(page).press("Enter");
-    await dialog.getByLabel("Chef", { exact: true }).selectOption("demo\n");
-    await dialog.getByLabel("Codeurs", { exact: true }).selectOption("demo\n");
-    await dialog.getByLabel("Relecteur", { exact: true }).selectOption("demo\n");
-    await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Personne" });
-    await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Personne" });
+    await dialog.waitFor();
+    for (const role of ["Chef", "Codeurs", "Relecture"]) await give(role, "demo");
+    for (const role of ["Tests", "Fusion"]) await give(role, "none");
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
-    await card.getByText("2 sous-tâches t'attendent").waitFor({ timeout: 60_000 });
+    await card.getByText(/^T'attend · /).waitFor({ timeout: 60_000 });
     await shot(page, "c12-equipe-bloquee");
-    await card.getByRole("button", { name: "Relancer « Corriger answer »" }).click();
-    await card.getByText("L'équipe travaille").or(card.getByText("t'attend")).first().waitFor();
+    const again = card.getByRole("button", { name: "Relancer « Corriger answer »" });
+    await again.click();
+    await card
+      .getByText(/^Au travail · /)
+      .or(card.getByText(/^T'attend · /))
+      .first()
+      .waitFor();
 
-    // Live: supervised coders wait on the user, and the timeline says so as it happens.
+    // Live: supervised coders wait on the user, and their lines say so as it happens.
     await composer(page).fill("/equipe Corrige answer");
     await composer(page).press("Enter");
-    await dialog.getByLabel("Chef", { exact: true }).selectOption("demo\n");
-    await dialog.getByLabel("Codeurs", { exact: true }).selectOption("demo\n");
-    await dialog.getByLabel("Relecteur", { exact: true }).selectOption({ label: "Personne" });
-    await dialog.getByLabel("Testeur", { exact: true }).selectOption({ label: "Personne" });
-    await dialog.getByLabel("Fusionneur", { exact: true }).selectOption({ label: "Personne" });
-    await dialog
-      .getByLabel("Accès des codeurs")
-      .selectOption({ label: "Ils me demandent avant d'agir" });
+    await dialog.waitFor();
+    for (const role of ["Chef", "Codeurs"]) await give(role, "demo");
+    for (const role of ["Relecture", "Tests", "Fusion"]) await give(role, "none");
+    await dialog.getByRole("radio", { name: "Me demander" }).click();
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
-    await strip.getByText("2 attendent ton accord").waitFor({ timeout: 30_000 });
-    expect(await strip.getByRole("button", { name: /: attend ton accord$/ }).count()).toBe(2);
-    await shot(page, "c13-frise-en-direct");
-    await card.getByRole("button", { name: "Arrêter l'équipe" }).click();
-    await strip.getByText(/^Arrêtée · /).waitFor();
+    await expect
+      .poll(
+        () => card.getByRole("button", { name: /^Codeur \d, .* : Attend ta réponse$/ }).count(),
+        {
+          timeout: 30_000,
+        },
+      )
+      .toBe(2);
+    await shot(page, "c13-equipe-en-direct");
+    // A team at work is stopped from the thread's menu, not by a button under its list.
+    expect(await card.getByRole("button", { name: /Arrêter/ }).count()).toBe(0);
+    await page.getByRole("button", { name: "Actions du fil" }).click();
+    await page.getByRole("menuitem", { name: "Arrêter l'équipe" }).click();
+    await card.getByText(/^Arrêtée · /).waitFor();
     await page.close();
   });
 
   it("shows a project's conversations grouped by state, on a page of its own", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
-    const inSidebar = page.locator(".thr-row.proj", { hasText: "equipe" }).locator(".thr");
+    const side = menu(page);
+    const inSidebar = side.getByRole("button", { name: /^equipe/ });
     await inSidebar.click();
-    await page.getByRole("heading", { name: "equipe" }).waitFor();
+    await page.getByText("Coordinateur du projet").waitFor();
     expect(new URL(page.url()).pathname).toMatch(/^\/p\//);
+    /** The project's threads beside its page, on a wide screen. */
+    const beside = page.getByRole("complementary", { name: "Fils du projet" });
 
     // A conversation opened from the page lands in the project, and comes back on its list.
-    await page.getByRole("button", { name: "Fil", exact: true }).click();
-    await pickAgent(page, /Agent de démo/);
-    await page.keyboard.press("Escape");
+    await beside.getByRole("button", { name: "Nouveau fil" }).click();
+    await pickAgent(page);
     await supervised(page);
     await composer(page).fill("Dis bonjour");
     await composer(page).press("Enter");
     // The new thread opens by itself, then back to the project.
     await page.waitForURL(/\/t\//);
     await inSidebar.click();
-    await page.getByRole("heading", { name: "equipe" }).waitFor();
+    await page.waitForURL(/\/p\//);
     // Sent, then gone to another page before the thread exists: the user stays where they went.
-    await page.getByRole("button", { name: "Fil", exact: true }).click();
+    await beside.getByRole("button", { name: "Nouveau fil" }).click();
     await composer(page).fill("Dis au revoir");
     await composer(page).press("Enter");
     await inSidebar.click();
-    await page.locator(".pp-row", { hasText: "Dis au revoir" }).waitFor();
+    await beside.getByRole("button", { name: /Dis au revoir/ }).waitFor();
     await page.waitForTimeout(300);
     expect(new URL(page.url()).pathname).toMatch(/^\/p\//);
-    const group = (name: string) => page.locator(".pp-group", { hasText: name });
-    const fold = (name: string) => page.locator(".pp-gh", { hasText: name });
+
+    // « Vue d'ensemble » groups them by what is really going on.
+    await page.getByRole("button", { name: "Vue d'ensemble" }).click();
+    const rows = (group: string) => page.locator(`.trow[data-group="${group}"]`);
     // Its agent asks before changing a file: the thread waits on the user, and says so.
-    const row = group("En attente").locator(".pp-row", { hasText: "Dis bonjour" });
+    const row = rows("waiting").filter({ hasText: "Dis bonjour" });
     await row.waitFor();
-    expect(await row.locator(".pp-line").textContent()).toBe("Attend ta réponse.");
-    // What needs no one is folded until asked.
-    expect(await fold("Inactif").getAttribute("aria-expanded")).toBe("false");
-    await fold("Inactif").click();
+    expect(await row.locator(".s").textContent()).toBe("Attend ta réponse.");
+    await page.getByText(/^T'attend · \d+$/).waitFor();
     // A team counts once, as its lead: its coders stay behind it.
-    expect(await page.locator(".pp-row", { hasText: "Dis bonjour" }).count()).toBe(1);
-    expect(await page.locator(".pp-row .pp-agent", { hasText: "Équipe de" }).count()).toBe(
-      await page.locator(".pp-row", { hasText: "Équipe :" }).count(),
+    expect(await page.locator(".trow", { hasText: "Dis bonjour" }).count()).toBe(1);
+    expect(await page.locator(".trow", { hasText: /^(Corriger|Documenter) answer/ }).count()).toBe(
+      0,
     );
     if (shots) await page.waitForTimeout(300);
     await shot(page, "p1-page-projet");
 
     // Once answered, the thread is at rest, under what its agent really said last.
-    await page
-      .getByRole("button", { name: /À traiter/ })
-      .first()
+    await pages(page)
+      .getByRole("button", { name: /^À traiter/ })
       .click();
-    const requests = page.getByRole("dialog", { name: "À traiter" });
+    const requests = page.getByRole("region", { name: "À traiter" });
     // Both threads opened here ask the same thing.
     const allow = requests.getByRole("button", { name: "Autoriser" });
     await expect.poll(() => allow.count()).toBe(2);
     await allow.first().click();
     await expect.poll(() => allow.count()).toBe(1);
     await allow.first().click();
-    await requests.getByRole("button", { name: "Fermer" }).click();
-    const idle = group("Inactif").locator(".pp-row", { hasText: "Dis bonjour" });
+    await requests.getByText("Rien ne t'attend").waitFor();
+    // Back on the project, its page is as it was left: on its overview.
+    await inSidebar.click();
+    await page.getByRole("tablist", { name: "Vue d'ensemble" }).waitFor();
+    const idle = rows("idle").filter({ hasText: "Dis bonjour" });
     await idle.waitFor();
-    await expect.poll(() => idle.locator(".pp-line").textContent()).toContain("C'est fait");
+    await expect.poll(() => idle.locator(".s").textContent()).toContain("C'est fait");
 
-    // Resolved from its menu, it moves to « Résolu »; reopened, it comes back.
-    await idle.getByRole("button", { name: "Actions de Dis bonjour" }).click();
-    await page.getByRole("menuitem", { name: "Marquer résolu" }).click();
-    await fold("Résolu").click();
-    const resolved = group("Résolu").locator(".pp-row", { hasText: "Dis bonjour" });
+    // Resolved from its menu, it moves to « Résolus »; reopened, it comes back.
+    const rowMenu = page.getByRole("menu", { name: "Actions de Dis bonjour" });
+    await idle.click({ button: "right" });
+    await rowMenu.getByRole("menuitem", { name: "Marquer résolu" }).click();
+    await page.getByRole("button", { name: /^Résolus · \d+/ }).click();
+    const resolved = rows("resolved").filter({ hasText: "Dis bonjour" });
     await resolved.waitFor();
     await shot(page, "p2-resolu");
-    await resolved.getByRole("button", { name: "Actions de Dis bonjour" }).click();
-    await page.getByRole("menuitem", { name: "Rouvrir" }).click();
-    await group("Inactif").locator(".pp-row", { hasText: "Dis bonjour" }).waitFor();
+    await resolved.click({ button: "right" });
+    await rowMenu.getByRole("menuitem", { name: "Rouvrir" }).click();
+    await idle.waitFor();
+    await page.getByRole("button", { name: "Retour", exact: true }).click();
 
-    // The project takes another name in place, for every window.
-    await page.getByRole("button", { name: "Actions du projet" }).click();
-    await page.getByRole("menuitem", { name: "Renommer" }).waitFor();
+    // The project takes another name from its settings, for every window.
+    const settings = page.getByRole("dialog", { name: "Réglages du projet" });
+    const rename = async (name: string) => {
+      await page.getByRole("button", { name: "Réglages du projet" }).click();
+      await settings.getByLabel("Nom du projet").fill(name);
+      await settings.getByLabel("Nom du projet").press("Enter");
+      await side.getByRole("button", { name: new RegExp(`^${name}( |$)`) }).waitFor();
+      await settings.getByRole("button", { name: "Fermer", exact: true }).click();
+    };
+    await rename("equipe bis");
     if (shots) await page.waitForTimeout(300);
-    await shot(page, "p3-menu-projet");
-    await page.getByRole("menuitem", { name: "Renommer" }).click();
-    await page.getByLabel("Nom du projet").fill("equipe bis");
-    await page.getByLabel("Nom du projet").press("Enter");
-    await page.getByRole("heading", { name: "equipe bis" }).waitFor();
-    await page.getByRole("button", { name: "Actions du projet" }).click();
-    await page.getByRole("menuitem", { name: "Renommer" }).click();
-    await page.getByLabel("Nom du projet").fill("equipe");
-    await page.getByLabel("Nom du projet").press("Enter");
-    await page.getByRole("heading", { name: "equipe", exact: true }).waitFor();
+    await shot(page, "p3-projet-renomme");
+    await rename("equipe");
 
-    // Pinned from its menu, the project says so in the list, for every window.
-    await page.getByRole("button", { name: "Actions du projet" }).click();
-    await page.getByRole("menuitem", { name: "Épingler" }).click();
-    await inSidebar.getByLabel("Épinglé").waitFor();
-    await page.getByRole("button", { name: "Actions du projet" }).click();
-    await page.getByRole("menuitem", { name: "Désépingler" }).waitFor();
-    await page.keyboard.press("Escape");
+    // Pinned from its settings: kept by the server, still so once the page is loaded again.
+    await page.getByRole("button", { name: "Réglages du projet" }).click();
+    const pin = settings.getByRole("switch", { name: "Épingler le projet" });
+    await pin.click();
+    await expect.poll(() => pin.getAttribute("aria-checked")).toBe("true");
+    await page.reload();
+    await page.getByRole("button", { name: "Réglages du projet" }).click();
+    await expect.poll(() => pin.getAttribute("aria-checked")).toBe("true");
+    await settings.getByRole("button", { name: "Fermer", exact: true }).click();
 
     // The coordinator: one agent to talk to about the whole project. Its agent calls
     // MoonAgentic's own tools, here to open a thread on a branch of its own.
-    await page.getByLabel("Modèle du coordinateur").selectOption("demo\n");
+    await page.getByRole("button", { name: /^Modèle du coordinateur : / }).click();
+    const models = page.getByRole("dialog", { name: "Modèle", exact: true });
+    const demoModel = models
+      .getByRole("group", { name: "Agent de démo", exact: true })
+      .getByRole("radio")
+      .first();
+    await expect
+      .poll(async () => {
+        if (await demoModel.count()) return true;
+        const all = models.getByRole("button", { name: "Tous", exact: true });
+        if (await all.count()) await all.click();
+        return false;
+      })
+      .toBe(true);
+    await demoModel.click();
     await page.getByRole("button", { name: "Activer le coordinateur" }).click();
-    // Its conversation takes the page, the threads beside it.
-    await page.locator(".pp-panel").waitFor();
-    // Before anything is asked: ways to start, and a panel that says what will come there.
-    await page.locator(".pp-hello").getByRole("button", { name: "Établir un plan" }).waitFor();
+    // Before anything is asked: ways to start, the threads still beside.
+    await page.getByRole("button", { name: "Établir un plan" }).waitFor();
+    await beside.getByRole("button", { name: /Dis bonjour/ }).waitFor();
     // What the coordinator works with, as the server has it.
+    await page.getByRole("button", { name: "Vue d'ensemble" }).click();
     await page.getByRole("tab", { name: "Contexte" }).click();
-    const context = page.locator(".pp-ctx");
-    await context.getByText("Tout va à l'agent du coordinateur.").waitFor();
-    expect(await context.getByText("Agent de démo").count()).toBe(1);
-    expect(await page.locator(".pp-panel .pp-row").count()).toBe(0);
+    await page
+      .getByRole("button", { name: /^Coordinateur/ })
+      .getByText(/démo/i)
+      .waitFor();
+    await page.getByText("Accès des fils").waitFor();
+    await page.getByText("Fils en même temps").waitFor();
     if (shots) await page.waitForTimeout(300);
     await shot(page, "p13-contexte");
-    await page.getByRole("tab", { name: "Fils de discussion" }).click();
+    await page.getByRole("button", { name: "Retour", exact: true }).click();
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
     await composer(page).fill("/ouvre Export Safari");
     await composer(page).press("Enter");
-    const card = page.locator(".opened-line", { hasText: "Export Safari" });
+    const card = page.getByRole("button", { name: "Ouvrir le fil Export Safari" });
     await card.waitFor();
     await page.getByText("J'ai ouvert le fil « Export Safari ».").waitFor();
     // The threads stay beside the conversation, the new one among them with its real state.
-    const beside = page.locator(".pp-panel .pp-row", { hasText: "Export Safari" });
-    await beside.waitFor();
-    await expect.poll(() => card.locator(".oc-state").textContent()).toBe("Attend ta réponse.");
-    // Beside the coordinator a line is a title and what goes on: the rest is in the thread.
-    expect(await beside.locator(".pp-agent").isVisible()).toBe(false);
+    await beside.getByRole("button", { name: /Export Safari/ }).waitFor();
+    await expect.poll(() => card.locator(".st").textContent()).toBe("Attend ta réponse.");
     // What the new thread waits for is asked above the coordinator's composer, to the user.
-    const ask = page.locator(".pp-ask", { hasText: "Export Safari" });
+    const ask = page
+      .getByRole("list", { name: "Autorisations demandées par les fils du projet" })
+      .getByRole("listitem")
+      .filter({ hasText: "Export Safari" });
     await ask.waitFor();
     expect(await ask.getByRole("button").count()).toBeGreaterThan(1);
     // The coordinator is no thread of the lists: not in the sidebar, not among the project's.
-    expect(await page.locator(".side .thr", { hasText: "Coordinateur" }).count()).toBe(0);
-    expect(await page.locator(".pp-row", { hasText: "Coordinateur" }).count()).toBe(0);
+    expect(await side.getByRole("button", { name: /Coordinateur/ }).count()).toBe(0);
+    expect(await beside.getByRole("button", { name: /Coordinateur/ }).count()).toBe(0);
     if (shots) await page.waitForTimeout(300);
     await shot(page, "p5-coordinateur");
-    // The thread opens beside the coordinator: both conversations in sight, each its composer.
+    // The thread opens from its line, and the arrow comes back to its project.
     await card.click();
-    const pane = page.locator(".pp-thread");
-    await pane.getByText("Corrige : Export Safari").first().waitFor();
-    await card.waitFor();
-    expect(new URL(page.url()).pathname).toMatch(/^\/p\/[^/]+\/f\/[^/]+$/);
-    await pane.getByPlaceholder("Oriente ce fil de discussion…").waitFor();
-    expect(await composer(page).count()).toBe(2);
-    if (shots) await page.waitForTimeout(300);
-    await shot(page, "p10-fil-a-cote");
-    // On a phone it takes the screen, the way back to the project above it.
+    await page.waitForURL(/\/t\//);
+    await page.getByText("Corrige : Export Safari").first().waitFor();
+    // On a phone it takes the screen, nothing wider than it.
     await page.setViewportSize({ width: 390, height: 780 });
-    await expect.poll(() => composer(page).count()).toBe(1);
-    await pane.getByText("Corrige : Export Safari").first().waitFor();
+    await page.getByText("Corrige : Export Safari").first().waitFor();
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
     if (shots) await page.waitForTimeout(300);
     await shot(page, "p11-fil-mobile");
     await page.setViewportSize({ width: 1280, height: 820 });
-    // The address keeps it: a reload comes back to the same two conversations.
-    await page.reload();
-    await pane.getByText("Corrige : Export Safari").first().waitFor();
+    await page.getByRole("button", { name: "Retour", exact: true }).click();
+    await page.waitForURL(/\/p\//);
     await card.waitFor();
-    await pane.getByRole("button", { name: "Fils de discussion" }).click();
-    await beside.waitFor();
-    expect(await pane.count()).toBe(0);
-    // From the list too, a thread opens beside the coordinator.
-    await beside.locator(".pp-open, button").first().click();
-    await pane.waitFor();
     // Once the thread has finished, its own words come back to the coordinator's conversation.
-    expect(await page.locator(".result").count()).toBe(0);
-    await pane.getByRole("button", { name: "Autoriser" }).click();
-    const result = page.locator(".pp-main .result");
+    // The composer has the focus: the press on « Autoriser » above it must land all the same.
+    expect(await page.locator(".rsl").count()).toBe(0);
+    await composer(page).click();
+    await ask.getByRole("button", { name: "Autoriser" }).click();
+    const result = page.locator(".rsl");
     await result.waitFor();
-    await page.locator(".pp-main .new-sep").waitFor();
-    expect(await result.locator(".result-s").textContent()).toContain("C'est fait");
-    await expect.poll(() => card.locator(".oc-state").textContent()).toBe("Inactif");
+    await page.getByRole("separator").filter({ hasText: "Nouveau" }).waitFor();
+    expect(await result.locator("p").textContent()).toContain("C'est fait");
+    await expect.poll(() => card.locator(".st").textContent()).toBe("Inactif");
     if (shots) await page.waitForTimeout(300);
     await shot(page, "p12-resultat");
-    await pane.getByRole("button", { name: "Fils de discussion" }).click();
 
-    // On a phone, the conversation and the threads take turns; nothing spills past the screen.
+    // On a phone, the coordinator has the page and the threads are one press away; nothing
+    // spills past the screen.
     await page.setViewportSize({ width: 390, height: 780 });
-    await page.getByRole("tab", { name: "Fils" }).click();
-    await page.locator(".pp-row", { hasText: "Export Safari" }).waitFor();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-      390,
-    );
-    // The coordinator's composer goes with its conversation: nothing is sent out of sight.
-    expect(await composer(page).count()).toBe(0);
-    if (shots) await page.waitForTimeout(400);
-    await shot(page, "p6-mobile-fils");
-    await page.getByRole("tab", { name: "Coordinateur" }).click();
     await card.waitFor();
     await composer(page).waitFor();
-    // The quick search lists threads, never the coordinator as one of them.
-    await page.keyboard.press("Control+k");
-    await page.getByRole("dialog").getByText("Export Safari").first().waitFor();
-    expect(
-      await page
-        .getByRole("dialog")
-        .getByText(/^Coordinateur · /)
-        .count(),
-    ).toBe(0);
-    await page.keyboard.press("Escape");
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
+    await page.getByRole("button", { name: "Vue d'ensemble" }).click();
+    await page.locator(".trow", { hasText: "Export Safari" }).waitFor();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+    if (shots) await page.waitForTimeout(400);
+    await shot(page, "p6-mobile-fils");
+    await page.getByRole("button", { name: "Retour", exact: true }).click();
+    await card.waitFor();
+    // The quick search lists threads, never the coordinator as one of them.
+    await page.keyboard.press("Control+k");
+    const search = page.getByRole("dialog", { name: "Recherche" });
+    await search.getByRole("combobox", { name: "Rechercher" }).fill("Export");
+    await search.getByText("Export Safari").first().waitFor();
+    expect(await search.getByText(/^Coordinateur · /).count()).toBe(0);
+    await page.keyboard.press("Escape");
     if (shots) await page.waitForTimeout(400);
     await shot(page, "p4-mobile");
 
     // In the settings, each kind of work is sent to an agent and a model in one pick; the
-    // server keeps the choice. Without favorites, every model is offered.
+    // server keeps the choice.
     await page.setViewportSize({ width: 1280, height: 820 });
-    await page.evaluate(() => {
-      history.pushState(null, "", "/reglages/coordinator");
-      dispatchEvent(new PopStateEvent("popstate"));
-    });
-    const bug = page.getByLabel("Modèle pour Bug");
-    expect(await page.getByRole("button", { name: "Afficher tous les modèles" }).count()).toBe(0);
-    await bug.selectOption("demo\nprecis");
+    await page.goto(new URL("/reglages/models", url).href);
+    const bug = page.getByRole("button", { name: /^Modèle pour Bug : / });
+    await bug.click();
+    const kinds = page.getByRole("dialog", { name: "Bug", exact: true });
+    const precise = kinds
+      .getByRole("group", { name: "Agent de démo", exact: true })
+      .getByRole("radio", { name: /^Démo précis/ });
+    await expect
+      .poll(async () => {
+        if (await precise.count()) return true;
+        const all = kinds.getByRole("button", { name: "Tous", exact: true });
+        if (await all.count()) await all.click();
+        return false;
+      })
+      .toBe(true);
+    await precise.click();
     await page.reload();
-    await expect.poll(() => bug.inputValue()).toBe("demo\nprecis");
-    expect(await page.getByLabel("Modèle pour Tests").inputValue()).toBe("");
-    await shot(page, "p8-reglages-coordinateur");
+    await expect
+      .poll(() => bug.getAttribute("aria-label"))
+      .toMatch(/^Modèle pour Bug : Démo précis/);
+    expect(
+      await page.getByRole("button", { name: /^Modèle pour Tests : / }).getAttribute("aria-label"),
+    ).toBe("Modèle pour Tests : Par défaut");
+    await shot(page, "p8-reglages-modeles");
     await page.close();
   });
   it("plans the project's work: the teams' cards follow their pieces, the user's are theirs to move", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
-    await page.locator(".thr-row.proj", { hasText: "equipe" }).locator(".thr").click();
-    await page.getByRole("button", { name: "Planner", exact: true }).click();
+    await pages(page).getByRole("button", { name: "Planner", exact: true }).click();
     const column = (name: string) => page.getByRole("region", { name, exact: true });
-    const cardOf = (title: string) => page.getByRole("button", { name: new RegExp(`: ${title},`) });
+    const cardOf = (title: string) =>
+      page.locator(".pc").and(page.getByRole("button", { name: new RegExp(`: ${title},`) }));
 
     // The first team's plan, laid down by its lead and carried to the end by its pieces.
-    await column("Livré").getByText("Documenter answer").waitFor();
-    expect(await column("Livré").locator(".pl-card").count()).toBe(2);
-    expect(await column("Livré").locator(".pl-src").first().textContent()).toBe("Chef");
+    const delivered = column("Livré").locator(".pc");
+    await delivered.filter({ hasText: "Documenter answer" }).first().waitFor();
+    expect(await delivered.count()).toBe(2);
+    expect(await delivered.first().locator(".pco").textContent()).toBe("Planifiée par le chef");
     // The team that was stopped left its pieces where they stopped.
-    await column("Reporté").getByText("arrêtée").first().waitFor();
+    await column("Reporté").locator(".pcw", { hasText: "arrêtée" }).first().waitFor();
+    // Every column shows at once on a desktop: the board does not scroll sideways.
+    expect(await page.locator("#kb").evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
 
-    // A card of the user's own, added in place.
-    await page.getByRole("button", { name: "Ajouter une tâche" }).click();
+    // A card of the user's own, written in a sheet.
+    await page.getByRole("button", { name: "Ajouter une tâche", exact: true }).click();
     await page.getByLabel("Nouvelle tâche, À faire").fill("Écrire le changelog");
     await page.keyboard.press("Enter");
-    await page.keyboard.press("Escape");
     const mine = cardOf("Écrire le changelog");
     await column("À faire").getByText("Écrire le changelog").waitFor();
-    expect(await mine.locator(".pl-src").textContent()).toBe("À la main");
+    expect(await mine.locator(".pco").count()).toBe(0);
 
     // Moved from the keyboard, then from its detail, where it gets a due day and a thread.
+    await expect
+      .poll(() => page.getByRole("dialog", { name: "Ajouter une tâche" }).count())
+      .toBe(0);
     await mine.focus();
     await page.keyboard.press("ArrowRight");
     await column("En cours").getByText("Écrire le changelog").waitFor();
     await mine.click();
-    const detail = page.getByRole("dialog", { name: /^Tâche \d+$/ });
-    await detail.getByRole("button", { name: "En test" }).click();
+    const detail = page.getByRole("dialog", { name: /^Tâche #\d+$/ });
+    const states = detail.getByRole("group", { name: "État de la tâche" });
+    await states.getByRole("button", { name: "En test" }).click();
     await detail.getByLabel("Échéance").fill("2020-01-15");
-    await detail
-      .getByLabel("Fil qui s'en occupe")
-      .selectOption({ label: "Équipe : Corrige answer et documente-la" });
-    await detail.getByText("Agent de démo").waitFor();
     // A click outside closes the panel, and keeps what was being typed.
     await detail.getByLabel("Description").fill("Pour la v1");
-    await page.mouse.click(300, 600);
+    await page
+      .locator(".sscrim.on")
+      .last()
+      .click({ position: { x: 6, y: 6 } });
     await expect.poll(() => detail.count()).toBe(0);
     await mine.click();
     await expect.poll(() => detail.getByLabel("Description").inputValue()).toBe("Pour la v1");
@@ -845,14 +900,26 @@ describe("composer", () => {
     await detail.getByLabel("Échéance").fill("0002-01-15");
     await detail.getByLabel("Échéance").fill("2020-01-15");
     expect(await page.locator(".toast").count()).toBe(0);
-    await detail.getByRole("button", { name: "Fermer" }).click();
-    await column("En test").getByText("en retard · 15 janv").waitFor();
+    await detail.getByRole("button", { name: "Fermer", exact: true }).click();
+    await column("En test").locator(".pcl").getByText("en retard · 15 janv").waitFor();
     await shot(page, "c14-planner");
+
+    // Given to a thread, it follows it: who works on it is said, and its state is the thread's.
+    await mine.click();
+    await detail.getByRole("button", { name: /^Fil qui s'en occupe : Aucun/ }).click();
+    await page
+      .getByRole("dialog", { name: "Fil qui s'en occupe" })
+      .getByRole("radio", { name: "Équipe : Corrige answer et documente-la" })
+      .click();
+    await detail.getByText("Suit son fil").waitFor();
+    await detail.getByText("Agent de démo").waitFor();
+    expect(await states.getByRole("button", { name: "En cours" }).isDisabled()).toBe(true);
+    await detail.getByRole("button", { name: "Fermer", exact: true }).click();
 
     // A team's card says what moves it, and cannot be moved by hand.
     await column("Livré").getByText("Documenter answer").click();
-    await detail.getByText("Cette carte suit le travail de l'équipe").waitFor();
-    expect(await detail.getByRole("button", { name: "En cours" }).isDisabled()).toBe(true);
+    await detail.getByText("Suit le travail de l'équipe").waitFor();
+    expect(await states.getByRole("button", { name: "En cours" }).isDisabled()).toBe(true);
     if (shots) await page.waitForTimeout(400);
     await shot(page, "c15-planner-carte");
     await detail.getByRole("button", { name: "Ouvrir le fil" }).click();
@@ -868,7 +935,7 @@ describe("composer", () => {
     await done.waitFor();
     // Delivered work is solid; the user's card is under the agent of the thread it was given.
     expect(await done.getAttribute("class")).not.toContain("planned");
-    expect(await bar("Écrire le changelog").getAttribute("class")).toContain("s-test");
+    await bar("Écrire le changelog").waitFor();
     // Today is in view when the timeline opens.
     await expect
       .poll(() =>
@@ -879,14 +946,14 @@ describe("composer", () => {
       )
       .toBe(true);
     await page
-      .getByRole("group", { name: "Échelle" })
+      .getByRole("group", { name: "Filtrer les tâches" })
       .getByRole("button", { name: "Mois" })
       .click();
     await shot(page, "c17-planner-timeline");
     // A bar opens the same detail as its card, where the planned start is set.
     await bar("Écrire le changelog").click();
     await detail.getByLabel("Début prévu").fill("2020-01-10");
-    await detail.getByRole("button", { name: "Fermer" }).click();
+    await detail.getByRole("button", { name: "Fermer", exact: true }).click();
 
     // On a phone the timeline scrolls inside itself; the page does not.
     await page.setViewportSize({ width: 390, height: 780 });
@@ -903,7 +970,7 @@ describe("composer", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
-    await column("En test").getByText("Écrire le changelog").scrollIntoViewIfNeeded();
+    await mine.scrollIntoViewIfNeeded();
     await mine.click();
     await detail.getByLabel("Titre").waitFor();
     if (shots) await page.waitForTimeout(400);
@@ -916,7 +983,14 @@ describe("composer", () => {
   it("plans a task for later: it starts by itself at its time, in a thread of its own", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
-    await page.locator(".thr-row.proj", { hasText: "equipe" }).locator(".thr").click();
+    await menu(page)
+      .getByRole("button", { name: /^equipe/ })
+      .click();
+    await page
+      .getByRole("complementary", { name: "Fils du projet" })
+      .getByRole("button", { name: "Nouveau fil" })
+      .click();
+    await expect.poll(() => composer(page).isEnabled()).toBe(true);
     const dialog = page.getByRole("dialog", { name: "Planifier une tâche" });
     const list = page.getByRole("list", { name: "Tâches planifiées" });
     const row = (title: string) => list.getByRole("listitem").filter({ hasText: title });
@@ -924,190 +998,243 @@ describe("composer", () => {
       const two = (n: number) => String(n).padStart(2, "0");
       return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}T${two(at.getHours())}:${two(at.getMinutes())}`;
     };
+    /** The demo agent for the task, not a real one that may be installed on this machine. */
+    const byDemo = async () => {
+      await dialog.getByRole("button", { name: /^Modèle : / }).click();
+      const models = page.getByRole("dialog", { name: "Modèle", exact: true });
+      const demo = models
+        .getByRole("group", { name: "Agent de démo", exact: true })
+        .getByRole("radio")
+        .first();
+      await expect
+        .poll(async () => {
+          if (await demo.count()) return true;
+          const all = models.getByRole("button", { name: "Tous", exact: true });
+          if (await all.count()) await all.click();
+          return false;
+        })
+        .toBe(true);
+      await demo.click();
+      await models.waitFor({ state: "hidden" });
+    };
+    const save = (sheet = dialog, name = "Planifier") =>
+      sheet.getByRole("button", { name, exact: true }).click();
 
     // The command carries what follows it into the dialog; a time in the past is refused.
     await composer(page).fill("/planifier Résume les changements de la semaine");
-    await composer(page).press("Enter");
     await composer(page).press("Enter");
     await dialog.getByLabel("Tâche").waitFor();
     expect(await dialog.getByLabel("Tâche").inputValue()).toBe(
       "Résume les changements de la semaine",
     );
-    await dialog.getByLabel("Modèle", { exact: true }).selectOption("demo\n");
+    await byDemo();
     await dialog.getByLabel("Quand").fill("2020-01-15T09:00");
-    await dialog.getByRole("button", { name: "Planifier", exact: true }).click();
-    await dialog.getByText("Ce moment est déjà passé").waitFor();
+    await save();
+    await dialog.getByRole("alert").getByText("Ce moment est déjà passé").waitFor();
 
     // Planned every day from tomorrow: it waits, and says when it will start.
     const tomorrow = new Date(Date.now() + 86_400_000);
     tomorrow.setHours(9, 0, 0, 0);
     await dialog.getByLabel("Quand").fill(field(tomorrow));
-    await dialog.getByLabel("Répéter").selectOption({ label: "Tous les jours" });
+    await dialog
+      .getByRole("radiogroup", { name: "Répéter" })
+      .getByRole("radio", { name: "Tous les jours" })
+      .click();
     await dialog.getByLabel("Nom").fill("Résumé du matin");
-    await dialog.getByRole("button", { name: "Planifier", exact: true }).click();
-    await row("Résumé du matin").getByText("Prochain lancement demain à 09:00").waitFor();
-    await row("Résumé du matin").getByText("Tous les jours à 09:00 · Agent de démo").waitFor();
+    await save();
+    // The planned tasks have a page of their own, where the new one is.
+    await page.waitForURL(/\/planner\/planifiees$/);
+    const morning = row("Résumé du matin");
+    await morning.getByText("Prochain lancement demain à 09:00").waitFor();
+    expect(await morning.locator(".rep").textContent()).toBe("Tous les jours à 09:00");
+    expect(await morning.locator(".pcm").textContent()).toBe("equipe" + "Agent de démo");
 
     // One for this very minute: the server starts it by itself, in a thread of its own.
-    await page.getByRole("button", { name: "Planifier une tâche" }).click();
+    await page.getByRole("button", { name: "Planifier une tâche", exact: true }).click();
     await dialog.getByLabel("Tâche").fill("Dis bonjour");
-    await dialog.getByLabel("Modèle", { exact: true }).selectOption("demo\n");
+    await byDemo();
     await dialog.getByLabel("Quand").fill(field(new Date()));
-    await dialog.getByRole("button", { name: "Planifier", exact: true }).click();
+    await save();
     await row("Dis bonjour")
       .getByText(/^Lancée aujourd'hui à/)
       .waitFor();
     await shot(page, "c19-planifiees");
-    await row("Dis bonjour").getByRole("button", { name: "Ouvrir le fil" }).click();
-    await page.locator(".view").getByText("Dis bonjour").first().waitFor();
+    await page.getByRole("button", { name: "Ouvrir le fil de Dis bonjour" }).click();
+    await page.waitForURL(/\/t\//);
+    await page.locator(".uw .u", { hasText: "Dis bonjour" }).first().waitFor();
     await page.goBack();
 
     // Paused, it no longer has a next time; changed, it keeps what was not touched.
-    await row("Résumé du matin").getByRole("switch").click();
-    await row("Résumé du matin").getByText("En pause").waitFor();
+    const toggle = (title: string) => page.getByRole("switch", { name: `Activer ${title}` });
+    await toggle("Résumé du matin").click();
+    await morning.getByText("En pause").waitFor();
     // Paused, it still opens on its own time, and stays paused when only its text changes.
-    await row("Résumé du matin").getByRole("button", { name: "Modifier" }).click();
-    const paused = page.getByRole("dialog", { name: "Modifier la tâche planifiée" });
-    expect(await paused.getByLabel("Quand").inputValue()).toBe(field(tomorrow));
-    await paused.getByRole("button", { name: "Enregistrer" }).click();
-    await row("Résumé du matin").getByText("En pause").waitFor();
-    await row("Résumé du matin").getByRole("switch").click();
-    await row("Résumé du matin").getByText("Prochain lancement demain à 09:00").waitFor();
-    await row("Résumé du matin").getByRole("button", { name: "Modifier" }).click();
     const edit = page.getByRole("dialog", { name: "Modifier la tâche planifiée" });
+    await page.getByRole("button", { name: "Modifier Résumé du matin" }).click();
+    await expect.poll(() => edit.getByLabel("Quand").inputValue()).toBe(field(tomorrow));
+    await save(edit, "Enregistrer");
+    await edit.waitFor({ state: "hidden" });
+    await morning.getByText("En pause").waitFor();
+    await toggle("Résumé du matin").click();
+    await morning.getByText("Prochain lancement demain à 09:00").waitFor();
+    await page.getByRole("button", { name: "Modifier Résumé du matin" }).click();
     await edit.getByLabel("Nom").fill("Résumé quotidien");
-    await edit.getByRole("button", { name: "Enregistrer" }).click();
-    await row("Résumé quotidien").getByText("Prochain lancement demain à 09:00").waitFor();
+    await save(edit, "Enregistrer");
+    const daily = row("Résumé quotidien");
+    await daily.getByText("Prochain lancement demain à 09:00").waitFor();
 
     // Started by hand, its time does not move.
-    await row("Résumé quotidien").getByRole("button", { name: "Lancer maintenant" }).click();
-    await page.locator(".view").getByText("Résume les changements de la semaine").first().waitFor();
-    await page.goBack();
-    await row("Résumé quotidien")
-      .getByText(/Dernier lancement aujourd'hui/)
+    await page.getByRole("button", { name: "Lancer maintenant Résumé quotidien" }).click();
+    await page.waitForURL(/\/t\//);
+    await page
+      .locator(".uw .u", { hasText: "Résume les changements de la semaine" })
+      .first()
       .waitFor();
-    await row("Résumé quotidien").getByText("Prochain lancement demain à 09:00").waitFor();
+    await page.goBack();
+    await daily.getByText(/^Prochain lancement demain à 09:00 · dernier aujourd'hui/).waitFor();
 
     // On a phone the list fits the screen.
     await page.setViewportSize({ width: 390, height: 780 });
+    await daily.waitFor();
     if (shots) await page.waitForTimeout(400);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
     await shot(page, "c20-planifiees-mobile");
-    await row("Résumé quotidien").getByRole("button", { name: "Supprimer" }).click();
-    await expect.poll(() => row("Résumé quotidien").count()).toBe(0);
+    await page.getByRole("button", { name: "Supprimer Résumé quotidien" }).click();
+    await expect.poll(() => daily.count()).toBe(0);
     await page.close();
   });
 
-  it("stacks tray popups above the composer, updates effort per model, and renders agent logos", async () => {
+  it("keeps the composer's menus above it, sets effort per model, and names agents without logos", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
-    await page.locator(".tray .tb").first().waitFor();
+    await menu(page).getByRole("button", { name: "Nouvelle discussion" }).click();
+    await expect.poll(() => composer(page).isEnabled()).toBe(true);
+    /** True when the first thing of that menu or sheet is what a press there would reach. */
+    const onTop = (name: string, role: "menu" | "dialog") =>
+      page.getByRole(role, { name, exact: true }).evaluate((el) => {
+        const target = el.querySelector("button");
+        if (!target) return false;
+        const box = target.getBoundingClientRect();
+        const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return !!top && el.contains(top);
+      });
 
-    // Open the project menu from the sunken tray and verify its top items paint above `.composer`.
-    await page.locator(".tray .tb").first().click();
-    const projectMenu = page.getByRole("menu", { name: "Projet" });
-    await projectMenu.waitFor();
-    const projectHit = await projectMenu.evaluate((menu) => {
-      const target = menu.querySelector(".menu-h") ?? menu.querySelector("button");
-      if (!target) return false;
-      const box = target.getBoundingClientRect();
-      const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-      return !!top && menu.contains(top);
-    });
-    expect(projectHit).toBe(true);
-    await shot(page, "c21-tray-projet");
+    // The « + » menu opens above the composer, not under it.
+    await composer(page).click();
+    await page.getByRole("button", { name: "Ajouter", exact: true }).click();
+    const add = page.getByRole("menu", { name: "Ajouter" });
+    await add.waitFor();
+    await expect.poll(() => onTop("Ajouter", "menu")).toBe(true);
+    await shot(page, "c21-menu-ajouter");
 
-    // Pick the git repo `equipe`, then check the branch popup from the tray stacks above `.composer` too.
-    await projectMenu.getByRole("menuitemradio", { name: /equipe/ }).click();
-    await page
-      .locator(".tray")
-      .getByRole("button", { name: /branche à part|dans ton dossier/ })
-      .click();
-    const branchMenu = page.getByRole("menu", { name: "Branche" });
-    await branchMenu.waitFor();
-    const branchHit = await branchMenu.evaluate((menu) => {
-      const target = menu.querySelector(".menu-h") ?? menu.querySelector("button");
-      if (!target) return false;
-      const box = target.getBoundingClientRect();
-      const top = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
-      return !!top && menu.contains(top);
-    });
-    expect(branchHit).toBe(true);
+    // Where to work is chosen from it: the git repository « equipe ».
+    await add.getByRole("menuitem", { name: /^Projet/ }).click();
+    const where = page.getByRole("dialog", { name: "Où travailler" });
+    await where.getByRole("button", { name: "Hors projet", exact: false }).waitFor();
+    await where.getByRole("button", { name: "equipe", exact: true }).click();
+    await where.waitFor({ state: "hidden" });
+    await composer(page).click();
+    await page.getByRole("button", { name: "Ajouter", exact: true }).click();
+    await add.getByRole("menuitem", { name: "Projet equipe" }).waitFor();
+    // In a repository, the options say where the agent works: on a branch apart, or in the folder.
+    await add.getByRole("menuitem", { name: "Plus" }).click();
+    const more = page.getByRole("dialog", { name: "Ajouter", exact: true });
+    const branch = more.getByRole("radiogroup", { name: "Branche" });
+    await branch.getByRole("radio", { name: "Sur une branche à part" }).waitFor();
+    await expect.poll(() => onTop("Ajouter", "dialog")).toBe(true);
+    await branch.getByRole("radio", { name: "Dans ton dossier" }).click();
+    await expect
+      .poll(() =>
+        branch.getByRole("radio", { name: "Dans ton dossier" }).getAttribute("aria-checked"),
+      )
+      .toBe("true");
+    await branch.getByRole("radio", { name: "Sur une branche à part" }).click();
     await page.keyboard.press("Escape");
+    await more.waitFor({ state: "hidden" });
 
-    // Built-in agents render their official logos in Options, and demo models switch effort stops cleanly.
-    await pickAgent(page, /Agent de démo/);
-    const logos = await page.locator(".mp-agent .ag.logo img").evaluateAll((imgs) =>
-      imgs.map((img) => ({
-        agent: img.closest(".ag")?.getAttribute("data-agent"),
-        src: img.getAttribute("src"),
-      })),
-    );
-    expect(logos).toEqual(
-      expect.arrayContaining([
-        { agent: "claude", src: "/agents/claude.svg" },
-        { agent: "codex", src: "/agents/codex.svg" },
-        { agent: "antigravity", src: "/agents/antigravity.svg" },
-        { agent: "cursor", src: "/agents/cursor.svg" },
-        { agent: "hermes", src: "/agents/hermes.png" },
-      ]),
-    );
-    await shot(page, "c22-agent-logos");
+    // Every agent is listed by its name alone: no logo anywhere in the model sheets.
+    await composer(page).click();
+    await pill(page).click();
+    const sheet = page.getByRole("dialog", { name: "Modèle", exact: true });
+    await sheet.getByRole("button", { name: "Plus", exact: true }).click();
+    const all = page.getByRole("dialog", { name: "Tous les modèles" });
+    for (const name of ["Claude Code", "Codex", "Antigravity", "Cursor", "Hermes", "Agent de démo"])
+      await all.getByRole("menuitemradio", { name: new RegExp(`^${name}`) }).waitFor();
+    expect(await all.locator("img, svg image").count()).toBe(0);
+    await shot(page, "c22-agents-sans-logo");
 
-    // Back to « Tous » to pick Démo rapide (3 effort stops: max index 2), then Démo précis (4 stops: max index 3).
-    const demoSection = page
-      .locator(".al")
-      .filter({ has: page.locator(".al-h", { hasText: /Agent de démo/ }) })
-      .first();
-    await page.getByRole("button", { name: "Retour" }).click();
-    await demoSection.getByRole("menuitemradio", { name: /Démo rapide/ }).click();
-    await page.locator(".agentchip").click();
-    await expect
-      .poll(() => page.getByRole("slider", { name: /Effort/ }).getAttribute("aria-valuemax"))
-      .toBe("2");
-
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
-    await demoSection.getByRole("menuitemradio", { name: /Démo précis/ }).click();
-    await page.locator(".agentchip").click();
-    await expect
-      .poll(() => page.getByRole("slider", { name: /Effort/ }).getAttribute("aria-valuemax"))
-      .toBe("3");
+    // Each model has its own effort stops: three for « Démo rapide », four for « Démo précis ».
+    // The highest one is « UltraMoon », whatever the agent calls it.
+    const stops = async (model: string) => {
+      await all.getByRole("menuitemradio", { name: /^Agent de démo/ }).click();
+      // The first demo agent's: the second one has models of the same names.
+      await all
+        .getByRole("menuitemradio", { name: new RegExp(`^${model}`) })
+        .first()
+        .click();
+      await all.waitFor({ state: "hidden" });
+      await expect.poll(() => pill(page).getAttribute("aria-label")).toContain(model);
+      await composer(page).click();
+      await pill(page).click();
+      await sheet.getByRole("button", { name: /^Effort : / }).click();
+      const slider = sheet.getByRole("slider", { name: `Effort de ${model}` });
+      const max = await slider.getAttribute("aria-valuemax");
+      await slider.focus();
+      await page.keyboard.press("End");
+      await expect.poll(() => slider.getAttribute("aria-valuetext")).toBe("UltraMoon");
+      return max;
+    };
+    expect(await stops("Démo rapide")).toBe("2");
+    await shot(page, "c22b-effort");
+    await sheet.getByRole("button", { name: "Plus", exact: true }).click();
+    expect(await stops("Démo précis")).toBe("3");
     await page.close();
   });
+
   it("lists the conversations started outside a project under « Récents », not as a project", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
-    await page.locator("nav").getByRole("button", { name: "Nouvelle discussion" }).click();
-    await pickAgent(page, /Agent de démo/);
-    await page.keyboard.press("Escape");
+    const side = menu(page);
+    await side.getByRole("button", { name: "Nouvelle discussion" }).click();
+    await expect.poll(() => composer(page).isEnabled()).toBe(true);
+    // Outside any project: said from the « + » menu.
+    await composer(page).click();
+    await page.getByRole("button", { name: "Ajouter", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^Projet/ }).click();
+    const where = page.getByRole("dialog", { name: "Où travailler" });
+    await where.getByRole("button", { name: /^Hors projet/ }).click();
+    await where.waitFor({ state: "hidden" });
+    await pickAgent(page);
+    await supervised(page);
     await composer(page).fill("Une question hors projet");
     await composer(page).press("Enter");
     await page.waitForURL(/\/t\//);
 
-    const side = page.locator(".side-scroll");
     // « Discussions » holds it, but is no project of the user's: no line of its own…
-    await side.getByRole("button", { name: "Une question hors projet" }).first().waitFor();
-    expect(await side.locator(".thr-row.proj", { hasText: "Discussions" }).count()).toBe(0);
+    const line = side.getByRole("button", { name: /^Une question hors projet/ });
+    await line.first().waitFor();
+    expect(await side.getByRole("button", { name: /^Discussions/ }).count()).toBe(0);
     // …the conversation is under « Récents ».
-    const headings = await side.locator(".sec-h").allTextContents();
-    const rows = await side.locator(".sec-h, .thr-row").allTextContents();
-    expect(headings).toContain("Récents");
-    expect(rows.indexOf("Récents")).toBeLessThan(
-      rows.findIndex((r) => r.includes("Une question hors projet")),
-    );
+    const rows = await side.locator(".dsec, .rc").allTextContents();
+    const recent = rows.findIndex((r) => r.trim() === "Récents");
+    expect(recent).toBeGreaterThan(-1);
+    expect(recent).toBeLessThan(rows.findIndex((r) => r.includes("Une question hors projet")));
     await shot(page, "c23-discussions-recents");
 
     // Resolved, it has no project to sit under: « Résolus » below « Récents » keeps it.
     // The demo agent waits for a yes to change a file: stopped first, so the turn is over.
-    await page.getByRole("button", { name: "Arrêter" }).click();
-    await expect.poll(() => page.getByRole("button", { name: "Arrêter" }).count()).toBe(0);
+    await page.getByRole("button", { name: "Arrêter", exact: true }).click();
+    await expect
+      .poll(() => page.getByRole("button", { name: "Arrêter", exact: true }).count())
+      .toBe(0);
     await page.getByRole("button", { name: "Actions du fil" }).click();
     await page.getByRole("menuitem", { name: "Marquer résolu" }).click();
-    await page.getByText("Cette discussion est résolue.").waitFor();
-    await side.getByRole("button", { name: "Résolus (1)" }).click();
-    await side.getByRole("button", { name: "Une question hors projet" }).first().waitFor();
+    await page.getByText("Ce fil est résolu").waitFor();
+    await expect.poll(() => line.count()).toBe(0);
+    await side.getByRole("button", { name: /^Résolus \(\d+\)$/ }).click();
+    await line.first().waitFor();
     await page.close();
   });
 });

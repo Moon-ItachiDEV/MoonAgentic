@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { addProject, pickAgent, setAccess } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -62,29 +63,22 @@ afterAll(async () => {
 const ANSWER = "C'est fait, la réponse vaut 42.";
 
 describe("/lock", () => {
-  it("hides a project from every window until its code is given", async () => {
+  it("hides a project from every window until its code is given, and locks the whole app", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     const errors: Error[] = [];
     page.on("pageerror", (err) => errors.push(err));
     await page.goto(url);
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(repo);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
+    await addProject(page, repo);
     const composer = page.getByRole("combobox", { name: "Message" });
     await expect.poll(() => composer.isEnabled()).toBe(true);
-    await page.locator(".agentchip").click();
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
-    await page.getByRole("button", { name: "Options", exact: true }).click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-    await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: /Mode d'accès/ }).click();
-    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
+    await pickAgent(page);
+    await setAccess(page, /Accès complet/);
     await composer.fill("Corrige la réponse");
     await composer.press("Enter");
     await page.getByText(ANSWER).waitFor();
     await page.waitForURL(/\/t\//);
     const threadUrl = page.url();
+    const menu = page.getByRole("complementary", { name: "Menu" });
 
     // Another device, with the thread open too.
     const other = await browser.newPage({ viewport: { width: 1280, height: 820 } });
@@ -92,52 +86,70 @@ describe("/lock", () => {
     await other.goto(threadUrl);
     await other.getByText(ANSWER).waitFor();
 
-    // No code yet: the first lock asks for one, twice, then locks.
-    await page.keyboard.press("Control+Shift+L");
-    const sheet = page.getByRole("dialog", { name: "Choisis ton code" });
-    await sheet.waitFor();
+    // No code yet: the first lock, from the project's settings, asks for one, twice.
+    await menu.getByRole("button", { name: /^secret/ }).click();
+    await page.waitForURL(/\/p\//);
+    await page.getByRole("button", { name: "Réglages du projet" }).click();
+    await page.getByRole("button", { name: "Verrouiller par code" }).click();
+    await page.getByRole("dialog", { name: "Choisis ton code" }).waitFor();
     await page.keyboard.type("123456");
     await page.getByRole("dialog", { name: "Confirme ton code" }).waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "lock-code.png") });
     await page.keyboard.type("123456");
-    await page.getByText("Code enregistré").waitFor();
     await page.getByText("secret verrouillé").waitFor();
-    // Its thread was open: the page goes home, and nothing of it is left on either screen.
-    await page.waitForURL((u) => !u.pathname.startsWith("/t/"));
-    await page.getByText("Discussions verrouillées").waitFor();
+    // Nothing of it is left on either screen: its page says so, and asks for the code.
+    await menu.getByRole("img", { name: "Verrouillé" }).waitFor();
     await expect.poll(() => page.getByText(ANSWER).count()).toBe(0);
     await expect.poll(() => page.getByText("Corrige la réponse").count()).toBe(0);
-    await other.getByText("Ce fil n'existe plus, ou son projet est verrouillé.").waitFor();
+    await other.getByText("Ce fil n'existe plus, ou son projet est verrouillé").waitFor();
     await expect.poll(() => other.getByText(ANSWER).count()).toBe(0);
-    // Its page says so, and asks for the code.
-    await page.locator(".thr-row.proj .thr", { hasText: "secret" }).click();
     await page.getByText("secret est verrouillé").waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "lock-projet.png") });
 
     // A wrong code is refused; the right one opens it for every window.
     await page.getByRole("button", { name: "Déverrouiller", exact: true }).click();
-    await page.getByRole("dialog", { name: "secret est verrouillé" }).waitFor();
+    const pad = page.getByRole("dialog", { name: "secret est verrouillé" });
+    await pad.waitFor();
     await page.keyboard.type("000000");
-    await page.getByText("Code incorrect.").waitFor();
-    await expect.poll(() => page.getByText("Code incorrect.").count()).toBe(0);
+    await pad.getByText("Code incorrect.").waitFor();
+    await expect.poll(() => pad.getByText("Code incorrect.").count()).toBe(0);
     await page.keyboard.type("123456");
-    await page.getByText("Déverrouillé", { exact: true }).waitFor();
-    await page.getByRole("button", { name: "Corrige la réponse" }).first().waitFor();
+    await pad.getByText("Déverrouillé", { exact: true }).waitFor();
+    const line = menu.getByRole("button", { name: /^Corrige la réponse/ }).first();
+    await line.waitFor();
     await other.getByText(ANSWER).waitFor();
 
     // /lock from the composer does the same, the code being set now.
-    await page.getByRole("button", { name: "Corrige la réponse" }).first().click();
+    await line.click();
     await page.getByText(ANSWER).waitFor();
     await composer.fill("/lock");
     await composer.press("Enter");
-    await page.getByText("Discussions verrouillées").waitFor();
+    await menu.getByRole("img", { name: "Verrouillé" }).waitFor();
     await expect.poll(() => other.getByText(ANSWER).count()).toBe(0);
     // Réglages show it among the locked ones.
     await page.goto(new URL("/reglages/general", url).toString());
     await page.getByRole("button", { name: "Changer le code" }).waitFor();
-    const chip = page.getByRole("button", { name: "secret", exact: true }).last();
-    expect(await chip.getAttribute("aria-pressed")).toBe("true");
+    const locked = page.getByRole("switch", { name: "Déverrouiller secret" });
+    expect(await locked.getAttribute("aria-checked")).toBe("true");
     if (shots) await page.screenshot({ path: path.join(shots, "lock-reglages.png") });
+
+    // Ctrl Maj L locks the whole app on this device: the agents go on, the screen is shut
+    // until the code is typed.
+    await page.keyboard.press("Control+Shift+L");
+    const shut = page.getByRole("dialog", { name: "App verrouillée" });
+    await shut.waitFor();
+    await page.keyboard.type("000000");
+    await expect.poll(() => shut.count()).toBe(1);
+    await page.waitForTimeout(1200);
+    await page.keyboard.type("123456");
+    await expect.poll(() => shut.count()).toBe(0);
+    // Loaded again while locked, it stays locked.
+    await page.keyboard.press("Control+Shift+L");
+    await shut.waitFor();
+    await page.reload();
+    await shut.waitFor();
+    await page.keyboard.type("123456");
+    await expect.poll(() => shut.count()).toBe(0);
     expect(errors).toEqual([]);
     await other.close();
     await page.close();
@@ -146,14 +158,19 @@ describe("/lock", () => {
   it("shows the pad on a phone", async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 780 }, hasTouch: true });
     await page.goto(url);
-    await page.getByRole("button", { name: "Menu" }).click();
-    await page.getByRole("button", { name: "Déverrouiller le projet secret" }).click();
-    await page.getByRole("dialog", { name: "secret est verrouillé" }).waitFor();
-    const tap = (digit: string) => page.getByRole("button", { name: digit, exact: true }).click();
+    await page
+      .getByRole("navigation", { name: "Sections" })
+      .getByRole("button", { name: "Projets" })
+      .click();
+    await page.getByRole("menuitem", { name: /^secret/ }).click();
+    await page.getByRole("button", { name: "Déverrouiller", exact: true }).click();
+    const pad = page.getByRole("dialog", { name: "secret est verrouillé" });
+    await pad.waitFor();
+    const tap = (digit: string) => pad.getByRole("button", { name: digit, exact: true }).click();
     for (const digit of "123") await tap(digit);
     if (shots) await page.screenshot({ path: path.join(shots, "lock-telephone.png") });
     for (const digit of "456") await tap(digit);
-    await page.getByText("Déverrouillé", { exact: true }).waitFor();
+    await pad.getByText("Déverrouillé", { exact: true }).waitFor();
     await page.close();
   });
 });

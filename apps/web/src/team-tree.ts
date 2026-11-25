@@ -275,7 +275,7 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
         tone: "warn",
         label: GLYPH_LABEL.attend,
         glyph: "attend",
-        action: "Ouvre son fil pour lui répondre",
+        action: GLYPH_LABEL.attend,
       };
     }
     if (thread.status === "error") {

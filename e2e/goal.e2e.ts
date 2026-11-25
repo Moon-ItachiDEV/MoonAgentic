@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { addProject, pickAgent, setAccess } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -64,18 +65,11 @@ async function newThread(name: string) {
   writeFileSync(path.join(project, "README.md"), "# Démo\n");
   const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
   await page.goto(url);
-  await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-  await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-  await page.getByLabel("Dossier", { exact: true }).fill(project);
-  await page.getByRole("button", { name: "Ajouter le projet" }).click();
+  await addProject(page, project);
   const composer = page.getByRole("combobox", { name: "Message" });
   await expect.poll(() => composer.isEnabled()).toBe(true);
   // The demo agent, not a real one that may be installed on this machine.
-  await page.locator(".agentchip").click();
-  await page.getByRole("button", { name: "Tous", exact: true }).click();
-  await page.getByRole("button", { name: "Options", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-  await page.keyboard.press("Escape");
+  await pickAgent(page);
   return { page, composer };
 }
 
@@ -83,9 +77,8 @@ describe("goal", () => {
   it("starts a thread on a goal, follows it turn by turn, and is taken up again", async () => {
     const { page, composer } = await newThread("objectif");
     // Let through, so each turn ends by itself.
-    await page.getByRole("button", { name: /Mode d'accès/ }).click();
-    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
-    const said = () => page.locator(".u-wrap").allTextContents();
+    await setAccess(page, /Accès complet/);
+    const said = () => page.locator(".uw").allTextContents();
 
     // Picked in the list, the command waits for the goal after it.
     await composer.fill("/go");
@@ -97,7 +90,7 @@ describe("goal", () => {
     // A thread of its own, which goes on by itself until the agent says it is reached.
     const bar = page.getByRole("region", { name: "Objectif" });
     await bar.getByText("Objectif atteint en 3 tours").waitFor({ timeout: 20_000 });
-    expect(await bar.locator(".cg-t").textContent()).toBe("Les tests passent, atteint au tour 3");
+    expect(await bar.locator(".gtx").textContent()).toBe("Les tests passent, atteint au tour 3");
     await expect.poll(async () => (await said()).length).toBe(3);
     const lines = await said();
     expect(lines[0]).toContain("Les tests passent, atteint au tour 3");

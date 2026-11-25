@@ -244,6 +244,9 @@ export function DecisionCard(props: {
       <button
         className="dcf press"
         aria-label={`Rouvrir la demande : ${title}`}
+        // As on the open card: the focus stays in the composer, which would fold and move
+        // this line from under the press.
+        onMouseDown={(e) => e.preventDefault()}
         onClick={() => setFolded(false)}
       >
         <span className="pill">À toi</span>

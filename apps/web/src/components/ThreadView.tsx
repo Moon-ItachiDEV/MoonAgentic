@@ -361,7 +361,7 @@ function Conversation({
         if (anchor.current) markAnchor();
       }}
     >
-      <div className="feed" ref={feed}>
+      <div className={`feed${working ? " working" : ""}`} ref={feed}>
         {intro}
         {strip && (
           <TeamPanel

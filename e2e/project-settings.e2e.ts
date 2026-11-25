@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { addProject } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -75,66 +76,66 @@ describe("a project's settings", () => {
     const errors: Error[] = [];
     page.on("pageerror", (err) => errors.push(err));
     await page.goto(url);
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(repo);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
-    await page.locator(".thr-row.proj", { hasText: "demo" }).locator(".thr").click();
-    await page.getByRole("heading", { name: "demo" }).waitFor();
+    await addProject(page, repo, false);
+    const menu = page.getByRole("complementary", { name: "Menu" });
 
-    await page.getByRole("button", { name: "Actions du projet" }).click();
-    await page.getByRole("menuitem", { name: "Réglages du projet…" }).click();
-    const dialog = page.getByRole("dialog", { name: "Réglages de demo" });
-    await dialog.getByRole("button", { name: "Icône 🚀" }).click();
+    await page.getByRole("button", { name: "Réglages du projet" }).click();
+    const dialog = page.getByRole("dialog", { name: "Réglages du projet" });
+    await dialog.getByRole("button", { name: /^Icône/ }).click();
+    await dialog.getByRole("button", { name: "Icône 🚀", exact: true }).click();
     await dialog.getByRole("radio", { name: "Menthe" }).click();
     // Every window sees it, the sidebar first.
-    const icon = page.locator(".thr-row.proj", { hasText: "demo" }).locator(".pj-ico.pc-mint");
+    const icon = menu.getByRole("button", { name: /^demo/ }).locator(".pj-ico.pc-mint");
     await expect.poll(() => icon.textContent(), { timeout: 30_000 }).toBe("🚀");
     if (shots) await page.screenshot({ path: path.join(shots, "projet-apparence.png") });
 
-    await dialog.getByRole("tab", { name: "Consignes" }).click();
     await dialog.getByLabel("Contenu de AGENTS.md").fill("## Projet\n- Lance les tests.\n");
     await dialog.getByRole("button", { name: "Enregistrer" }).click();
-    await dialog.getByText("Enregistré").waitFor();
+    // Not committed yet: said, since a thread on its own branch would not see it.
+    await dialog.getByText("Pas encore commité").waitFor();
     expect(readFileSync(path.join(repo, "AGENTS.md"), "utf8")).toBe(
       "## Projet\n- Lance les tests.\n",
     );
-    // Not committed yet: said, since a thread on its own branch would not see it.
-    await dialog.getByText("Pas encore commité").waitFor();
     await dialog.getByRole("button", { name: "Relier" }).click();
     await dialog.getByText("Relié").waitFor();
     expect(readFileSync(path.join(repo, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
     if (shots) await page.screenshot({ path: path.join(shots, "projet-consignes.png") });
 
-    await dialog.getByRole("tab", { name: "Commandes" }).click();
-    await dialog.getByRole("button", { name: "Nouvelle commande" }).click();
-    await dialog.getByLabel("Nom").fill("deploy");
-    await dialog.getByLabel(/Description/).fill("Déployer en préproduction");
-    await dialog
+    await dialog.getByRole("button", { name: /^\/ Commandes/ }).click();
+    const commands = page.getByRole("dialog", { name: "Commandes" });
+    await commands.getByRole("button", { name: "Nouvelle commande" }).click();
+    await commands.getByLabel("Nom").fill("deploy");
+    await commands.getByLabel("Description").fill("Déployer en préproduction");
+    await commands
       .getByLabel("Message envoyé à l'agent")
       .fill("Déploie $ARGUMENTS en préproduction.");
-    await dialog.getByRole("button", { name: "Enregistrer" }).click();
-    await dialog.getByText("/deploy", { exact: true }).waitFor();
+    await commands.getByRole("button", { name: "Enregistrer" }).click();
+    await commands.getByRole("button", { name: "Modifier /deploy" }).waitFor();
     expect(readFileSync(path.join(repo, ".moonagentic/commands/deploy.md"), "utf8")).toBe(
       "---\ndescription: Déployer en préproduction\n---\n\nDéploie $ARGUMENTS en préproduction.\n",
     );
+    await commands.getByRole("button", { name: "Retour", exact: true }).click();
 
-    await dialog.getByRole("tab", { name: "Skills" }).click();
-    await dialog.getByRole("button", { name: "Nouvelle skill" }).click();
-    await dialog.getByLabel("Nom").fill("tests-vitest");
-    await dialog.getByLabel("Description").fill("Écrire des tests avec Vitest");
-    await dialog.getByLabel("Instructions").fill("Lance pnpm test.");
-    await dialog.getByRole("button", { name: "Enregistrer" }).click();
-    await dialog.locator(".ps-list").getByText(".agents/skills/tests-vitest/SKILL.md").waitFor();
+    await dialog.getByRole("button", { name: /^\$ Skills/ }).click();
+    const skills = page.getByRole("dialog", { name: "Skills" });
+    await skills.getByRole("button", { name: "Nouvelle skill" }).click();
+    await skills.getByLabel("Nom").fill("tests-vitest");
+    await skills.getByLabel("Description").fill("Écrire des tests avec Vitest");
+    await skills.getByLabel("Instructions").fill("Lance pnpm test.");
+    await skills.getByRole("button", { name: "Enregistrer" }).click();
+    await skills.getByRole("button", { name: "Modifier tests-vitest" }).waitFor();
+    expect(existsSync(path.join(repo, ".agents/skills/tests-vitest/SKILL.md"))).toBe(true);
     if (shots) await page.screenshot({ path: path.join(shots, "projet-skills.png") });
-    await dialog.getByRole("button", { name: "Supprimer tests-vitest" }).click();
-    await page.getByRole("button", { name: "Supprimer", exact: true }).click();
-    await dialog.getByText("Aucune skill dans ce projet.").waitFor();
+    await skills.getByRole("button", { name: "Supprimer tests-vitest" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Supprimer" }).click();
+    await expect
+      .poll(() => skills.getByRole("button", { name: "Modifier tests-vitest" }).count())
+      .toBe(0);
     expect(existsSync(path.join(repo, ".agents/skills/tests-vitest"))).toBe(false);
-    await dialog.getByRole("button", { name: "Fermer" }).click();
+    await skills.getByRole("button", { name: "Fermer", exact: true }).click();
 
     // The composer of the project's folder offers the command.
-    await page.getByRole("button", { name: "Fil", exact: true }).click();
+    await page.getByRole("button", { name: "Nouveau fil" }).first().click();
     const composer = page.getByRole("combobox", { name: "Message" });
     await composer.fill("/depl");
     await expect

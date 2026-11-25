@@ -84,6 +84,18 @@ export function App() {
   const [tabPop, setTabPop] = useState<TabPop>(null);
   /** The open thread's « … » menu. */
   const [threadMenu, setThreadMenu] = useState(false);
+  // Escape closes the menu open above the page, as a click beside it does.
+  useEffect(() => {
+    if (!threadMenu && !tabPop) return;
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      setThreadMenu(false);
+      setTabPop(null);
+    };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  }, [threadMenu, tabPop]);
   // The layout follows the window's width: phone, iPad, computer.
   const screen = useScreen();
   const flags = useScrFlags();
@@ -167,6 +179,10 @@ export function App() {
     lastPage.current = pageProjectId;
   }, [pageProjectId]);
 
+  /** On a phone, the settings show their list rather than a section. */
+  const [settingsList, setSettingsList] = useState(false);
+
+  // Every hook is above: an early return before one of them breaks the page when the state changes.
   if (state.status === "unauthorized") return <PairGate />;
 
   const thread: Thread | undefined =
@@ -228,8 +244,6 @@ export function App() {
     setLoose(true);
   };
   // Any other way home (back, a deleted thread…) is the usual home, in the project last picked.
-  /** On a phone, the settings show their list rather than a section. */
-  const [settingsList, setSettingsList] = useState(false);
   const go = (next: Parameters<typeof navigate>[0]) => {
     setDrawer(false);
     setSearching(false);
@@ -1190,7 +1204,17 @@ function Bottom({ children }: { children: React.ReactNode }) {
     };
   }, []);
   return (
-    <div className="bottom" id="bottom" ref={box}>
+    <div
+      className="bottom"
+      id="bottom"
+      ref={box}
+      // A press on a button above the composer keeps the composer's focus: losing it folds
+      // the composer, and the button would move away before the press ends.
+      onMouseDown={(e) => {
+        const on = e.target as Element;
+        if (on.closest("button") && !on.closest(".cmp")) e.preventDefault();
+      }}
+    >
       {children}
     </div>
   );

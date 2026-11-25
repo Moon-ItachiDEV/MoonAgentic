@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium, type Page } from "playwright";
+import { addProject } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -68,40 +69,44 @@ async function onPlanner(name: string, viewport = { width: 1280, height: 820 }):
   writeFileSync(path.join(project, "README.md"), "# Démo\n");
   const page = await browser.newPage({ viewport });
   await page.goto(url);
-  await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-  await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-  await page.getByLabel("Dossier", { exact: true }).fill(project);
-  await page.getByRole("button", { name: "Ajouter le projet" }).click();
+  await addProject(page, project);
   await expect.poll(() => page.getByRole("combobox", { name: "Message" }).isEnabled()).toBe(true);
-  await page.locator(".nav").getByRole("button", { name: "Planner", exact: true }).click();
-  await page.getByRole("heading", { name: /Planner/ }).waitFor();
+  await pages(page).getByRole("button", { name: "Planner", exact: true }).click();
+  await page.getByRole("tablist", { name: "Vue" }).waitFor();
   return page;
 }
 
+/** The sidebar's pages. */
+const pages = (page: Page) => page.getByRole("navigation", { name: "Pages" });
 const pathname = (page: Page) => new URL(page.url()).pathname;
 /** The titles of the cards in a column of the board. */
 const column = (page: Page, label: string) =>
-  page.getByRole("region", { name: label, exact: true }).locator(".pl-card h3").allTextContents();
+  page.getByRole("region", { name: label, exact: true }).locator(".pc .pct").allTextContents();
 
 describe("planner", () => {
   it("starts a card's work in a new thread, and moves the card as that thread does", async () => {
     const page = await onPlanner("lancer");
-    await page.getByRole("button", { name: "Ajouter une tâche" }).click();
+    await page.getByRole("button", { name: "Ajouter une tâche", exact: true }).click();
     await page.getByLabel("Nouvelle tâche, À faire").fill("Dire bonjour au projet");
     await page.keyboard.press("Enter");
-    await page.keyboard.press("Escape");
-    // The card comes back from the server: on a busy machine, after Escape.
     await expect.poll(() => column(page, "À faire")).toEqual(["Dire bonjour au projet"]);
 
     // « Lancer » on the card opens it on its launch: which agent, with what access.
     await page.getByRole("button", { name: "Lancer la tâche 1" }).click();
-    const detail = page.getByRole("dialog", { name: "Tâche 1" });
+    const detail = page.getByRole("dialog", { name: "Tâche #1" });
     const launch = detail.getByRole("form", { name: "Lancer la tâche 1" });
     await launch.waitFor();
     // The demo agent, not a real one that may be installed on this machine.
-    await launch.getByLabel("Modèle", { exact: true }).selectOption("demo\n");
+    await launch.getByRole("button", { name: /^Modèle : / }).click();
+    await page
+      .getByRole("dialog", { name: "Modèle" })
+      .getByRole("group", { name: "Agent de démo", exact: true })
+      .getByRole("radio")
+      .first()
+      .click();
     // It asks before it acts: the card is seen at work for as long as it waits.
-    await launch.getByLabel("Accès de l'agent").selectOption("supervised");
+    const full = launch.getByRole("switch", { name: "Accès complet, sans rien demander" });
+    if ((await full.getAttribute("aria-checked")) === "true") await full.click();
     if (shots) {
       // Once the panel has slid in.
       await page.waitForTimeout(400);
@@ -112,23 +117,25 @@ describe("planner", () => {
     // The card is at work with its agent, and its state is no longer the user's to set.
     await expect.poll(() => column(page, "En cours")).toEqual(["Dire bonjour au projet"]);
     await launch.waitFor({ state: "detached" });
-    await detail.getByText("Cette carte suit son fil").waitFor();
+    await detail.getByText("Suit son fil").waitFor();
     expect(await detail.getByRole("button", { name: "Livré" }).isDisabled()).toBe(true);
     expect(await detail.getByRole("button", { name: "Lancer", exact: true }).count()).toBe(0);
     if (shots) await page.screenshot({ path: path.join(shots, "planner-en-cours.png") });
     await page.keyboard.press("Escape");
-    const card = page.locator(".pl-card", { hasText: "Dire bonjour au projet" });
+    const card = page.locator(".pc", { hasText: "Dire bonjour au projet" });
     expect(await card.getByRole("button", { name: /Lancer/ }).count()).toBe(0);
     // The agent asks before changing a file: the card says so, and stays at work.
     await expect
-      .poll(() => card.locator(".pl-who").textContent(), { timeout: 15_000 })
+      .poll(() => card.locator(".pcw").textContent(), { timeout: 15_000 })
       .toBe("Agent de démo · attend ton accord");
     expect(await column(page, "En cours")).toEqual(["Dire bonjour au projet"]);
-    await page.getByRole("button", { name: /À traiter/ }).click();
-    const requests = page.getByRole("dialog", { name: "À traiter" });
+    await pages(page)
+      .getByRole("button", { name: /^À traiter/ })
+      .click();
+    const requests = page.getByRole("region", { name: "À traiter" });
     await requests.getByRole("button", { name: "Autoriser" }).click();
-    await requests.getByText("Aucun agent n'attend ta réponse.").waitFor();
-    await requests.getByRole("button", { name: "Fermer" }).click();
+    await requests.getByText("Rien ne t'attend").waitFor();
+    await pages(page).getByRole("button", { name: "Planner", exact: true }).click();
 
     // Its agent done, the work is to check: the card went there by itself.
     await expect
@@ -142,7 +149,7 @@ describe("planner", () => {
     await detail.getByRole("button", { name: "Ouvrir le fil" }).click();
     await expect.poll(() => pathname(page)).toMatch(/^\/t\//);
     await expect
-      .poll(() => page.locator(".u-wrap").first().textContent())
+      .poll(() => page.locator(".uw").first().textContent())
       .toContain("Dire bonjour au projet");
     await page.close();
   });
@@ -154,31 +161,27 @@ describe("planner", () => {
     expect(await tab("Tableau").getAttribute("aria-selected")).toBe("true");
 
     // From the sidebar, the planned tasks open at their address, and are marked there.
-    const entry = page.getByRole("button", { name: /^Tâches planifiées/ });
+    const entry = pages(page).getByRole("button", { name: /^Tâches planifiées/ });
     await entry.click();
     await expect.poll(() => pathname(page)).toBe("/planner/planifiees");
-    expect(await tab("Planifiées").getAttribute("aria-selected")).toBe("true");
-    await page.getByText("Aucune tâche planifiée.").waitFor();
+    await page.getByText("Aucune tâche planifiée").waitFor();
     expect(await entry.getAttribute("aria-current")).toBe("page");
     expect(
-      await page
-        .locator(".nav")
+      await pages(page)
         .getByRole("button", { name: "Planner", exact: true })
         .getAttribute("aria-current"),
     ).toBeNull();
 
     // The address alone brings the view back: after a reload, and in a new window.
     await page.reload();
-    await page.getByText("Aucune tâche planifiée.").waitFor();
-    expect(await tab("Planifiées").getAttribute("aria-selected")).toBe("true");
+    await page.getByText("Aucune tâche planifiée").waitFor();
 
+    await pages(page).getByRole("button", { name: "Planner", exact: true }).click();
     await tab("Timeline").click();
     await expect.poll(() => pathname(page)).toBe("/planner/timeline");
     await page.goBack();
-    await expect.poll(() => pathname(page)).toBe("/planner/planifiees");
-    await expect.poll(() => tab("Planifiées").getAttribute("aria-selected")).toBe("true");
-    await tab("Tableau").click();
     await expect.poll(() => pathname(page)).toBe("/planner");
+    await expect.poll(() => tab("Tableau").getAttribute("aria-selected")).toBe("true");
 
     // An address that names no view is the board.
     await page.goto(new URL("/planner/nimporte", url).href);

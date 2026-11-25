@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { crc32, deflateSync } from "node:zlib";
 import { type Browser, chromium, type Page } from "playwright";
+import { addProject, pickAgent, setAccess } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -104,7 +105,7 @@ afterAll(async () => {
 });
 
 const composer = (page: Page) => page.getByRole("combobox", { name: "Message" });
-const drafts = (page: Page) => page.locator(".cimg");
+const drafts = (page: Page) => page.locator(".att .th");
 const sentImages = (page: Page) => page.locator(".u-img img");
 const send = (page: Page) => page.getByRole("button", { name: "Envoyer" });
 
@@ -164,27 +165,20 @@ describe("images jointes", () => {
     // An image the page may not show is said on the console, by the browser's own policy.
     page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
     await page.goto(url);
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(repo);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
+    await addProject(page, repo);
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
-    await page.locator(".agentchip").click();
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
-    await page.getByRole("button", { name: "Options", exact: true }).click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-    await page.keyboard.press("Escape");
+    await pickAgent(page);
     // The demo agent asks before it changes a file: here it is let through.
-    await page.getByRole("button", { name: /Mode d'accès/ }).click();
-    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
+    await setAccess(page, /Accès complet/);
 
     const red = png(40, 30, [220, 40, 40]);
     const blue = png(30, 40, [40, 80, 220]);
 
     // The « + » offers to join an image; the file chosen shows in the composer.
-    await page.getByRole("button", { name: "Ajouter" }).click();
+    await composer(page).click();
+    await page.getByRole("button", { name: "Ajouter", exact: true }).click();
     const chooser = page.waitForEvent("filechooser");
-    await page.getByRole("menuitem", { name: "Joindre une image" }).click();
+    await page.getByRole("menuitem", { name: "Photos" }).click();
     await (await chooser).setFiles({ name: "rouge.png", mimeType: "image/png", buffer: red });
     await drafts(page).getByRole("img", { name: "rouge.png" }).waitFor();
     // An image alone is a message: it can be sent as soon as the server has it.
@@ -196,7 +190,7 @@ describe("images jointes", () => {
     await expect.poll(() => drafts(page).count()).toBe(2);
     await give(page, "drop", [{ name: "encore.png", type: "image/png", bytes: red }]);
     await expect.poll(() => drafts(page).count()).toBe(3);
-    await expect.poll(() => page.locator(".cimg.sending").count()).toBe(0);
+    await expect.poll(() => page.locator(".att .th.sending").count()).toBe(0);
     expect(await page.locator(".cdrop").count()).toBe(0);
     expect(waiting()).toBe(3);
     await shot(page, "i1-composer");
@@ -231,7 +225,7 @@ describe("images jointes", () => {
     // The agent got both, as images. Its turn is over first: until its last word, what it
     // did is folded in two details, and the one opened too early would be merged away.
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
-    await page.locator(".team-detail-h").last().click();
+    await page.locator(".det .fold").last().click();
     await page
       .getByText(
         `Pièces jointes : image/png, ${red.length} octets (image), image/png, ${blue.length} octets (image).`,
@@ -270,14 +264,14 @@ describe("images jointes", () => {
     await page.getByRole("button", { name: "Agrandir photo.jpg" }).waitFor();
     await expect.poll(() => sentImages(page).count()).toBe(3);
     await expect.poll(() => page.getByText("C'est fait, la réponse vaut 42.").count()).toBe(2);
-    await page.locator(".team-detail-h").last().click();
+    await page.locator(".det .fold").last().click();
     await page.getByText(/Pièces jointes : image\/jpeg, \d+ octets \(image\)\./).waitFor();
     // A message of images alone has no empty bubble.
-    expect(await page.locator(".u-wrap").last().locator(".u").count()).toBe(0);
+    expect(await page.locator(".uw").last().locator(".u").count()).toBe(0);
 
     // « Revenir ici » takes the message back with its image.
-    await page.locator(".u-wrap").last().hover();
-    await page.locator(".u-wrap").last().getByRole("button", { name: "Revenir ici" }).click();
+    await page.locator(".uw").last().hover();
+    await page.locator(".uw").last().getByRole("button", { name: "Revenir ici" }).click();
     await page
       .getByRole("group", { name: "Revenir à ce message" })
       .getByRole("button", { name: "Revenir ici" })
@@ -294,8 +288,9 @@ describe("images jointes", () => {
     const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
     const page = await context.newPage();
     await page.goto(url);
-    await page.getByRole("button", { name: "Menu", exact: true }).click();
-    await page.getByText("Regarde ces deux images").first().click();
+    // A thread on a branch of its own is a code session: the « Code » tab lists it.
+    await page.getByRole("button", { name: "Code", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^Regarde ces deux images/ }).click();
     await expect.poll(() => sentImages(page).count()).toBe(2);
     await page.getByLabel("Choisir des images").setInputFiles(
       [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({
@@ -305,7 +300,7 @@ describe("images jointes", () => {
       })),
     );
     await expect.poll(() => drafts(page).count()).toBe(8);
-    await expect.poll(() => page.locator(".cimg.sending").count()).toBe(0);
+    await expect.poll(() => page.locator(".att .th.sending").count()).toBe(0);
     // No more than eight in one message: the ninth is refused, and said so.
     await page
       .getByLabel("Choisir des images")

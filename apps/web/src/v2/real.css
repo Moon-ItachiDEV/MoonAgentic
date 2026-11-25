@@ -109,6 +109,13 @@ samp {
   color: var(--faint);
   display: grid;
 }
+/* A finger held on a thread's line opens its menu, not the phone's own callout. */
+.rc,
+.trow,
+.it.thr {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
 .pmenu.rowm {
   position: fixed;
   z-index: 130;

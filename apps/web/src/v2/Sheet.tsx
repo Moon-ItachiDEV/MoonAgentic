@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { I } from "./I.tsx";
 import { scrRoot, useScrFlag } from "./scr.ts";
@@ -37,6 +37,11 @@ export function Sheet(props: {
   const [shown, setShown] = useState(false);
   const last = useRef<ReactNode>(null);
   if (open) last.current = props.children;
+  // Each opening starts anew: opened again while it was still closing, what it showed would
+  // otherwise keep its state (a form left busy, a list of before).
+  const opening = useRef({ count: 0, open: false });
+  if (open && !opening.current.open) opening.current.count += 1;
+  opening.current.open = open;
   const sheet = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -140,7 +145,7 @@ export function Sheet(props: {
             {props.right}
           </div>
         )}
-        {open ? props.children : last.current}
+        <Fragment key={opening.current.count}>{open ? props.children : last.current}</Fragment>
       </div>
     </>,
     scrRoot(),

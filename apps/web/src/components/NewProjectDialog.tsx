@@ -214,7 +214,7 @@ function Body({
       </div>
 
       {!gh && (
-        <div className="ins" aria-label="Dossiers git trouvés sur cette machine">
+        <div className="ins" role="group" aria-label="Dossiers git trouvés sur cette machine">
           {local === null && (
             <div className="fvn">
               <span className="t2-spin" />
@@ -306,7 +306,7 @@ function Body({
             </div>
           )}
           {signedIn && !github.error && (
-            <div className="ins" aria-label="Tes dépôts GitHub">
+            <div className="ins" role="group" aria-label="Tes dépôts GitHub">
               {github.repos === null && (
                 <div className="fvn">
                   <span className="t2-spin" />

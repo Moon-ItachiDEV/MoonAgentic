@@ -14,8 +14,8 @@ import {
   type LineStatus,
 } from "../sidebar-tree.ts";
 import { Glyph, I } from "../v2/I.tsx";
+import { useThreadRowMenu } from "../v2/ThreadRowMenu.tsx";
 import { Wordmark } from "./MoonMark.tsx";
-import { Presence } from "./Presence.tsx";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 import { fuzzyMatch, type QuickAction } from "../quick-actions.ts";
 
@@ -83,31 +83,8 @@ export function Sidebar(props: {
     setUnfolded(next);
   };
 
-  // The line whose menu is open (right click, or a long press), and where.
-  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const menuThread = state.threads.find((t) => t.id === menu?.id);
-  const menuOpen = !!menu && !!menuThread;
-  useEffect(() => {
-    if (!menuOpen) return;
-    const away = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Element)) setMenu(null);
-    };
-    const escape = (event: KeyboardEvent) => event.key === "Escape" && setMenu(null);
-    const moved = () => setMenu(null);
-    document.addEventListener("pointerdown", away);
-    document.addEventListener("keydown", escape);
-    window.addEventListener("resize", moved);
-    return () => {
-      document.removeEventListener("pointerdown", away);
-      document.removeEventListener("keydown", escape);
-      window.removeEventListener("resize", moved);
-    };
-  }, [menuOpen]);
-  const act = (run: () => void) => () => {
-    setMenu(null);
-    run();
-  };
+  // The menu of a line: a right click, or a finger held on it.
+  const { bind, menu: rowMenu } = useThreadRowMenu(state.threads, props);
 
   const planSignal = plannerSignal(state.plan, state.threads, state.agents);
   const planCount = planSignal.waiting || planSignal.active;
@@ -150,10 +127,7 @@ export function Sidebar(props: {
       className={`rc${mark ? " wo" : ""}${t.id === props.activeThreadId ? " on" : ""}${t.unread ? " unread" : ""}`}
       aria-current={t.id === props.activeThreadId ? "page" : undefined}
       onClick={() => props.onOpenThread(t.id)}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        setMenu({ id: t.id, x: e.clientX, y: e.clientY });
-      }}
+      {...bind(t)}
     >
       {mark && <Mark status={lineStatus(t, members.get(t.id))} />}
       <span className="nm">{t.title}</span>
@@ -200,63 +174,7 @@ export function Sidebar(props: {
   const resolvedOpen = unfolded.has("resolved");
   return (
     <>
-      <Presence show={menuOpen}>
-        {menu && menuThread && (
-          <div
-            ref={menuRef}
-            className="pmenu still rowm"
-            role="menu"
-            aria-label={`Actions de ${menuThread.title}`}
-            style={{ "--x": `${menu.x}px`, "--y": `${menu.y}px` } as React.CSSProperties}
-          >
-            {!menuThread.archived && (
-              <button
-                className="pi2"
-                role="menuitem"
-                onClick={act(() => props.onTogglePin(menuThread.id, !menuThread.pinned))}
-              >
-                <I n="star" s={20} />
-                <span className="nm">{menuThread.pinned ? "Désépingler" : "Épingler"}</span>
-              </button>
-            )}
-            {!menuThread.archived && (
-              <button
-                className="pi2"
-                role="menuitem"
-                onClick={act(() =>
-                  connection.send({
-                    type: "thread.setUnread",
-                    threadId: menuThread.id,
-                    unread: !menuThread.unread,
-                  }),
-                )}
-              >
-                <I n="dot" s={20} />
-                <span className="nm">
-                  {menuThread.unread ? "Marquer comme lu" : "Marquer comme non lu"}
-                </span>
-              </button>
-            )}
-            <button
-              className="pi2"
-              role="menuitem"
-              onClick={act(() => props.onSetArchived(menuThread.id, !menuThread.archived))}
-            >
-              <I n="check" s={20} />
-              <span className="nm">{menuThread.archived ? "Rouvrir" : "Marquer résolu"}</span>
-            </button>
-            <div className="psep" />
-            <button
-              className="pi2 dng"
-              role="menuitem"
-              onClick={act(() => props.onDeleteThread(menuThread))}
-            >
-              <I n="x" s={20} />
-              <span className="nm">Supprimer…</span>
-            </button>
-          </div>
-        )}
-      </Presence>
+      {rowMenu}
       <div className="dtop">
         <Wordmark />
         <button
@@ -268,7 +186,7 @@ export function Sidebar(props: {
           <I n="search" s={20} />
         </button>
       </div>
-      <div className="dscroll" onScroll={() => menu && setMenu(null)}>
+      <div className="dscroll">
         <nav className="nav" aria-label="Pages">
           <button
             className={`ni press${props.page === "inbox" ? " on" : ""}`}

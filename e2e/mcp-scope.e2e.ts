@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium, type Page } from "playwright";
+import { pickAgent } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Store } from "../apps/server/src/store.ts";
 
@@ -73,109 +74,121 @@ const shot = async (page: Page, name: string) => {
   if (shots) await page.screenshot({ path: path.join(shots, `${name}.png`) });
 };
 
-/** Asks the demo agent something in a new thread of that project; resolves once it answered. */
+/**
+ * Asks the demo agent something in a new thread of that project; resolves once it answered.
+ * Before it is sent, the « + » menu says how many servers a thread started there would get.
+ */
 async function ask(page: Page, project: string, text: string) {
-  await page.getByRole("button", { name: `Nouvelle discussion dans ${project}` }).click();
+  await page
+    .getByRole("complementary", { name: "Menu" })
+    .getByRole("button", { name: new RegExp(`^${project}`) })
+    .click();
+  await page.waitForURL(/\/p\//);
+  await page.getByRole("button", { name: "Nouveau fil" }).first().click();
   const composer = page.getByRole("combobox", { name: "Message" });
   await expect.poll(() => composer.isEnabled()).toBe(true);
   // The demo agent, not a real one that may be installed on this machine.
-  await page.locator(".agentchip").click();
-  await page.getByRole("button", { name: "Tous", exact: true }).click();
-  await page.getByRole("button", { name: "Options", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
+  await pickAgent(page);
+  await composer.click();
+  await page.getByRole("button", { name: "Ajouter", exact: true }).click();
+  const servers = (await page.getByRole("menuitem", { name: /^Serveurs MCP/ }).textContent()) ?? "";
   await page.keyboard.press("Escape");
-  const sub = (await page.locator(".greet-sub").textContent()) ?? "";
   await composer.fill(text);
   await composer.press("Enter");
   const answer = page.getByText(`Tu m'as demandé : « ${text} »`);
   await answer.waitFor();
-  return { sub, answer: (await answer.textContent()) ?? "" };
+  return { servers, answer: (await answer.textContent()) ?? "" };
 }
 
+/** Réglages › Connexions et MCP, where the servers are listed. */
 const openServers = async (page: Page) => {
   await page.getByRole("button", { name: "Réglages" }).click();
-  await page.getByRole("button", { name: "Serveurs MCP" }).click();
-  await page.getByRole("button", { name: "Gérer les serveurs MCP" }).click();
-  return page.getByRole("dialog", { name: "Serveurs MCP" });
+  await page
+    .getByRole("navigation", { name: "Réglages" })
+    .getByRole("button", { name: "Connexions et MCP" })
+    .click();
+  return page.getByRole("region", { name: "Connexions et MCP" });
 };
+const closeSettings = (page: Page) =>
+  page.getByRole("button", { name: "Fermer les réglages" }).click();
 
 describe("serveurs MCP par projet", () => {
   it("gives a server to the threads of the projects picked, and says for whom it is", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
-    let dialog = await openServers(page);
+    let list = await openServers(page);
     // Added for one project from the start.
-    await dialog.getByLabel("Nom").fill("fichiers");
-    await dialog.getByLabel("Commande ou adresse").fill("npx -y serveur-fichiers");
-    await dialog.getByRole("radio", { name: "Seulement certains" }).check();
-    await dialog.getByText("Coche au moins un projet").waitFor();
-    await dialog.getByRole("checkbox", { name: "Alpha" }).check();
-    expect(await dialog.getByText("Coche au moins un projet").count()).toBe(0);
+    await list.getByRole("button", { name: "Ajouter un serveur" }).click();
+    const add = page.getByRole("dialog", { name: "Ajouter un serveur" });
+    await add.getByLabel("Nom").fill("fichiers");
+    await add.getByLabel("Commande", { exact: true }).fill("npx -y serveur-fichiers");
+    await add.getByRole("button", { name: "Projets : Tous les projets" }).click();
+    await add.getByRole("button", { name: "Alpha", exact: true }).click();
+    await add.getByRole("button", { name: "Projets : Alpha" }).waitFor();
     await shot(page, "s1-ajout");
-    await dialog.getByRole("button", { name: "Ajouter", exact: true }).click();
-    const forWhom = dialog.getByRole("button", { name: /Pour qui est fichiers/ });
-    await forWhom.waitFor();
-    expect(await forWhom.textContent()).toBe("Pour : Alpha");
-    await dialog.getByRole("button", { name: "Fermer" }).click();
-    // The settings say it too.
-    await page.getByText("Commande · npx -y serveur-fichiers · Alpha").waitFor();
-    await page.getByRole("button", { name: "Retour" }).click();
+    await add.getByRole("button", { name: "Ajouter", exact: true }).click();
+    // The settings say for whom it is.
+    const row = list.getByRole("button", { name: /^fichiers/ });
+    await row.waitFor();
+    expect(await row.locator("small").textContent()).toBe("Alpha");
+    await closeSettings(page);
 
-    // A thread of that project gets it, a thread of the other does not, and the home page
+    // A thread of that project gets it, a thread of the other does not, and the « + » menu
     // counts what a thread started there would get.
     const inAlpha = await ask(page, "Alpha", "Un");
-    expect(inAlpha.sub).toContain("1 serveur MCP");
+    expect(inAlpha.servers).toBe("Serveurs MCP1");
     expect(inAlpha.answer).toContain("Serveurs MCP reçus : fichiers.");
     const inBeta = await ask(page, "Beta", "Deux");
-    expect(inBeta.sub).not.toContain("MCP");
+    expect(inBeta.servers).toBe("Serveurs MCP");
     expect(inBeta.answer).not.toContain("Serveurs MCP reçus");
 
-    // Changed in its row: for every project, and for a team's every role.
-    dialog = await openServers(page);
-    await dialog.getByRole("button", { name: /Pour qui est fichiers/ }).click();
-    expect(await dialog.getByRole("checkbox", { name: "Alpha" }).isChecked()).toBe(true);
-    expect(await dialog.getByRole("checkbox", { name: "Beta" }).isChecked()).toBe(false);
+    // Changed in its sheet: for every project, and for a team's every role.
+    list = await openServers(page);
+    await row.click();
+    const sheet = page.getByRole("dialog", { name: "fichiers" });
+    await sheet.getByRole("button", { name: "Projets : Alpha" }).click();
+    const pressed = (name: string) =>
+      sheet.getByRole("button", { name, exact: true }).getAttribute("aria-pressed");
+    expect(await pressed("Alpha")).toBe("true");
+    expect(await pressed("Beta")).toBe("false");
     await shot(page, "s1-pour-qui");
-    await dialog.getByRole("radio", { name: "Tous les projets" }).check();
-    await dialog.getByRole("checkbox", { name: /relecteurs, testeurs et fusionneurs/ }).check();
+    await sheet.getByRole("button", { name: "Tous les projets", exact: true }).click();
+    await sheet.getByRole("switch", { name: /relecteurs, testeurs et fusionneurs/ }).click();
     await expect
-      .poll(() => dialog.getByRole("button", { name: /Pour qui est fichiers/ }).textContent())
-      .toBe("Pour : Tous les projets · toute l'équipe");
-    await dialog.getByRole("button", { name: "Fermer" }).click();
-    await page.getByRole("button", { name: "Retour" }).click();
+      .poll(() => row.locator("small").textContent())
+      .toBe("Tous les projets · toute l'équipe");
+    await sheet.getByRole("button", { name: "Fermer", exact: true }).click();
+    await closeSettings(page);
     const again = await ask(page, "Beta", "Trois");
-    expect(again.sub).toContain("1 serveur MCP");
+    expect(again.servers).toBe("Serveurs MCP1");
     expect(again.answer).toContain("Serveurs MCP reçus : fichiers.");
 
     // Kept by the server: still so after the page is loaded again.
     await page.reload();
-    dialog = await openServers(page);
-    expect(await dialog.getByRole("button", { name: /Pour qui est fichiers/ }).textContent()).toBe(
-      "Pour : Tous les projets · toute l'équipe",
-    );
+    list = await openServers(page);
+    await expect
+      .poll(() => row.locator("small").textContent())
+      .toBe("Tous les projets · toute l'équipe");
     await page.close();
   });
 
   it("fits the choice of projects on a phone", async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 780 }, hasTouch: true });
     await page.goto(url);
-    // From the connections, one press away on a phone.
-    await page.getByRole("button", { name: "Menu", exact: true }).click();
-    await page.getByRole("button", { name: "Connexions" }).click();
-    await page.getByRole("button", { name: "Gérer", exact: true }).click();
-    const dialog = page.getByRole("dialog", { name: "Serveurs MCP" });
-    await dialog.getByRole("button", { name: /Pour qui est fichiers/ }).click();
-    await dialog.getByRole("radio", { name: "Seulement certains" }).check();
-    await dialog.getByRole("checkbox", { name: "Beta" }).check();
-    await expect
-      .poll(() => dialog.getByRole("button", { name: /Pour qui est fichiers/ }).textContent())
-      .toBe("Pour : Beta · toute l'équipe");
+    // From the composer's « + », one press away on a phone.
+    await page.getByRole("button", { name: "Ajouter", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^Serveurs MCP/ }).click();
+    await page.getByRole("button", { name: /^fichiers/ }).click();
+    const sheet = page.getByRole("dialog", { name: "fichiers" });
+    await sheet.getByRole("button", { name: /^Projets : / }).click();
+    await sheet.getByRole("button", { name: "Beta", exact: true }).click();
+    await sheet.getByRole("button", { name: "Projets : Beta", exact: true }).waitFor();
     await shot(page, "s1-telephone");
     // Nothing is wider than the screen.
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       390,
     );
-    const box = await dialog.boundingBox();
+    const box = await sheet.boundingBox();
     expect(box!.x).toBeGreaterThanOrEqual(0);
     expect(box!.x + box!.width).toBeLessThanOrEqual(390);
     await page.close();
