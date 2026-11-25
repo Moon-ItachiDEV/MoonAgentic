@@ -935,13 +935,15 @@ export class Store {
 
   /**
    * Messages from the user or an agent inside one project's top-level threads that match all
-   * space-separated terms in `query`, latest first. Coordinator and team sub-threads are
-   * excluded, and no other project is ever touched.
+   * space-separated terms in `query`: the latest `perThread` of each of the `threads` threads
+   * that named them last. A thread that names them often takes no other thread's place.
+   * Coordinator and team sub-threads are excluded, and no other project is ever touched.
    */
   searchProjectItems(
     projectId: string,
     query: string,
-    limit = 30,
+    threads = 10,
+    perThread = 3,
     excludeThreadId?: string,
   ): SearchHit[] {
     const terms = [...new Set(fold(query).trim().split(/\s+/).filter(Boolean))].slice(0, 6);
@@ -952,28 +954,37 @@ export class Store {
     const primary = ordered[0]!;
     const rest = ordered.slice(1);
     const pattern = `*${primary.replace(/[*?[]/g, (c) => `[${c}]`)}*`;
-    const extraClauses = rest.map(() => `AND instr(f.text, ?) > 0`).join("\n          ");
+    const extraClauses = rest.map(() => `AND instr(f.text, ?) > 0`).join("\n            ");
     const excludeClause = excludeThreadId ? `AND t.id != ?` : "";
     const params: (string | number)[] = [
       pattern,
       ...rest,
       projectId,
       ...(excludeThreadId ? [excludeThreadId] : []),
-      limit,
+      perThread,
+      threads * perThread,
     ];
+    // Each match is numbered within its thread, the latest first, and only the first few of
+    // each thread are opened: at most `perThread` rows a thread, so `threads` threads fit.
     const rows = this.sql(
       `SELECT i.thread_id, i.id, i.data
-         FROM search_fts f
-         JOIN search_docs d ON d.n = f.rowid
-         JOIN threads t ON t.id = d.thread_id
-         JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
-        WHERE f.text GLOB ?
-          ${extraClauses}
-          AND t.project_id = ?
-          ${excludeClause}
-          AND json_extract(t.extra, '$.parentId') IS NULL
-          AND COALESCE(json_extract(t.extra, '$.kind'), '') != 'coordinator'
-        ORDER BY f.rowid DESC
+         FROM (
+           SELECT d.thread_id AS thread_id, d.item_id AS item_id, f.rowid AS n,
+                  ROW_NUMBER() OVER (PARTITION BY d.thread_id ORDER BY f.rowid DESC) AS nth,
+                  MAX(f.rowid) OVER (PARTITION BY d.thread_id) AS latest
+             FROM search_fts f
+             JOIN search_docs d ON d.n = f.rowid
+             JOIN threads t ON t.id = d.thread_id
+            WHERE f.text GLOB ?
+            ${extraClauses}
+              AND t.project_id = ?
+              ${excludeClause}
+              AND json_extract(t.extra, '$.parentId') IS NULL
+              AND COALESCE(json_extract(t.extra, '$.kind'), '') != 'coordinator'
+         ) hit
+         JOIN items i ON i.thread_id = hit.thread_id AND i.id = hit.item_id
+        WHERE hit.nth <= ?
+        ORDER BY hit.latest DESC, hit.n DESC
         LIMIT ?`,
     ).all(...params) as { thread_id: string; id: string; data: string }[];
     const foldedQuery = fold(query).trim();

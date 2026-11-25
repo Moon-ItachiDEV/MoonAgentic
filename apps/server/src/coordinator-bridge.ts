@@ -46,7 +46,9 @@ const text = (value: string, isError = false) => ({
   ...(isError ? { isError: true } : {}),
 });
 
-const START_TEAM_TIMEOUT_MS = 15 * 60_000;
+/** Calls that may wait for the user's answer in MoonAgentic, and how long they are given. */
+const WAITS_FOR_USER = new Set(["start_team", "save_memory"]);
+const USER_ANSWER_TIMEOUT_MS = 15 * 60_000;
 
 async function call(tool: string, args: unknown, cancelled: AbortSignal) {
   const token = await access;
@@ -58,7 +60,7 @@ async function call(tool: string, args: unknown, cancelled: AbortSignal) {
       body: JSON.stringify({ tool, args: args ?? {} }),
       signal: AbortSignal.any([
         cancelled,
-        AbortSignal.timeout(tool === "start_team" ? START_TEAM_TIMEOUT_MS : 60_000),
+        AbortSignal.timeout(WAITS_FOR_USER.has(tool) ? USER_ANSWER_TIMEOUT_MS : 60_000),
       ]),
     });
     const body = (await response.json()) as { result?: unknown; error?: string };

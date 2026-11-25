@@ -110,7 +110,7 @@ import { AgentCatalog, agentCommands } from "./catalog.ts";
 import { Coordinators, TEAM_PRESETS_SETTING } from "./coordinator.ts";
 import { historyBefore, projectMemoryContext } from "./history.ts";
 import { cardText, Planner } from "./planner.ts";
-import { COORDINATOR_TOOLS, PROJECT_READ_TOOLS } from "./coordinator-tools.ts";
+import { COORDINATOR_TOOLS, THREAD_TOOLS } from "./coordinator-tools.ts";
 import { localPullRequests, parsePullRequestUrl, type PullRequests } from "./pull-request.ts";
 import { Scheduler } from "./scheduler.ts";
 import { diffText, shipTarget, Teams, teamStatus } from "./team.ts";
@@ -250,8 +250,8 @@ const LOW_EFFORT = /^(low|bas)$/i;
 const OWN_TOOL = new RegExp(
   `^(?:Run )?mcp_{1,2}moonagentic_{1,2}(?:${COORDINATOR_TOOLS.map((t) => t.name).join("|")})$`,
 );
-const OWN_READ_TOOL = new RegExp(
-  `^(?:Run )?mcp_{1,2}moonagentic_{1,2}(?:${PROJECT_READ_TOOLS.map((t) => t.name).join("|")})$`,
+const OWN_THREAD_TOOL = new RegExp(
+  `^(?:Run )?mcp_{1,2}moonagentic_{1,2}(?:${THREAD_TOOLS.map((t) => t.name).join("|")})$`,
 );
 
 /** A known, open pull request is asked about again this often. */
@@ -566,7 +566,7 @@ export class Hub {
       broadcast: (m) => this.broadcast(m),
       checkAgent: (id) => void this.agents.launch(id),
       removing: (id) => this.removingProjects.has(id),
-      isLocked: (id) => this.locks.isLocked(id),
+      outsideProjects: (id) => this.isDiscussions(id),
       running: (id) => this.turns.has(id),
       leadContext: (id) => this.leadContext(id),
       updateThread: (id, patch) => this.updateThread(id, patch),
@@ -584,6 +584,8 @@ export class Hub {
       discover: (agentId, projectId) => this.discover(agentId, projectId),
       confirmTeamPermission: (coordinatorId, task, signal) =>
         this.confirmTeamPermission(coordinatorId, task, signal),
+      confirmMemoryWrite: (threadId, content, replace, signal) =>
+        this.confirmMemoryWrite(threadId, content, replace, signal),
     });
     store.recoverAfterRestart();
     // Messages the index does not have yet: all of them, the first time after an update.
@@ -1711,14 +1713,21 @@ export class Hub {
   }
 
   /**
+   * Whether the project is « Discussions »: its conversations have nothing in common but
+   * where they are kept, so they share no memory and do not read each other.
+   */
+  private isDiscussions(projectId: string): boolean {
+    const project = this.store.getProject(projectId);
+    return project?.name === "Discussions" && path.basename(project.path) === "Discussions";
+  }
+
+  /**
    * The project « Discussions », where conversations started without a project go: a folder
    * beside where projects are usually made, created the first time it is needed. One already made
    * is reused, wherever the next projects go.
    */
   discussionsProject(): string {
-    const made = this.store
-      .listProjects()
-      .find((p) => p.name === "Discussions" && path.basename(p.path) === "Discussions");
+    const made = this.store.listProjects().find((p) => this.isDiscussions(p.id));
     if (made && existsSync(made.path)) return made.id;
     const folder = path.join(defaultParent(this.store.listProjects(), this.homeDir), "Discussions");
     mkdirSync(folder, { recursive: true });
@@ -3488,8 +3497,10 @@ export class Hub {
       // A new session knows nothing of the project's shared memory or earlier thread messages:
       // send the shared memory (when non-empty) and the prior conversation (after a hand-off,
       // a step back, or when the agent could not resume its earlier session) once on turn 1.
+      // A conversation outside any project has no project to share a memory or threads with.
+      const shares = !this.isDiscussions(thread.projectId);
       const memory =
-        !continuing && session.fresh
+        !continuing && session.fresh && shares
           ? projectMemoryContext(this.store.getProjectMemory(thread.projectId).text)
           : undefined;
       const history =
@@ -3499,7 +3510,7 @@ export class Hub {
               itemId,
               this.catalog.name,
               (id) => this.attachments.find(thread.id, id)?.file,
-              this.coordinatorUrl && !thread.parentId && thread.kind !== "coordinator"
+              this.coordinatorUrl && shares && !thread.parentId && thread.kind !== "coordinator"
                 ? { threadId: thread.id }
                 : undefined,
             )
@@ -4070,14 +4081,15 @@ export class Hub {
           ? REVIEWER_ALLOWED
           : undefined;
     const readOnlyDenied = !!allowed && !allowed.has(request.toolCall.kind ?? "");
-    // MoonAgentic's own tools are already limited by the server: coordinators may use all
-    // their tools, while regular and team threads auto-approve strictly read-only context tools
-    // (list_threads, search_threads, read_thread, read_memory); save_memory follows permissionMode.
+    // MoonAgentic's own tools are already limited by the server: asking the user before each
+    // one would make them useless. The server itself asks before a thread outside full access
+    // writes the shared memory (`confirmMemoryWrite`), whether its agent asked first or not:
+    // the agent's own request for it is let through here, so the user is asked once.
     this.noteToolName(threadId, request.toolCall);
     // An agent that does not name the tool is taken at its title, for a call of no known kind:
     // never a change of files nor a command.
     const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
-    const ownPattern = thread.kind === "coordinator" ? OWN_TOOL : OWN_READ_TOOL;
+    const ownPattern = thread.kind === "coordinator" ? OWN_TOOL : OWN_THREAD_TOOL;
     const own =
       !!this.coordinatorUrl &&
       (named !== undefined
@@ -4205,6 +4217,63 @@ export class Hub {
         resolve(null);
       };
       this.pendingPermissions.set(id, { threadId: coordinatorId, resolve: done });
+      this.broadcastRequests();
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  /**
+   * Asks the user before a thread outside full access writes the project's shared memory:
+   * every later session of the project starts with what is written there. Same card and
+   * « À traiter » queue as an agent's own requests.
+   */
+  private confirmMemoryWrite(
+    threadId: string,
+    content: string,
+    replace: boolean,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (signal?.aborted) return Promise.resolve(false);
+    // The words to be written, on one line, with nothing in them that is not seen.
+    const flat = content
+      .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const shown = [...flat];
+    const preview = shown.length > 80 ? `${shown.slice(0, 79).join("").trimEnd()}…` : flat;
+    const id = `permission:${randomUUID()}`;
+    this.putItem(threadId, {
+      id,
+      kind: "permission",
+      title: !preview
+        ? "Vider la mémoire du projet"
+        : replace
+          ? `Remplacer la mémoire du projet par : ${preview}`
+          : `Ajouter à la mémoire du projet : ${preview}`,
+      options: [
+        { optionId: "allow", name: "Autoriser", kind: "allow_once" },
+        { optionId: "reject", name: "Refuser", kind: "reject_once" },
+      ],
+      outcome: null,
+      at: Date.now(),
+    });
+    this.updateThread(threadId, { status: "waiting" });
+    this.admit();
+    return new Promise<boolean>((resolve) => {
+      const onAbort = () => {
+        this.settlePermission(id);
+        if (
+          this.store.getThread(threadId)?.status === "waiting" &&
+          ![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)
+        ) {
+          this.updateThread(threadId, { status: this.turns.has(threadId) ? "running" : "idle" });
+        }
+      };
+      const done = (response: acp.RequestPermissionResponse) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(response.outcome.outcome === "selected" && response.outcome.optionId === "allow");
+      };
+      this.pendingPermissions.set(id, { threadId, resolve: done });
       this.broadcastRequests();
       signal?.addEventListener("abort", onAbort, { once: true });
     });
