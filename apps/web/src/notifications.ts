@@ -138,8 +138,16 @@ const inFront = () => document.visibilityState === "visible" && document.hasFocu
 const ASK_MS = 250;
 const HOLD_MS = 3000;
 /** How the tabs of this browser tell each other that one of them is in front of the user. */
-const tabs =
-  typeof BroadcastChannel === "function" ? new BroadcastChannel("moonagentic.notifications") : null;
+const tabs = (() => {
+  // A browser that has none, or refuses one here, only loses the check between tabs.
+  try {
+    return typeof BroadcastChannel === "function"
+      ? new BroadcastChannel("moonagentic.notifications")
+      : null;
+  } catch {
+    return null;
+  }
+})();
 
 /** Resolves true when another MoonAgentic tab is in front of the user right now. */
 function anotherTabInFront(): Promise<boolean> {
