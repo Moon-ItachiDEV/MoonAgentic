@@ -51,3 +51,27 @@ describe("DesktopCrashLog", () => {
     expect(redactDesktopLine("key sk-ant-1234567890abcdef")).toBe("key sk-ant-…");
   });
 });
+
+describe("the desktop's own masking", () => {
+  it("is the server's, word for word", () => {
+    const here = readFileSync(new URL("../src/redact.ts", import.meta.url), "utf8");
+    const server = readFileSync(new URL("../../server/src/redact.ts", import.meta.url), "utf8");
+    expect(here).toBe(server);
+  });
+
+  it("keeps what the server masks out of the desktop log", () => {
+    const dir = tempDir();
+    const log = new DesktopCrashLog(dir);
+    const lines = [
+      "connexion refusée password=fauxSecret01",
+      "OPENAI_API_KEY=fauxSecret02",
+      "fatal: https://moi:fauxSecret03@git.example.com/x.git",
+      "Authorization: Basic dXNlcjpmYXV4U2VjcmV0MDQ=",
+      '{"api_key": "fauxSecret05"}',
+    ];
+    log.write(lines.join("\n"));
+    const content = readFileSync(log.file(), "utf8");
+    for (const n of ["01", "02", "03", "05"]) expect(content).not.toContain(`fauxSecret${n}`);
+    expect(content).not.toContain("dXNlcjpmYXV4U2VjcmV0MDQ");
+  });
+});

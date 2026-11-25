@@ -142,6 +142,8 @@ export function Artifacts({
   const load = useCallback(() => {
     const seq = ++asked.current;
     setLoading(true);
+    // Asked again: what failed before says nothing yet of this time.
+    setError(null);
     connection.ask({ type: "artifacts.list", requestId: newId() }).then(
       (reply) => {
         if (seq !== asked.current) return;
@@ -194,7 +196,7 @@ export function Artifacts({
           className="ib"
           aria-label="Actualiser la liste"
           title="Actualiser"
-          disabled={loading}
+          disabled={loading || !online}
           onClick={load}
         >
           <IconRefresh size={15} />

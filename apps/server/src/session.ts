@@ -6,6 +6,7 @@ import type { AgentLaunch } from "./agents.ts";
 import type { ImageBlock } from "./attachments.ts";
 import type { PromptLink } from "./files.ts";
 import { acpMcpServers, type McpServerRecord } from "./mcp.ts";
+import { redact } from "./redact.ts";
 import { killTree, spawnPlan } from "./spawn.ts";
 
 /**
@@ -600,7 +601,9 @@ export class AgentSession {
         signInSeen = true;
         askSignIn();
       } else {
-        stderr = `${stderr}${line}\n`.slice(-STDERR_TAIL);
+        // Masked line by line, before the tail is cut: cut first, a secret's beginning could
+        // go with what tells it for one, and the rest be kept.
+        stderr = `${stderr}${redact(line)}\n`.slice(-STDERR_TAIL);
       }
     };
     // Whole lines only, so a link cut in two by a read is never kept by halves.

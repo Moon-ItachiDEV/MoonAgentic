@@ -127,6 +127,7 @@ import { TurnLine } from "./turn-line.ts";
 import { sweepWorktrees } from "./worktree-sweep.ts";
 import { AppUpdates, type GitSource, type ShellChannel } from "./app-update.ts";
 import { backupBeforeUpdate } from "./backups.ts";
+import { redact } from "./redact.ts";
 import { isTeamPreset } from "./saved-shapes.ts";
 import { isRecord, type Store, StorageRefused, storageTrouble } from "./store.ts";
 import {
@@ -4022,7 +4023,8 @@ export class Hub {
           if (reason && !this.closed && !this.cancelled.has(thread.id)) {
             const summary = this.locks.isLocked(thread.projectId)
               ? ""
-              : (reason.split(/\r?\n/)[0]?.trim().slice(0, 180) ?? "");
+              : // Masked before it is cut: half a secret is no longer known for one.
+                redact(reason.split(/\r?\n/)[0]?.trim() ?? "").slice(0, 180);
             this.diagnostics?.recordSlow(
               "agent-exit",
               `${thread.agentId} arrêté : ${summary || "sortie imprévue"}`,
