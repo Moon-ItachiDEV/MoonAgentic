@@ -467,7 +467,7 @@ export function createHttpServer(options: {
   );
   /** Single-use short-lived tickets issued for WebSocket upgrades, with whom each is for. */
   const wsTickets = new Map<string, { expiresAt: number; who: Who }>();
-  const issueWsTicket = (who: Who): string => {
+  const issueWsTicket = (who: Who, ttlMs = wsTicketTtlMs): string => {
     const now = Date.now();
     for (const [key, { expiresAt }] of wsTickets) {
       if (expiresAt <= now) wsTickets.delete(key);
@@ -478,7 +478,7 @@ export function createHttpServer(options: {
       wsTickets.delete(oldest);
     }
     const ticket = newToken();
-    wsTickets.set(ticket, { expiresAt: now + wsTicketTtlMs, who });
+    wsTickets.set(ticket, { expiresAt: now + ttlMs, who });
     return ticket;
   };
   const consumeWsTicket = (given: string | null): Who | undefined => {
@@ -1006,6 +1006,21 @@ export function createHttpServer(options: {
   // A phone that left the network never says goodbye: a connection that does not answer a
   // ping by the next one is closed, so nothing is kept for a window that is gone.
   const alive = new WeakSet<WebSocket>();
+  const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
+  // A connection that died without a word is replaced without asking for a ticket: the
+  // browser would send that on a connection it kept, which may have died too. Each open one
+  // holds the next ticket, renewed with each heartbeat, and only one at a time.
+  const spares = new Map<WebSocket, string>();
+  const spareTtlMs = 2 * heartbeatMs;
+  const giveSpare = (ws: WebSocket) => {
+    const who = sockets.get(ws);
+    if (!who || ws.readyState !== ws.OPEN) return;
+    const before = spares.get(ws);
+    if (before !== undefined) wsTickets.delete(before);
+    const ticket = issueWsTicket(who, spareTtlMs);
+    spares.set(ws, ticket);
+    ws.send(JSON.stringify({ type: "ws.ticket", ticket, ttlMs: spareTtlMs }));
+  };
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
       if (!alive.has(ws)) {
@@ -1014,8 +1029,9 @@ export function createHttpServer(options: {
       }
       alive.delete(ws);
       ws.ping();
+      giveSpare(ws);
     }
-  }, options.heartbeatMs ?? HEARTBEAT_MS);
+  }, heartbeatMs);
   heartbeat.unref();
   server.on("upgrade", (req, socket, head) => {
     try {
@@ -1072,7 +1088,12 @@ export function createHttpServer(options: {
         };
         const disconnect = hub.connect(client);
         sockets.set(ws, who);
-        ws.on("close", () => sockets.delete(ws));
+        // Its last ticket stays good until it expires: it is for the connection that follows.
+        ws.on("close", () => {
+          sockets.delete(ws);
+          spares.delete(ws);
+        });
+        giveSpare(ws);
         alive.add(ws);
         ws.on("pong", () => alive.add(ws));
         ws.on("close", disconnect);

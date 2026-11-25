@@ -3,11 +3,14 @@ import { HIDDEN_FRAME_MS } from "./frame.ts";
 import {
   ASK_TIMEOUT_MS,
   askTimeoutFor,
+  CONFIRM_MS,
   Connection,
+  DEVICE_REMOVED,
   NOT_SENT,
   PING_MS,
   PONG_TIMEOUT_MS,
   readTokens,
+  TICKET_TIMEOUT_MS,
   WAKE_PONG_MS,
 } from "./connection.ts";
 
@@ -47,9 +50,9 @@ class FakeWebSocket {
     // A dead connection: the browser takes its time to say so.
   }
 
-  closeNow(): void {
+  closeNow(code = 1006): void {
     this.readyState = FakeWebSocket.CLOSED;
-    this.onclose?.({ code: 1006 });
+    this.onclose?.({ code });
   }
 }
 
@@ -585,11 +588,13 @@ describe("Connection", () => {
 
   it("rejects immediately without leaving a timer when the socket is not open", async () => {
     const { conn } = await setupConnection({ askTimeoutMs: 5_000 });
+    // The connection being opened has its own wait: the ask adds none.
+    const before = vi.getTimerCount();
 
     await expect(
       conn.ask({ type: "search", requestId: "req-offline", query: "w" }),
     ).rejects.toThrow(NOT_SENT);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(vi.getTimerCount()).toBe(before);
   });
 
   it("ignores malformed JSON frames in onmessage without breaking the connection", async () => {
@@ -701,5 +706,226 @@ describe("Connection", () => {
     expect(text()).toBe("Bonjour à toi.");
     await vi.advanceTimersByTimeAsync(HIDDEN_FRAME_MS * 5);
     expect(told).toBe(2);
+  });
+});
+
+/** What a socket was given, read back. */
+const sentOn = (socket: FakeWebSocket) =>
+  socket.sent.map((raw) => JSON.parse(raw) as { type: string; sendId?: string; text?: string });
+
+// Audit of 2026-11-25, N25: a phone's network changes, the connection dies without a word,
+// and what the user does meanwhile was lost without them knowing.
+describe("an action sent on a connection that died without a word", () => {
+  it("goes again, the same, on the next connection", async () => {
+    const { conn, socket } = await setupConnection();
+    socket.open();
+    expect(conn.send({ type: "thread.send", threadId: "t", text: "Bonjour" })).toBe(true);
+    const [sent, ping] = sentOn(socket);
+    expect(sent).toMatchObject({ type: "thread.send", text: "Bonjour" });
+    expect(sent!.sendId).toBeTruthy();
+    // The server is asked at once whether it got it.
+    expect(ping).toEqual({ type: "ping" });
+
+    // No answer: the connection is replaced well before the browser would notice.
+    await vi.advanceTimersByTimeAsync(CONFIRM_MS);
+    expect(conn.getState().status).not.toBe("open");
+    await vi.advanceTimersByTimeAsync(10);
+    const next = FakeWebSocket.instances.at(-1)!;
+    expect(next).not.toBe(socket);
+    next.open();
+    const again = sentOn(next).find((m) => m.type === "thread.send");
+    expect(again).toEqual(sent);
+  });
+
+  it("does not go again once the server answered after it", async () => {
+    const { conn, socket } = await setupConnection();
+    socket.open();
+    conn.send({ type: "permission.respond", threadId: "t", itemId: "p", optionId: "oui" });
+    const sendId = sentOn(socket)[0]!.sendId!;
+    expect(conn.waitsForConfirmation(sendId)).toBe(true);
+    socket.emitMessage(JSON.stringify({ type: "pong" }));
+    expect(conn.waitsForConfirmation(sendId)).toBe(false);
+    expect(conn.confirmedSince(sendId)).toBeTypeOf("number");
+    await vi.advanceTimersByTimeAsync(CONFIRM_MS * 2);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    socket.closeNow();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const next = FakeWebSocket.instances.at(-1)!;
+    next.open();
+    expect(sentOn(next).some((m) => m.type === "permission.respond")).toBe(false);
+  });
+
+  it("is not taken as received by the answer to a ping sent before it", async () => {
+    const { conn, socket } = await setupConnection({ pingMs: PING_MS });
+    socket.open();
+    await vi.advanceTimersByTimeAsync(PING_MS);
+    conn.send({
+      type: "question.respond",
+      threadId: "t",
+      itemId: "q",
+      answers: [{ picks: ["a"] }],
+    });
+    const sendId = sentOn(socket).find((m) => m.type === "question.respond")!.sendId!;
+    // The answer to the heartbeat's ping: it left before the action.
+    socket.emitMessage(JSON.stringify({ type: "pong" }));
+    expect(conn.waitsForConfirmation(sendId)).toBe(true);
+    socket.emitMessage(JSON.stringify({ type: "pong" }));
+    expect(conn.waitsForConfirmation(sendId)).toBe(false);
+  });
+});
+
+describe("a connection replaced after it died without a word", () => {
+  it("opens with the ticket the server gave on it, asking for none", async () => {
+    const { socket } = await setupConnection();
+    socket.open();
+    socket.emitMessage(JSON.stringify({ type: "ws.ticket", ticket: "spare-1", ttlMs: 60_000 }));
+    const asked = vi.mocked(fetch).mock.calls.length;
+    socket.closeNow();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const next = FakeWebSocket.instances.at(-1)!;
+    expect(next).not.toBe(socket);
+    expect(new URL(next.url).searchParams.get("ticket")).toBe("spare-1");
+    expect(vi.mocked(fetch).mock.calls.length).toBe(asked);
+  });
+
+  it("asks for one once the ticket it was given is too old, or was used", async () => {
+    const { socket } = await setupConnection();
+    socket.open();
+    socket.emitMessage(JSON.stringify({ type: "ws.ticket", ticket: "spare-1", ttlMs: 10_000 }));
+    // A little before the server stops taking it, it is not tried any more.
+    await vi.advanceTimersByTimeAsync(6_000);
+    socket.closeNow();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const next = FakeWebSocket.instances.at(-1)!;
+    expect(new URL(next.url).searchParams.get("ticket")).toMatch(/^ticket-/);
+    // Never twice: the one after that asks too.
+    next.closeNow();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(new URL(FakeWebSocket.instances.at(-1)!.url).searchParams.get("ticket")).toMatch(
+      /^ticket-/,
+    );
+  });
+});
+
+describe("a ticket asked for on a network that went away", () => {
+  it("is asked for again at once after each try that stayed silent", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/" });
+    vi.stubGlobal("localStorage", { getItem: () => "secret-token", setItem: () => undefined });
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    let asked = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (input: string, init?: { signal?: AbortSignal }) =>
+          new Promise<Response>((resolve, reject) => {
+            if (input !== "/api/ws-ticket") return resolve(new Response(null, { status: 204 }));
+            asked += 1;
+            // The first three never come back, as on connections the browser kept that died
+            // with the network.
+            if (asked > 3) {
+              return resolve(new Response(JSON.stringify({ ticket: "t2" }), { status: 200 }));
+            }
+            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+      ),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const conn = new Connection({ pingMs: 0 });
+    await vi.advanceTimersByTimeAsync(3 * TICKET_TIMEOUT_MS + 100);
+    expect(asked).toBe(4);
+    FakeWebSocket.instances.at(-1)!.open();
+    expect(conn.getState().status).toBe("open");
+  });
+});
+
+// Audit of 2026-11-25, N30.
+describe("access taken back or renewed", () => {
+  const storage = (initial: string) => {
+    const kept = new Map([["moonagentic.token", initial]]);
+    return {
+      kept,
+      store: {
+        getItem: (k: string) => kept.get(k) ?? null,
+        setItem: (k: string, v: string) => void kept.set(k, v),
+        removeItem: (k: string) => void kept.delete(k),
+      },
+    };
+  };
+
+  it("says so on a device the computer removed, and still after a reload", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    const { kept, store } = storage("phone-token");
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/" });
+    vi.stubGlobal("localStorage", store);
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) =>
+        input === "/api/ws-ticket"
+          ? new Response(JSON.stringify({ ticket: "t1" }), { status: 200 })
+          : new Response(null, { status: 401 }),
+      ),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const conn = new Connection({ pingMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    FakeWebSocket.instances[0]!.open();
+    FakeWebSocket.instances[0]!.closeNow(4003);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(conn.getState().status).toBe("unauthorized");
+    expect(conn.pairError).toBe(DEVICE_REMOVED);
+    expect(kept.has("moonagentic.token")).toBe(false);
+
+    const reloaded = new Connection({ pingMs: 0 });
+    expect(reloaded.getState().status).toBe("unauthorized");
+    expect(reloaded.pairError).toBe(DEVICE_REMOVED);
+  });
+
+  it("goes on with the token another tab renewed, instead of asking to pair", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    const { kept, store } = storage("old-token");
+    type Listener = (event: { key: string; newValue: string | null }) => void;
+    const listeners = new Map<string, Listener>();
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: Listener) => listeners.set(type, listener),
+    });
+    vi.stubGlobal("document", { addEventListener: () => undefined, visibilityState: "visible" });
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/" });
+    vi.stubGlobal("localStorage", store);
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    const tickets: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string, init?: { headers?: Record<string, string> }) => {
+        const token = init?.headers?.authorization?.replace("Bearer ", "") ?? "";
+        if (token !== kept.get("moonagentic.token")) return new Response(null, { status: 401 });
+        if (input === "/api/ws-ticket") {
+          tickets.push(token);
+          return new Response(JSON.stringify({ ticket: `t-${token}` }), { status: 200 });
+        }
+        return new Response(null, { status: 204 });
+      }),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const conn = new Connection({ pingMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    FakeWebSocket.instances[0]!.open();
+
+    // The other tab renews: the server closes this one, before that tab has kept the new
+    // token, so this one is refused at first.
+    kept.set("moonagentic.token", "new-token-pending");
+    FakeWebSocket.instances[0]!.closeNow(4001);
+    await vi.advanceTimersByTimeAsync(0);
+    kept.set("moonagentic.token", "new-token");
+    listeners.get("storage")?.({ key: "moonagentic.token", newValue: "new-token" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(tickets.at(-1)).toBe("new-token");
+    FakeWebSocket.instances.at(-1)!.open();
+    expect(conn.getState().status).toBe("open");
   });
 });
