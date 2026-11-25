@@ -7,6 +7,7 @@ import {
 } from "@moonagentic/protocol";
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
+import { COLOR_NAME } from "../project-colors.ts";
 import {
   claudeAction,
   commandProblem,
@@ -23,17 +24,6 @@ import { Sheet } from "../v2/Sheet.tsx";
 import { BranchCleanup } from "./BranchCleanup.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 import { ProjectIcon } from "./ProjectIcon.tsx";
-
-const COLOR_NAME: Record<ProjectColor, string> = {
-  moon: "Lune",
-  sky: "Ciel",
-  mint: "Menthe",
-  sun: "Soleil",
-  coral: "Corail",
-  rose: "Rose",
-  violet: "Violet",
-  slate: "Ardoise",
-};
 
 const why = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -399,11 +389,7 @@ export function ProjectSettings(props: {
       >
         <div className="sbody">{body}</div>
       </Sheet>
-      {cleaning && (
-        <div className="legacy legacy-over">
-          <BranchCleanup project={project} onClose={() => setCleaning(false)} />
-        </div>
-      )}
+      <BranchCleanup open={cleaning} project={project} onClose={() => setCleaning(false)} />
       {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
     </>
   );

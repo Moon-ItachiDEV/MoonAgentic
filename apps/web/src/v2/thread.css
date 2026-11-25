@@ -625,3 +625,206 @@ button.cqt {
   font-size: 12px;
   color: var(--muted);
 }
+
+/* Images joined to a message, in the thread. */
+.u-imgs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.u-img {
+  display: block;
+  width: 112px;
+  height: 112px;
+  padding: 0;
+  border-radius: 16px;
+  background: var(--group);
+  overflow: hidden;
+  cursor: zoom-in;
+  flex: none;
+}
+.u-img:disabled {
+  cursor: default;
+}
+.u-img img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* Alone, an image is larger. Its box is set before it loads, so the thread does not jump
+   under the reader when it arrives. */
+.u-imgs.one .u-img {
+  width: min(240px, 100%);
+  height: 180px;
+}
+.u-img.gone {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: auto;
+  height: 40px;
+  padding: 0 12px;
+  color: var(--faint);
+  font-size: 12.5px;
+  cursor: default;
+}
+
+/* The files of the computer an answer names: an image the agent made, in the thread. */
+.md img.md-img {
+  display: block;
+  max-width: min(100%, 520px);
+  max-height: 420px;
+  height: auto;
+  margin: 8px 0;
+  border-radius: 16px;
+  background: var(--group);
+  cursor: zoom-in;
+  object-fit: contain;
+}
+/* Its box is there before it loads, so the thread does not jump under the reader. */
+.md img.md-img.waiting {
+  width: min(100%, 320px);
+  aspect-ratio: 4 / 3;
+  animation: md-img-wait 1.4s ease-in-out infinite;
+}
+@keyframes md-img-wait {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .md img.md-img.waiting {
+    animation: none;
+  }
+}
+/* The image and, over its corner, what keeps it: a glass button. */
+.md .md-img-box {
+  position: relative;
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+}
+.md-img-keep {
+  position: absolute;
+  right: 10px;
+  bottom: 18px;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 18px;
+  background: var(--glass);
+  backdrop-filter: blur(14px) saturate(1.6);
+  -webkit-backdrop-filter: blur(14px) saturate(1.6);
+  box-shadow: var(--glass-sh);
+  color: var(--fg);
+  transition: transform 150ms var(--out);
+}
+.md-img-keep:active {
+  transform: scale(0.94);
+}
+.md img.md-img.waiting + .md-img-keep {
+  display: none;
+}
+.md-img-keep:focus-visible,
+.md img.md-img:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.md-img-gone {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  margin: 4px 0;
+  padding: 0 12px;
+  border-radius: 16px;
+  background: var(--hover);
+  color: var(--faint);
+  font-size: 12.5px;
+}
+.md a.md-file {
+  cursor: pointer;
+}
+
+/* The image an agent is making, before it is there: dots, a wave of light, the real time. */
+.img-draft {
+  display: grid;
+  gap: 10px;
+  margin: 6px 0 10px;
+}
+.img-draft-label {
+  color: var(--faint);
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+.img-draft-canvas {
+  position: relative;
+  width: min(100%, 360px);
+  aspect-ratio: 4 / 5;
+  border-radius: 20px;
+  overflow: hidden;
+}
+.img-draft-canvas::before,
+.img-draft-canvas::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle, currentColor 1.1px, transparent 1.5px);
+  background-size: 14px 14px;
+  background-position: 7px 7px;
+}
+/* The grid at rest, barely there. */
+.img-draft-canvas::before {
+  color: color-mix(in srgb, var(--faint) 45%, transparent);
+}
+/* The same dots in the accent colour, seen through a soft light that drifts over them. */
+.img-draft-canvas::after {
+  color: var(--accent);
+  -webkit-mask-image: radial-gradient(ellipse 45% 55% at 50% 50%, #000 0%, transparent 70%);
+  mask-image: radial-gradient(ellipse 45% 55% at 50% 50%, #000 0%, transparent 70%);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: 160% 160%;
+  mask-size: 160% 160%;
+  animation: img-draft-wave 5s ease-in-out infinite alternate;
+}
+@keyframes img-draft-wave {
+  0% {
+    -webkit-mask-position: 0% 10%;
+    mask-position: 0% 10%;
+  }
+  50% {
+    -webkit-mask-position: 90% 50%;
+    mask-position: 90% 50%;
+  }
+  100% {
+    -webkit-mask-position: 20% 100%;
+    mask-position: 20% 100%;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .img-draft-canvas::after {
+    animation: none;
+  }
+}
+.img-draft-time {
+  position: absolute;
+  z-index: 1;
+  right: 12px;
+  bottom: 12px;
+  height: 28px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 14px;
+  background: var(--glass);
+  backdrop-filter: blur(14px) saturate(1.6);
+  -webkit-backdrop-filter: blur(14px) saturate(1.6);
+  box-shadow: var(--glass-sh);
+  color: var(--muted);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}

@@ -49,6 +49,15 @@ import { RemoteAccess } from "./RemoteAccess.tsx";
 import { Subscriptions } from "./Subscriptions.tsx";
 import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
 import { TeamPresets } from "./TeamPresets.tsx";
+import {
+  AgentAddSheet,
+  AgentSheet,
+  AgentState,
+  GithubSheet,
+  useAgentChecks,
+  useGithubStatus,
+} from "./Connections.tsx";
+import { McpAddSheet, McpServerSheet } from "./McpSheets.tsx";
 
 /** The sections, in the groups the list shows them in. */
 const GROUPS: { id: SettingsSection; label: string; icon: IconName | "half" }[][] = [
@@ -71,22 +80,6 @@ const GROUPS: { id: SettingsSection; label: string; icon: IconName | "half" }[][
 ];
 const SECTIONS = GROUPS.flat();
 const THEMES: Record<Theme, string> = { system: "Système", light: "Clair", dark: "Sombre" };
-
-/** The GitHub account `gh` is signed in to, as the server reports it; nothing when none. */
-function useGithubLogin(): string | undefined {
-  const [login, setLogin] = useState<string>();
-  useEffect(() => {
-    let live = true;
-    connection
-      .ask({ type: "github.status", requestId: newId() })
-      .then((reply) => live && setLogin(reply.status.login))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
-  }, []);
-  return login;
-}
 
 /** One line of a group: what it sets, a word on its state when it has one, then its control. */
 function Row(props: { title: string; text?: ReactNode; children?: ReactNode }) {
@@ -475,12 +468,119 @@ interface PageProps {
   mcpServers: McpServerInfo[];
   mcpSecretsError?: string | null;
   onPickProject: (id: string) => void;
-  onOpenConnections: () => void;
-  onOpenMcp: () => void;
+}
+
+/** What the pages share with the layer: GitHub as the server reports it, and its sheet. */
+interface GithubProps {
+  github: ReturnType<typeof useGithubStatus>;
+  onOpenGithub: () => void;
+}
+
+/** « Agents »: each one with its state; a line opens it, the last adds one. */
+function AgentsPage({ agents }: { agents: AgentInfo[] }) {
+  const [opened, setOpened] = useState<string>();
+  const [adding, setAdding] = useState(false);
+  const checks = useAgentChecks();
+  const agent = agents.find((a) => a.id === opened);
+  return (
+    <>
+      <div className="ins">
+        {agents.map((a) => (
+          <button key={a.id} className="it" onClick={() => setOpened(a.id)}>
+            <span className="tx">
+              {a.name}
+              <small>
+                {!a.available
+                  ? (a.hint ?? "Pas trouvé sur cette machine")
+                  : (a.check?.version ?? a.command ?? "")}
+              </small>
+            </span>
+            <span className="rt">
+              <AgentState agent={a} checking={checks.checking(a)} />
+              <I n="right" s={15} />
+            </span>
+          </button>
+        ))}
+      </div>
+      <div className="ins">
+        <button className="it acc" onClick={() => setAdding(true)}>
+          <I n="plus" s={18} />
+          <span className="tx">Ajouter un agent</span>
+        </button>
+      </div>
+      <AgentSheet
+        agent={agent}
+        checking={!!agent && checks.checking(agent)}
+        onCheck={() => agent && checks.check(agent)}
+        onClose={() => setOpened(undefined)}
+      />
+      <AgentAddSheet open={adding} onClose={() => setAdding(false)} />
+    </>
+  );
+}
+
+/** « Connexions et MCP »: the GitHub account, then the servers given to the agents. */
+function McpPage(props: PageProps & GithubProps) {
+  const [opened, setOpened] = useState<string>();
+  const [adding, setAdding] = useState(false);
+  const { status, checking } = props.github;
+  return (
+    <>
+      <div className="gl2">Comptes</div>
+      <div className="ins">
+        <button className="it" onClick={props.onOpenGithub}>
+          <span className="ic">
+            <I n="gh" s={18} />
+          </span>
+          <span className="tx">GitHub</span>
+          <span className="rt">
+            {status?.login ?? (checking ? "" : "Non connecté")}
+            <I n="right" s={15} />
+          </span>
+        </button>
+      </div>
+      <div className="gl2">Serveurs MCP</div>
+      <div className="ins">
+        {props.mcpSecretsError && (
+          <div className="it ro">
+            <span className="tx">
+              <small className="erx">{props.mcpSecretsError}</small>
+            </span>
+          </div>
+        )}
+        {props.mcpServers.map((s) => (
+          <button key={s.id} className="it" onClick={() => setOpened(s.id)}>
+            <span className="tx">
+              {s.name}
+              <small>{mcpScopeLabel(scopeOf(s), props.projects)}</small>
+            </span>
+            <span className="rt">
+              {s.enabled ? (
+                <span className="dvon">Actif</span>
+              ) : (
+                <span className="mof">Arrêté</span>
+              )}
+              <I n="right" s={15} />
+            </span>
+          </button>
+        ))}
+        <button className="it acc" onClick={() => setAdding(true)}>
+          <I n="plus" s={18} />
+          <span className="tx">Ajouter un serveur</span>
+        </button>
+      </div>
+      <McpServerSheet
+        server={props.mcpServers.find((s) => s.id === opened)}
+        projects={props.projects}
+        onClose={() => setOpened(undefined)}
+      />
+      <McpAddSheet open={adding} projects={props.projects} onClose={() => setAdding(false)} />
+    </>
+  );
 }
 
 /** One section of the settings; every value here is real and takes effect at once. */
-function SectionBody(props: PageProps & { section: SettingsSection }) {
+function SectionBody(props: PageProps & GithubProps & { section: SettingsSection }) {
   // Kept by the server: the same on every device.
   const { permissionMode: mode, isolated } = useDefaults();
   const theme = useSyncExternalStore(subscribeTheme, readTheme);
@@ -570,43 +670,7 @@ function SectionBody(props: PageProps & { section: SettingsSection }) {
         </div>
       );
     case "agents":
-      return (
-        <>
-          <div className="ins">
-            {props.agents.map((a) => {
-              const signIn = a.available && a.check?.signInNeeded;
-              const broken = a.available && a.check?.ok === false;
-              return (
-                <div key={a.id} className="it ro">
-                  <span className="tx">
-                    {a.name}
-                    <small>
-                      {!a.available
-                        ? (a.hint ?? "Pas trouvé sur cette machine")
-                        : signIn
-                          ? `Connexion requise${a.login ? ` : ${a.login}` : ""}`
-                          : (a.check?.version ?? a.command ?? "")}
-                    </small>
-                  </span>
-                  {!a.available ? (
-                    <span className="mof">Absent</span>
-                  ) : signIn || broken ? (
-                    <span className="mer">À vérifier</span>
-                  ) : (
-                    <span className="dvon">Prêt</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-          <div className="ins">
-            <button className="it acc" onClick={props.onOpenConnections}>
-              <I n="plus" s={18} />
-              <span className="tx">Vérifier ou ajouter un agent</span>
-            </button>
-          </div>
-        </>
-      );
+      return <AgentsPage agents={props.agents} />;
     case "mascots":
       return <MascotSettings agents={props.agents} />;
     case "models":
@@ -695,52 +759,7 @@ function SectionBody(props: PageProps & { section: SettingsSection }) {
       );
     }
     case "mcp":
-      return (
-        <>
-          <div className="gl2">Comptes</div>
-          <div className="ins">
-            <button className="it" onClick={props.onOpenConnections}>
-              <span className="ic">
-                <I n="gh" s={18} />
-              </span>
-              <span className="tx">GitHub et agents</span>
-              <I n="right" s={15} />
-            </button>
-          </div>
-          <div className="gl2">Serveurs MCP</div>
-          <div className="ins">
-            {props.mcpSecretsError && (
-              <div className="it ro">
-                <span className="tx">
-                  <small className="erx">{props.mcpSecretsError}</small>
-                </span>
-              </div>
-            )}
-            {props.mcpServers.map((s) => (
-              <button key={s.id} className="it" onClick={props.onOpenMcp}>
-                <span className="tx">
-                  {s.name}
-                  <small>{mcpScopeLabel(scopeOf(s), props.projects)}</small>
-                </span>
-                <span className="rt">
-                  {s.enabled ? (
-                    <span className="dvon">Actif</span>
-                  ) : (
-                    <span className="mof">Arrêté</span>
-                  )}
-                  <I n="right" s={15} />
-                </span>
-              </button>
-            ))}
-            <button className="it acc" onClick={props.onOpenMcp}>
-              <I n="plus" s={18} />
-              <span className="tx">
-                {props.mcpServers.length ? "Gérer les serveurs" : "Ajouter un serveur"}
-              </span>
-            </button>
-          </div>
-        </>
-      );
+      return <McpPage {...props} />;
     case "teams":
       return <TeamPresets agents={props.agents} projectId={props.projectId} />;
     case "remote":
@@ -774,7 +793,9 @@ export function SettingsLayer(
   },
 ) {
   const [query, setQuery] = useState("");
-  const login = useGithubLogin();
+  const github = useGithubStatus();
+  const [githubOpen, setGithubOpen] = useState(false);
+  const login = github.status?.login;
   const theme = useSyncExternalStore(subscribeTheme, readTheme);
   const quotas = useQuotas();
   const { app } = useApp();
@@ -865,7 +886,7 @@ export function SettingsLayer(
             />
           </label>
           {!query && (
-            <button className="prof press" onClick={props.onOpenConnections}>
+            <button className="prof press" onClick={() => setGithubOpen(true)}>
               <span className="me sm">{(login ?? "M").slice(0, 1).toUpperCase()}</span>
               <span className="tx">
                 <b>{login ?? "MoonAgentic"}</b>
@@ -931,10 +952,11 @@ export function SettingsLayer(
         </div>
         <div className="sscroll" key={props.section} onScroll={sub.onScroll}>
           <h1 className="lt">{title}</h1>
-          <SectionBody {...props} />
+          <SectionBody {...props} github={github} onOpenGithub={() => setGithubOpen(true)} />
           <div style={{ height: 30 }} />
         </div>
       </div>
+      <GithubSheet open={githubOpen} github={github} onClose={() => setGithubOpen(false)} />
     </div>
   );
 }

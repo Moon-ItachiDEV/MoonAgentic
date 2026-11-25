@@ -1421,3 +1421,149 @@ html[data-dev="desk"] .prk .stp a:hover {
 .ppill > .gl {
   margin-right: 6px;
 }
+
+/* The viewer: more than one thing to do at the bottom, a file that is not an image. */
+.ivf {
+  gap: 10px;
+}
+.ivs {
+  text-decoration: none;
+}
+.ivi > .t2-spin {
+  color: #fff;
+}
+.ivc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: min(340px, 86%);
+  padding: 26px 22px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.ivc b {
+  font-size: 16px;
+  font-weight: 600;
+}
+.ivc small {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* A whole page with one thing to do: pair this device, reload after a failure. */
+.gate2 {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 32px 24px;
+  text-align: center;
+  background: var(--bg);
+  color: var(--fg);
+}
+.view > .gate2 {
+  min-height: 60dvh;
+  background: none;
+}
+.gate2 h1 {
+  margin: 6px 0 0;
+  font: 600 30px/1.18 var(--serif);
+  letter-spacing: -0.01em;
+}
+.gate2 > b {
+  font-size: 17px;
+  font-weight: 600;
+}
+.gate2 .pcw {
+  max-width: 420px;
+  overflow-wrap: anywhere;
+}
+.gate2 > .b2,
+.gform .b2 {
+  flex: none;
+  height: 52px;
+  border-radius: 26px;
+}
+.gate2 > .b2 {
+  min-width: 180px;
+}
+.gform {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(320px, 100%);
+  margin-top: 8px;
+}
+.gform .rni {
+  height: 54px;
+  text-align: center;
+  font-size: 20px;
+  letter-spacing: 0.08em;
+}
+.gform .rni::placeholder {
+  color: var(--faint);
+}
+
+/* Sheets with a form: a path typed in a line, secrets on several lines, what failed. */
+.npf input.mono {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+.npf input::placeholder,
+.mcps::placeholder {
+  color: var(--faint);
+}
+textarea.rni.mcps {
+  height: auto;
+  min-height: 84px;
+  padding: 12px 14px;
+  margin-bottom: 22px;
+  font: 400 13.5px/1.5 var(--mono);
+  resize: vertical;
+  display: block;
+}
+.sbody > .pcw {
+  margin: 0 0 12px;
+}
+.sbody .fvn .t2-spin {
+  display: inline-block;
+}
+.sbody .fvn .ppill {
+  display: inline-flex;
+}
+a.it {
+  text-decoration: none;
+  color: inherit;
+}
+.brr .tx {
+  min-width: 0;
+}
+
+/* The connection to the server is lost and being tried again: said on every page. */
+.offp {
+  position: absolute;
+  top: calc(var(--st) + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 18px;
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: up 320ms var(--out) both;
+}
+.sbody > .mga + .ins {
+  margin-top: 14px;
+}

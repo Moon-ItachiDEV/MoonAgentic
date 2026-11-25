@@ -14,7 +14,6 @@ import { Composer as PlainComposer } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { AppUpdateHostOnDemand, UpdateBar } from "./components/UpdateBar.tsx";
-import { ConnectionsDialog } from "./components/ConnectionsDialog.tsx";
 import { Artifacts } from "./components/Artifacts.tsx";
 import { Home } from "./components/Home.tsx";
 import {
@@ -32,7 +31,6 @@ import {
 } from "./components/icons.tsx";
 import { LockSheet } from "./components/LockSheet.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
-import { McpDialog } from "./components/McpDialog.tsx";
 import { NewProjectDialog } from "./components/NewProjectDialog.tsx";
 import type { QuickAction } from "./components/QuickSearch.tsx";
 import { ProjectRequests, projectRequests } from "./components/ProjectRequests.tsx";
@@ -103,8 +101,6 @@ export function App() {
   const screen = useScreen();
   const flags = useScrFlags();
   const [creatingProject, setCreatingProject] = useState(false);
-  const [mcpOpen, setMcpOpen] = useState(false);
-  const [connectionsOpen, setConnectionsOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [pickedProjectId, setPickedProjectId] = useState(() => readPref("project"));
@@ -264,6 +260,8 @@ export function App() {
   };
   /** Leaves the settings for where they were opened from. */
   const closeSettings = () => go({ name: "home" });
+  const openAgents = () => go({ name: "settings", section: "agents" });
+  const openMcp = () => go({ name: "settings", section: "mcp" });
   /** Opens the planner on its board or its timeline, the one last looked at on this device. */
   const openPlanner = () =>
     go(
@@ -412,8 +410,8 @@ export function App() {
       icon: <IconClock size={15} />,
       run: () => go({ name: "planner", view: "planifiees" }),
     },
-    { label: "Connexions", icon: <IconPlug size={15} />, run: () => setConnectionsOpen(true) },
-    { label: "Serveurs MCP", icon: <IconPlug size={15} />, run: () => setMcpOpen(true) },
+    { label: "Connexions", icon: <IconPlug size={15} />, run: openAgents },
+    { label: "Serveurs MCP", icon: <IconPlug size={15} />, run: openMcp },
     ...(thread
       ? [
           {
@@ -496,12 +494,12 @@ export function App() {
         onPickProject={pickProject}
         onPickLoose={newLoose}
         mcpServers={state.mcpServers}
-        onMcp={() => setMcpOpen(true)}
+        onMcp={openMcp}
         onCreated={(id) => navigate({ name: "thread", threadId: id })}
         onExport={() => exportThread(t)}
         onSearch={() => setSearching(true)}
         onRequests={() => go({ name: "inbox" })}
-        onConnections={() => setConnectionsOpen(true)}
+        onConnections={openAgents}
         onArchive={() => t && setArchived(t.id, true)}
         onDelete={() => t && askDeleteThread(t)}
         onTeam={(task) => setTeamTask(task)}
@@ -898,7 +896,7 @@ export function App() {
                       <I n="clock" s={14} />
                       Planifier une tâche
                     </button>
-                    <button className="ppill" onClick={() => setConnectionsOpen(true)}>
+                    <button className="ppill" onClick={openMcp}>
                       <I n="plug" s={14} />
                       Utiliser mes outils
                     </button>
@@ -920,7 +918,7 @@ export function App() {
               agents={state.agents}
               favorites={state.favorites}
               ready={state.ready}
-              onOpenConnections={() => setConnectionsOpen(true)}
+              onOpenConnections={openAgents}
               onStart={async (pick) => {
                 await connection.request({
                   type: "coordinator.open",
@@ -1102,98 +1100,73 @@ export function App() {
               mcpServers={state.mcpServers}
               mcpSecretsError={state.mcpSecretsError}
               onPickProject={pickProject}
-              onOpenConnections={() => setConnectionsOpen(true)}
-              onOpenMcp={() => setMcpOpen(true)}
             />
           </Suspense>
         </ErrorBoundary>
       )}
-      <div className="legacy legacy-over">
-        <TeamDialog
-          open={teamTask !== null && !!project}
-          project={project}
-          agents={state.agents}
-          favorites={state.favorites}
-          task={teamTask ?? ""}
-          onClose={() => setTeamTask(null)}
-          onStarted={(id) => {
-            setTeamTask(null);
-            navigate({ name: "thread", threadId: id });
-          }}
-        />
-        <ReviewDialog
-          open={reviewPr !== null && !!project}
-          project={project}
-          agents={state.agents}
-          favorites={state.favorites}
-          threads={state.threads}
-          saved={state.coordinator.review}
-          savedJudge={state.coordinator.reviewJudge}
-          pr={reviewPr ?? ""}
-          onClose={() => setReviewPr(null)}
-          onStarted={(id) => {
-            setReviewPr(null);
-            navigate({ name: "thread", threadId: id });
-          }}
-        />
-        <ScheduleDialog
-          open={scheduling !== null}
-          projects={openProjects}
-          projectId={project?.id}
-          agents={state.agents}
-          favorites={state.favorites}
-          text={scheduling?.text ?? ""}
-          schedule={scheduling?.schedule}
-          onClose={() => setScheduling(null)}
-          onSaved={() => {
-            setScheduling(null);
-            // The planned tasks are listed at their own address.
-            go({ name: "planner", view: "planifiees" });
-          }}
-        />
-        <Presence show={creatingProject}>
-          <NewProjectDialog
-            onClose={() => setCreatingProject(false)}
-            onCreated={(id) => {
-              setCreatingProject(false);
-              pickProject(id);
-              go({ name: "project", projectId: id });
-            }}
-          />
-        </Presence>
-        <Presence show={connectionsOpen}>
-          <ConnectionsDialog
-            agents={state.agents}
-            mcpServers={state.mcpServers}
-            mcpSecretsError={state.mcpSecretsError}
-            onOpenMcp={() => {
-              setConnectionsOpen(false);
-              setMcpOpen(true);
-            }}
-            onClose={() => setConnectionsOpen(false)}
-          />
-        </Presence>
-        <LockSheet />
-        <AppUpdateHostOnDemand />
-        <Presence show={!!confirm}>
-          {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
-        </Presence>
-        <Presence show={mcpOpen}>
-          <McpDialog
-            servers={state.mcpServers}
-            projects={state.projects}
-            secretsError={state.mcpSecretsError}
-            onClose={() => setMcpOpen(false)}
-          />
-        </Presence>
-        {/* Shown on every page, the phone's included, where the sidebar's own line is out of sight. */}
-        {state.status === "closed" && (
-          <div className="offline" role="status">
-            <span className="spin" aria-hidden />
-            Reconnexion au serveur…
-          </div>
-        )}
-      </div>
+      <TeamDialog
+        open={teamTask !== null && !!project}
+        project={project}
+        agents={state.agents}
+        favorites={state.favorites}
+        task={teamTask ?? ""}
+        onClose={() => setTeamTask(null)}
+        onStarted={(id) => {
+          setTeamTask(null);
+          navigate({ name: "thread", threadId: id });
+        }}
+      />
+      <ReviewDialog
+        open={reviewPr !== null && !!project}
+        project={project}
+        agents={state.agents}
+        favorites={state.favorites}
+        threads={state.threads}
+        saved={state.coordinator.review}
+        savedJudge={state.coordinator.reviewJudge}
+        pr={reviewPr ?? ""}
+        onClose={() => setReviewPr(null)}
+        onStarted={(id) => {
+          setReviewPr(null);
+          navigate({ name: "thread", threadId: id });
+        }}
+      />
+      <ScheduleDialog
+        open={scheduling !== null}
+        projects={openProjects}
+        projectId={project?.id}
+        agents={state.agents}
+        favorites={state.favorites}
+        text={scheduling?.text ?? ""}
+        schedule={scheduling?.schedule}
+        onClose={() => setScheduling(null)}
+        onSaved={() => {
+          setScheduling(null);
+          // The planned tasks are listed at their own address.
+          go({ name: "planner", view: "planifiees" });
+        }}
+      />
+      <NewProjectDialog
+        open={creatingProject}
+        onClose={() => setCreatingProject(false)}
+        onCreated={(id) => {
+          setCreatingProject(false);
+          pickProject(id);
+          go({ name: "project", projectId: id });
+        }}
+      />
+      <LockSheet />
+      <AppUpdateHostOnDemand />
+      <Presence show={!!confirm}>
+        {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
+      </Presence>
+      {/* Shown on every page, the phone's included. */}
+      {state.status === "closed" && (
+        <div className="offp glass" role="status">
+          <span className="t2-spin" />
+          Reconnexion
+        </div>
+      )}
       <Sheet open={usageOpen} onClose={() => setUsageOpen(false)} title="Utilisation" tall>
         <div className="sbody">
           {usageOpen && <QuotaList agents={state.agents} first={homeAgentId} />}

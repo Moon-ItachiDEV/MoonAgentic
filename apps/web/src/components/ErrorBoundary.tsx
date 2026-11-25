@@ -50,14 +50,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     if (this.props.fallback) return this.props.fallback(error, this.reload);
     return (
       <div className="view">
-        <div className="gate" role="alert">
-          <div>
-            <p>Impossible d'afficher cet écran.</p>
-            {error.message && <p className="failed">{error.message}</p>}
-            <button className="btn pri" type="button" onClick={this.reload}>
-              Recharger
-            </button>
-          </div>
+        <div className="gate2" role="alert">
+          <b>Impossible d'afficher cet écran.</b>
+          {error.message && <p className="pcw t-err">{error.message}</p>}
+          <button className="b2 ink press" type="button" onClick={this.reload}>
+            Recharger
+          </button>
         </div>
       </div>
     );
@@ -70,15 +68,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
  */
 export function AppFailed({ error, reload }: { error: Error; reload: () => void }) {
   return (
-    <div className="gate" role="alert">
-      <div>
-        <h1>MoonAgentic n'a pas pu s'afficher</h1>
-        <p>Tes agents continuent sur le serveur : recharge la page pour les retrouver.</p>
-        {error.message && <p className="failed">{error.message}</p>}
-        <button className="btn pri" type="button" onClick={reload}>
-          Recharger
-        </button>
-      </div>
+    <div className="gate2" role="alert">
+      <h1>MoonAgentic n'a pas pu s'afficher</h1>
+      <span className="ppill">Tes agents continuent sur le serveur</span>
+      {error.message && <p className="pcw t-err">{error.message}</p>}
+      <button className="b2 ink press" type="button" onClick={reload}>
+        Recharger
+      </button>
     </div>
   );
 }
