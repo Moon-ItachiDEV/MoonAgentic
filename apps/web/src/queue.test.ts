@@ -17,23 +17,21 @@ describe("messages that wait", () => {
     expect(queueState({ status: "running" })).toMatchObject({ count: 0, paused: false });
     expect(queueState({ status: "running", queue: queue(1) })).toEqual({
       count: 1,
-      label: "1 message en file · il part à la fin du tour",
+      label: "En file · 1",
       paused: false,
     });
-    expect(queueState({ status: "waiting", queue: queue(3) }).label).toBe(
-      "3 messages en file · ils partent un par un, à la fin de chaque tour",
-    );
+    expect(queueState({ status: "waiting", queue: queue(3) }).label).toBe("En file · 3");
   });
 
   it("stay until the user sends them after a stop or an error", () => {
     expect(queueState({ status: "idle", queue: queue(2) })).toEqual({
       count: 2,
-      label: "2 messages en attente · rien ne part tout seul après un arrêt",
+      label: "En attente · 2",
       paused: true,
     });
     expect(queueState({ status: "error", queue: queue(1) })).toEqual({
       count: 1,
-      label: "1 message en attente · le dernier tour a échoué",
+      label: "En attente · 1 · tour échoué",
       paused: true,
     });
   });

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium, type Page } from "playwright";
+import { addProject, pickAgent } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -64,18 +65,11 @@ async function newThread(name: string) {
   writeFileSync(path.join(project, "README.md"), "# Démo\n");
   const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
   await page.goto(url);
-  await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-  await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-  await page.getByLabel("Dossier", { exact: true }).fill(project);
-  await page.getByRole("button", { name: "Ajouter le projet" }).click();
+  await addProject(page, project);
   const composer = page.getByRole("combobox", { name: "Message" });
   await expect.poll(() => composer.isEnabled()).toBe(true);
   // The demo agent, not a real one that may be installed on this machine.
-  await page.locator(".agentchip").click();
-  await page.getByRole("button", { name: "Tous", exact: true }).click();
-  await page.getByRole("button", { name: "Options", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-  await page.keyboard.press("Escape");
+  await pickAgent(page);
   return { page, composer };
 }
 
@@ -84,34 +78,29 @@ async function allow(page: Page) {
   const inbox = page.getByRole("button", { name: /À traiter/ }).first();
   await expect.poll(() => inbox.textContent(), { timeout: 15_000 }).toContain("1");
   await inbox.click();
-  const requests = page.getByRole("dialog", { name: "À traiter" });
-  const row = requests.locator(".rq-row").first();
+  const requests = page.getByRole("region", { name: "À traiter" });
+  const row = requests.locator(".rq").first();
   const answered = await row.elementHandle();
   await row.getByRole("button", { name: "Autoriser" }).click();
   // That request goes. The list may not stay empty: the message in line starts a turn of
   // its own at once, and the demo agent asks again.
   await answered!.waitForElementState("hidden");
-  await requests.getByRole("button", { name: "Fermer" }).click();
+  // « À traiter » is a page: back to the thread.
+  await page.goBack();
 }
 
 describe("message queue", () => {
   it("keeps what is written during a turn, lets it be changed, and sends it at the end", async () => {
     const { page, composer } = await newThread("file");
     const queue = page.getByRole("region", { name: "Messages en file" });
-    const said = () => page.locator(".u-wrap").allTextContents();
-    const rows = () => queue.locator(".qm .t").allTextContents();
+    const said = () => page.locator(".uw").allTextContents();
+    const rows = () => queue.locator(".cqt").allTextContents();
 
     await composer.fill("Corrige la réponse");
     await page.keyboard.press("Enter");
     // The agent asks before it changes a file: its turn is under way for as long as it waits.
     await page.getByRole("button", { name: "Arrêter" }).waitFor();
-    await expect
-      .poll(() => composer.getAttribute("placeholder"))
-      // Its own name until the agent gives its models, then the model: « Démo précis » is the
-      // demo agent's preferred one, « Démo rapide » what it says first.
-      .toMatch(
-        /^Ajouter une consigne pendant que (Démo précis|Démo rapide|Agent de démo) travaille…$/,
-      );
+    await expect.poll(() => composer.getAttribute("placeholder")).toBe("Ajouter une consigne");
 
     // Written now, a message waits above the composer instead of being refused.
     await composer.fill("Ensuite, lance les tests");
@@ -119,9 +108,7 @@ describe("message queue", () => {
     await page.keyboard.press("Enter");
     await expect.poll(rows).toEqual(["Ensuite, lance les tests"]);
     expect(await composer.inputValue()).toBe("");
-    expect(await queue.getByRole("status").textContent()).toBe(
-      "1 message en file · il part à la fin du tour",
-    );
+    expect(await queue.getByRole("status").textContent()).toBe("En file · 1");
     await composer.fill("Puis ouvre la PR");
     await page.keyboard.press("Enter");
     await composer.fill("Message de trop");
@@ -129,9 +116,7 @@ describe("message queue", () => {
     await expect
       .poll(rows)
       .toEqual(["Ensuite, lance les tests", "Puis ouvre la PR", "Message de trop"]);
-    expect(await queue.getByRole("status").textContent()).toBe(
-      "3 messages en file · ils partent un par un, à la fin de chaque tour",
-    );
+    expect(await queue.getByRole("status").textContent()).toBe("En file · 3");
 
     // One is changed, another taken out; only the first message was said to the agent.
     await queue.getByRole("button", { name: /^Modifier le message 1/ }).click();
@@ -151,7 +136,7 @@ describe("message queue", () => {
 
     // Stopped by hand, the turn sends nothing after it: the message stays, and says why.
     await page.getByRole("button", { name: "Arrêter" }).click();
-    await queue.getByText("1 message en attente · rien ne part tout seul après un arrêt").waitFor();
+    await queue.getByText("En attente · 1").waitFor();
     // It is the server's: another window, or this one loaded again, shows it too.
     await page.reload();
     await expect.poll(rows).toEqual(["Puis ouvre la PR"]);

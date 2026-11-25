@@ -1342,6 +1342,10 @@ export class Hub {
         this.sendSnapshots();
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "lock.check":
+        this.locks.verify(message.pin, client.deviceId ?? COMPUTER_ACTOR);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "lock.reset":
         this.locks.reset();
         this.sendSnapshots();
@@ -1623,7 +1627,7 @@ export class Hub {
         return;
       case "files.search": {
         const dir = this.folderOf(message.projectId, message.threadId);
-        const files = searchFiles(await listFiles(dir), message.query);
+        const files = searchFiles(await listFiles(dir), message.query, message.limit);
         client.send({ type: "files", requestId: message.requestId, files });
         return;
       }

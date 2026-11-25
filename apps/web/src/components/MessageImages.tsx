@@ -1,8 +1,8 @@
 import type { ImageRef } from "@moonagentic/protocol";
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { useState } from "react";
 import { useAttachedImage } from "../attachments.ts";
-import { IconClose, IconImage } from "./icons.tsx";
+import { I } from "../v2/I.tsx";
+import { Viewer } from "../v2/Viewer.tsx";
 
 /** The images sent with a message: small in the thread, whole when one is pressed. */
 export function MessageImages(props: { threadId: string; images: ImageRef[] }) {
@@ -18,7 +18,7 @@ export function MessageImages(props: { threadId: string; images: ImageRef[] }) {
         />
       ))}
       {shown && (
-        <Viewer threadId={props.threadId} image={shown} onClose={() => setShown(undefined)} />
+        <Shown threadId={props.threadId} image={shown} onClose={() => setShown(undefined)} />
       )}
     </div>
   );
@@ -29,7 +29,7 @@ function Thumbnail(props: { threadId: string; image: ImageRef; onOpen: () => voi
   if (failed) {
     return (
       <span className="u-img gone" title={props.image.name}>
-        <IconImage />
+        <I n="image" s={15} />
         Image indisponible
       </span>
     );
@@ -47,43 +47,27 @@ function Thumbnail(props: { threadId: string; image: ImageRef; onOpen: () => voi
   );
 }
 
-/** One image at its full size, over the page. */
-function Viewer(props: { threadId: string; image: ImageRef; onClose: () => void }) {
+/** One image at its full size, over the app. */
+function Shown(props: { threadId: string; image: ImageRef; onClose: () => void }) {
   const { url } = useAttachedImage(props.threadId, props.image.id);
-  const close = useRef<HTMLButtonElement>(null);
-  useEffect(() => {
-    const before = document.activeElement;
-    close.current?.focus();
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.stopPropagation();
-      props.onClose();
-    };
-    document.addEventListener("keydown", escape, true);
-    return () => {
-      document.removeEventListener("keydown", escape, true);
-      if (before instanceof HTMLElement) before.focus();
-    };
-  }, []);
-  // On the page itself, so no message's own layout clips it.
-  return createPortal(
-    <div
-      className="scrim img-view"
-      role="dialog"
-      aria-modal
-      aria-label={props.image.name}
-      onMouseDown={(e) => e.target === e.currentTarget && props.onClose()}
+  return (
+    <Viewer
+      label={props.image.name}
+      onClose={props.onClose}
+      actions={
+        url && (
+          <a className="ivs press" href={url} download={props.image.name}>
+            <I n="dl" s={18} />
+            Télécharger
+          </a>
+        )
+      }
     >
-      {url && <img src={url} alt={props.image.name} />}
-      <button
-        ref={close}
-        className="img-view-x"
-        aria-label="Fermer l'image"
-        onClick={props.onClose}
-      >
-        <IconClose size={16} />
-      </button>
-    </div>,
-    document.body,
+      {url ? (
+        <img src={url} alt={props.image.name} />
+      ) : (
+        <span className="t2-spin" role="status" aria-label="Chargement" />
+      )}
+    </Viewer>
   );
 }

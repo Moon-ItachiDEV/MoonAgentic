@@ -65,7 +65,7 @@ describe("a database another program holds", () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await page.goto(url);
     await page.getByRole("button", { name: "Nouveau projet" }).first().waitFor();
-    const pill = page.locator(".offline.unsaved");
+    const pill = page.locator(".offp.unsaved");
     expect(await pill.count()).toBe(0);
 
     // As a copy or an SQLite tool does: the write lock, kept for a while.
@@ -102,7 +102,7 @@ describe("a database another program holds", () => {
       // A screen that opens meanwhile is told too, from its first message.
       const late = await browser.newPage({ viewport: { width: 390, height: 844 } });
       await late.goto(url);
-      await late.locator(".offline.unsaved").waitFor({ timeout: 15_000 });
+      await late.locator(".offp.unsaved").waitFor({ timeout: 15_000 });
       await late.close();
     } finally {
       other.exec("ROLLBACK");

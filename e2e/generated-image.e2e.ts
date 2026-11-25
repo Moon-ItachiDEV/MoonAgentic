@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium, devices, type Page } from "playwright";
+import { addProject, pickAgent } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -87,17 +88,10 @@ afterAll(async () => {
 
 async function newThread(page: Page, ask = "Stp génère une image d'un pingouin") {
   await page.goto(url);
-  await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-  await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-  await page.getByLabel("Dossier", { exact: true }).fill(repo);
-  await page.getByRole("button", { name: "Ajouter le projet" }).click();
+  await addProject(page, repo);
   const composer = page.getByRole("combobox", { name: "Message" });
   await expect.poll(() => composer.isEnabled()).toBe(true);
-  await page.locator(".agentchip").click();
-  await page.getByRole("button", { name: "Tous", exact: true }).click();
-  await page.getByRole("button", { name: "Options", exact: true }).click();
-  await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-  await page.keyboard.press("Escape");
+  await pickAgent(page);
   await composer.fill(ask);
   await composer.press("Enter");
 }

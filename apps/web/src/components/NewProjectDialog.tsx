@@ -1,4 +1,10 @@
-import type { GithubRepo, GithubStatus, LocalClone } from "@moonagentic/protocol";
+import {
+  type GithubRepo,
+  type GithubStatus,
+  type LocalClone,
+  PROJECT_COLORS,
+  type ProjectColor,
+} from "@moonagentic/protocol";
 import { useEffect, useMemo, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import {
@@ -10,10 +16,13 @@ import {
   repoFolderName,
   repoFullName,
 } from "../github.ts";
-import { GithubMark, GithubSignIn } from "./GithubSignIn.tsx";
-import { IconCheck } from "./icons.tsx";
+import { COLOR_NAME } from "../project-colors.ts";
+import { shortAgo } from "../project-threads.ts";
+import { I } from "../v2/I.tsx";
+import { Sheet } from "../v2/Sheet.tsx";
+import { GithubSignIn } from "./GithubSignIn.tsx";
 
-type Source = "github" | "local";
+type Source = "local" | "github";
 
 /** Where the user lets MoonAgentic's GitHub app into an organisation, or revokes it. */
 export const GITHUB_APP_ACCESS =
@@ -69,23 +78,31 @@ function useLocalClones() {
   return found;
 }
 
-export function NewProjectDialog({
-  onClose,
+/** The folder a path ends with, and what comes before it. */
+const leaf = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? "";
+const above = (path: string) => path.replace(/[\\/]+[^\\/]+[\\/]*$/, "");
+
+function Body({
   onCreated,
+  onBusy,
 }: {
-  onClose: () => void;
   onCreated: (id: string) => void;
+  onBusy: (busy: boolean) => void;
 }) {
-  const [source, setSource] = useState<Source>("github");
+  const [source, setSource] = useState<Source>("local");
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
   const [folder, setFolder] = useState("");
+  /** « Autre dossier »: a path typed by hand. */
+  const [typing, setTyping] = useState(false);
   const [name, setName] = useState("");
+  const [color, setColor] = useState<ProjectColor | null>(null);
   /** The parent folder typed by the user; the server's default until then. */
   const [parentTyped, setParentTyped] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [now] = useState(() => Date.now());
   const github = useGithub();
   const local = useLocalClones();
   const clones = local?.clones ?? [];
@@ -98,21 +115,26 @@ export function NewProjectDialog({
   const already = fullName ? localFor(fullName, clones) : undefined;
   const owner = githubOwner(query);
   const shown = useMemo(
-    () => (picked ? [] : filterRepos(github.repos ?? [], query).slice(0, 60)),
-    [github.repos, query, picked],
+    () => filterRepos(github.repos ?? [], query).slice(0, 60),
+    [github.repos, query],
   );
-  const folderName = name.trim() || repoFolderName(repo);
   const freeFolders = clones.filter((c) => !c.projectId);
-  const localName = name.trim() || folder.trim().split(/[\\/]/).filter(Boolean).pop() || "";
+  const localName = name.trim() || leaf(folder.trim());
+  const gh = source === "github";
 
   const run = async (make: () => Promise<string>) => {
     setBusy(true);
+    onBusy(true);
     setError(null);
     try {
-      onCreated(await make());
+      const id = await make();
+      if (color) connection.send({ type: "project.setLook", projectId: id, icon: null, color });
+      onBusy(false);
+      onCreated(id);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setBusy(false);
+      onBusy(false);
     }
   };
 
@@ -128,9 +150,9 @@ export function NewProjectDialog({
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    if (busy) return;
-    if (source === "local") {
-      if (folder.trim() && localName) void addFolder(folder.trim(), localName);
+    if (busy || !ready) return;
+    if (!gh) {
+      void addFolder(folder.trim(), localName);
       return;
     }
     if (already?.projectId) {
@@ -141,7 +163,6 @@ export function NewProjectDialog({
       void addFolder(already.path, name.trim() || already.name);
       return;
     }
-    if (!canClone(repo, parent, name)) return;
     void run(() =>
       connection.request({
         type: "project.clone",
@@ -153,287 +174,314 @@ export function NewProjectDialog({
     );
   };
 
-  const ready =
-    source === "local" ? !!folder.trim() && !!localName : !!already || canClone(repo, parent, name);
-  const action =
-    source === "local"
-      ? "Ajouter le projet"
-      : already?.projectId
-        ? "Ouvrir le projet"
-        : already
-          ? "Utiliser ce clone"
-          : busy
-            ? "Clonage…"
-            : "Cloner";
+  const ready = gh
+    ? !!fullName && (!!already || canClone(repo, parent, name))
+    : !!folder.trim() && !!localName;
+  const chosen = gh ? !!fullName : !!folder.trim();
+  const isProject = gh && !!already?.projectId;
+  const action = !gh ? "Créer" : isProject ? "Ouvrir" : already ? "Créer" : "Cloner";
+  const switchTo = (next: Source) => {
+    setSource(next);
+    setError(null);
+    setName("");
+  };
 
   return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
-      <form
-        className="dialog new-project"
-        role="dialog"
-        aria-modal
-        aria-labelledby="np-title"
-        onSubmit={submit}
-        onKeyDown={(e) => e.key === "Escape" && !busy && onClose()}
-      >
-        <h2 id="np-title">Nouveau projet</h2>
-        <div className="np-src" role="radiogroup" aria-label="Source du projet">
-          {(
-            [
-              ["github", "Depuis GitHub"],
-              ["local", "Dossier sur la machine"],
-            ] as const
-          ).map(([value, label]) => (
+    <form className="sbody" onSubmit={submit}>
+      <div className="seg" role="radiogroup" aria-label="Source du projet">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!gh}
+          aria-pressed={!gh}
+          disabled={busy}
+          onClick={() => switchTo("local")}
+        >
+          <I n="folder" s={16} />
+          Sur le PC
+        </button>
+        <button
+          type="button"
+          role="radio"
+          aria-checked={gh}
+          aria-pressed={gh}
+          disabled={busy}
+          onClick={() => switchTo("github")}
+        >
+          <I n="gh" s={16} />
+          GitHub
+        </button>
+      </div>
+
+      {!gh && (
+        <div className="ins" role="group" aria-label="Dossiers git trouvés sur cette machine">
+          {local === null && (
+            <div className="fvn">
+              <span className="t2-spin" />
+            </div>
+          )}
+          {freeFolders.slice(0, 60).map((c) => (
             <button
-              key={value}
+              key={c.path}
               type="button"
-              role="radio"
-              aria-checked={source === value}
+              className="it fva"
+              aria-pressed={!typing && folder === c.path}
               disabled={busy}
               onClick={() => {
-                setSource(value);
-                setError(null);
+                setTyping(false);
+                setFolder(folder === c.path && !typing ? "" : c.path);
                 setName("");
               }}
             >
-              {label}
+              <span className="tx">
+                {c.name}
+                <small>{above(c.path)}</small>
+              </span>
+              <span className="fvc">
+                <I n="check" s={14} />
+              </span>
             </button>
           ))}
-        </div>
-
-        {source === "github" && github.status === null && !github.error && (
-          <p className="np-empty">Vérification de GitHub…</p>
-        )}
-
-        {source === "github" && github.status && !signedIn && (
-          <div className="gh-card">
-            <span className="gh-logo" aria-hidden>
-              <GithubMark size={22} />
-            </span>
-            <b>Connecte ton compte GitHub</b>
-            <p>
-              Une seule fois. Tu choisis ensuite ton dépôt dans la liste et MoonAgentic le clone
-              pour toi.
-            </p>
-            {github.status.canSignIn ? (
-              <GithubSignIn onSignedIn={github.recheck} />
-            ) : (
-              <p className="np-hint">
-                Lance <code>gh auth login</code> dans un terminal sur cette machine.
-              </p>
-            )}
-          </div>
-        )}
-
-        {source === "github" && (signedIn || github.status) && (
-          <>
-            {picked ? (
-              <div className="np-picked">
-                <GithubMark size={15} />
-                <span className="np-name">{picked}</span>
-                <button
-                  type="button"
-                  className="btn quiet sm"
-                  aria-label="Changer de dépôt"
-                  disabled={busy}
-                  onClick={() => {
-                    setPicked(null);
-                    setName("");
-                  }}
-                >
-                  Changer
-                </button>
-              </div>
-            ) : (
-              <label className="field">
-                {signedIn ? `Dépôts de @${github.status?.login}` : "Ou l'adresse d'un dépôt public"}
-                <input
-                  className="mono"
-                  aria-label="Dépôt"
-                  autoFocus={signedIn}
-                  placeholder={
-                    signedIn ? "Rechercher, ou coller une adresse…" : "https://github.com/…/…"
-                  }
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  disabled={busy}
-                />
-              </label>
-            )}
-            {owner && !picked && (
-              <p className="np-hint">
-                C'est l'adresse du compte @{owner}, pas celle d'un dépôt.{" "}
-                {signedIn
-                  ? "Choisis un de ses dépôts dans la liste."
-                  : `Ajoute le nom du dépôt : github.com/${owner}/nom-du-dépôt.`}
-              </p>
-            )}
-            {signedIn && !picked && !github.error && (
-              <ul className="np-repos" aria-label="Tes dépôts GitHub">
-                {github.repos === null && <li className="np-empty">Chargement de tes dépôts…</li>}
-                {github.repos !== null && shown.length === 0 && !repoFullName(query) && (
-                  <li className="np-empty">
-                    {owner
-                      ? `Aucun de tes dépôts n'appartient à @${owner}.`
-                      : "Aucun de tes dépôts ne correspond."}
-                  </li>
-                )}
-                {shown.map((r) => {
-                  const here = localFor(r.fullName, clones);
-                  return (
-                    <li key={r.fullName}>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => {
-                          setPicked(r.fullName);
-                          setName("");
-                          setError(null);
-                        }}
-                      >
-                        <span className="np-name">{r.fullName}</span>
-                        <span className="np-tags">
-                          {r.private && <span className="np-tag">privé</span>}
-                          {here && (
-                            <span className="np-tag here">
-                              {here.projectId ? "déjà un projet" : "déjà cloné"}
-                            </span>
-                          )}
-                        </span>
-                        {r.description && <small>{r.description}</small>}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-            {signedIn && github.status?.account === "moonagentic" && !picked && (
-              <p className="np-hint">
-                Un dépôt d'organisation manque ?{" "}
-                <a href={GITHUB_APP_ACCESS} target="_blank" rel="noreferrer">
-                  Autorise MoonAgentic pour cette organisation
-                </a>
-                .
-              </p>
-            )}
-            {github.error && <p className="error">{github.error}</p>}
-
-            {fullName && already && (
-              <div className="np-done" role="status">
-                <IconCheck size={16} />
-                <b>
-                  {already.projectId
-                    ? "Déjà un projet de MoonAgentic"
-                    : "Déjà cloné sur cette machine"}
-                </b>
-                <span className="mono">{already.path}</span>
-              </div>
-            )}
-            {fullName && !already && !editing && (
-              <p className="np-where">
-                Sera cloné dans{" "}
-                <span className="mono">{parent ? joinPath(parent, folderName) : "…"}</span>{" "}
-                <button
-                  type="button"
-                  className="np-link"
-                  disabled={busy}
-                  onClick={() => setEditing(true)}
-                >
-                  Changer
-                </button>
-              </p>
-            )}
-            {fullName && !already && editing && (
-              <>
-                <label className="field">
-                  Cloner dans
-                  <input
-                    className="mono"
-                    required
-                    value={parent}
-                    onChange={(e) => setParentTyped(e.target.value)}
-                    disabled={busy}
-                  />
-                </label>
-                <label className="field">
-                  Nom du dossier
-                  <input
-                    className="mono"
-                    placeholder={repoFolderName(repo)}
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    disabled={busy}
-                  />
-                </label>
-              </>
-            )}
-          </>
-        )}
-
-        {source === "local" && (
-          <>
-            {freeFolders.length > 0 && (
-              <ul className="np-repos" aria-label="Dossiers git trouvés sur cette machine">
-                {freeFolders.slice(0, 60).map((c) => (
-                  <li key={c.path}>
-                    <button
-                      type="button"
-                      aria-pressed={folder === c.path}
-                      disabled={busy}
-                      onClick={() => {
-                        setFolder(c.path);
-                        setName("");
-                      }}
-                    >
-                      <span className="np-name">{c.name}</span>
-                      {c.repo && <span className="np-tag">{c.repo}</span>}
-                      <small className="mono">{c.path}</small>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {local && freeFolders.length === 0 && (
-              <p>
-                Aucun dépôt git trouvé dans ton dossier personnel qui ne soit pas déjà un projet.
-              </p>
-            )}
-            {local === null && <p className="np-empty">Recherche de tes dossiers…</p>}
-            <label className="field">
-              {freeFolders.length > 0 ? "Ou un autre dossier" : "Dossier"}
+          {typing ? (
+            <label className="it ro npf">
               <input
                 className="mono"
                 aria-label="Dossier"
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
                 placeholder={local?.parent ? joinPath(local.parent, "mon-projet") : "~/mon-projet"}
                 value={folder}
                 onChange={(e) => setFolder(e.target.value)}
                 disabled={busy}
               />
             </label>
-            {folder.trim() && (
-              <label className="field">
-                Nom
+          ) : (
+            <button
+              type="button"
+              className="it"
+              disabled={busy}
+              onClick={() => {
+                setTyping(true);
+                setFolder("");
+                setName("");
+              }}
+            >
+              <span className="tx">Autre dossier</span>
+              <I n="right" s={15} />
+            </button>
+          )}
+        </div>
+      )}
+
+      {gh && github.status === null && !github.error && (
+        <div className="fvn">
+          <span className="t2-spin" />
+        </div>
+      )}
+      {gh && github.status && !signedIn && github.status.canSignIn && (
+        <GithubSignIn onSignedIn={github.recheck} />
+      )}
+      {gh && github.status && (
+        <>
+          <label className="fvs">
+            <I n="search" s={17} />
+            <input
+              className={signedIn ? undefined : "mono"}
+              aria-label="Dépôt"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder={signedIn ? "Rechercher un dépôt" : "https://github.com/…/…"}
+              value={query}
+              onChange={(e) => {
+                setQuery(e.target.value);
+                setPicked(null);
+              }}
+              disabled={busy}
+            />
+          </label>
+          {!signedIn && !github.status.canSignIn && !fullName && (
+            <div className="fvn">
+              <span className="ppill mono">gh auth login</span>
+            </div>
+          )}
+          {signedIn && !github.error && (
+            <div className="ins" role="group" aria-label="Tes dépôts GitHub">
+              {github.repos === null && (
+                <div className="fvn">
+                  <span className="t2-spin" />
+                </div>
+              )}
+              {github.repos !== null && shown.length === 0 && !fullName && (
+                <div className="fvn">{owner ? `Aucun dépôt de @${owner}` : "Aucun dépôt"}</div>
+              )}
+              {shown.map((r) => {
+                const here = localFor(r.fullName, clones);
+                const [account, short] = r.fullName.split("/");
+                return (
+                  <button
+                    key={r.fullName}
+                    type="button"
+                    className="it fva"
+                    aria-pressed={picked === r.fullName}
+                    disabled={busy}
+                    onClick={() => {
+                      setPicked(picked === r.fullName ? null : r.fullName);
+                      setName("");
+                      setEditing(false);
+                      setError(null);
+                    }}
+                  >
+                    <span className="tx">
+                      <span className="npn">
+                        {short}
+                        {r.private && <I n="lock" s={12} />}
+                      </span>
+                      <small>
+                        {account}
+                        {r.pushedAt ? ` · ${shortAgo(r.pushedAt, now)}` : ""}
+                      </small>
+                    </span>
+                    {here && <span className="npk">{here.projectId ? "Projet" : "Sur le PC"}</span>}
+                    <span className="fvc">
+                      <I n="check" s={14} />
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {signedIn && github.status.account === "moonagentic" && !fullName && (
+            <div className="ins">
+              <a className="it" href={GITHUB_APP_ACCESS} target="_blank" rel="noreferrer">
+                <span className="tx">Accès des organisations</span>
+                <I n="ext" s={15} />
+              </a>
+            </div>
+          )}
+        </>
+      )}
+      {gh && github.error && (
+        <p className="pcw t-err" role="alert">
+          {github.error}
+        </p>
+      )}
+
+      {chosen && (
+        <div className="npx on">
+          <div className="gl2">Projet</div>
+          <div className="ins">
+            {!isProject && (
+              <>
+                <label className="it ro npf">
+                  <span style={{ color: color ? `var(--pc-${color})` : "var(--muted)" }}>
+                    <I n="folder" s={20} />
+                  </span>
+                  <input
+                    aria-label={gh && !already ? "Nom du dossier" : "Nom du projet"}
+                    autoComplete="off"
+                    spellCheck={false}
+                    placeholder={gh ? (already?.name ?? repoFolderName(repo)) : leaf(folder.trim())}
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    disabled={busy}
+                  />
+                </label>
+                <div className="sep" />
+                <div className="sw" role="radiogroup" aria-label="Couleur">
+                  {PROJECT_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      role="radio"
+                      aria-checked={color === c}
+                      aria-pressed={color === c}
+                      aria-label={COLOR_NAME[c]}
+                      title={COLOR_NAME[c]}
+                      style={{ "--c": `var(--pc-${c})` } as React.CSSProperties}
+                      disabled={busy}
+                      onClick={() => setColor(color === c ? null : c)}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+            {gh && already && (
+              <div className="it ro" role="status">
+                <span className="tx">
+                  {already.projectId ? "Déjà un projet" : "Déjà sur le PC"}
+                </span>
+                <span className="rt mcv">
+                  <span className="mono" title={already.path}>
+                    {already.path}
+                  </span>
+                </span>
+              </div>
+            )}
+            {gh && !already && !editing && (
+              <button type="button" className="it" disabled={busy} onClick={() => setEditing(true)}>
+                <span className="tx">Emplacement</span>
+                <span className="rt mcv">
+                  <span className="mono" title={parent}>
+                    {parent || "…"}
+                  </span>
+                </span>
+                <I n="right" s={15} />
+              </button>
+            )}
+            {gh && !already && editing && (
+              <label className="it ro npf">
                 <input
-                  placeholder={localName || "mon-projet"}
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
+                  className="mono"
+                  aria-label="Cloner dans"
+                  autoFocus
+                  autoComplete="off"
+                  spellCheck={false}
+                  value={parent}
+                  onChange={(e) => setParentTyped(e.target.value)}
                   disabled={busy}
                 />
               </label>
             )}
-          </>
-        )}
-
-        {error && <p className="error">{error}</p>}
-        <div className="row">
-          <button type="button" className="btn quiet" onClick={onClose} disabled={busy}>
-            Annuler
-          </button>
-          <button type="submit" className="btn pri" disabled={busy || !ready}>
-            {action}
-          </button>
+          </div>
         </div>
-      </form>
-    </div>
+      )}
+
+      {error && (
+        <p className="pcw t-err" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="mga">
+        <button
+          type="submit"
+          className={`b2 ink press npgo${busy ? " busy" : ""}`}
+          disabled={busy || !ready}
+        >
+          {busy && <span className="t2-spin" />}
+          {busy && gh && !already ? "Clonage" : action}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+/** « Nouveau projet »: a git folder of the machine, or a GitHub repository cloned onto it. */
+export function NewProjectDialog({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (id: string) => void;
+}) {
+  // While a repository is cloned, the sheet stays: closing it would hide whether it worked.
+  const [busy, setBusy] = useState(false);
+  const close = () => !busy && onClose();
+  return (
+    <Sheet open={open} onClose={close} title="Nouveau projet" modal={busy}>
+      {open && <Body onCreated={onCreated} onBusy={setBusy} />}
+    </Sheet>
   );
 }

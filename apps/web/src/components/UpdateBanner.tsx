@@ -7,9 +7,10 @@ export function UpdateBanner() {
   const stale = useSyncExternalStore(subscribeStale, readStale);
   if (!stale) return null;
   return (
-    <div className="update-banner" role="status">
-      <span>Une nouvelle version de MoonAgentic est prête.</span>
-      <button type="button" className="btn pri sm" onClick={() => location.reload()}>
+    <div className="updb glass stale" role="status">
+      <span className="dvon" />
+      <span className="tx">Nouvelle version prête</span>
+      <button type="button" className="b2 ink press" onClick={() => location.reload()}>
         Recharger
       </button>
     </div>

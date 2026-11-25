@@ -1,9 +1,8 @@
-// MoonAgentic's own updates, drawn from the reference mockup (ade/maquette, « Mise à jour »):
-// a pill at the foot of the side bar, a 360 px card beside it (a sheet on a phone), the steps
-// of an install on every screen, and the rows of Réglages › Général.
+// MoonAgentic's own updates, as the mockup draws them: a bar above the home page's composer
+// (UpdateBar.tsx), the sheet where an install is chosen, the steps of an install over every
+// screen, and the rows of Réglages › Général.
 import type { AppInfo } from "@moonagentic/protocol";
-import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { createPortal } from "react-dom";
+import { type ReactNode, useEffect, useState, useSyncExternalStore } from "react";
 import {
   closeUpdateCard,
   formatSize,
@@ -21,34 +20,35 @@ import {
 import { connection } from "../connection.ts";
 import { seenAgo } from "../remote.ts";
 import { expectNewBuild } from "../update.ts";
-import { IconBranch, IconExternal, IconOkCircle, IconRefresh } from "./icons.tsx";
-import { MoonMark } from "./MoonMark.tsx";
-import { StateGlyph } from "./StateGlyph.tsx";
+import { Glyph, I } from "../v2/I.tsx";
+import { Sheet } from "../v2/Sheet.tsx";
 
-const useApp = () => useSyncExternalStore(connection.subscribe, connection.getState);
+export const useApp = () => useSyncExternalStore(connection.subscribe, connection.getState);
 
 /** What the install has done and does now. */
 function Steps(props: { app: AppInfo; connected: boolean }) {
   return (
-    <ol className="tl2">
+    <div className="plan" role="list">
       {installSteps(props.app.update, props.connected).map((s) => (
-        <li
+        <div
           key={s.key}
-          className={`t2 t2-${s.state === "done" ? "done" : s.state === "now" ? "now" : "next"}`}
+          role="listitem"
+          className={`stp ${s.state === "done" ? "d" : s.state === "now" ? "c" : "p"}`}
         >
-          <span className={`t2-m${s.state === "done" ? " ok" : ""}`}>
+          <i>
             {s.state === "done" ? (
-              <IconOkCircle size={18} />
+              <I n="okc" s={18} />
             ) : s.state === "now" ? (
-              <i className="t2-spin" />
+              <b className="sp" />
             ) : (
-              <i className="t2-ring" />
+              <b className="ring" />
             )}
-          </span>
-          <span className="t2-l">{s.label}</span>
-        </li>
+          </i>
+          <span>{s.label}</span>
+          <span />
+        </div>
       ))}
-    </ol>
+    </div>
   );
 }
 
@@ -57,45 +57,20 @@ function Notes(props: { app: AppInfo }) {
   if (!notes.length) return null;
   return (
     <>
-      <div className="apu-sub">Nouveautés</div>
-      <ul className="apu-list">
+      <div className="gl2">Nouveautés</div>
+      <div className="ins">
         {notes.map((n, i) => (
-          <li key={i}>
-            <span>{n.title}</span>
-            {n.number !== undefined && <span className="apu-m">#{n.number}</span>}
-          </li>
+          <div key={i} className="it ro">
+            <span className="tx">{n.title}</span>
+            {n.number !== undefined && (
+              <span className="rt">
+                <span className="mono">#{n.number}</span>
+              </span>
+            )}
+          </div>
         ))}
-      </ul>
-    </>
-  );
-}
-
-function Badge(props: { app: AppInfo }) {
-  const { app } = props;
-  const u = app.update;
-  if (app.kind === "git") {
-    return (
-      <div className="prc-id">
-        <span className="prc-n">
-          <IconBranch size={14} />
-          main
-        </span>
-        <span className="prc-br">
-          {u.behind ?? 0} commit{(u.behind ?? 0) > 1 ? "s" : ""} de plus
-        </span>
       </div>
-    );
-  }
-  return (
-    <div className="prc-id">
-      <span className="prc-n">
-        <MoonMark width={14} height={14} />
-        MoonAgentic {u.version}
-      </span>
-      <span className="prc-br">
-        {app.version} → {u.version}
-      </span>
-    </div>
+    </>
   );
 }
 
@@ -103,7 +78,7 @@ function Copy(props: { text: string }) {
   const [done, setDone] = useState(false);
   return (
     <button
-      className="btn sm"
+      className="b2 soft press"
       onClick={() => {
         void navigator.clipboard
           ?.writeText(props.text)
@@ -111,64 +86,73 @@ function Copy(props: { text: string }) {
           .catch(() => undefined);
       }}
     >
+      <I n={done ? "check" : "copies"} s={16} />
       {done ? "Copié" : "Copier"}
     </button>
   );
 }
 
-/** What the card says and offers, for where the update stands. */
-function CardBody(props: { app: AppInfo; running: number; connected: boolean }) {
+/** The sheet's title, for where the update stands. */
+function titleOf(app: AppInfo): string {
+  const u = app.update;
+  if (app.kind === "git") return "Nouvelle version sur main";
+  return `Version ${u.version ?? ""}`.trim();
+}
+
+/** What the sheet says and offers, for where the update stands. */
+function Body(props: { app: AppInfo; running: number; connected: boolean }) {
   const { app, running } = props;
   const u = app.update;
+  const [when, setWhen] = useState<"idle" | "now">("idle");
   const send = (message: Parameters<typeof connection.send>[0]) => connection.send(message);
-  if (u.phase) {
-    return (
-      <>
-        <Badge app={app} />
-        <h3>Installation en cours</h3>
-        <Steps app={app} connected={props.connected} />
-      </>
-    );
-  }
+  if (u.phase) return <Steps app={app} connected={props.connected} />;
   if (u.install) {
     const n = u.working ?? 0;
     return (
       <>
-        <Badge app={app} />
-        <h3>S'installe dès que rien ne tourne</h3>
-        {n > 0 && (
-          <div className="apu-run">
-            <StateGlyph kind="travaille" size={16} />
-            <span>{workingLine(n)}</span>
-          </div>
-        )}
-        <div className="prc-acts apu-acts">
-          <button className="btn" onClick={() => send({ type: "app.install", when: "now" })}>
-            Installer maintenant
-          </button>
-          <button className="btn quiet" onClick={() => send({ type: "app.cancel" })}>
+        <div className="gl2">
+          S'installe dès que rien ne tourne
+          {n > 0 && (
+            <>
+              <span className="sp" />
+              <span className="ppill">
+                <Glyph />
+                {workingLine(n)}
+              </span>
+            </>
+          )}
+        </div>
+        <div className="rva">
+          <button className="b2 soft press" onClick={() => send({ type: "app.cancel" })}>
             Annuler l'attente
+          </button>
+          <button
+            className="b2 ink press"
+            onClick={() => send({ type: "app.install", when: "now" })}
+          >
+            Installer maintenant
           </button>
         </div>
       </>
     );
   }
   if (u.state === "downloading") {
+    const percent = Math.round((u.progress ?? 0) * 100);
     return (
       <>
-        <Badge app={app} />
-        <h3>Téléchargement en arrière-plan</h3>
-        <div
-          className="apu-bar"
-          role="progressbar"
-          aria-valuenow={Math.round((u.progress ?? 0) * 100)}
-        >
-          <i style={{ width: `${Math.round((u.progress ?? 0) * 100)}%` }} />
+        <div className="ins qcard">
+          <div className="qrow ok">
+            <div className="qh">
+              <span className="l">Téléchargement</span>
+              <span className="p">
+                {percent} %{u.size ? ` de ${formatSize(u.size)}` : ""}
+              </span>
+            </div>
+            <div className="qb" role="progressbar" aria-valuenow={percent}>
+              <i style={{ width: `${percent}%` }} />
+            </div>
+          </div>
         </div>
-        <p className="apu-note">
-          {Math.round((u.progress ?? 0) * 100)} %{u.size ? ` de ${formatSize(u.size)}` : ""}. Rien
-          ne s'installe sans ton accord.
-        </p>
         <Notes app={app} />
       </>
     );
@@ -176,17 +160,10 @@ function CardBody(props: { app: AppInfo; running: number; connected: boolean }) 
   if (u.state === "failed") {
     return (
       <>
-        <Badge app={app} />
-        <h3>La version {u.version} n'a pas pu être téléchargée</h3>
-        {u.error && (
-          <div className="apu-tags">
-            <span className="tag err">{u.error}</span>
-          </div>
-        )}
-        {app.checks && <p className="apu-note">Nouvel essai tout seul dans 6 h.</p>}
-        <div className="prc-acts apu-acts">
-          <button className="btn acc" onClick={() => send({ type: "app.check" })}>
-            <IconRefresh size={15} />
+        {u.error && <p className="pcw t-err">{u.error}</p>}
+        <div className="mga">
+          <button className="b2 ink press" onClick={() => send({ type: "app.check" })}>
+            <I n="refresh" s={17} />
             Réessayer
           </button>
         </div>
@@ -196,12 +173,14 @@ function CardBody(props: { app: AppInfo; running: number; connected: boolean }) 
   if (app.kind === "git") {
     return (
       <>
-        <Badge app={app} />
-        <h3>Nouvelle version sur main</h3>
         <Notes app={app} />
-        <p className="apu-note apu-lead">Arrête l'app avec Ctrl C, puis lance :</p>
-        <div className="apu-cmd">
-          <code>{PULL_COMMAND}</code>
+        <div className="gl2">Après Ctrl C dans le terminal</div>
+        <div className="ins">
+          <div className="it ro apcmd">
+            <code className="mono">{PULL_COMMAND}</code>
+          </div>
+        </div>
+        <div className="mga">
           <Copy text={PULL_COMMAND} />
         </div>
       </>
@@ -210,18 +189,12 @@ function CardBody(props: { app: AppInfo; running: number; connected: boolean }) 
   if (app.kind === "mac") {
     return (
       <>
-        <Badge app={app} />
-        <h3>MoonAgentic {u.version} est sortie</h3>
-        <p className="apu-note apu-lead">
-          Sur Mac, une app non signée ne peut pas se remplacer seule. Télécharge le fichier et
-          remplace l'app.
-        </p>
         <Notes app={app} />
         {u.url && (
-          <div className="prc-acts apu-acts">
-            <a className="btn pri" href={u.url} target="_blank" rel="noopener noreferrer">
+          <div className="mga">
+            <a className="b2 ink press" href={u.url} target="_blank" rel="noopener noreferrer">
+              <I n="ext" s={16} />
               Télécharger le .dmg
-              <IconExternal size={13} />
             </a>
           </div>
         )}
@@ -230,78 +203,40 @@ function CardBody(props: { app: AppInfo; running: number; connected: boolean }) 
   }
   return (
     <>
-      <Badge app={app} />
-      <h3>Mise à jour prête</h3>
-      <div className="apu-tags">
-        <span className="tag ok">Téléchargée</span>
-        {u.size !== undefined && <span className="tag">{formatSize(u.size)}</span>}
-        <span className="tag">Windows</span>
-      </div>
       <Notes app={app} />
-      {running > 0 && (
-        <div className="apu-run">
-          <StateGlyph kind="travaille" size={16} />
-          <span>{workingLine(running)} · installation après eux</span>
-        </div>
-      )}
-      <div className="prc-acts apu-acts">
-        <button className="btn pri" onClick={() => send({ type: "app.install", when: "idle" })}>
-          Installer quand rien ne tourne
+      <div className="gl2">
+        Installer
+        {u.size !== undefined && <small> · {formatSize(u.size)}</small>}
+        {running > 0 && (
+          <>
+            <span className="sp" />
+            <span className="ppill">
+              <Glyph />
+              {workingLine(running)}
+            </span>
+          </>
+        )}
+      </div>
+      <div className="seg" role="group" aria-label="Quand installer">
+        <button aria-pressed={when === "idle"} onClick={() => setWhen("idle")}>
+          Quand rien ne tourne
         </button>
-        <button className="btn" onClick={() => send({ type: "app.install", when: "now" })}>
-          Installer maintenant
+        <button aria-pressed={when === "now"} onClick={() => setWhen("now")}>
+          Maintenant
         </button>
       </div>
-      {running > 0 && (
-        <p className="apu-note">
-          « Maintenant » coupe {running > 1 ? `les ${running} fils` : "le fil"} au travail. Tu
-          pourras {running > 1 ? "les" : "le"} reprendre après le redémarrage.
-        </p>
-      )}
+      <div className="mga apgo">
+        <button
+          className="b2 ink press"
+          onClick={() => {
+            send({ type: "app.install", when });
+            closeUpdateCard();
+          }}
+        >
+          Installer
+        </button>
+      </div>
     </>
-  );
-}
-
-/** The card beside the side bar, a sheet on a phone. */
-function UpdateCard(props: { app: AppInfo; at: { top?: number; left?: number } }) {
-  const state = useApp();
-  const ref = useRef<HTMLDivElement>(null);
-  const [top, setTop] = useState(props.at.top);
-  useEffect(() => {
-    const away = (event: PointerEvent) => {
-      const target = event.target as Element;
-      if (ref.current?.contains(target) || target.closest(".apu-pill, .apu-ov")) return;
-      closeUpdateCard();
-    };
-    const escape = (event: KeyboardEvent) => event.key === "Escape" && closeUpdateCard();
-    document.addEventListener("pointerdown", away);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", away);
-      document.removeEventListener("keydown", escape);
-    };
-  }, []);
-  // Its foot level with the pill's, kept inside the window.
-  useEffect(() => {
-    const box = ref.current?.getBoundingClientRect();
-    if (!box || props.at.top === undefined) return;
-    setTop(Math.max(16, Math.min(props.at.top - box.height, window.innerHeight - 16 - box.height)));
-  }, [props.at.top, props.app]);
-  const running = state.threads.filter((t) => t.status === "running").length;
-  const style = {
-    ...(top !== undefined ? { "--top": `${top}px` } : { "--top": "80px" }),
-    ...(props.at.left !== undefined ? { "--left": `${props.at.left}px` } : {}),
-  } as React.CSSProperties;
-  return (
-    <div
-      ref={ref}
-      className="prc apu-card"
-      role="dialog"
-      aria-label="Mise à jour de MoonAgentic"
-      style={style}
-    >
-      <CardBody app={props.app} running={running} connected={state.status === "open"} />
-    </div>
   );
 }
 
@@ -309,7 +244,7 @@ function UpdateCard(props: { app: AppInfo; at: { top?: number; left?: number } }
 let watch: InstallWatch = { saw: false, lost: false };
 
 /**
- * Mounted once: the card when opened, and the steps of an install over every screen, from
+ * Mounted once: the sheet when opened, and the steps of an install over every screen, from
  * the copy of the database until the app is back.
  */
 export function AppUpdateHost() {
@@ -327,35 +262,37 @@ export function AppUpdateHost() {
     // The server answers again: the page loads the version it now serves.
     if (next.reload) expectNewBuild();
   }, [phase, connected]);
-  const overlay = app && (installing || waitingBack);
-  let card: ReactNode = null;
-  if (overlay) {
-    card = (
-      <>
-        <div className="scrim apu-scrim" />
-        <div className="apu-inst" role="status" aria-live="polite">
-          <div className="apu-ih">
-            <MoonMark width={28} height={28} />
-            <div>
-              <h2>Installation de MoonAgentic {app.update.version}</h2>
-              {app.update.install && (
-                <small>
-                  Demandée {app.update.install.by} · {seenAgo(app.update.install.at, Date.now())}
-                </small>
-              )}
-            </div>
-          </div>
-          <Steps app={app} connected={connected} />
-          <p className="apu-note">
-            Les fenêtres et les appareils jumelés se reconnectent tout seuls.
-          </p>
+  const overlay = !!app && (installing || waitingBack);
+  const shown = updateShown(app);
+  const running = state.threads.filter((t) => t.status === "running").length;
+  if (!app) return null;
+  return (
+    <>
+      <Sheet open={!!at && shown && !overlay} onClose={closeUpdateCard} title={titleOf(app)}>
+        <div className="sbody">
+          <Body app={app} running={running} connected={connected} />
         </div>
-      </>
-    );
-  } else if (at && updateShown(app)) {
-    card = <UpdateCard app={app} at={at} />;
-  }
-  return card ? createPortal(card, document.body) : null;
+      </Sheet>
+      {/* The install itself is not left: it shows on every screen until the app is back. */}
+      <Sheet
+        open={overlay}
+        onClose={() => undefined}
+        label={`Installation de MoonAgentic ${app.update.version ?? ""}`}
+        modal
+      >
+        <div className="cfw apins" role="status" aria-live="polite">
+          <div className="grab" />
+          <h3>Installation de MoonAgentic {app.update.version}</h3>
+          {app.update.install && (
+            <span className="ppill">
+              Demandée {app.update.install.by} · {seenAgo(app.update.install.at, Date.now())}
+            </span>
+          )}
+          <Steps app={app} connected={connected} />
+        </div>
+      </Sheet>
+    </>
+  );
 }
 
 /** Réglages › Général: the version, a look by hand, and how the app runs on this computer. */
@@ -386,25 +323,23 @@ export function AppUpdateSettings(props: {
   const checked = u.checkedAt ? ` · vérifiée ${seenAgo(u.checkedAt, Date.now())}` : "";
   return (
     <>
-      <h3 className="lk-h">Mise à jour</h3>
-      <div className="set-card">
-        <Row
-          title={app.kind === "git" ? `Version ${app.version}` : `Version ${app.version}`}
-          text={
-            <>
-              {`${where}${app.kind === "other" ? "" : checked}`}
-              {failure && <span className="apu-look-err">{failure}</span>}
-            </>
-          }
-        >
+      <div className="gl2">Mises à jour</div>
+      <div className="ins">
+        <Row title="Version" text={failure ?? (app.kind === "other" ? where : undefined)}>
+          <span className="rt">
+            {app.kind !== "other" && u.state !== "checking" && !updateShown(app) && !failure && (
+              <span className="okp">À jour</span>
+            )}
+            <span className="mono">{app.version}</span>
+          </span>
           {app.kind !== "other" && (
             <button
-              className="btn sm"
+              className="mini press"
               disabled={u.state === "checking" || !!u.phase}
+              title={`${where}${checked}`}
               onClick={() => connection.send({ type: "app.check" })}
             >
-              <IconRefresh size={14} />
-              {u.state === "checking" ? "Recherche…" : "Vérifier maintenant"}
+              {u.state === "checking" ? "Recherche…" : "Vérifier"}
             </button>
           )}
         </Row>
@@ -413,39 +348,27 @@ export function AppUpdateSettings(props: {
             title={app.kind === "git" ? "Nouvelle version sur main" : `MoonAgentic ${u.version}`}
             text={
               u.state === "failed"
-                ? (u.error ?? "Le téléchargement a échoué.")
-                : app.kind === "windows"
-                  ? "Téléchargée en arrière-plan · s'installe seulement quand tu le demandes"
-                  : app.kind === "mac"
-                    ? "À télécharger et installer à la main"
-                    : `${u.behind ?? 0} commit${(u.behind ?? 0) > 1 ? "s" : ""} à récupérer`
+                ? (u.error ?? "Le téléchargement a échoué")
+                : app.kind === "git"
+                  ? `${u.behind ?? 0} commit${(u.behind ?? 0) > 1 ? "s" : ""} à récupérer`
+                  : undefined
             }
           >
-            <button className="btn sm pri" onClick={() => openUpdateCard()}>
+            <button className="mini press" onClick={() => openUpdateCard()}>
               {app.kind === "windows" && u.state === "ready" && !u.install ? "Installer…" : "Voir"}
             </button>
           </Row>
         )}
         {app.kind !== "other" && (
           <>
-            <Row
-              title="Chercher les nouvelles versions"
-              text={
-                app.kind === "git"
-                  ? "Au démarrage puis toutes les 6 h, sur la branche main du dépôt"
-                  : "Au démarrage puis toutes les 6 h, dans les versions publiées du dépôt"
-              }
-            >
+            <Row title="Chercher les nouvelles versions">
               <Toggle
                 label="Chercher les nouvelles versions"
                 on={app.checks}
                 onChange={(on) => set({ checks: on })}
               />
             </Row>
-            <Row
-              title="Prévenir sur mes appareils"
-              text="Une notification quand une version est prête, là où les notifications sont activées"
-            >
+            <Row title="Prévenir sur mes appareils">
               <Toggle
                 label="Prévenir sur mes appareils"
                 on={app.notify}
@@ -457,13 +380,10 @@ export function AppUpdateSettings(props: {
       </div>
       {(app.openAtLogin !== undefined || app.preventSleep !== undefined) && (
         <>
-          <h3 className="lk-h">Démarrage</h3>
-          <div className="set-card">
+          <div className="gl2">Démarrage</div>
+          <div className="ins">
             {app.openAtLogin !== undefined && (
-              <Row
-                title={app.kind === "mac" ? "Ouvrir à la connexion" : "Lancer avec Windows"}
-                text="MoonAgentic démarre à l'ouverture de la session, fenêtre cachée"
-              >
+              <Row title={app.kind === "mac" ? "Ouvrir à la connexion" : "Lancer avec Windows"}>
                 <Toggle
                   label="Lancer à l'ouverture de la session"
                   on={app.openAtLogin}
@@ -472,10 +392,7 @@ export function AppUpdateSettings(props: {
               </Row>
             )}
             {app.preventSleep !== undefined && (
-              <Row
-                title="Empêcher la veille"
-                text="Tant que l'app tourne, l'ordinateur reste joignable"
-              >
+              <Row title="Empêcher la veille">
                 <Toggle
                   label="Empêcher la veille"
                   on={app.preventSleep}

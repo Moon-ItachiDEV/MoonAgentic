@@ -1,7 +1,6 @@
 import type { Skill } from "@moonagentic/protocol";
 import { useLayoutEffect, useRef } from "react";
 import type { ComposerCommand, Trigger } from "../commands.ts";
-import { IconFile, IconTerminal } from "./icons.tsx";
 
 export type Suggestion =
   | { type: "command"; command: ComposerCommand }
@@ -40,31 +39,26 @@ export function Suggestions(props: {
   }, [props.active]);
 
   return (
-    <div
-      className="menu suggest"
-      ref={list}
-      role="listbox"
-      id="composer-suggest"
-      aria-label={TITLES[props.kind]}
-    >
-      <div className="menu-h">{TITLES[props.kind]}</div>
-      {props.items.length === 0 && props.empty && <div className="menu-note">{props.empty}</div>}
-      {props.items.map((item, i) => (
-        <button
-          key={suggestionKey(item)}
-          id={`sg-${i}`}
-          data-index={i}
-          role="option"
-          aria-selected={i === props.active}
-          className={i === props.active ? "on" : undefined}
-          // The textarea keeps the focus, and its caret.
-          onMouseDown={(e) => e.preventDefault()}
-          onMouseMove={() => i !== props.active && props.onHover(i)}
-          onClick={() => props.onPick(item)}
-        >
-          <Row item={item} />
-        </button>
-      ))}
+    <div className="sugm" role="listbox" id="composer-suggest" aria-label={TITLES[props.kind]}>
+      <div className="sgl" ref={list}>
+        {props.items.length === 0 && props.empty && <p className="sge">{props.empty}</p>}
+        {props.items.map((item, i) => (
+          <button
+            key={suggestionKey(item)}
+            id={`sg-${i}`}
+            data-index={i}
+            role="option"
+            aria-selected={i === props.active}
+            className={`sgr${i === props.active ? " on" : ""}`}
+            // The textarea keeps the focus, and its caret.
+            onMouseDown={(e) => e.preventDefault()}
+            onMouseMove={() => i !== props.active && props.onHover(i)}
+            onClick={() => props.onPick(item)}
+          >
+            <Row item={item} />
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -74,18 +68,15 @@ function Row({ item }: { item: Suggestion }) {
     const c = item.command;
     return (
       <>
-        <span className="sg-ic">
-          <IconTerminal />
+        <span className="nm">
+          /{c.name}
+          {c.hint && <i> {c.hint}</i>}
         </span>
-        <span className="tx">
-          <span className="sg-name">/{c.name}</span>
-          {c.hint && <span className="sg-hint"> {c.hint}</span>}
-          <small>
-            {c.description}
-            {c.hides?.length ? ` · remplace celle de ${c.hides.join(", ")}` : ""}
-          </small>
-        </span>
-        <span className="sg-by">{c.by}</span>
+        <small>
+          {c.description}
+          {c.hides?.length ? ` · remplace celle de ${c.hides.join(", ")}` : ""}
+        </small>
+        <span className="by">{c.by}</span>
       </>
     );
   }
@@ -93,25 +84,17 @@ function Row({ item }: { item: Suggestion }) {
     const at = item.path.lastIndexOf("/");
     return (
       <>
-        <span className="sg-ic">
-          <IconFile />
-        </span>
-        <span className="tx">
-          <span className="sg-name">{item.path.slice(at + 1)}</span>
-          <small>{at === -1 ? "racine du projet" : item.path.slice(0, at)}</small>
-        </span>
+        <span className="nm">{item.path.slice(at + 1)}</span>
+        <small className="mono">{at === -1 ? "racine du projet" : item.path.slice(0, at)}</small>
       </>
     );
   }
   const s = item.skill;
   return (
     <>
-      <span className="sg-ic sg-dollar">$</span>
-      <span className="tx">
-        <span className="sg-name">{s.name}</span>
-        {s.description && <small>{s.description}</small>}
-      </span>
-      <span className="sg-by">{s.scope === "project" ? "Projet" : "Perso"}</span>
+      <span className="nm">{s.name}</span>
+      {s.description && <small>{s.description}</small>}
+      <span className="by">{s.scope === "project" ? "Projet" : "Perso"}</span>
     </>
   );
 }

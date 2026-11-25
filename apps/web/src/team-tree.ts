@@ -102,15 +102,6 @@ export const GLYPH_LABEL: Record<GlyphKind, string> = {
   file: "En file",
 };
 
-export const TOOL_LABEL: Record<ToolGroup, string> = {
-  read: "Lecture",
-  edit: "Édition",
-  search: "Recherche",
-  run: "Terminal",
-  web: "Web",
-  other: "Autres",
-};
-
 const toolGroup = (kind: string): ToolGroup =>
   kind === "read"
     ? "read"
@@ -284,7 +275,7 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
         tone: "warn",
         label: GLYPH_LABEL.attend,
         glyph: "attend",
-        action: "Ouvre son fil pour lui répondre",
+        action: GLYPH_LABEL.attend,
       };
     }
     if (thread.status === "error") {

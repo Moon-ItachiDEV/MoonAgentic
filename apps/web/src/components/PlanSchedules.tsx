@@ -1,7 +1,9 @@
-import type { AgentInfo, ClientMessage, Schedule, Thread } from "@moonagentic/protocol";
+import type { AgentInfo, ClientMessage, Project, Schedule, Thread } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { momentLabel, repeatLabel, scheduleState } from "../schedule.ts";
+import { Fab } from "../v2/Fab.tsx";
+import { I } from "../v2/I.tsx";
 
 type ScheduleRequest = Extract<ClientMessage, { type: `schedule.${string}` }>;
 
@@ -13,11 +15,12 @@ const call = (message: ScheduleRequest) =>
   });
 
 /**
- * The project's tasks planned for later. Each line says what the server really holds: when
- * the task next starts, when it last did, and why it did not when that is the case.
+ * The tasks planned for later, of every project shown. Each card says what the server really
+ * holds: when the task next starts, when it last did, and why it did not when that is the case.
  */
 export function PlanSchedules({
   schedules,
+  projects,
   threads,
   agents,
   onEdit,
@@ -25,10 +28,13 @@ export function PlanSchedules({
   onOpenThread,
 }: {
   schedules: Schedule[];
+  /** The projects whose tasks are listed; a locked one's stay out of sight. */
+  projects: Project[];
   threads: Thread[];
   agents: AgentInfo[];
   onEdit: (schedule: Schedule) => void;
-  onNew: () => void;
+  /** Nothing to plan in when there is no project yet. */
+  onNew: (() => void) | undefined;
   onOpenThread: (id: string) => void;
 }) {
   // « Demain » becomes « aujourd'hui » while the page stays open.
@@ -37,28 +43,21 @@ export function PlanSchedules({
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, []);
-
-  if (schedules.length === 0) {
-    return (
-      <div className="pl-sch-none">
-        <p>
-          Aucune tâche planifiée. Une tâche planifiée part toute seule à son heure, une fois ou à
-          intervalles réguliers, dans un nouveau fil.
-        </p>
-        <button className="btn pri" onClick={onNew}>
-          Planifier une tâche
-        </button>
-        <small>
-          Ou tape <code>/planifier</code> dans une discussion.
-        </small>
-      </div>
-    );
-  }
+  const shown = schedules.filter((s) => projects.some((p) => p.id === s.projectId));
 
   return (
-    <div className="pl-sch" role="list" aria-label="Tâches planifiées">
-      {schedules.map((s) => {
+    <div className="view" id="view" role="list" aria-label="Tâches planifiées">
+      {shown.length === 0 && (
+        <div className="empty2">
+          <span className="eic n">
+            <I n="clock" s={26} />
+          </span>
+          <b>Aucune tâche planifiée</b>
+        </div>
+      )}
+      {shown.map((s) => {
         const state = scheduleState(s, now);
+        const project = projects.find((p) => p.id === s.projectId);
         const last = threads.find((t) => t.id === s.lastThreadId);
         const agent = agents.find((a) => a.id === s.agentId);
         // What the thread of its last run is really doing now.
@@ -68,37 +67,23 @@ export function PlanSchedules({
             : last?.status === "waiting"
               ? ", attend ton accord"
               : "";
+        const missed = !!s.lastError;
         return (
-          <article key={s.id} className={`pl-sch-row ${state.tone}`} role="listitem">
-            <div className="pl-sch-tx">
-              <b>{s.title}</b>
-              <p>
-                {repeatLabel(s)} · {agent?.name ?? s.agentId}
-                {s.permissionMode === "full" ? " · accès complet" : ""}
-              </p>
-              <p className="pl-sch-state">
-                <i />
-                {state.label}
-                {state.tone === "done" ? live : ""}
-              </p>
-              {s.lastAt !== undefined && state.tone !== "done" && (
-                <p>
-                  Dernier lancement {momentLabel(s.lastAt, now)}
-                  {live}
-                  {s.runs > 1 ? ` · ${s.runs} lancements` : ""}
-                </p>
-              )}
-              {s.lastError && <p className="pl-sch-err">{s.lastError}</p>}
-            </div>
-            <div className="pl-sch-ctl">
+          <article key={s.id} className={`sc2${s.enabled ? "" : " off"}`} role="listitem">
+            <div className="sch">
+              <span className="rep">
+                <I n="clock" s={14} />
+                {repeatLabel(s)}
+              </span>
+              <span className="sp" />
               {/* A one-time task that has run is planned again from « Modifier ». */}
               {state.tone !== "done" && (
                 <button
+                  className="tog"
                   role="switch"
                   aria-checked={s.enabled}
                   aria-label={`Activer ${s.title}`}
                   title={s.enabled ? "Mettre en pause" : "Réactiver"}
-                  className={`set-sw${s.enabled ? " on" : ""}`}
                   onClick={() =>
                     void call({
                       type: "schedule.update",
@@ -109,35 +94,74 @@ export function PlanSchedules({
                   }
                 />
               )}
+            </div>
+            <button className="sct" onClick={() => onEdit(s)} aria-label={`Modifier ${s.title}`}>
+              {s.title}
+            </button>
+            <span className="pcm">
+              {project && <i className={`pdot${project.color ? ` pc-${project.color}` : ""}`} />}
+              {project?.name}
+              <span className="dotsep" />
+              {agent?.name ?? s.agentId}
+              {s.permissionMode === "full" && (
+                <>
+                  <span className="dotsep" />
+                  accès complet
+                </>
+              )}
+            </span>
+            {s.lastError && <p className="pcw t-err">{s.lastError}</p>}
+            <div className="scf">
+              <span className={`scs${missed ? " warn" : state.tone === "done" ? " ok" : ""}`}>
+                {state.label}
+                {state.tone === "done"
+                  ? live
+                  : s.lastAt !== undefined
+                    ? ` · dernier ${momentLabel(s.lastAt, now)}${live}`
+                    : ""}
+                {s.runs > 1 ? ` · ${s.runs} lancements` : ""}
+              </span>
+              <span className="sp" />
               {last && (
-                <button className="btn quiet" onClick={() => onOpenThread(last.id)}>
-                  Ouvrir le fil
+                <button
+                  className="mini press"
+                  aria-label={`Ouvrir le fil de ${s.title}`}
+                  onClick={() => onOpenThread(last.id)}
+                >
+                  Fil
                 </button>
               )}
               <button
-                className="btn quiet"
+                className="mini press"
+                aria-label={`Lancer maintenant ${s.title}`}
                 onClick={() =>
                   void call({ type: "schedule.run", requestId: newId(), id: s.id }).then(
                     (id) => id && onOpenThread(id),
                   )
                 }
               >
-                Lancer maintenant
-              </button>
-              <button className="btn quiet" onClick={() => onEdit(s)}>
-                Modifier
+                Lancer
               </button>
               <button
-                className="btn quiet danger"
+                className="mini ic press"
                 aria-label={`Supprimer ${s.title}`}
                 onClick={() => void call({ type: "schedule.remove", requestId: newId(), id: s.id })}
               >
-                Supprimer
+                <I n="x" s={14} />
               </button>
             </div>
           </article>
         );
       })}
+      <div className="end" style={{ height: 110 }} />
+      {onNew && (
+        <Fab>
+          <button className="newd press" onClick={onNew}>
+            <I n="plus" s={20} />
+            Planifier une tâche
+          </button>
+        </Fab>
+      )}
     </div>
   );
 }

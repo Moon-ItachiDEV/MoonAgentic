@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, type BrowserContext, chromium, type Page } from "playwright";
+import { addProject, pickAgent } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -75,7 +76,7 @@ const shot = async (page: Page, name: string) => {
   await page.screenshot({ path: path.join(shots, `${name}.png`) });
 };
 const composer = (page: Page) => page.getByRole("combobox", { name: "Message" });
-const card = (page: Page) => page.locator(".dcard");
+const card = (page: Page) => page.locator(".dc");
 const say = async (page: Page, text: string) => {
   await composer(page).fill(text);
   await composer(page).press("Enter");
@@ -161,7 +162,7 @@ const look = (page: Page) =>
         inAnswer(innerWidth - 5, innerHeight - 5),
       ],
       // Under the middle of each of the request's rows: the request itself.
-      rows: [...document.querySelectorAll(".dcard .dcard-o")].map((row) => {
+      rows: [...document.querySelectorAll(".dc .rows .opt")].map((row) => {
         const box = row.getBoundingClientRect();
         const top = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
         return !!top && row.contains(top);
@@ -209,20 +210,14 @@ describe("agent answers", () => {
   it("cannot pass for the app, nor stand over a permission request", async () => {
     const page = await context.newPage();
     await page.goto(url);
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(project);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
+    await addProject(page, project);
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
-    await page.locator(".agentchip").click();
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
-    await page.getByRole("button", { name: "Options", exact: true }).click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-    await page.keyboard.press("Escape");
+    await pickAgent(page);
 
     await say(page, hostile(new URL(url).origin));
     await card(page).getByRole("heading", { name: "Modifier src/app.ts" }).waitFor();
     await card(page).evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+    await page.waitForURL(/\/t\//);
     thread = page.url();
     await shot(page, "a1-reponse-hostile");
 
@@ -258,6 +253,8 @@ describe("agent answers", () => {
         const style = getComputedStyle(a);
         return [style.color, style.textDecorationLine, style.cursor];
       });
+    // The pointer is off both: a link under it is underlined, whichever it is.
+    await page.mouse.move(0, 0);
     expect(await drawn(file)).toEqual(await drawn(doc));
     const viewer = page.getByRole("dialog", { name: "app.ts" });
     await file.click();
@@ -329,9 +326,10 @@ describe("agent answers", () => {
       .getByRole("heading", { name: "Lire le fichier hs.tixe-lruc README.md", exact: true })
       .waitFor();
     await expect
-      .poll(() => card(page).locator(".dcard-o .dcard-on").allTextContents())
-      .toEqual(["Autoriser", "resufeR", "Autre chose…"]);
-    expect(await card(page).locator(".dcard-o .dcard-od").allTextContents()).toEqual([
+      .poll(() => card(page).locator(".opt .on").allTextContents())
+      .toEqual(["Autoriser", "resufeR"]);
+    await card(page).getByRole("button", { name: "Autre chose…" }).waitFor();
+    expect(await card(page).locator(".opt .ot small").allTextContents()).toEqual([
       "Autorisé cette fois seulement",
       "L'agent ne le fait pas et continue autrement",
     ]);

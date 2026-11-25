@@ -1,0 +1,1634 @@
+/* What the real app needs beyond the mockup: the mockup draws a phone, the app fills the window. */
+html {
+  background: var(--bg);
+}
+html,
+body,
+#root {
+  height: 100%;
+}
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+code,
+kbd,
+pre,
+samp {
+  letter-spacing: 0;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* Where a list does scroll in view (a computer's mouse), its bar stays thin and quiet. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--faint);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+/* A popup kept on screen while it closes takes no input and has no box of its own. */
+.presence {
+  display: contents;
+}
+.presence.closing * {
+  pointer-events: none;
+}
+
+/* The brand, in the menu. */
+.brand {
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+
+/* Menu: a line that is open, one that waits, one not read yet. */
+.rc.on,
+.rc[aria-selected="true"].on {
+  background: var(--hover);
+  color: var(--fg);
+}
+.rc .nm {
+  flex: 1;
+  min-width: 0;
+}
+.rc .nm small {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dsearch .rc {
+  height: auto;
+  min-height: 46px;
+  padding-block: 6px;
+}
+.rc > .ud {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  margin-left: 10px;
+  background: var(--warn-dot);
+}
+.rc > .nr {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 3px;
+  margin-left: 10px;
+  background: var(--fg2);
+}
+.rc.unread {
+  color: var(--fg);
+  font-weight: 500;
+}
+.rc.more {
+  color: var(--muted);
+  font-size: 14px;
+}
+.rc .wi2.err .ud {
+  background: var(--err);
+}
+.pj .lk {
+  color: var(--faint);
+  display: grid;
+}
+/* A finger held on a thread's line opens its menu, not the phone's own callout. */
+.rc,
+.trow,
+.it.thr {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+.pmenu.rowm {
+  position: fixed;
+  z-index: 130;
+  left: max(8px, min(var(--x), calc(100vw - 248px)));
+  top: max(8px, min(var(--y), calc(100vh - 230px)));
+  transform-origin: 0 0;
+}
+
+/* A project's icon: its coloured folder, or the emoji or letters set in its settings. */
+.pj-fold,
+.pj-ico {
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--pc, var(--pc-moon));
+}
+.pj-ico {
+  border-radius: 7px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--fg);
+  background: color-mix(in srgb, var(--pc, var(--pc-moon)) 16%, transparent);
+}
+.pc-moon {
+  --pc: var(--pc-moon);
+}
+.pc-sky {
+  --pc: var(--pc-sky);
+}
+.pc-mint {
+  --pc: var(--pc-mint);
+}
+.pc-sun {
+  --pc: var(--pc-sun);
+}
+.pc-coral {
+  --pc: var(--pc-coral);
+}
+.pc-rose {
+  --pc: var(--pc-rose);
+}
+.pc-violet {
+  --pc: var(--pc-violet);
+}
+.pc-slate {
+  --pc: var(--pc-slate);
+}
+.pava {
+  color: var(--pc, var(--pc-moon));
+}
+
+/* Tab lists: what leads a line. */
+.pi2 .lead {
+  flex: none;
+  color: var(--muted);
+}
+.pi2 .ud.lead {
+  margin: 0 6px;
+}
+.pi2 .lk {
+  color: var(--faint);
+}
+
+/* The notice at the top: what the server says, with a way to close it. */
+.toast.on button {
+  margin-left: 6px;
+  font-weight: 500;
+  opacity: 0.75;
+}
+
+/* The bottom of the page: what waits above the composer, then the composer and what opens from it. */
+.bottom > .res {
+  display: flex;
+}
+.cw {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cw > .dcw {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.cw > .dcw:empty {
+  display: none;
+}
+.cw > .dcw > .updb {
+  margin: 0;
+}
+.updb.qw .tx {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.updb.qw .b2 {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 50%;
+  height: 36px;
+  padding: 0 14px;
+  font-size: 14px;
+  gap: 0;
+  white-space: pre;
+}
+.updb.qw .b2 .nm {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* On a phone the warning takes two lines instead of being cut. */
+.scr:not(.roomy) .updb.qw {
+  height: auto;
+  min-height: 52px;
+  padding-block: 8px;
+  border-radius: 24px;
+}
+.scr:not(.roomy) .updb.qw .tx {
+  white-space: normal;
+}
+.updb.qw.full .tx {
+  color: var(--err-tx);
+}
+.cw > .pmenu {
+  left: 0;
+  bottom: calc(100% + 8px);
+}
+.cw > .sugm {
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+}
+.cw > .ctxp {
+  right: 0;
+  bottom: calc(100% + 8px);
+}
+.scr.pm .bottom {
+  z-index: 23;
+  opacity: 1;
+  filter: none;
+}
+.pi2.ro {
+  cursor: default;
+}
+.pi2 .pk {
+  width: 20px;
+  text-align: center;
+  font-weight: 600;
+  color: var(--fg2);
+  flex: none;
+}
+.pi2 .rt.mono {
+  font: 400 13px var(--mono);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cmp .cb:disabled,
+.cmp .mdl:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.cmp .mdl {
+  max-width: 62%;
+  overflow: hidden;
+}
+.cmp .mdl .mn {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cmp .cb.stop.soft {
+  background: var(--chip);
+  color: var(--fg);
+}
+.cmp .cb.go.alt,
+.cmp .cb.stop.vox {
+  width: auto;
+  padding: 0 14px 0 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.cmp .cb.go:disabled {
+  opacity: 0.5;
+}
+.cmp .line .cb.go,
+.cmp .line .cb.stop {
+  animation: pop 260ms var(--spring);
+}
+.att {
+  margin: 0;
+  list-style: none;
+}
+.att .th {
+  background: var(--card);
+}
+.att .th img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+  display: block;
+}
+.att .th.sending img {
+  opacity: 0.5;
+}
+.att .th-wait {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid var(--track);
+  border-top-color: var(--fg2);
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cmp.drop {
+  box-shadow:
+    0 0 0 1.5px var(--accent),
+    var(--lift);
+}
+.cmp .cdrop {
+  padding: 12px 16px 0;
+  font-size: 14px;
+  color: var(--accent);
+}
+.cmp .vxp {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 6px;
+  font-size: 16px;
+  line-height: 22px;
+  max-height: 132px;
+  overflow-y: auto;
+}
+.cmp .vxp-ph,
+.cmp .vxp-cur {
+  color: var(--faint);
+}
+.cmp .vlevel {
+  display: none;
+}
+.vxh {
+  display: flex;
+  justify-content: center;
+  gap: 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.vxh kbd {
+  font: 500 12px var(--mono);
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--card);
+}
+html[data-dev="touch"] .vxh {
+  display: none;
+}
+/* The model sheet: the wheel scrolls for real (finger, mouse wheel, arrows), under the mockup's look. */
+.wheelw {
+  position: relative;
+}
+.wheel.nat {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;
+  touch-action: pan-y;
+  outline: 0;
+}
+.wheel.nat::-webkit-scrollbar {
+  display: none;
+}
+.wheel.nat .wlist {
+  padding: 52px 0;
+  transition: none;
+}
+.wheel.nat .wi {
+  scroll-snap-align: center;
+  cursor: pointer;
+  transition: none;
+}
+.wheelw,
+.mv .wdesc {
+  transition:
+    opacity 300ms var(--out),
+    filter 300ms var(--out),
+    transform 400ms var(--spring);
+}
+.mv.eff .wheelw {
+  opacity: 0;
+  filter: blur(8px);
+  transform: scale(0.94);
+  pointer-events: none;
+}
+.wi .eg:hover {
+  background: var(--hover);
+}
+.it.mrow {
+  padding: 0;
+  gap: 0;
+}
+.it.mrow .mpick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: inherit;
+  padding: 10px 4px 10px 16px;
+  text-align: left;
+}
+.it.mrow .mpick .tx {
+  flex: 1;
+  min-width: 0;
+}
+.it.mrow .mstar {
+  flex: none;
+  width: 48px;
+  align-self: stretch;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+.it.mrow .mstar.on {
+  color: var(--fg);
+}
+.it.mrow .mstar.on svg {
+  fill: currentColor;
+}
+.it .rt.mq {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.it .rt.mq.warn {
+  color: var(--warn);
+}
+.it .rt.mq.full {
+  color: var(--err-tx);
+}
+.sheet.mpk .sbody > .seg {
+  margin-bottom: 4px;
+}
+
+/* Settings › Abonnements, and the usage sheet: one group per agent. */
+.qsec + .qsec {
+  margin-top: 22px;
+}
+.uhead button.rd {
+  color: inherit;
+  font: inherit;
+  font-weight: 400;
+  border-radius: 8px;
+}
+.uhead button.rd:disabled {
+  cursor: default;
+}
+.qkv {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px;
+  font-size: 15px;
+  color: var(--fg2);
+  box-shadow: 0 -0.5px 0 var(--glass-ring);
+}
+.qkv b {
+  margin-left: auto;
+  font-weight: 500;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.qnote {
+  margin: 8px 12px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* A confirmation whose consequence does not fit a pill. */
+.cfw .cft {
+  margin: 0;
+  max-width: 320px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.cfw .cft.err {
+  color: var(--err-tx);
+}
+
+/* Settings › Mascottes: the agents' own moons. */
+.mjm moon-mascot {
+  display: block;
+  width: 38px;
+}
+.mprev moon-mascot {
+  display: block;
+  width: 132px;
+}
+.msh {
+  grid-template-columns: repeat(auto-fit, minmax(64px, 1fr));
+}
+.msh button span moon-mascot {
+  display: block;
+  width: 38px;
+}
+.msh button span {
+  color: var(--faint);
+}
+.mtw button[data-moon] i {
+  background: linear-gradient(160deg, var(--sky-top), var(--sky-bottom));
+}
+.mtw button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Settings › Accès à distance. */
+.it .tx.mono {
+  font: 400 13.5px var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.it small.mer,
+.it .rt.mer {
+  color: var(--err-tx);
+}
+.qrw .pcode {
+  font: 600 22px var(--mono);
+  letter-spacing: 0.12em;
+  color: var(--fg);
+}
+
+/* A project's conversations: what leads a line, and what it says. */
+.it.thr {
+  gap: 12px;
+}
+.it.thr > .gl,
+.it.thr > .ud,
+.it.thr > .idl,
+.it.thr > svg.ok {
+  flex: none;
+  width: 18px;
+  justify-self: center;
+}
+.it.thr > .ud,
+.trow .ld .ud {
+  width: 8px;
+  height: 8px;
+  margin: 0 5px;
+  border-radius: 4px;
+  background: var(--warn-dot);
+}
+.it.thr > .ud.err,
+.trow .ld .ud.err {
+  background: var(--err);
+}
+.it.thr > .idl,
+.trow .ld .idl {
+  width: 6px;
+  height: 6px;
+  margin: 0 6px;
+  border-radius: 3px;
+  background: var(--faint);
+}
+.it.thr svg.ok,
+.trow .ld svg.ok {
+  color: var(--ok);
+}
+.it.thr .tx {
+  min-width: 0;
+}
+.it.thr .tx small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.it small.acc {
+  color: var(--accent);
+}
+.it.thr.unread .tx {
+  font-weight: 600;
+}
+.rpan .sbody > div + div {
+  margin-top: 0;
+}
+
+/* « Vue d'ensemble ». */
+.trow .ld {
+  display: grid;
+  justify-items: center;
+}
+.trow .s.w {
+  color: var(--warn);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+.trow.unread .t {
+  font-weight: 600;
+}
+button.ovh {
+  align-self: flex-start;
+}
+.ovg {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.ovg > div:not(.ovh) {
+  display: grid;
+}
+.thumb.ic {
+  place-items: center;
+  align-content: center;
+  color: var(--faint);
+}
+.view > .ins.ovins {
+  flex: none;
+}
+.view > .newth {
+  flex: none;
+}
+.ovh .mono {
+  font: 400 13px var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.tree .tf {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding-left: 24px;
+  color: var(--fg2);
+}
+.tree .tf svg {
+  color: var(--faint);
+  flex: none;
+}
+.tree .sub .tf {
+  padding-left: 24px;
+}
+.tree .tf .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A project with no coordinator yet, and what its conversation starts with. */
+.empty.cst .ins {
+  width: min(360px, 100%);
+  text-align: left;
+}
+.pstarts {
+  justify-content: flex-start;
+  margin-bottom: 26px;
+}
+.pstarts .ppill {
+  gap: 6px;
+  cursor: pointer;
+}
+.ppill.err {
+  color: var(--err-tx);
+}
+
+/* Project settings. */
+.fld > .pj-fold,
+.fld > .pj-ico {
+  flex: none;
+}
+button.ico-pick {
+  width: 100%;
+  text-align: left;
+}
+.ico-pick .tx {
+  flex: 1;
+  min-width: 0;
+}
+.ico-pick .tx small {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+}
+.ico-pick > svg {
+  color: var(--faint);
+}
+.icp {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px 12px;
+}
+.icp input {
+  width: 96px;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  outline: 0;
+  border-radius: 12px;
+  background: var(--card);
+  font: 400 15px var(--sans);
+  color: var(--fg);
+}
+.icp button {
+  min-width: 36px;
+  height: 36px;
+  padding: 0 6px;
+  border-radius: 12px;
+  font-size: 18px;
+}
+.icp button[aria-pressed="true"] {
+  background: var(--card);
+}
+.icp button.icd {
+  font-size: 14px;
+  color: var(--accent);
+  padding: 0 10px;
+}
+.icp small {
+  flex-basis: 100%;
+  font-size: 13px;
+}
+.fld .mono {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+.pse .cfa {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+.it.ro > .mpick {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  min-height: inherit;
+}
+.it .tx .mono {
+  font: 500 14px var(--mono);
+}
+.snone.mer,
+.it .tx.mer {
+  color: var(--err-tx);
+}
+.it.thr .tx {
+  flex: 1;
+  overflow: hidden;
+}
+.it.thr .tx .thn {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.it.thr > svg:last-child {
+  flex: none;
+}
+.trow .chip {
+  max-width: 100%;
+  min-width: 0;
+}
+.trow .chip svg {
+  flex: none;
+}
+.trow .chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ovh > span:first-child {
+  flex: none;
+}
+.trow .s.e {
+  color: var(--err-tx);
+  font-family: var(--sans);
+  font-size: 13px;
+}
+
+/* Above the coordinator's composer: what the project's conversations wait for. */
+.bottom > .dcw {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.updb.pra {
+  margin: 0;
+  height: auto;
+  min-height: 52px;
+  padding-block: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  animation: none;
+}
+.updb.pra .tx {
+  text-align: left;
+  white-space: normal;
+  flex: 1 1 160px;
+}
+.updb.pra .tx small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The menu's pages. */
+.pdot {
+  background: var(--pc, var(--pc-moon));
+}
+.scr.wide .view > .empty,
+.scr.wide .view > .empty2 {
+  grid-column: 1/-1;
+}
+.prc2 {
+  max-height: none;
+  flex: none;
+}
+.prc2 .wkp .t2-spin {
+  width: 12px;
+  height: 12px;
+}
+a.stp2 {
+  text-decoration: none;
+  color: inherit;
+}
+.ins.prm {
+  margin: 0;
+  flex: none;
+}
+.ins.prm .ic.mg {
+  color: var(--pc-violet);
+}
+.rq {
+  flex: none;
+}
+.rqa {
+  flex-wrap: wrap;
+}
+.rqa .b2 {
+  flex: 1 1 120px;
+}
+
+/* Planner: what the real board adds to the mockup's (drag and drop, a card's own launch). */
+.empty2 .eic.n {
+  background: var(--hover);
+  color: var(--muted);
+}
+.empty2 .eic.e {
+  background: var(--errbg);
+  color: var(--err);
+}
+.empty2 .newth {
+  margin-top: 12px;
+}
+.chips .sp {
+  flex: 1;
+  min-width: 6px;
+}
+.chips button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.chips button > i:not(.pdot) {
+  font-style: normal;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+.chips button[aria-pressed="true"] > i:not(.pdot) {
+  color: color-mix(in srgb, var(--on-ink) 60%, transparent);
+}
+.chips button:disabled {
+  opacity: 0.45;
+}
+.kbc.over {
+  border-radius: 20px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.pc {
+  cursor: pointer;
+}
+.pc.drag {
+  opacity: 0.4;
+}
+.pc .mini {
+  margin: 2px 0 0;
+}
+.pcw.t-live {
+  color: var(--accent);
+  background: var(--accbg);
+}
+.pcw.t-wait {
+  color: var(--warn);
+}
+.pcw.t-err {
+  color: var(--err);
+  background: var(--errbg);
+}
+.kba {
+  height: 40px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  transition:
+    background-color 200ms var(--out),
+    color 200ms var(--out);
+}
+.kba:hover {
+  background: var(--hover);
+  color: var(--fg2);
+}
+.chips.plst {
+  margin-bottom: 22px;
+}
+input.dte {
+  border: 0;
+  background: none;
+  font: 400 16px var(--sans);
+  color: var(--fg2);
+  text-align: right;
+  outline: none;
+  color-scheme: light dark;
+  min-width: 0;
+}
+.pll {
+  margin-bottom: 22px;
+}
+.pll .cfa {
+  margin-top: 12px;
+}
+
+/* Tâches planifiées */
+button.sct {
+  text-align: left;
+  color: var(--fg);
+}
+.sc2 .pcm {
+  flex-wrap: wrap;
+  gap: 4px 7px;
+}
+.sc2 .scs {
+  min-width: 0;
+}
+.scf .mini {
+  flex: none;
+  margin-right: 0;
+}
+.mini.ic {
+  width: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.ins.stw {
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.schd .chips.wrap {
+  margin-bottom: 10px;
+}
+.schd .ppill.err {
+  margin-bottom: 12px;
+}
+
+/* Artefacts */
+.acard .thumb.ic {
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+.acard .thumb.img {
+  padding: 0;
+}
+.acard .thumb.img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.artv {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+.artv .pcm {
+  flex-wrap: wrap;
+}
+.artv .pcm .mono {
+  overflow-wrap: anywhere;
+}
+.artst {
+  flex: 1;
+  min-height: 320px;
+  border-radius: 18px;
+  background: var(--sunken);
+  box-shadow: 0 0 0 0.5px var(--glass-ring);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.artst img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.artst iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+.artv .rqa {
+  flex-wrap: wrap;
+}
+a.b2 {
+  text-decoration: none;
+}
+.scr.wide .sheet.artsh {
+  width: min(960px, calc(100% - 48px));
+}
+.rqa .b2 {
+  flex: 1 1 auto;
+  padding: 0 14px;
+  white-space: nowrap;
+  min-width: 0;
+}
+.sheet.artsh .sbody {
+  flex: 1;
+}
+
+/* /equipe: what the real team adds to the mockup's card */
+.tmr:disabled {
+  cursor: default;
+}
+.tmr .ds.mer {
+  color: var(--err-tx);
+}
+.tmc > .pcw {
+  margin: 8px 6px 2px;
+}
+.tmpr a.b2 {
+  text-decoration: none;
+}
+.tmpr .b2 + .b2 {
+  margin-left: -2px;
+}
+button.tmc.tmlk {
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+.tmlk .tmh {
+  margin: 0;
+}
+.tmlk .tmo {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tmc > * {
+  min-width: 0;
+}
+.tmr {
+  min-width: 0;
+}
+
+/* /revue: a line holds its thread's button and, when it failed, the way to start it again */
+.tmr > .tmrb {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  text-align: left;
+  color: inherit;
+}
+.tmrb:disabled {
+  cursor: default;
+}
+.tmr > .mini {
+  flex: none;
+  margin: 0;
+}
+.rvf .w .wl {
+  display: block;
+}
+.rvf .w .wl + .wl {
+  margin-top: 6px;
+}
+.rvf .w b {
+  font-weight: 500;
+  color: var(--fg);
+}
+.rva.one {
+  grid-template-columns: 1fr;
+}
+.rva a.b2 {
+  text-decoration: none;
+}
+.tmh .tmo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tmh .ppill {
+  flex: none;
+  white-space: nowrap;
+}
+.tmh .tmt {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* /equipe and /revue: their launch sheets */
+.tmsh .ins.tmrs,
+.rvsh .ins {
+  margin-bottom: 14px;
+}
+.tmm.tmno {
+  background: none;
+  animation: none;
+}
+.ppill.tmkeep {
+  gap: 6px;
+  margin: -4px 0 14px 4px;
+}
+.tmsh .pcw,
+.rvsh .pcw {
+  margin: 0 0 14px;
+}
+.rvsh .fld {
+  margin-bottom: 10px;
+}
+.rvsh .it.fva .prn {
+  flex: none;
+}
+
+/* A sheet one level down: its title over where the thing is, a way back on the left. */
+.shd h3.two {
+  flex-direction: column;
+  line-height: 1.2;
+  padding: 0 60px;
+}
+.shd h3.two > * {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* « Modifications » */
+.sheet.dsh .sbody {
+  flex: 1;
+}
+.dsum .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dtabs {
+  margin: 0 0 12px;
+}
+.dtabs .cnt {
+  margin-left: 6px;
+}
+.dsy {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 16px;
+  background: var(--group);
+  font-size: 14px;
+  color: var(--fg2);
+}
+.dsy .tx {
+  flex: 1;
+  min-width: 0;
+}
+.dsy .b2 {
+  flex: none;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 18px;
+  font-size: 14px;
+}
+.dfo small.mer {
+  color: var(--err-tx);
+}
+.dfo .cnt.w {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--on-ink);
+  background: var(--ink);
+}
+.dfo .dfd {
+  flex: none;
+}
+.sbody > .rvw {
+  margin: 10px 6px 0;
+}
+.dship {
+  margin-top: 14px;
+}
+.dship .ppill {
+  justify-self: start;
+}
+.dbt .b2 {
+  flex: 1;
+}
+.dbar {
+  gap: 8px;
+}
+.dbar .b2 {
+  flex: 1;
+}
+.dbar.in {
+  margin-top: 14px;
+}
+.dlg {
+  display: grid;
+}
+button.dl {
+  width: 100%;
+  border-radius: 0;
+}
+button.dl:disabled {
+  cursor: default;
+}
+html[data-dev="desk"] button.dl:not(:disabled):hover {
+  box-shadow: inset 3px 0 0 var(--track);
+}
+.dl.hk {
+  min-height: 26px;
+  background: var(--sunken);
+}
+.dl.hk .dt {
+  color: var(--faint);
+}
+.dce .dct {
+  height: auto;
+  min-height: 72px;
+  padding: 12px 14px;
+  line-height: 1.4;
+  resize: none;
+}
+button.dcm {
+  text-align: left;
+}
+.dcm.lost {
+  margin: 10px 0 0;
+}
+.dcm.lost .b2 {
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 17px;
+  font-size: 13.5px;
+}
+.drj {
+  margin-top: 18px;
+  padding: 0 16px;
+}
+/* « Fichiers » : the folder as it is now, and a file read with its line numbers. */
+.wff {
+  margin-bottom: 10px;
+}
+.wft button.tf {
+  width: 100%;
+  text-align: left;
+}
+.wft .dpl {
+  margin-left: auto;
+  padding-left: 8px;
+}
+.wfc .dl {
+  grid-template-columns: 48px 4px 1fr;
+}
+.wfc {
+  margin: 0 -16px;
+}
+
+/* A pull request in its thread */
+.prk .stp a {
+  color: inherit;
+  text-decoration: none;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-dev="desk"] .prk .stp a:hover {
+  text-decoration: underline;
+}
+.prk > .prm {
+  width: 100%;
+}
+.prm.prw small {
+  font-size: 12.5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.prm.prw small.mer {
+  color: var(--err-tx);
+}
+.prm.prw .tog {
+  flex: none;
+}
+.rmh a {
+  color: var(--faint);
+  display: inline-grid;
+}
+
+/* The code: wrong, its dots turn red and shake; its sheet holds the same pad as the lock. */
+.pin.err i.full {
+  background: var(--err);
+}
+.pin.err {
+  animation: pin-no 420ms var(--out);
+}
+@keyframes pin-no {
+  20% {
+    transform: translateX(-9px);
+  }
+  40% {
+    transform: translateX(8px);
+  }
+  60% {
+    transform: translateX(-5px);
+  }
+  80% {
+    transform: translateX(3px);
+  }
+}
+.lkmid {
+  flex-direction: column;
+  gap: 14px;
+}
+.lkmsg {
+  color: var(--err-tx);
+}
+.kp button:disabled {
+  opacity: 0.5;
+}
+.lkw {
+  gap: 16px;
+}
+.lkw .pin {
+  margin: 8px 0 0;
+}
+.lkw .kp {
+  margin-top: 4px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pin.err {
+    animation: none;
+  }
+}
+
+/* Updates */
+.updb .tx small.mer {
+  color: var(--err-tx);
+}
+.updb .dvon {
+  flex: none;
+}
+/* A tab left open across an update: the same bar, above everything, with one tap to reload. */
+.updb.stale {
+  position: fixed;
+  left: 50%;
+  top: calc(12px + env(safe-area-inset-top));
+  transform: translateX(-50%);
+  z-index: 1000;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  margin: 0;
+  animation: none;
+}
+.apcmd code {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: all;
+}
+.apgo {
+  margin-top: 22px;
+}
+.apins .plan {
+  width: 100%;
+  margin-top: 6px;
+}
+.gl2 small {
+  font-weight: 400;
+  color: var(--faint);
+}
+.apins .stp .sp {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 2px solid var(--track);
+  border-top-color: var(--accent);
+  animation: rot 700ms linear infinite;
+}
+.ppill > .gl {
+  margin-right: 6px;
+}
+
+/* The viewer: more than one thing to do at the bottom, a file that is not an image. */
+.ivf {
+  gap: 10px;
+}
+.ivs {
+  text-decoration: none;
+}
+.ivi > .t2-spin {
+  color: #fff;
+}
+.ivc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: min(340px, 86%);
+  padding: 26px 22px;
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+.ivc b {
+  font-size: 16px;
+  font-weight: 600;
+}
+.ivc small {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* A whole page with one thing to do: pair this device, reload after a failure. */
+.gate2 {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 32px 24px;
+  text-align: center;
+  background: var(--bg);
+  color: var(--fg);
+}
+.view > .gate2 {
+  min-height: 60dvh;
+  background: none;
+}
+.gate2 h1 {
+  margin: 6px 0 0;
+  font: 600 30px/1.18 var(--serif);
+  letter-spacing: -0.01em;
+}
+.gate2 > b {
+  font-size: 17px;
+  font-weight: 600;
+}
+.gate2 .pcw {
+  max-width: 420px;
+  overflow-wrap: anywhere;
+}
+.gate2 > .b2,
+.gform .b2 {
+  flex: none;
+  height: 52px;
+  border-radius: 26px;
+}
+.gate2 > .b2 {
+  min-width: 180px;
+}
+.gform {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(320px, 100%);
+  margin-top: 8px;
+}
+.gform .rni {
+  height: 54px;
+  text-align: center;
+  font-size: 20px;
+  letter-spacing: 0.08em;
+}
+.gform .rni::placeholder {
+  color: var(--faint);
+}
+
+/* Sheets with a form: a path typed in a line, secrets on several lines, what failed. */
+.npf input.mono {
+  font-family: var(--mono);
+  font-size: 14px;
+}
+.npf input::placeholder,
+.mcps::placeholder {
+  color: var(--faint);
+}
+textarea.rni.mcps {
+  height: auto;
+  min-height: 84px;
+  padding: 12px 14px;
+  margin-bottom: 22px;
+  font: 400 13.5px/1.5 var(--mono);
+  resize: vertical;
+  display: block;
+}
+.sbody > .pcw {
+  margin: 0 0 12px;
+}
+.sbody .fvn .t2-spin {
+  display: inline-block;
+}
+.sbody .fvn .ppill {
+  display: inline-flex;
+}
+a.it {
+  text-decoration: none;
+  color: inherit;
+}
+.brr .tx {
+  min-width: 0;
+}
+
+/* The connection to the server is lost and being tried again: said on every page. */
+.offp {
+  position: absolute;
+  top: calc(var(--st) + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 120;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 18px;
+  font-size: 13.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  animation: up 320ms var(--out) both;
+}
+/* The server saves nothing (a full disk, a held database): the same pill, in the colour of an
+   error, and on two lines where a phone's width asks for it. */
+.offp.unsaved {
+  height: auto;
+  min-height: 36px;
+  max-width: calc(100% - 32px);
+  width: max-content;
+  padding: 8px 14px;
+  white-space: normal;
+  text-align: center;
+  color: var(--err-tx);
+}
+.sbody > .mga + .ins {
+  margin-top: 14px;
+}
+
+/* What the composer asks for stays on one line, cut when it is long. */
+.cmp textarea::placeholder {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Project page on a very wide screen: the conversation stays a centred column beside the threads. */
+.scr.xl[data-s="project"] .view {
+  padding-right: calc(350px + max(0px, (100% - 350px) / 2 - 340px));
+}
+.scr.xl[data-s="project"] .bottom {
+  padding-right: calc(350px + max(0px, (100% - 350px) / 2 - 348px));
+}
+.scr.xl[data-s="project"] .sugm {
+  right: calc(350px + max(0px, (100% - 350px) / 2 - 348px));
+}

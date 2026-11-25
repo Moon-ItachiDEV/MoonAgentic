@@ -2,7 +2,7 @@ import type { QueuedMessage, Thread } from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { queueState } from "../queue.ts";
-import { IconArrowUp, IconClose } from "./icons.tsx";
+import { I } from "../v2/I.tsx";
 
 /** Sends a change to the server; a refusal is shown rather than lost. */
 const call = (message: Parameters<typeof connection.request>[0]) =>
@@ -20,10 +20,13 @@ export function MessageQueue({ thread }: { thread: Thread }) {
   const state = queueState(thread);
   if (state.count === 0) return null;
   return (
-    <section className="cqueue" aria-label="Messages en file">
-      <p className="cq-h" role="status">
-        {state.label}
-      </p>
+    <section className="cq" aria-label="Messages en file">
+      <div className="cqh">
+        <span className="ppill" role="status">
+          <I n="clock" s={13} />
+          {state.label}
+        </span>
+      </div>
       {(thread.queue ?? []).map((message, index) => (
         <Queued
           key={message.id}
@@ -71,30 +74,29 @@ function Queued({
     }
     setDraft(null);
   };
-  return (
-    <div className="qm">
-      {message.from === "coordinator" && <span className="l">Coordinateur</span>}
-      {draft === null ? (
-        <button
-          className="t"
-          title="Modifier ce message"
-          aria-label={`Modifier le message ${place}${
-            message.from === "coordinator" ? " du coordinateur" : ""
-          } : ${message.text}`}
-          onClick={() => setDraft(message.text)}
-        >
-          {message.text}
-        </button>
-      ) : (
+  const send = () =>
+    void call({ type: "thread.queueSend", requestId: newId(), threadId, id: message.id });
+  const remove = () => {
+    setDraft(null);
+    void call({
+      type: "thread.queueEdit",
+      requestId: newId(),
+      threadId,
+      id: message.id,
+      text: "",
+    });
+  };
+  if (draft !== null) {
+    return (
+      <div className="cqm ed">
         <textarea
           ref={field}
-          className="cq-edit"
+          className="cqe"
           autoFocus
-          rows={1}
+          rows={2}
           aria-label={`Message ${place} en file`}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={save}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault();
@@ -105,43 +107,54 @@ function Queued({
             }
           }}
         />
-      )}
-      {place === 1 && draft === null && (
+        <div className="cqa">
+          <button className="cqx press" onClick={() => setDraft(null)}>
+            Annuler
+          </button>
+          <button className="cqx ink press" onClick={save}>
+            Enregistrer
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="cqm">
+      <span className="cqn">{place}</span>
+      <button
+        className="cqt"
+        title="Modifier ce message"
+        aria-label={`Modifier le message ${place}${
+          message.from === "coordinator" ? " du coordinateur" : ""
+        } : ${message.text}`}
+        onClick={() => setDraft(message.text)}
+      >
+        {message.from === "coordinator" && <small>Coordinateur</small>}
+        {message.text}
+      </button>
+      <button className="cqb press" aria-label="Modifier" onClick={() => setDraft(message.text)}>
+        <I n="edit" s={16} />
+      </button>
+      <button
+        className="cqb press"
+        aria-label={`Retirer le message ${place} de la file`}
+        title="Retirer de la file"
+        onClick={remove}
+      >
+        <I n="x" s={15} />
+      </button>
+      {place === 1 && (
         // While the agent works, sending now stops its turn first; after a stop or an error
         // nothing goes by itself, and this is how the messages go on.
         <button
+          className="cqb ink press"
+          aria-label={paused ? "Envoyer" : "Envoyer maintenant"}
           title={paused ? "Envoie ce message à l'agent" : "Arrête l'agent et envoie ce message"}
-          onClick={() =>
-            void call({
-              type: "thread.queueSend",
-              requestId: newId(),
-              threadId,
-              id: message.id,
-            })
-          }
+          onClick={send}
         >
-          <IconArrowUp size={13} />
-          {paused ? "Envoyer" : "Envoyer maintenant"}
+          <I n="up" s={15} />
         </button>
       )}
-      <button
-        aria-label={`Retirer le message ${place} de la file`}
-        title="Retirer de la file"
-        // Before the field's blur, which would save what is being typed.
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => {
-          setDraft(null);
-          void call({
-            type: "thread.queueEdit",
-            requestId: newId(),
-            threadId,
-            id: message.id,
-            text: "",
-          });
-        }}
-      >
-        <IconClose />
-      </button>
     </div>
   );
 }

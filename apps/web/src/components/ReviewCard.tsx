@@ -8,17 +8,13 @@ import {
   type ReviewSeverity,
   type Thread,
 } from "@moonagentic/protocol";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { modelNameOf } from "../model-label.ts";
-import { AgentBadge } from "./AgentBadge.tsx";
-import { StateGlyph } from "./StateGlyph.tsx";
-
-const MAKER: Record<string, string> = {
-  codex: "OpenAI",
-  claude: "Anthropic",
-  antigravity: "Google",
-};
+import { Glyph, I } from "../v2/I.tsx";
+import { Masc } from "../v2/Masc.tsx";
+import type { FrostMoonPhase, FrostMoonState } from "./FrostMoon.tsx";
+import { clock } from "../team-rows.ts";
 
 const SEVERITY: Record<ReviewSeverity, string> = {
   critical: "Critique",
@@ -134,86 +130,102 @@ export function fixMessage(review: PrReview, name: (i: number) => string): strin
   return lines.join("\n");
 }
 
+/** What a reviewer's mascot shows: the three are told apart by their shape. */
+const SHAPES: FrostMoonPhase[] = ["star", "crescent", "planet"];
+
+/** The line's look and its mascot's eyes, from a reviewer's or the judge's real state. */
+const rowLook = (tone: string, found: boolean): { state: string; face: FrostMoonState } =>
+  tone === "work"
+    ? { state: "run", face: "lit" }
+    : tone === "warn"
+      ? { state: "run", face: "attend" }
+      : tone === "ok"
+        ? // Red eyes once it found something to correct.
+          { state: "ok", face: found ? "erreur" : "termine" }
+        : tone === "err"
+          ? { state: "stop", face: "erreur" }
+          : { state: "idle", face: "file" };
+
 function Point({
   point,
   name,
-  agentOf,
+  open,
+  onToggle,
 }: {
   point: ReviewPoint;
   name: (i: number) => string;
-  agentOf: (i: number) => Pick<AgentInfo, "id" | "short"> | undefined;
+  open: boolean;
+  onToggle: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const at = where(point);
   const notes = point.notes.filter((n) => n.detail || n.title !== point.title);
   // A finder agreeing with its own point says nothing new.
   const votes = (point.votes ?? []).filter(
     (v) => !point.by.includes(v.by) || v.verdict !== "agree" || v.severity,
   );
-  const said = notes.length > 0 || votes.length > 0;
+  const off = !stands(point);
+  const said = notes.length > 0 || votes.length > 0 || !!point.ruling?.reason || point.divergent;
+  const seen = point.ruling
+    ? `Tranché : ${point.ruling.real ? "réel" : "écarté"}`
+    : off
+      ? "Retiré"
+      : `${SEVERITY[point.severity]} · vu par ${point.by.length}`;
   return (
-    <li className={`prr-pt${open ? " open" : ""}`}>
-      <button
-        type="button"
-        className="prr-pt-h"
-        aria-expanded={said ? open : undefined}
-        onClick={() => said && setOpen((o) => !o)}
-      >
-        <span className={`prr-sev ${point.severity}`}>
-          <i aria-hidden />
-          {SEVERITY[point.severity]}
+    <button
+      type="button"
+      className={`rvf${open ? " on" : ""}${off ? " off" : ""}`}
+      aria-expanded={said ? open : undefined}
+      aria-label={`${SEVERITY[point.severity]} : ${point.title}, vu par ${point.by.map(name).join(", ")}`}
+      onClick={() => said && onToggle()}
+    >
+      <i className={`sv${!off && point.severity !== "minor" ? " b" : ""}`} />
+      <span className="tx">
+        <span className="t">{point.title}</span>
+        <span className="m">
+          {at && <span className="mono">{at}</span>}
+          <span>{seen}</span>
         </span>
-        <span className="prr-pt-t">
-          <span className="prr-pt-title">{point.title}</span>
-          {at && <code className="prr-at">{at}</code>}
-        </span>
-        <span className="prr-by" aria-label={`Vu par ${point.by.map(name).join(", ")}`}>
-          {point.by.map((i) => (
-            <AgentBadge key={i} agent={agentOf(i)} small />
-          ))}
-        </span>
-      </button>
-      {point.divergent && (
-        <span className="prr-div">
-          Gravité discutée :{" "}
-          {point.notes
-            .map((n) => `${name(n.by)} ${SEVERITY[n.severity].toLowerCase()}`)
-            .join(" · ")}
-        </span>
-      )}
-      {point.ruling && (
-        <span className={`prr-ruling${point.ruling.real ? "" : " off"}`}>
-          <b>Arbitre : {point.ruling.real ? "réel" : "écarté"}</b>
-          {point.ruling.reason && ` · ${point.ruling.reason}`}
-        </span>
-      )}
-      {open && (
-        <ul className="prr-notes">
-          {notes.map((n) => (
-            <li key={n.by}>
-              <b>{name(n.by)}</b>
-              {n.title !== point.title && <span>{n.title}</span>}
-              {n.detail && <p>{n.detail}</p>}
-            </li>
-          ))}
-          {votes.map((v) => (
-            <li key={`v${v.by}`} className={`prr-vote ${v.verdict}`}>
-              <b>
-                {name(v.by)} : {VERDICT[v.verdict]}
-                {v.severity && ` (${SEVERITY[v.severity].toLowerCase()})`}
-              </b>
-              {v.reason && <p>{v.reason}</p>}
-            </li>
-          ))}
-        </ul>
-      )}
-    </li>
+        {open && (
+          <span className="w">
+            {point.divergent && (
+              <span className="wl">
+                Gravité discutée :{" "}
+                {point.notes
+                  .map((n) => `${name(n.by)} ${SEVERITY[n.severity].toLowerCase()}`)
+                  .join(" · ")}
+              </span>
+            )}
+            {notes.map((n) => (
+              <span key={n.by} className="wl">
+                <b>{name(n.by)}</b>
+                {n.title !== point.title && ` · ${n.title}`}
+                {n.detail && ` : ${n.detail}`}
+              </span>
+            ))}
+            {votes.map((v) => (
+              <span key={`v${v.by}`} className="wl">
+                <b>
+                  {name(v.by)}, {VERDICT[v.verdict]}
+                  {v.severity && ` (${SEVERITY[v.severity].toLowerCase()})`}
+                </b>
+                {v.reason && ` : ${v.reason}`}
+              </span>
+            ))}
+            {point.ruling?.reason && (
+              <span className="wl">
+                <b>Arbitre</b> : {point.ruling.reason}
+              </span>
+            )}
+          </span>
+        )}
+      </span>
+    </button>
   );
 }
 
 /**
- * « /revue » on its own thread: each reviewer with its real state, then what they found put
- * together, common points first, as soon as one of them is done.
+ * « /revue » on its own thread, as the mockup draws it: where the review is, each reviewer
+ * with its mascot and its real state, then what they found, as soon as one of them is done.
  */
 export function ReviewCard({
   thread,
@@ -230,41 +242,34 @@ export function ReviewCard({
 }) {
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
-  const agentOf = (i: number) => {
-    const r = review.reviewers[i];
-    return r && (agents.find((a) => a.id === r.agentId) ?? { id: r.agentId, short: "?" });
-  };
-  const modelName = (r: PrReviewer) => {
+  const [openPoint, setOpenPoint] = useState<number | null>(null);
+  const [showOff, setShowOff] = useState(false);
+  const modelName = (r: { agentId: string; model?: string | undefined }) => {
     const agent = agents.find((a) => a.id === r.agentId);
     return modelNameOf(agent?.models, r.model) ?? "Modèle par défaut";
   };
+  const agentName = (id: string) => agents.find((a) => a.id === id)?.name ?? id;
+  // A reviewer goes by its agent's name, or by its model when two share an agent.
   const name = (i: number) => {
     const r = review.reviewers[i];
-    return r ? (MAKER[r.agentId] ?? agents.find((a) => a.id === r.agentId)?.name ?? r.agentId) : "";
+    if (!r) return "";
+    const shared = review.reviewers.filter((x) => x.agentId === r.agentId).length > 1;
+    return shared ? modelName(r) : agentName(r.agentId);
   };
   const atWork = reviewAtWork(review);
+  // The present moves on, once a second, only while the review runs.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!atWork) return;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [atWork]);
   const points = review.points ?? [];
-  // While they weigh each other's points, what was found is shown as found.
-  const debated = review.phase !== "debating" && points.some((p) => p.outcome);
-  // Before the confrontation: by how many found each point; after it, by where it ended up.
-  const groups: { key: string; title: string; points: ReviewPoint[] }[] = debated
-    ? [
-        {
-          key: "ok",
-          title: "Confirmés",
-          points: points.filter((p) => p.outcome === "confirmed"),
-        },
-        { key: "dis", title: "Contestés", points: points.filter((p) => p.outcome === "disputed") },
-        { key: "open", title: "Non discutés", points: points.filter((p) => p.outcome === "open") },
-        { key: "off", title: "Écartés", points: points.filter((p) => !stands(p)) },
-      ]
-    : [
-        { key: "c", title: "Vus par plusieurs", points: points.filter((p) => p.by.length > 1) },
-        { key: "s", title: "Vus par un seul", points: points.filter((p) => p.by.length === 1) },
-      ];
+  const standing = points.filter(stands);
+  const gone = points.filter((p) => !stands(p));
   const judge = review.judge;
   const judgeThread = judge?.threadId ? threads.find((t) => t.id === judge.threadId) : undefined;
-  const judgeAgent = judge && agents.find((a) => a.id === judge.agentId);
   const anyDone = review.reviewers.some((r) => r.status === "done");
   // The thread whose branch is this pull request, to have the points fixed there.
   const owner = threads.find(
@@ -279,44 +284,86 @@ export function ReviewCard({
     setError(null);
     work.catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
   };
+  // The four steps of a review, and the one it is at.
+  const step = {
+    preparing: 0,
+    reviewing: 0,
+    debating: 1,
+    judging: 2,
+    done: 4,
+    failed: -1,
+    stopped: -1,
+  }[review.phase];
+  const steps = ["Lecture", "Confrontation", "Arbitrage", "Verdict"];
+  const confirmed = standing.filter((p) => p.outcome === "confirmed" && !p.ruling).length;
+  const ruled = points.filter((p) => p.ruling).length;
+  const debated = review.phase !== "debating" && points.some((p) => p.outcome);
+  const fixable = !atWork && standing.length > 0 && !!owner;
 
   return (
-    <section className="prr" aria-label={`Revue de la PR #${review.number}`}>
-      <header className="prr-h">
-        {review.url ? (
-          <a className="prr-num" href={review.url} target="_blank" rel="noreferrer">
-            #{review.number} ↗
-          </a>
-        ) : (
-          <span className="prr-num">#{review.number}</span>
-        )}
-        <span className={`prr-phase ${review.phase}`}>
-          {atWork ? <StateGlyph kind="lit" size={13} /> : <i aria-hidden />}
-          {reviewHeadline(review)}
+    <section className="tmc" aria-label={`Revue de la PR #${review.number}`}>
+      <div className="tmh">
+        <span className="ppill">
+          {atWork ? <Glyph /> : review.phase === "done" ? <I n="check" s={13} /> : null}
+          {review.phase === "done" && anyDone
+            ? `Verdict · ${standing.length} ${standing.length > 1 ? "points" : "point"}`
+            : reviewHeadline(review)}
         </span>
-      </header>
-      {review.title && <h3 className="prr-title">{review.title}</h3>}
-      {review.error && <p className="prr-err">{review.error}</p>}
+        {review.title && <span className="tmo">{review.title}</span>}
+        <span className="tmt" role="timer">
+          {clock((review.endedAt ?? now) - review.startedAt)}
+        </span>
+      </div>
+      {step >= 0 && (
+        <div className="rvph" aria-hidden>
+          {steps.map((label, i) => (
+            <span key={label} className={i < step ? "ok" : i === step ? "run" : ""}>
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
+      {review.error && <p className="pcw t-err">{review.error}</p>}
 
-      <ul className="prr-rev">
+      <div className="tml">
         {review.reviewers.map((r, i) => {
           const own = r.threadId ? threads.find((t) => t.id === r.threadId) : undefined;
           const state = reviewerState(r, own);
+          const look = rowLook(state.tone, !!r.findings?.length);
+          const failed = (r.status === "failed" || r.status === "stopped") && !!own;
           return (
-            <li key={i}>
-              <AgentBadge agent={agentOf(i)} small />
-              <span className="prr-rev-n">
-                <b>{name(i)}</b>
-                <span>{modelName(r)}</span>
-              </span>
-              <span className={`prr-state ${state.tone}`}>
-                {state.tone === "work" ? <StateGlyph kind="lit" size={13} /> : <i aria-hidden />}
-                {state.text}
-              </span>
-              {(r.status === "failed" || r.status === "stopped") && own && (
+            <div key={i} className={`tmr ${look.state}`}>
+              <button
+                type="button"
+                className="tmrb"
+                disabled={!own}
+                aria-label={`${agentName(r.agentId)}, ${modelName(r)} : ${state.text}`}
+                onClick={() => own && onOpenThread(own.id)}
+              >
+                <span className="tmb mb">
+                  <Masc job="rev" state={look.face} phase={SHAPES[i % SHAPES.length]!} />
+                  <i />
+                </span>
+                <span className="tx">
+                  <span className="nm">
+                    {agentName(r.agentId)}
+                    <small>{modelName(r)}</small>
+                  </span>
+                  <small className={`ds${state.tone === "err" ? " mer" : ""}`}>
+                    {state.tone === "work" ? (
+                      <span className="shimmer">{state.text}</span>
+                    ) : (
+                      state.text
+                    )}
+                    {r.error && ` · ${r.error}`}
+                  </small>
+                </span>
+              </button>
+              {failed && (
                 <button
                   type="button"
-                  className="btn prr-btn"
+                  className="mini press"
+                  aria-label={`Relancer ${agentName(r.agentId)}`}
                   onClick={() =>
                     act(
                       connection.request({
@@ -331,106 +378,174 @@ export function ReviewCard({
                   Relancer
                 </button>
               )}
-              {own && (
-                <button
-                  type="button"
-                  className="btn prr-btn ghost"
-                  onClick={() => onOpenThread(own.id)}
-                >
-                  Ouvrir
-                </button>
-              )}
-              {r.error && <span className="prr-rev-err">{r.error}</span>}
-            </li>
+            </div>
           );
         })}
         {judge &&
           (() => {
             const state = judgeState(judge, review, judgeThread);
+            const look = rowLook(state.tone, false);
             return (
-              <li className="prr-judge">
-                <AgentBadge agent={judgeAgent ?? { id: judge.agentId, short: "?" }} small />
-                <span className="prr-rev-n">
-                  <b>Arbitre</b>
-                  <span>{modelName({ ...judge, status: "done" })}</span>
-                </span>
-                <span className={`prr-state ${state.tone}`}>
-                  {state.tone === "work" ? <StateGlyph kind="lit" size={13} /> : <i aria-hidden />}
-                  {state.text}
-                </span>
-                {judgeThread && (
-                  <button
-                    type="button"
-                    className="btn prr-btn ghost"
-                    onClick={() => onOpenThread(judgeThread.id)}
-                  >
-                    Ouvrir
-                  </button>
-                )}
-                {judge.error && <span className="prr-rev-err">{judge.error}</span>}
-              </li>
+              <div className={`tmr ${look.state}`}>
+                <button
+                  type="button"
+                  className="tmrb"
+                  disabled={!judgeThread}
+                  aria-label={`Arbitre, ${modelName(judge)} : ${state.text}`}
+                  onClick={() => judgeThread && onOpenThread(judgeThread.id)}
+                >
+                  <span className="tmb mb">
+                    <Masc job="arb" state={look.face} />
+                    <i />
+                  </span>
+                  <span className="tx">
+                    <span className="nm">
+                      Arbitre
+                      <small>{modelName(judge)}</small>
+                    </span>
+                    <small className={`ds${state.tone === "err" ? " mer" : ""}`}>
+                      {state.tone === "work" ? (
+                        <span className="shimmer">{state.text}</span>
+                      ) : (
+                        state.text
+                      )}
+                      {judge.error && ` · ${judge.error}`}
+                    </small>
+                  </span>
+                </button>
+              </div>
             );
           })()}
-      </ul>
+      </div>
 
-      {anyDone && (
-        <div className="prr-syn">
-          {points.length === 0 ? (
-            <p className="prr-none">Aucun problème relevé.</p>
-          ) : (
-            groups
-              .filter((g) => g.points.length > 0)
-              .map((g) => (
-                <div key={g.key} className={`prr-group ${g.key}`}>
-                  <h4>
-                    {g.title} <span>{g.points.length}</span>
-                  </h4>
-                  <ul className="prr-pts">
-                    {g.points.map((p) => (
-                      <Point key={points.indexOf(p)} point={p} name={name} agentOf={agentOf} />
-                    ))}
-                  </ul>
-                </div>
-              ))
-          )}
+      {anyDone && points.length === 0 && (
+        <div className="rvc">
+          <span>Aucun problème relevé</span>
         </div>
       )}
+      {anyDone && points.length > 0 && (
+        <>
+          <div className="rvc">
+            {debated ? (
+              <>
+                <span>
+                  <b>{confirmed}</b> {confirmed > 1 ? "confirmés" : "confirmé"}
+                </span>
+                {ruled > 0 && (
+                  <span>
+                    <b>{ruled}</b> {ruled > 1 ? "tranchés" : "tranché"}
+                  </span>
+                )}
+                <span>
+                  <b>{gone.length}</b> {gone.length > 1 ? "retirés" : "retiré"}
+                </span>
+              </>
+            ) : (
+              <>
+                <span>
+                  <b>{points.filter((p) => p.by.length > 1).length}</b> vus par plusieurs
+                </span>
+                <span>
+                  <b>{points.filter((p) => p.by.length === 1).length}</b> vus par un seul
+                </span>
+              </>
+            )}
+          </div>
+          <div className="rvl">
+            {standing.map((p) => {
+              const index = points.indexOf(p);
+              return (
+                <Point
+                  key={index}
+                  point={p}
+                  name={name}
+                  open={openPoint === index}
+                  onToggle={() => setOpenPoint(openPoint === index ? null : index)}
+                />
+              );
+            })}
+            {gone.length > 0 && (
+              <button
+                type="button"
+                className="rvw"
+                aria-expanded={showOff}
+                onClick={() => setShowOff(!showOff)}
+              >
+                <I n={showOff ? "down" : "right"} s={14} />
+                {gone.length} {gone.length > 1 ? "retirés" : "retiré"}
+              </button>
+            )}
+            {showOff &&
+              gone.map((p) => {
+                const index = points.indexOf(p);
+                return (
+                  <Point
+                    key={index}
+                    point={p}
+                    name={name}
+                    open={openPoint === index}
+                    onToggle={() => setOpenPoint(openPoint === index ? null : index)}
+                  />
+                );
+              })}
+          </div>
+        </>
+      )}
 
-      {error && <p className="prr-err">{error}</p>}
-      <div className="prr-act">
-        {atWork && (
+      {error && <p className="pcw t-err">{error}</p>}
+      {atWork ? (
+        <div className="pra">
           <button
             type="button"
-            className="btn prr-btn stop"
+            className="b2 soft press"
             onClick={() => connection.send({ type: "review.stop", threadId: thread.id })}
           >
             Arrêter la revue
           </button>
-        )}
-        {!atWork && points.some(stands) && owner && !sent && (
-          <button
-            type="button"
-            className="btn prr-btn acc"
-            onClick={() =>
-              act(
-                connection
-                  .request({
-                    type: "thread.queue",
-                    requestId: newId(),
-                    threadId: owner.id,
-                    text: fixMessage(review, name),
-                  })
-                  .then(() => {
-                    setSent(true);
-                    onOpenThread(owner.id);
-                  }),
-              )
-            }
-          >
-            Faire corriger dans « {owner.title} »
-          </button>
-        )}
-      </div>
+        </div>
+      ) : (
+        (review.url || fixable) && (
+          <div className={`rva${review.url && fixable ? "" : " one"}`}>
+            {review.url && (
+              <a className="b2 soft press" href={review.url} target="_blank" rel="noreferrer">
+                Voir la PR
+              </a>
+            )}
+            {fixable && owner && (
+              <button
+                type="button"
+                className="b2 ink press"
+                disabled={sent}
+                aria-label={`Faire corriger dans « ${owner.title} »`}
+                onClick={() =>
+                  act(
+                    connection
+                      .request({
+                        type: "thread.queue",
+                        requestId: newId(),
+                        threadId: owner.id,
+                        text: fixMessage(review, name),
+                      })
+                      .then(() => {
+                        setSent(true);
+                        onOpenThread(owner.id);
+                      }),
+                  )
+                }
+              >
+                {sent ? (
+                  <>
+                    <I n="check" s={16} />
+                    Envoyé
+                  </>
+                ) : (
+                  "Faire corriger"
+                )}
+              </button>
+            )}
+          </div>
+        )
+      )}
     </section>
   );
 }

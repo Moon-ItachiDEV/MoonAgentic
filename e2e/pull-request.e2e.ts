@@ -1,4 +1,4 @@
-// The pull request of a thread's branch in the review panel, and links to pull requests in
+// The pull request of a thread's branch in its thread and on the « Pull requests » page, and links to pull requests in
 // the conversation, in the built app against a real server and a stand-in `gh`.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { addProject, pickAgent } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -139,17 +140,10 @@ describe("pull requests", () => {
         if (shots) await page.screenshot({ path: path.join(shots, `${name}.png`) });
       };
       await page.goto(url);
-      await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-      await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-      await page.getByLabel("Dossier", { exact: true }).fill(repo);
-      await page.getByRole("button", { name: "Ajouter le projet" }).click();
+      await addProject(page, repo);
       const composer = page.getByRole("combobox", { name: "Message" });
       await expect.poll(() => composer.isEnabled()).toBe(true);
-      await page.locator(".agentchip").click();
-      await page.getByRole("button", { name: "Tous", exact: true }).click();
-      await page.getByRole("button", { name: "Options", exact: true }).click();
-      await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-      await page.keyboard.press("Escape");
+      await pickAgent(page);
 
       // No pull request yet: its link in the conversation has no state, so no color.
       await composer.fill("Regarde https://github.com/moon/demo/pull/42 et dis-moi");
@@ -160,22 +154,21 @@ describe("pull requests", () => {
       expect(await chip.getAttribute("href")).toBe("https://github.com/moon/demo/pull/42");
       expect(await chip.getAttribute("data-state")).toBeNull();
 
-      // Nothing about a pull request in the panel while GitHub knows none.
-      await page.getByRole("button", { name: /^Code/ }).click();
-      const panel = page.getByRole("complementary", { name: "À revoir" });
-      await panel.waitFor();
-      expect(await panel.getByLabel("Pull request").count()).toBe(0);
-      await page.getByRole("button", { name: "Fermer la revue" }).click();
+      // Nothing about a pull request in the thread while GitHub knows none.
+      const pr = page.getByRole("region", { name: "Pull request" });
+      expect(await pr.count()).toBe(0);
+      /** GitHub is asked again when the window is looked at again. */
+      const lookAgain = () =>
+        page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
 
-      // The pull request exists, its CI runs: the panel says so when opened.
+      // The pull request exists, its CI runs: the thread shows its steps once opened again.
       github({
         statusCheckRollup: [run("Lint", "COMPLETED", "SUCCESS"), run("Tests", "IN_PROGRESS", "")],
       });
-      await page.getByRole("button", { name: /^Code/ }).click();
-      const pr = panel.getByLabel("Pull request");
-      await pr.getByText("CI en cours · 1 sur 2 terminés").waitFor();
-      expect(await pr.locator(".prchip").getAttribute("data-state")).toBe("open");
-      // What the panel learned colors the link in the conversation too.
+      await page.reload();
+      await pr.locator(".stp.c", { hasText: "Tests" }).getByText("en cours").waitFor();
+      await pr.locator(".stp.d", { hasText: "Lint" }).waitFor();
+      // What the card learned colors the link in the conversation too.
       await expect.poll(() => chip.getAttribute("data-state")).toBe("open");
 
       // Red CI names the failed check; a conflict holds the merge back.
@@ -186,67 +179,55 @@ describe("pull requests", () => {
           run("Tests", "COMPLETED", "FAILURE"),
         ],
       });
-      await pr.getByRole("button", { name: "Actualiser" }).click();
-      await pr.getByText("CI rouge · 1 check en échec").waitFor();
+      await lookAgain();
+      await pr.locator(".stp.x", { hasText: "Tests" }).getByText("Échec").waitFor();
       await pr.getByRole("link", { name: "Tests" }).waitFor();
       await pr.getByText("Conflits avec main").waitFor();
       // A merge GitHub would refuse is not offered at all.
-      const merge = pr.getByRole("button", { name: "Fusionner la pull request" });
+      const merge = pr.getByRole("button", { name: "Fusionner", exact: true });
       expect(await merge.count()).toBe(0);
       await shot("pr2-rouge-conflit");
 
-      // The side bar follows it too: its line opens a card with the same steps.
-      const side = page.locator(".spr");
-      await side.getByText("Échec de la CI").waitFor();
-      await side.getByRole("button", { name: /#42/ }).click();
-      const card = page.getByRole("dialog", { name: "Pull request #42" });
+      // The side bar counts it, and its page shows it with the same steps.
+      const pages = page.getByRole("navigation", { name: "Pages" });
+      await pages.getByRole("img", { name: "1 en échec, 0 à fusionner" }).waitFor();
+      await pages.getByRole("button", { name: /^Pull requests/ }).click();
+      const card = page.locator(".prc2");
+      await card.getByText("Checks en échec").waitFor();
       await card.getByText("Conflits avec main").waitFor();
-      await card.getByRole("button", { name: "Corriger la CI" }).waitFor();
-      expect(await card.getByRole("button", { name: "Fusionner" }).count()).toBe(0);
-      await card.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
-      await shot("pr5-barre-carte");
-      await side.getByRole("button", { name: /#42/ }).click();
-      await card.waitFor({ state: "detached" });
+      expect(await card.getAttribute("data-kind")).toBe("failed");
+      expect(await card.getByRole("button", { name: "Fusionner", exact: true }).count()).toBe(0);
+      await shot("pr5-page");
 
-      // On a phone the card is a sheet above the side bar's drawer, not behind it.
-      await page.getByRole("button", { name: "Fermer la revue" }).click();
+      // On a phone the page fits the screen, and leads back to the thread.
       await page.setViewportSize({ width: 390, height: 800 });
-      await page.getByRole("button", { name: "Retour" }).click();
-      await page.getByRole("button", { name: "Menu" }).click();
-      await side.getByRole("button", { name: /#42/ }).click();
       await card.getByText("Conflits avec main").waitFor();
-      await card.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
-      expect(
-        await card.evaluate((el) => {
-          const box = el.getBoundingClientRect();
-          const top = document.elementFromPoint(box.left + box.width / 2, box.top + 8);
-          return !!top && el.contains(top);
-        }),
-      ).toBe(true);
-      await shot("pr6-barre-carte-mobile");
+      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+        390,
+      );
+      await shot("pr6-page-mobile");
       await card.getByRole("button", { name: "Ouvrir le fil" }).click();
-      await card.waitFor({ state: "detached" });
+      await page.waitForURL(/\/t\//);
       await page.setViewportSize({ width: 1280, height: 820 });
-      await page.getByRole("button", { name: /^Code/ }).click();
       await pr.getByText("Conflits avec main").waitFor();
 
-      // All green: merging asks first, then the pull request turns violet everywhere.
+      // All green: merging asks first, then the pull request is merged everywhere.
       github({
         statusCheckRollup: [
           run("Lint", "COMPLETED", "SUCCESS"),
           run("Tests", "COMPLETED", "SUCCESS"),
         ],
       });
-      await pr.getByRole("button", { name: "Actualiser" }).click();
-      await pr.getByText("CI verte · 2 checks passés").waitFor();
+      await lookAgain();
       await pr.getByText("Pas de conflit avec main").waitFor();
+      expect(await pr.locator(".stp.d").count()).toBe(3);
       await shot("pr1-verte");
       await merge.click();
-      const confirm = page.getByRole("alertdialog", { name: "Fusionner la pull request #42 ?" });
-      await confirm.getByText("sera fusionnée dans main").waitFor();
+      const confirm = page.getByRole("dialog", { name: "Fusionner la PR #42" });
+      await confirm.getByText("2 checks verts").waitFor();
+      await confirm.getByText("Sans conflit").waitFor();
       await confirm.getByRole("button", { name: "Fusionner" }).click();
       await pr.getByText("Fusionnée dans main", { exact: true }).waitFor();
-      expect(await pr.locator(".prchip").getAttribute("data-state")).toBe("merged");
       await expect.poll(() => chip.getAttribute("data-state")).toBe("merged");
       expect(await merge.count()).toBe(0);
       await shot("pr3-mergee");
@@ -277,12 +258,10 @@ describe("pull requests", () => {
         .getByText(/^Regarde https/)
         .first()
         .click();
-      await page.getByRole("button", { name: /^Code/ }).click();
-      const panel = page.getByRole("complementary", { name: "À revoir" });
-      const pr = panel.getByLabel("Pull request");
+      const pr = page.getByRole("region", { name: "Pull request" });
       await pr.getByText("Conflits avec main").waitFor();
       const watch = pr.getByRole("switch", { name: "Corriger tout seul" });
-      await pr.getByText("3 fois au plus").waitFor();
+      expect(await watch.getAttribute("title")).toContain("3 fois au plus");
       expect(await watch.getAttribute("aria-checked")).toBe("false");
 
       // The first task is still waiting on the user: no other task is sent to a thread at work.
@@ -292,8 +271,11 @@ describe("pull requests", () => {
         expect
           .poll(
             async () => {
-              if (await allow.count()) await allow.click().catch(() => undefined);
-              return panel.getByText("L'agent travaille encore").count();
+              if (await allow.count()) {
+                await allow.click().catch(() => undefined);
+                return 1;
+              }
+              return page.locator(".feed.working").count();
             },
             { timeout: 20_000 },
           )
@@ -301,7 +283,8 @@ describe("pull requests", () => {
       await idle();
 
       await watch.click();
-      await pr.getByText("1 correction sur 3 (dernière : conflits).").waitFor();
+      await pr.getByText("1 sur 3", { exact: true }).waitFor();
+      expect(await watch.getAttribute("title")).toBe("1 correction sur 3 (dernière : conflits).");
       expect(await watch.getAttribute("aria-checked")).toBe("true");
       await page.getByText("Pull request · correction automatique").waitFor();
       // The task as the user sees it in the thread (the demo agent then names its plan after it).
@@ -397,22 +380,40 @@ describe("pull requests", () => {
         .getByText(/^Regarde https/)
         .first()
         .click();
-      await page.getByRole("button", { name: /^Code/ }).click();
-      const panel = page.getByRole("complementary", { name: "À revoir" });
-      const pr = panel.getByLabel("Pull request");
-      await pr.getByRole("button", { name: "Remarques de relecture" }).click();
-      const remarks = pr.getByLabel("Remarques de relecture");
-      // Open ones only: the resolved conversation is left out.
+      const pr = page.getByRole("region", { name: "Pull request" });
+      // The card counts the open ones: the resolved conversation is left out.
+      const open = pr.getByRole("button", { name: /^Remarques/ });
+      await expect.poll(() => open.locator(".cnt").textContent(), { timeout: 30_000 }).toBe("2");
+      await open.click();
+      const remarks = page.getByRole("dialog", { name: "Remarques · #42" });
       await remarks.getByText("Le titre devrait dire ce que fait l'app.").waitFor();
       await remarks.getByText("README.md:1").waitFor();
       await remarks.getByText("Relecture · changements demandés").waitFor();
       expect(await remarks.getByText("Déjà réglé").count()).toBe(0);
       if (shots) await page.screenshot({ path: path.join(shots, "pr6-remarques.png") });
 
+      // Whatever the agent asks along the way is allowed, until it is done.
+      const allow = page.getByRole("button", { name: /Autoriser/ }).first();
+      const idle = () =>
+        expect
+          .poll(
+            async () => {
+              if (await allow.count()) {
+                await allow.click().catch(() => undefined);
+                return 1;
+              }
+              return page.locator(".feed.working").count();
+            },
+            { timeout: 20_000 },
+          )
+          .toBe(0);
+
       // The user leaves the stranger's out, and sends the other one.
-      await remarks.getByRole("checkbox").nth(1).uncheck();
-      await remarks.getByRole("button", { name: "Envoyer à l'agent (1)" }).click();
-      await pr.getByText("Remarque envoyée à l'agent.").waitFor();
+      const mine = remarks.locator(".rmc", { hasText: "Le titre devrait dire" });
+      await mine.getByRole("button", { name: "Envoyer à l'agent" }).click();
+      await mine.getByText("Chez l'agent").waitFor();
+      await remarks.getByRole("button", { name: "Fermer", exact: true }).click();
+      await pr.getByText("1 chez l'agent").waitFor();
       await page.getByText("Pull request · remarques de relecture").waitFor();
       await page
         .locator(".u", {
@@ -420,22 +421,12 @@ describe("pull requests", () => {
             "1 remarque de relecture sur la pull request #42 : vérifie et corrige ce qui est fondé.",
         })
         .waitFor();
-      // Whatever the agent asks along the way is allowed, until it is done.
-      const allow = page.getByRole("button", { name: /Autoriser/ }).first();
-      await expect
-        .poll(
-          async () => {
-            if (await allow.count()) await allow.click().catch(() => undefined);
-            return panel.getByText("L'agent travaille encore").count();
-          },
-          { timeout: 20_000 },
-        )
-        .toBe(0);
+      await idle();
 
       // On a phone, the list fits the screen.
-      await pr.getByRole("button", { name: "Remarques de relecture" }).click();
-      await remarks.getByText("README.md:1").waitFor();
       await page.setViewportSize({ width: 390, height: 800 });
+      await open.click();
+      await remarks.getByText("README.md:1").waitFor();
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         390,
       );

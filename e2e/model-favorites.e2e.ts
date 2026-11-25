@@ -71,35 +71,44 @@ describe("Réglages › Modèles", () => {
     for (const page of [one, two]) page.on("pageerror", (err) => errors.push(err));
     await one.goto(at("models"));
     await two.goto(at("models"));
-    await one.getByText("Aucun favori pour l'instant").waitFor();
+    await one.getByRole("button", { name: "Ajouter un favori" }).waitFor();
+    expect(await one.locator(".fv").count()).toBe(0);
     if (shots) await one.screenshot({ path: path.join(shots, "favoris-1-vide.png") });
 
-    // The demo agents never started: their models are read on demand.
-    for (const name of ["Agent de démo", "Second agent de démo"]) {
-      await one
-        .locator(".mf-grp", { has: one.getByText(name, { exact: true }) })
+    // The demo agents never started: their models are read on demand, in « Ajouter un favori ».
+    await one.getByRole("button", { name: "Ajouter un favori" }).click();
+    const sheet = one.getByRole("dialog", { name: "Ajouter un favori" });
+    for (const name of [/^Agent de démo/, /^Second agent de démo/]) {
+      await sheet
+        .locator(".gl2")
+        .filter({ hasText: name })
         .getByRole("button", { name: "Lire ses modèles" })
         .click();
     }
-    const add = (page: typeof one, name: string) =>
-      page.getByRole("button", { name: `Ajouter ${name} aux favoris` });
-    await expect.poll(() => add(one, "Démo précis").count(), { timeout: 60_000 }).toBe(2);
+    const add = (name: string) =>
+      sheet.getByRole("button", { name: `Ajouter ${name} aux favoris` });
+    await expect.poll(() => add("Démo précis").count(), { timeout: 60_000 }).toBe(2);
 
-    await add(one, "Démo précis").first().click();
-    await expect.poll(() => add(one, "Démo rapide").count(), { timeout: 30_000 }).toBe(2);
-    await add(one, "Démo rapide").first().click();
-    await expect.poll(() => add(one, "Démo rapide").count(), { timeout: 30_000 }).toBe(1);
-    await add(one, "Démo rapide").first().click();
+    await add("Démo précis").first().click();
+    await expect.poll(() => add("Démo rapide").count(), { timeout: 30_000 }).toBe(2);
+    await add("Démo rapide").first().click();
+    await expect.poll(() => add("Démo rapide").count(), { timeout: 30_000 }).toBe(1);
+    await add("Démo rapide").first().click();
+    // A picked model says its rank in the wheel.
+    await expect
+      .poll(() => sheet.locator(".fvr").allTextContents(), { timeout: 30_000 })
+      .toHaveLength(3);
+
+    // A search that finds nothing says so.
+    await sheet.getByRole("searchbox", { name: "Rechercher un modèle" }).fill("zzz");
+    await sheet.getByText("Aucun modèle", { exact: true }).waitFor();
+    await sheet.getByRole("searchbox", { name: "Rechercher un modèle" }).fill("");
+    await sheet.getByRole("button", { name: "Fermer", exact: true }).click();
 
     const order = (page: typeof one) =>
       page
-        .locator(".mf-fav")
-        .evaluateAll((rows) =>
-          rows.map(
-            (r) =>
-              `${r.querySelector("[data-agent]")?.getAttribute("data-agent") ?? ""} ${r.querySelector("b")?.textContent}`,
-          ),
-        );
+        .locator(".fv .grip")
+        .evaluateAll((grips) => grips.map((g) => g.getAttribute("data-key") ?? ""));
     await expect.poll(() => order(one), { timeout: 30_000 }).toHaveLength(3);
     const starred = await order(one);
     if (shots) await one.screenshot({ path: path.join(shots, "favoris-2-liste.png") });
@@ -115,7 +124,7 @@ describe("Réglages › Modèles", () => {
 
     // And back down by dragging its handle under the next line.
     const handle = await grips.nth(0).boundingBox();
-    const next = await one.locator(".mf-fav").nth(1).boundingBox();
+    const next = await one.locator(".fv").nth(1).boundingBox();
     if (!handle || !next) throw new Error("Lignes introuvables.");
     await one.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
     await one.mouse.down();
@@ -126,12 +135,8 @@ describe("Réglages › Modèles", () => {
       .toEqual([starred[0], starred[2], starred[1]]);
     if (shots) await two.screenshot({ path: path.join(shots, "favoris-3-mobile.png") });
 
-    // A search that finds nothing says so.
-    await one.getByRole("searchbox", { name: "Rechercher un modèle" }).fill("zzz");
-    await one.getByText("Aucun modèle ne contient « zzz ».").waitFor();
-    await one.getByRole("searchbox", { name: "Rechercher un modèle" }).fill("");
-
-    // Taken out from the list, it is a model like any other again.
+    // « Modifier » shows what takes one out: it is a model like any other again.
+    await one.getByRole("button", { name: "Modifier", exact: true }).click();
     await one
       .getByRole("button", { name: /^Retirer .* des favoris$/ })
       .first()

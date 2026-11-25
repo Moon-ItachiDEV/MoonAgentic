@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { addProject, pickAgent, setAccess } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -98,19 +99,11 @@ describe("artifacts", () => {
       if (!res.url().startsWith(new URL(url).origin)) outside.push(res.url());
     });
     await page.goto(url);
-    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-    await page.getByRole("radio", { name: "Dossier sur la machine" }).click();
-    await page.getByLabel("Dossier", { exact: true }).fill(repo);
-    await page.getByRole("button", { name: "Ajouter le projet" }).click();
+    await addProject(page, repo);
     const composer = page.getByRole("combobox", { name: "Message" });
     await expect.poll(() => composer.isEnabled()).toBe(true);
-    await page.locator(".agentchip").click();
-    await page.getByRole("button", { name: "Tous", exact: true }).click();
-    await page.getByRole("button", { name: "Options", exact: true }).click();
-    await page.getByRole("menuitemradio", { name: /Agent de démo/ }).click();
-    await page.keyboard.press("Escape");
-    await page.getByRole("button", { name: /Mode d'accès/ }).click();
-    await page.getByRole("menuitemradio", { name: /Accès complet/ }).click();
+    await pickAgent(page);
+    await setAccess(page, /Accès complet/);
     await composer.fill("Corrige la réponse");
     await composer.press("Enter");
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
@@ -133,20 +126,24 @@ describe("artifacts", () => {
     await drawing.close();
     writeFileSync(path.join(folder, "rapport.pdf"), "%PDF-1.4\n%%EOF\n");
 
-    await page.getByRole("button", { name: "Artefacts", exact: true }).click();
+    const pages = page.getByRole("navigation", { name: "Pages" });
+    await pages.getByRole("button", { name: "Artefacts", exact: true }).click();
     await page.waitForURL(/\/artefacts$/);
-    const rows = page.locator(".art-row");
+    const list = page.getByRole("region", { name: "Artefacts" });
+    const rows = list.locator(".acard");
     await expect.poll(() => rows.count()).toBe(3);
-    await page.getByRole("button", { name: /^accueil\.html/ }).waitFor();
-    await page.getByRole("button", { name: /^capture\.png/ }).waitFor();
-    await page.getByRole("button", { name: /^rapport\.pdf/ }).waitFor();
+    await list.getByRole("button", { name: /^accueil\.html/ }).waitFor();
+    await list.getByRole("button", { name: /^capture\.png/ }).waitFor();
+    await list.getByRole("button", { name: /^rapport\.pdf/ }).waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "artefacts-liste.png") });
-    await page.getByRole("button", { name: /^Images/ }).click();
+    const kinds = list.getByRole("group", { name: "Filtrer par type" });
+    await kinds.getByRole("button", { name: /^Images/ }).click();
     await expect.poll(() => rows.count()).toBe(1);
-    await page.getByRole("button", { name: /^Tout/ }).click();
+    await kinds.getByRole("button", { name: /^Tout/ }).click();
 
-    await page.getByRole("button", { name: /^accueil\.html/ }).click();
-    const frame = page.frameLocator(".art-stage iframe");
+    await list.getByRole("button", { name: /^accueil\.html/ }).click();
+    const sheet = page.getByRole("dialog", { name: "accueil.html" });
+    const frame = sheet.frameLocator("iframe");
     await frame.getByRole("heading", { name: "Maquette de l'accueil" }).waitFor();
     // Its style and its image come from beside it, in the thread's folder.
     const shown = page.frames().find((f) => f.url().includes("/api/artifacts/"))!;
@@ -164,7 +161,7 @@ describe("artifacts", () => {
     if (shots) await page.screenshot({ path: path.join(shots, "artefacts-page.png") });
 
     // The address works only for this thread's listed files, without the token.
-    const link = await page.locator(".art-tab").getAttribute("href");
+    const link = await sheet.getByRole("link", { name: "Nouvel onglet" }).getAttribute("href");
     expect(link).toMatch(/^\/api\/artifacts\/[\w-]+\/maquettes\/accueil\.html$/);
     const status = (to: string) =>
       page.evaluate(async (to) => (await fetch(to, { credentials: "omit" })).status, to);
@@ -172,17 +169,23 @@ describe("artifacts", () => {
     expect(await status(link!.replace("maquettes/accueil.html", "notes.md"))).toBe(404);
     expect(await status(link!.replace(/artifacts\/[\w-]+\//, "artifacts/faux/"))).toBe(404);
 
-    await page.getByRole("button", { name: "Retour aux artefacts" }).click();
-    await page.getByRole("button", { name: /^capture\.png/ }).click();
-    const image = page.locator(".art-stage img");
+    await sheet.getByRole("button", { name: "Fermer", exact: true }).click();
+    await list.getByRole("button", { name: /^capture\.png/ }).click();
+    const image = page.getByRole("dialog", { name: "capture.png" }).locator(".artst img");
     await expect.poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(240);
-    await page.getByRole("button", { name: "Retour aux artefacts" }).click();
+    await page
+      .getByRole("dialog", { name: "capture.png" })
+      .getByRole("button", { name: "Fermer", exact: true })
+      .click();
     const pdf = page.waitForResponse((res) => res.url().endsWith("/rapport.pdf"));
-    await page.getByRole("button", { name: /^rapport\.pdf/ }).click();
+    await list.getByRole("button", { name: /^rapport\.pdf/ }).click();
     const answer = await pdf;
     expect(answer.status()).toBe(200);
     expect(answer.headers()["content-type"]).toBe("application/pdf");
-    await page.getByRole("button", { name: "Ouvrir le fil" }).click();
+    await page
+      .getByRole("dialog", { name: "rapport.pdf" })
+      .getByRole("button", { name: "Ouvrir le fil" })
+      .click();
     await page.waitForURL(/\/t\//);
 
     // A new file shows once the list is asked for again.
@@ -190,8 +193,8 @@ describe("artifacts", () => {
       path.join(folder, "logo.svg"),
       '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>',
     );
-    await page.getByRole("button", { name: "Artefacts", exact: true }).click();
-    await page.getByRole("button", { name: /^logo\.svg/ }).waitFor();
+    await pages.getByRole("button", { name: "Artefacts", exact: true }).click();
+    await list.getByRole("button", { name: /^logo\.svg/ }).waitFor();
     expect(errors).toEqual([]);
     await page.close();
   });
@@ -199,16 +202,21 @@ describe("artifacts", () => {
   it("is the phone's fourth tab", async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 780 } });
     await page.goto(url);
-    const tabs = page.locator(".tabbar");
+    // The tab shows the latest ones above it, and leads to them all.
+    const tabs = page.getByRole("navigation", { name: "Sections" });
     await tabs.getByRole("button", { name: "Artefacts" }).click();
-    await page.waitForURL(/\/artefacts$/);
-    await expect
-      .poll(() => tabs.getByRole("button", { name: "Artefacts" }).getAttribute("aria-current"))
-      .toBe("page");
-    await page.getByRole("button", { name: /^accueil\.html/ }).waitFor();
+    const recent = page.getByRole("menu", { name: "Artefacts" });
+    await recent.getByRole("menuitem", { name: /^accueil\.html/ }).waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "artefacts-telephone.png") });
-    await tabs.getByRole("button", { name: "Nouveau" }).click();
-    await page.waitForURL((u) => u.pathname === "/");
+    await recent.getByRole("menuitem", { name: "Tous les artefacts" }).click();
+    await page.waitForURL(/\/artefacts$/);
+    await page
+      .getByRole("region", { name: "Artefacts" })
+      .getByRole("button", { name: /^accueil\.html/ })
+      .waitFor();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
     await page.close();
   });
 });

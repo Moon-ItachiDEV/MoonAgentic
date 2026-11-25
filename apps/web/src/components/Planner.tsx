@@ -9,7 +9,7 @@ import {
   type Schedule,
   type Thread,
 } from "@moonagentic/protocol";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
 import {
   PLAN_COLUMNS,
@@ -26,8 +26,12 @@ import {
 import { useDefaults } from "../defaults.ts";
 import { readPref, writePref } from "../prefs.ts";
 import type { PlannerView } from "../router.ts";
-import { IconClose, IconFolder, IconPlay } from "./icons.tsx";
-import { firstPick, type ModelPick, ModelSelect } from "./ModelSelect.tsx";
+import { parseRouteValue, routeChoices, routeValue } from "../route-choices.ts";
+import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
+import { Fab } from "../v2/Fab.tsx";
+import { Glyph, I } from "../v2/I.tsx";
+import { Sheet } from "../v2/Sheet.tsx";
+import { firstPick, type ModelPick } from "../model-pick.ts";
 import { PlanSchedules } from "./PlanSchedules.tsx";
 import { PlanTimeline } from "./PlanTimeline.tsx";
 
@@ -58,6 +62,7 @@ export function Planner({
   threads,
   agents,
   schedules,
+  projects,
   onSchedule,
   onOpenThread,
   onNewProject,
@@ -70,6 +75,8 @@ export function Planner({
   plan: PlanTask[];
   /** The tasks planned for later, of every project. */
   schedules: Schedule[];
+  /** Every project open to the user: the planned tasks are listed for all of them. */
+  projects: Project[];
   /** Opens the planning of a new task, or of the one given. */
   onSchedule: (schedule?: Schedule) => void;
   threads: Thread[];
@@ -78,6 +85,8 @@ export function Planner({
   onNewProject: () => void;
 }) {
   const [filter, setFilter] = useState<Filter>("all");
+  // The board holds every project's cards, as the mockup's does; one project alone on demand.
+  const [scope, setScope] = useState<string>("all");
   const [openId, setOpenId] = useState<string | null>(null);
   // The card whose detail opened on its launch, from « Lancer » on the board.
   const [launchId, setLaunchId] = useState<string | null>(null);
@@ -89,14 +98,42 @@ export function Planner({
   const [zoom, setZoom] = useState<"sem" | "mois">(() =>
     readPref("plannerZoom") === "sem" ? "sem" : "mois",
   );
+  // On a phone one column shows at a time: the one in sight, by its tab.
+  const [column, setColumn] = useState(1);
+  const board = useRef<HTMLDivElement>(null);
+  const tabs = useRef<HTMLDivElement>(null);
+  const columnOf = (index: number) => board.current?.children[index] as HTMLElement | undefined;
+  useLayoutEffect(() => {
+    const el = board.current;
+    const first = columnOf(1);
+    // Opens on « En cours », as the mockup does: what moves is what is looked at first.
+    if (el && first && el.scrollWidth > el.clientWidth) el.scrollLeft = first.offsetLeft - 20;
+  }, [view, project?.id]);
+
+  if (view === "planifiees") {
+    return (
+      <PlanSchedules
+        schedules={schedules}
+        projects={projects}
+        threads={threads}
+        agents={agents}
+        onEdit={onSchedule}
+        onNew={projects.length > 0 ? () => onSchedule() : undefined}
+        onOpenThread={onOpenThread}
+      />
+    );
+  }
 
   if (!project) {
     return (
-      <div className="pl">
-        <div className="pl-none">
-          <p>Le planner range les tâches d'un projet.</p>
-          <button className="btn pri" onClick={onNewProject}>
-            <IconFolder />
+      <div className="view" id="view">
+        <div className="empty">
+          <span className="ei">
+            <I n="grid" s={24} />
+          </span>
+          <b>Le planner range les tâches d'un projet</b>
+          <button className="newth press" onClick={onNewProject}>
+            <I n="plus" s={18} />
             Nouveau projet
           </button>
         </div>
@@ -104,10 +141,13 @@ export function Planner({
     );
   }
 
-  const cards = plan.filter((c) => c.projectId === project.id);
-  const planned = schedules.filter((s) => s.projectId === project.id);
+  const projectOf = (card: PlanTask) => projects.find((p) => p.id === card.projectId);
+  const everyCard = plan.filter((c) => projectOf(c));
+  const withCards = projects.filter((p) => everyCard.some((c) => c.projectId === p.id));
+  // A project whose last card left is no longer a choice: back to all of them.
+  const inScope = scope !== "all" && withCards.some((p) => p.id === scope) ? scope : "all";
+  const cards = everyCard.filter((c) => inScope === "all" || c.projectId === inScope);
   const shown = cards.filter((c) => filter === "all" || c.source === filter);
-  const count = (status: PlanStatus) => cards.filter((c) => c.status === status).length;
   const fromLead = cards.filter((c) => c.source === "lead").length;
   const open = cards.find((c) => c.id === openId);
   const dragged = cards.find((c) => c.id === dragId);
@@ -120,103 +160,81 @@ export function Planner({
   };
 
   return (
-    <div className="pl">
-      <div className="pl-top">
-        <h1>
-          Planner <span className="pl-chip">{project.name}</span>
-        </h1>
-        {view === "timeline" && (
-          <div className="pl-seg pl-zoom" role="group" aria-label="Échelle">
-            {(
-              [
-                ["sem", "Semaines"],
-                ["mois", "Mois"],
-              ] as const
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                className={zoom === key ? "on" : ""}
-                aria-pressed={zoom === key}
-                onClick={() => {
-                  setZoom(key);
-                  writePref("plannerZoom", key);
-                }}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-        <div className="pl-seg" role="tablist" aria-label="Vue">
-          {(
-            [
-              ["tableau", "Tableau"],
-              ["timeline", "Timeline"],
-              ["planifiees", "Planifiées"],
-            ] as const
-          ).map(([key, label]) => (
-            <button
-              key={key}
-              role="tab"
-              aria-selected={view === key}
-              className={view === key ? "on" : ""}
-              onClick={() => {
-                // Board or timeline: the one last looked at is where « Planner » opens.
-                if (key !== "planifiees") writePref("plannerView", key);
-                onView(key === "tableau" ? undefined : key);
-              }}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <button
-          className="btn pri"
-          onClick={() => {
-            if (view === "planifiees") return onSchedule();
-            // A card is written on the board, where its column is chosen.
-            onView(undefined);
-            setAdding("todo");
-          }}
-        >
-          {view === "planifiees" ? "Planifier une tâche" : "Ajouter une tâche"}
-        </button>
-      </div>
-      <div className="pl-sum" role="status">
-        <span>
-          <b>{cards.length}</b> tâche{cards.length > 1 ? "s" : ""}
-        </span>
-        {PLAN_COLUMNS.filter((c) => c.status !== "todo").map((c) => (
-          <span key={c.status} className={`k s-${c.status}`}>
-            <i />
-            <b>{count(c.status)}</b> {c.label.toLowerCase()}
-          </span>
-        ))}
-      </div>
-      <div
-        className="pl-filters"
-        role="group"
-        aria-label="Filtrer les tâches"
-        hidden={view === "planifiees"}
-      >
+    <div className="view" id="view">
+      <div className="ovtabs" role="tablist" aria-label="Vue">
         {(
           [
-            ["all", "Toutes", cards.length],
-            ["lead", "Planifiées par le chef", fromLead],
-            ["user", "Ajoutées à la main", cards.length - fromLead],
+            ["tableau", "Tableau"],
+            ["timeline", "Timeline"],
           ] as const
-        ).map(([key, label, n]) => (
+        ).map(([key, label]) => (
           <button
             key={key}
-            className={filter === key ? "on" : ""}
-            aria-pressed={filter === key}
-            onClick={() => setFilter(key)}
+            role="tab"
+            aria-selected={view === key}
+            onClick={() => {
+              // Board or timeline: the one last looked at is where « Planner » opens.
+              writePref("plannerView", key);
+              onView(key === "tableau" ? undefined : key);
+            }}
           >
-            {label} <span>{n}</span>
+            {label}
           </button>
         ))}
       </div>
-      {view === "timeline" && (
+      {(fromLead > 0 || withCards.length > 1 || view === "timeline") && (
+        <div className="chips plf" role="group" aria-label="Filtrer les tâches">
+          {withCards.length > 1 && (
+            <>
+              <button aria-pressed={inScope === "all"} onClick={() => setScope("all")}>
+                Tous les projets
+              </button>
+              {withCards.map((p) => (
+                <button key={p.id} aria-pressed={inScope === p.id} onClick={() => setScope(p.id)}>
+                  <i className={`pdot${p.color ? ` pc-${p.color}` : ""}`} />
+                  {p.name}
+                </button>
+              ))}
+              {fromLead > 0 && <span className="sp" />}
+            </>
+          )}
+          {fromLead > 0 &&
+            (
+              [
+                ["all", "Toutes"],
+                ["lead", "Planifiées par le chef"],
+                ["user", "Ajoutées à la main"],
+              ] as const
+            ).map(([key, label]) => (
+              <button key={key} aria-pressed={filter === key} onClick={() => setFilter(key)}>
+                {label}
+              </button>
+            ))}
+          {view === "timeline" && (
+            <>
+              <span className="sp" />
+              {(
+                [
+                  ["sem", "Semaines"],
+                  ["mois", "Mois"],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  aria-pressed={zoom === key}
+                  onClick={() => {
+                    setZoom(key);
+                    writePref("plannerZoom", key);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+      {view === "timeline" ? (
         <PlanTimeline
           cards={shown}
           threads={threads}
@@ -224,109 +242,163 @@ export function Planner({
           zoom={zoom}
           onOpen={setOpenId}
         />
+      ) : (
+        <>
+          <div className="kbtabs" id="kbtabs" ref={tabs}>
+            {PLAN_COLUMNS.map((c, i) => (
+              <button
+                key={c.status}
+                aria-pressed={column === i}
+                title={c.hint || undefined}
+                onClick={() => {
+                  const el = board.current;
+                  const to = columnOf(i);
+                  if (el && to) el.scrollTo({ left: to.offsetLeft - 20, behavior: "smooth" });
+                }}
+              >
+                {c.label}
+                <i>{shown.filter((x) => x.status === c.status).length}</i>
+              </button>
+            ))}
+          </div>
+          <div
+            className="kb"
+            id="kb"
+            ref={board}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              const first = columnOf(0);
+              if (!first || el.scrollWidth <= el.clientWidth) return;
+              const at = Math.max(
+                0,
+                Math.min(
+                  PLAN_COLUMNS.length - 1,
+                  Math.round(el.scrollLeft / (first.offsetWidth + 10)),
+                ),
+              );
+              if (at === column) return;
+              setColumn(at);
+              tabs.current?.children[at]?.scrollIntoView({
+                inline: "center",
+                block: "nearest",
+                behavior: "smooth",
+              });
+            }}
+          >
+            {PLAN_COLUMNS.map((c) => {
+              const list = shown.filter((x) => x.status === c.status);
+              return (
+                <section
+                  key={c.status}
+                  className={`kbc${over === c.status ? " over" : ""}`}
+                  aria-label={c.label}
+                  onDragOver={(e) => {
+                    if (!dragged) return;
+                    e.preventDefault();
+                    setOver(c.status);
+                  }}
+                  onDragLeave={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(null);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    drop(c.status);
+                  }}
+                >
+                  {list.map((card) => (
+                    <Card
+                      key={card.id}
+                      card={card}
+                      project={projectOf(card) ?? project}
+                      work={cardWork(card, threads, agents)}
+                      late={isLate(card, now)}
+                      dragging={card.id === dragId}
+                      free={!card.team && !followedThread(card, threads)}
+                      onOpen={() => setOpenId(card.id)}
+                      onRun={
+                        card.status === "todo" && canRun(card, threads)
+                          ? () => {
+                              setLaunchId(card.id);
+                              setOpenId(card.id);
+                            }
+                          : undefined
+                      }
+                      onDrag={setDragId}
+                    />
+                  ))}
+                  {list.length === 0 && <p className="kbe">Aucune carte</p>}
+                  <button
+                    className="kba"
+                    aria-label={`Ajouter une tâche, ${c.label}`}
+                    onClick={() => setAdding(c.status)}
+                  >
+                    <I n="plus" s={16} />
+                  </button>
+                </section>
+              );
+            })}
+          </div>
+        </>
       )}
-      {view === "planifiees" && (
-        <PlanSchedules
-          schedules={planned}
-          threads={threads}
-          agents={agents}
-          onEdit={onSchedule}
-          onNew={() => onSchedule()}
-          onOpenThread={onOpenThread}
-        />
-      )}
-      <div className="pl-board" hidden={view !== "tableau"}>
-        {PLAN_COLUMNS.map((column) => {
-          const list = shown.filter((c) => c.status === column.status);
-          return (
-            <section
-              key={column.status}
-              className={`pl-col s-${column.status}${over === column.status ? " over" : ""}`}
-              aria-label={column.label}
-              onDragOver={(e) => {
-                if (!dragged) return;
-                e.preventDefault();
-                setOver(column.status);
-              }}
-              onDragLeave={(e) => {
-                if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(null);
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                drop(column.status);
-              }}
-            >
-              <div className="pl-col-h" title={column.hint}>
-                <i />
-                {column.label}
-                <span>{list.length}</span>
-              </div>
-              <div className="pl-list">
-                {list.map((card) => (
-                  <Card
-                    key={card.id}
-                    card={card}
-                    work={cardWork(card, threads, agents)}
-                    late={isLate(card, now)}
-                    dragging={card.id === dragId}
-                    free={!card.team && !followedThread(card, threads)}
-                    onOpen={() => setOpenId(card.id)}
-                    onRun={
-                      card.status === "todo" && canRun(card, threads)
-                        ? () => {
-                            setLaunchId(card.id);
-                            setOpenId(card.id);
-                          }
-                        : undefined
-                    }
-                    onDrag={setDragId}
-                  />
-                ))}
-                {list.length === 0 && (
-                  <div className="pl-empty">
-                    {filter !== "all" ? "Aucune carte avec ce filtre" : "Aucune carte"}
-                  </div>
-                )}
-              </div>
-              {adding === column.status ? (
-                <QuickAdd
-                  projectId={project.id}
-                  status={column.status}
-                  onClose={() => setAdding(null)}
-                />
-              ) : (
-                <button className="pl-add" onClick={() => setAdding(column.status)}>
-                  + Ajouter
-                </button>
-              )}
-            </section>
-          );
-        })}
-      </div>
-      {view !== "planifiees" && <PlannerHelp />}
-      {open && (
-        <Detail
-          key={open.id}
-          card={open}
-          work={cardWork(open, threads, agents)}
-          project={project}
-          agents={agents}
-          followed={followedThread(open, threads)}
-          launch={launchId === open.id}
-          threads={linkableThreads(open, threads)}
-          onOpenThread={onOpenThread}
-          onClose={() => {
-            setOpenId(null);
-            setLaunchId(null);
+      <div className="end" />
+      <Fab>
+        <button
+          className="newd press"
+          onClick={() => {
+            // A card is written on the board, in the column in sight.
+            if (view !== "tableau") onView(undefined);
+            const el = board.current;
+            // Where every column shows at once, a new card starts in the first one.
+            const paged = !!el && el.scrollWidth > el.clientWidth;
+            setAdding((paged && PLAN_COLUMNS[column]?.status) || "todo");
           }}
-        />
-      )}
+        >
+          <I n="plus" s={20} />
+          Ajouter une tâche
+        </button>
+      </Fab>
+      <PlannerHelp />
+      <QuickAdd
+        projects={projects}
+        projectId={inScope === "all" ? project.id : inScope}
+        status={adding}
+        onClose={() => setAdding(null)}
+      />
+      <Sheet
+        open={!!open}
+        onClose={() => {
+          setOpenId(null);
+          setLaunchId(null);
+        }}
+        title={open ? `Tâche #${open.number}` : "Tâche"}
+        tall
+        className="pld"
+      >
+        {open && (
+          <Detail
+            key={open.id}
+            card={open}
+            work={cardWork(open, threads, agents)}
+            project={projectOf(open) ?? project}
+            agents={agents}
+            followed={followedThread(open, threads)}
+            launch={launchId === open.id}
+            threads={linkableThreads(open, threads)}
+            onOpenThread={onOpenThread}
+            onClose={() => {
+              setOpenId(null);
+              setLaunchId(null);
+            }}
+          />
+        )}
+      </Sheet>
     </div>
   );
 }
 
 function Card({
   card,
+  project,
   work,
   late,
   dragging,
@@ -336,6 +408,7 @@ function Card({
   onDrag,
 }: {
   card: PlanTask;
+  project: Project;
   work: ReturnType<typeof cardWork>;
   late: boolean;
   dragging: boolean;
@@ -350,9 +423,10 @@ function Card({
     const next = PLAN_STATUSES[PLAN_STATUSES.indexOf(card.status) + by];
     if (free && next) void move(card, next);
   };
+  const doing = [work.agent, work.label].filter(Boolean).join(" · ");
   return (
     <article
-      className={`pl-card s-${card.status}${dragging ? " drag" : ""}`}
+      className={`pc press${card.status === "live" ? " done" : ""}${dragging ? " drag" : ""}`}
       role="button"
       tabIndex={0}
       draggable={free}
@@ -374,81 +448,130 @@ function Card({
       }}
       onDragEnd={() => onDrag(null)}
     >
-      <div className="pl-row">
-        <span className="pl-key">#{card.number}</span>
-        <span className={`pl-src${card.source === "lead" ? " lead" : ""}`}>
-          {card.source === "lead" ? "Chef" : "À la main"}
-        </span>
-      </div>
-      <h3>{card.title}</h3>
+      <span className="pct">
+        {work.tone === "live" && <Glyph />}
+        {card.title}
+      </span>
+      <span className="pcm">
+        <i className={`pdot${project.color ? ` pc-${project.color}` : ""}`} />
+        {project.name}
+        <span className="dotsep" />#{card.number}
+        {card.due && card.status !== "live" && !late && (
+          <>
+            <span className="dotsep" />
+            {dueLabel(card.due)}
+          </>
+        )}
+      </span>
+      {doing && <span className={`pcw t-${work.tone}`}>{doing}</span>}
+      {late && card.due && card.status !== "live" && (
+        <span className="pcl">en retard · {dueLabel(card.due)}</span>
+      )}
+      {card.source === "lead" && <span className="pco">Planifiée par le chef</span>}
       {onRun && (
         <button
-          className="pl-run"
+          className="mini press"
           aria-label={`Lancer la tâche ${card.number}`}
           onClick={(e) => {
             e.stopPropagation();
             onRun();
           }}
         >
-          <IconPlay size={11} />
           Lancer
         </button>
-      )}
-      {(work.agent || work.label || card.due) && (
-        <div className="pl-meta">
-          {(work.agent || work.label) && (
-            <span className={`pl-who t-${work.tone}`}>
-              <i />
-              {[work.agent, work.label].filter(Boolean).join(" · ")}
-            </span>
-          )}
-          {card.due && card.status !== "live" && (
-            <span className={`pl-due${late ? " late" : ""}`}>
-              {late ? "en retard · " : ""}
-              {dueLabel(card.due)}
-            </span>
-          )}
-        </div>
       )}
     </article>
   );
 }
 
+/** A new card: its title, and the column it starts in. */
 function QuickAdd({
-  projectId,
+  projects,
+  projectId: first,
   status,
   onClose,
 }: {
+  projects: Project[];
+  /** The project it opens on: the one in sight. */
   projectId: string;
-  status: PlanStatus;
+  /** The column asked for; nothing while the sheet is closed. */
+  status: PlanStatus | null;
   onClose: () => void;
 }) {
   const [title, setTitle] = useState("");
+  const [picked, setPicked] = useState<PlanStatus>("todo");
+  const [projectId, setProjectId] = useState(first);
+  useEffect(() => {
+    if (!status) return;
+    setPicked(status);
+    setProjectId(first);
+  }, [status, first]);
   const add = () => {
     if (!title.trim()) return;
-    void call({ type: "plan.add", requestId: newId(), projectId, title: title.trim(), status });
+    void call({
+      type: "plan.add",
+      requestId: newId(),
+      projectId,
+      title: title.trim(),
+      status: picked,
+    });
     setTitle("");
+    onClose();
   };
   return (
-    <form
-      className="pl-quick"
-      onSubmit={(e) => {
-        e.preventDefault();
-        add();
-      }}
-    >
-      <input
-        autoFocus
-        aria-label={`Nouvelle tâche, ${planLabel(status)}`}
-        placeholder="Titre de la tâche"
-        maxLength={200}
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => e.key === "Escape" && onClose()}
-        onBlur={() => !title.trim() && onClose()}
-      />
-      <small>Entrée pour ajouter, Échap pour fermer</small>
-    </form>
+    <Sheet open={status !== null} onClose={onClose} title="Ajouter une tâche">
+      <form
+        className="sbody"
+        onSubmit={(e) => {
+          e.preventDefault();
+          add();
+        }}
+      >
+        <label className="fld">
+          <input
+            // Focused when the sheet opens, where the keyboard is wanted at once.
+            ref={(el) => {
+              if (el && status !== null && document.activeElement !== el) el.focus();
+            }}
+            aria-label={`Nouvelle tâche, ${planLabel(picked)}`}
+            placeholder="Titre de la tâche"
+            maxLength={200}
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+          />
+        </label>
+        <div className="chips wrap" role="radiogroup" aria-label="Colonne">
+          {PLAN_COLUMNS.map((c) => (
+            <button
+              key={c.status}
+              type="button"
+              role="radio"
+              aria-checked={picked === c.status}
+              aria-pressed={picked === c.status}
+              onClick={() => setPicked(c.status)}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+        {projects.length > 1 && (
+          <div className="ins">
+            <ChoiceRow
+              title="Projet"
+              value={projectId}
+              shown={projects.find((p) => p.id === projectId)?.name ?? ""}
+              choices={projects.map((p) => ({ value: p.id, label: p.name }))}
+              onPick={setProjectId}
+            />
+          </div>
+        )}
+        <div className="mga">
+          <button className="b2 ink press" disabled={!title.trim()}>
+            Ajouter
+          </button>
+        </div>
+      </form>
+    </Sheet>
   );
 }
 
@@ -478,12 +601,6 @@ function Detail({
   const [launching, setLaunching] = useState(launch);
   const [title, setTitle] = useState(card.title);
   const [description, setDescription] = useState(card.description ?? "");
-  const panel = useRef<HTMLElement>(null);
-  // Also once the card got its thread: the launch that had the focus is gone, and Escape
-  // must still close the panel.
-  useEffect(() => {
-    panel.current?.focus();
-  }, [followed?.id]);
   // What another device writes shows here too, unless this one is being typed over.
   const known = useRef({ title: card.title, description: card.description ?? "" });
   useEffect(() => {
@@ -506,174 +623,141 @@ function Detail({
     const next = description.trim();
     if (next !== (card.description ?? "")) void update({ description: next || null });
   };
-  // Closing saves what is being typed: a click outside comes before the field's blur.
-  const close = () => {
-    saveTitle();
-    saveDescription();
-    onClose();
-  };
+  // Leaving saves what is being typed: the sheet closes before the field's blur.
+  const latest = useRef({ saveTitle, saveDescription });
+  latest.current = { saveTitle, saveDescription };
+  useEffect(
+    () => () => {
+      latest.current.saveTitle();
+      latest.current.saveDescription();
+    },
+    [],
+  );
+  const doing = [work.agent, work.label].filter(Boolean).join(" · ");
+  const linked: Choice[] = [
+    { value: "", label: "Aucun" },
+    ...threads.map((t) => ({ value: t.id, label: t.title })),
+  ];
   return (
-    <div className="pl-scrim" onMouseDown={(e) => e.target === e.currentTarget && close()}>
-      <aside
-        ref={panel}
-        className="pl-detail"
-        role="dialog"
-        aria-modal
-        aria-label={`Tâche ${card.number}`}
-        tabIndex={-1}
-        onKeyDown={(e) => e.key === "Escape" && close()}
-      >
-        <div className="pl-detail-h">
-          <span className="pl-key">#{card.number}</span>
-          <span className={`pl-src${card.source === "lead" ? " lead" : ""}`}>
-            {card.source === "lead" ? "Planifiée par le chef" : "Ajoutée à la main"}
-          </span>
-          <button className="ib" aria-label="Fermer" onClick={close}>
-            <IconClose />
-          </button>
-        </div>
-        <div className="pl-detail-b">
-          {launching && !card.team && !followed && (
-            <Launch
-              card={card}
-              project={project}
-              agents={agents}
-              // What is being typed is what the agent is told.
-              before={() => {
-                saveTitle();
-                saveDescription();
-              }}
-              onCancel={() => {
-                setLaunching(false);
-                panel.current?.focus();
-              }}
-            />
-          )}
-          <label className="field">
-            Titre
-            <input
-              value={title}
-              maxLength={200}
-              onChange={(e) => setTitle(e.target.value)}
-              onBlur={saveTitle}
-              onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
-            />
-          </label>
-          <label className="field">
-            Description
-            <textarea
-              rows={4}
-              maxLength={4000}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              onBlur={saveDescription}
-            />
-          </label>
-          <div className="field">
-            État
-            <div className="pl-states" role="group" aria-label="État de la tâche">
-              {PLAN_COLUMNS.map((c) => (
-                <button
-                  key={c.status}
-                  className={`s-${c.status}${card.status === c.status ? " on" : ""}`}
-                  aria-pressed={card.status === c.status}
-                  disabled={!!card.team || !!followed}
-                  onClick={() => card.status !== c.status && void move(card, c.status)}
-                >
-                  <i />
-                  {c.label}
-                </button>
-              ))}
-            </div>
-            {card.team && (
-              <small className="pl-note">
-                Cette carte suit le travail de l'équipe : son état change avec lui.
-              </small>
-            )}
-            {followed && (
-              <small className="pl-note">
-                Cette carte suit son fil : elle passe « En test » quand l'agent a fini, et « Livré »
-                quand le fil est résolu ou sa pull request fusionnée. Choisis « Aucun » ci-dessous
-                pour la déplacer à la main.
-              </small>
-            )}
-          </div>
-          <label className="field">
-            Début prévu
-            <input
-              type="date"
-              value={dueDay(card.start)}
-              onChange={(e) => {
-                const start = dayToDue(e.target.value);
-                if (start !== null || e.target.value === "") void update({ start });
-              }}
-            />
-          </label>
-          <label className="field">
-            Échéance
-            <input
-              type="date"
-              value={dueDay(card.due)}
-              onChange={(e) => {
-                // A day still being typed is not sent; an emptied field clears it.
-                const due = dayToDue(e.target.value);
-                if (due !== null || e.target.value === "") void update({ due });
-              }}
-            />
-          </label>
-          {!card.team && (
-            <label className="field">
-              Fil qui s'en occupe
-              <select
-                value={card.threadId ?? ""}
-                onChange={(e) => void update({ threadId: e.target.value || null })}
-              >
-                <option value="">Aucun</option>
-                {threads.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-          {(work.agent || work.label) && (
-            <div className={`pl-who t-${work.tone}`}>
-              <i />
-              {[work.agent, work.label].filter(Boolean).join(" · ")}
-            </div>
-          )}
-        </div>
-        <div className="pl-detail-f">
-          {!card.team && !followed && !launching && (
-            <button className="btn pri" onClick={() => setLaunching(true)}>
-              <IconPlay size={12} />
-              Lancer
-            </button>
-          )}
-          {work.threadId && (
-            <button
-              className="btn"
-              onClick={() => {
-                saveTitle();
-                saveDescription();
-                onOpenThread(work.threadId!);
-              }}
-            >
-              Ouvrir le fil
-            </button>
-          )}
+    <div className="sbody">
+      {launching && !card.team && !followed && (
+        <Launch
+          card={card}
+          project={project}
+          agents={agents}
+          // What is being typed is what the agent is told.
+          before={() => {
+            saveTitle();
+            saveDescription();
+          }}
+          onCancel={() => setLaunching(false)}
+        />
+      )}
+      <div className="gl2">Titre</div>
+      <label className="fld">
+        <input
+          aria-label="Titre"
+          value={title}
+          maxLength={200}
+          onChange={(e) => setTitle(e.target.value)}
+          onBlur={saveTitle}
+          onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+        />
+      </label>
+      <div className="gl2">Description</div>
+      <label className="fld ta">
+        <textarea
+          aria-label="Description"
+          maxLength={4000}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          onBlur={saveDescription}
+        />
+      </label>
+      <div className="gl2">État</div>
+      <div className="chips wrap plst" role="group" aria-label="État de la tâche">
+        {PLAN_COLUMNS.map((c) => (
           <button
-            className="btn danger"
+            key={c.status}
+            aria-pressed={card.status === c.status}
+            disabled={!!card.team || !!followed}
+            onClick={() => card.status !== c.status && void move(card, c.status)}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+      <div className="ins">
+        {(card.team || followed) && (
+          <div className="it ro">
+            <span className="tx">{card.team ? "Suit le travail de l'équipe" : "Suit son fil"}</span>
+            {doing && <span className={`rt${work.tone === "err" ? " mer" : ""}`}>{doing}</span>}
+          </div>
+        )}
+        <label className="it ro">
+          <span className="tx">Début prévu</span>
+          <input
+            className="dte"
+            type="date"
+            value={dueDay(card.start)}
+            onChange={(e) => {
+              const start = dayToDue(e.target.value);
+              if (start !== null || e.target.value === "") void update({ start });
+            }}
+          />
+        </label>
+        <label className="it ro">
+          <span className="tx">Échéance</span>
+          <input
+            className="dte"
+            type="date"
+            value={dueDay(card.due)}
+            onChange={(e) => {
+              // A day still being typed is not sent; an emptied field clears it.
+              const due = dayToDue(e.target.value);
+              if (due !== null || e.target.value === "") void update({ due });
+            }}
+          />
+        </label>
+        {!card.team && (
+          <ChoiceRow
+            title="Fil qui s'en occupe"
+            value={card.threadId ?? ""}
+            shown={linked.find((c) => c.value === (card.threadId ?? ""))?.label ?? "Aucun"}
+            choices={linked}
+            onPick={(value) => void update({ threadId: value || null })}
+          />
+        )}
+      </div>
+      <div className="ins">
+        {!card.team && !followed && !launching && (
+          <button className="it acc" onClick={() => setLaunching(true)}>
+            <I n="play" s={17} />
+            <span className="tx">Lancer</span>
+          </button>
+        )}
+        {work.threadId && (
+          <button
+            className="it acc"
             onClick={() => {
-              void call({ type: "plan.remove", requestId: newId(), id: card.id });
-              onClose();
+              saveTitle();
+              saveDescription();
+              onOpenThread(work.threadId!);
             }}
           >
-            Supprimer
+            <span className="tx">Ouvrir le fil</span>
           </button>
-        </div>
-      </aside>
+        )}
+        <button
+          className="it dng"
+          onClick={() => {
+            void call({ type: "plan.remove", requestId: newId(), id: card.id });
+            onClose();
+          }}
+        >
+          <span className="tx">Supprimer</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -732,57 +816,74 @@ function Launch({
     }
   };
 
+  const [all, setAll] = useState(false);
+  const { groups, favoritesOnly } = routeChoices(agents, favorites, pick, all);
+  const models: Choice[] = groups.flatMap((g) =>
+    g.options.map((o) => ({ value: o.value, label: o.label, group: g.agent.name })),
+  );
+  const value = pick ? routeValue(pick.agentId, pick.model) : "";
+
   return (
     <form
       ref={form}
-      className="pl-launch"
+      className="pll"
       aria-label={`Lancer la tâche ${card.number}`}
       onSubmit={(e) => {
         e.preventDefault();
         void run();
       }}
     >
-      <p>
-        Un nouveau fil de « {project.name} » reçoit le titre et la description de la carte. La carte
-        suit ensuite ce fil.
-      </p>
-      <label className="field">
-        Modèle
-        <ModelSelect
-          label="Modèle"
-          agents={agents}
-          favorites={favorites}
-          value={pick}
-          onChange={setPick}
-          projectId={project.id}
+      <div className="ins">
+        <ChoiceRow
+          title="Modèle"
+          value={value}
+          shown={
+            models.find((c) => c.value === value)?.label ??
+            (agents.some((a) => a.available) ? "" : "Aucun agent prêt")
+          }
+          choices={models}
+          {...(favoritesOnly || all
+            ? {
+                more: {
+                  label: all ? "Favoris" : "Tous",
+                  on: all,
+                  toggle: () => setAll((on) => !on),
+                },
+              }
+            : {})}
+          onPick={(v) => setPick(parseRouteValue(v))}
         />
-      </label>
-      <label className="field">
-        Accès de l'agent
-        <select value={mode} onChange={(e) => setMode(e.target.value as PermissionMode)}>
-          <option value="supervised">Il me demande avant d'agir</option>
-          <option value="full">Accès complet, sans rien demander</option>
-        </select>
-      </label>
-      {project.git && (
-        <label className="pl-check">
-          <input
-            type="checkbox"
-            checked={isolated}
-            onChange={(e) => setIsolated(e.target.checked)}
+        <div className="it ro">
+          <span className="tx">Accès complet</span>
+          <button
+            type="button"
+            className="tog"
+            role="switch"
+            aria-checked={mode === "full"}
+            aria-label="Accès complet, sans rien demander"
+            onClick={() => setMode(mode === "full" ? "supervised" : "full")}
           />
-          Branche à part
-        </label>
-      )}
-      {!agents.some((a) => a.available) && (
-        <p className="error">Aucun agent n'est prêt : ouvre les Connexions.</p>
-      )}
-      <div className="pl-launch-f">
-        <button type="button" className="btn quiet" disabled={busy} onClick={onCancel}>
-          Annuler
-        </button>
-        <button className="btn pri" disabled={busy || !agentId}>
+        </div>
+        {project.git && (
+          <div className="it ro">
+            <span className="tx">Branche à part</span>
+            <button
+              type="button"
+              className="tog"
+              role="switch"
+              aria-checked={isolated}
+              aria-label="Branche à part"
+              onClick={() => setIsolated(!isolated)}
+            />
+          </div>
+        )}
+      </div>
+      <div className="cfa">
+        <button className="b2 ink press" disabled={busy || !agentId}>
           {busy ? "Lancement…" : "Lancer la tâche"}
+        </button>
+        <button type="button" className="b2 soft press" disabled={busy} onClick={onCancel}>
+          Annuler
         </button>
       </div>
     </form>

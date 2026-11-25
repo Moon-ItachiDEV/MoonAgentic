@@ -126,7 +126,7 @@ export function composerCommands(options: {
     add("resoudre", "Marquer cette discussion résolue et ranger sa copie de travail", "archive");
     add("supprimer", "Supprimer cette discussion (sa branche reste)", "delete");
   }
-  add("lock", "Verrouiller ce projet par code (Ctrl Maj L)", "lock");
+  add("lock", "Verrouiller ce projet par code", "lock");
   add("chercher", "Chercher dans les fils et les messages (Ctrl K)", "search");
   add("demandes", "Voir ce que les agents attendent de toi", "requests");
   add("connexions", "Voir l'état des agents et les serveurs MCP", "connections");

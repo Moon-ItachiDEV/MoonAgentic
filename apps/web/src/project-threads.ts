@@ -16,9 +16,6 @@ export const GROUP_LABEL: Record<ThreadGroup, string> = {
   resolved: "Résolu",
 };
 
-/** Groups shown folded until asked: what needs no one right now. */
-export const FOLDED_BY_DEFAULT: ReadonlySet<ThreadGroup> = new Set(["idle", "resolved"]);
-
 /**
  * The project's conversations by group, in the order the page shows them, each with the
  * latest first. A team counts once, as its lead: its members stay behind it.

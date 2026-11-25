@@ -8,15 +8,21 @@ import type {
 } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
 import { connection, newId } from "../connection.ts";
+import { parseRouteValue, routeChoices, routeValue } from "../route-choices.ts";
 import { firstMoment, fromField, REPEATS, titleFromText, toField } from "../schedule.ts";
-import { firstPick, type ModelPick, ModelSelect } from "./ModelSelect.tsx";
+import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
+import { I } from "../v2/I.tsx";
+import { Sheet } from "../v2/Sheet.tsx";
+import { firstPick, type ModelPick } from "../model-pick.ts";
 
 /**
  * Plans a task for later, or changes one already planned. At its time the server starts a
  * new thread of the project with the task's text; the agent is chosen here, once.
  */
 export function ScheduleDialog({
-  project,
+  open,
+  projects,
+  projectId: firstProjectId,
   agents,
   favorites,
   text: initialText,
@@ -24,7 +30,11 @@ export function ScheduleDialog({
   onClose,
   onSaved,
 }: {
-  project: Project;
+  open: boolean;
+  /** The projects a new task can be planned in. */
+  projects: Project[];
+  /** The project it opens on: the one in sight. */
+  projectId: string | undefined;
   agents: AgentInfo[];
   favorites: Favorites;
   /** What was typed after `/planifier`. */
@@ -34,34 +44,50 @@ export function ScheduleDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [text, setText] = useState(schedule?.text ?? initialText);
-  const [title, setTitle] = useState(schedule?.title ?? "");
-  const [firstWhen] = useState(() => toField(firstMoment(schedule, Date.now())));
-  const [when, setWhen] = useState(firstWhen);
-  const [repeat, setRepeat] = useState<ScheduleRepeat>(schedule?.repeat ?? "once");
-  const [pick, setPick] = useState<ModelPick | undefined>(() =>
-    schedule
-      ? { agentId: schedule.agentId, ...(schedule.model ? { model: schedule.model } : {}) }
-      : firstPick(agents, favorites),
-  );
+  const [text, setText] = useState("");
+  const [title, setTitle] = useState("");
+  const [firstWhen, setFirstWhen] = useState("");
+  const [when, setWhen] = useState("");
+  const [repeat, setRepeat] = useState<ScheduleRepeat>("once");
+  const [projectId, setProjectId] = useState(firstProjectId);
+  const [pick, setPick] = useState<ModelPick | undefined>(undefined);
+  // Nobody watches a planned task start: it asks before acting unless told otherwise.
+  const [mode, setMode] = useState<PermissionMode>("supervised");
+  const [all, setAll] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Each opening starts from the task given, or from an empty one.
+  useEffect(() => {
+    if (!open) return;
+    const first = toField(firstMoment(schedule, Date.now()));
+    setText(schedule?.text ?? initialText);
+    setTitle(schedule?.title ?? "");
+    setFirstWhen(first);
+    setWhen(first);
+    setRepeat(schedule?.repeat ?? "once");
+    setProjectId(schedule?.projectId ?? firstProjectId);
+    setPick(
+      schedule
+        ? { agentId: schedule.agentId, ...(schedule.model ? { model: schedule.model } : {}) }
+        : firstPick(agents, favorites),
+    );
+    setMode(schedule?.permissionMode ?? "supervised");
+    setBusy(false);
+    setError(null);
+    // Read as they are when it opens: a list that moves under an open sheet changes nothing.
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, schedule?.id]);
+
+  const project = projects.find((p) => p.id === projectId);
   const agentId = pick?.agentId ?? "";
   const agent = agents.find((a) => a.id === agentId);
   const model = pick?.model ?? "";
-  // Nobody watches a planned task start: it asks before acting unless told otherwise.
-  const [mode, setMode] = useState<PermissionMode>(schedule?.permissionMode ?? "supervised");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const at = fromField(when);
+  const ready = !!text.trim() && at !== null && (!!schedule || (!!agentId && !!project));
 
-  useEffect(() => {
-    const escape = (event: KeyboardEvent) => event.key === "Escape" && !busy && onClose();
-    document.addEventListener("keydown", escape);
-    return () => document.removeEventListener("keydown", escape);
-  }, [onClose, busy]);
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!text.trim() || at === null || (!schedule && !agentId)) return;
+  const submit = async () => {
+    if (!ready || busy || at === null) return;
     setBusy(true);
     setError(null);
     try {
@@ -81,7 +107,7 @@ export function ScheduleDialog({
           title: title.trim() || titleFromText(text),
           ...(moved ? { at, repeat } : {}),
         });
-      } else {
+      } else if (project) {
         const picked = model || agent?.defaultModel;
         await connection.request({
           type: "schedule.add",
@@ -104,108 +130,175 @@ export function ScheduleDialog({
     }
   };
 
+  const { groups, favoritesOnly } = routeChoices(agents, favorites, pick, all);
+  const models: Choice[] = groups.flatMap((g) =>
+    g.options.map((o) => ({ value: o.value, label: o.label, group: g.agent.name })),
+  );
+  const value = pick ? routeValue(pick.agentId, pick.model) : "";
+  const label = schedule ? "Enregistrer" : "Planifier";
+
   return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
+    <Sheet
+      open={open}
+      onClose={() => !busy && onClose()}
+      title={schedule ? "Modifier la tâche planifiée" : "Planifier une tâche"}
+      tall
+      className="schd"
+      right={
+        <button
+          className={`ok2 press${ready && !busy ? " on" : ""}`}
+          aria-label={label}
+          disabled={!ready || busy}
+          onClick={() => void submit()}
+        >
+          <I n="check" s={19} />
+        </button>
+      }
+    >
       <form
-        className="dialog sched"
-        role="dialog"
-        aria-modal
-        aria-labelledby="sched-title"
-        onSubmit={(e) => void submit(e)}
+        className="sbody"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
       >
-        <h2 id="sched-title">{schedule ? "Modifier la tâche planifiée" : "Planifier une tâche"}</h2>
-        <p>
-          À l'heure dite, MoonAgentic ouvre un nouveau fil dans « {project.name} » et y envoie cette
-          tâche. Le serveur doit être allumé à ce moment-là : s'il ne l'était pas, la tâche part à
-          son retour.
-        </p>
-        <label className="field">
-          Tâche
+        <div className="gl2">Consigne</div>
+        <div className="ins stw">
           <textarea
-            autoFocus
+            className="sta"
+            // Focused when the sheet opens, where the keyboard is wanted at once.
+            ref={(el) => {
+              if (el && open && !text && document.activeElement !== el) el.focus();
+            }}
+            aria-label="Tâche"
             required
             rows={3}
             value={text}
             placeholder="Lance les tests et corrige ce qui échoue"
             onChange={(e) => setText(e.target.value)}
           />
-        </label>
-        <label className="field">
-          Nom
+        </div>
+        <label className="fld">
           <input
+            aria-label="Nom"
             value={title}
             maxLength={200}
-            placeholder="Repris de la tâche si tu le laisses vide"
+            placeholder={text.trim() ? titleFromText(text) : "Nom"}
             onChange={(e) => setTitle(e.target.value)}
           />
         </label>
-        <div className="team-row">
-          <label className="field">
-            Quand
+        <div className="gl2">Quand</div>
+        <div className="chips wrap" role="radiogroup" aria-label="Répéter">
+          {REPEATS.map((r) => (
+            <button
+              key={r.repeat}
+              type="button"
+              role="radio"
+              aria-checked={repeat === r.repeat}
+              aria-pressed={repeat === r.repeat}
+              onClick={() => setRepeat(r.repeat)}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+        <div className="ins">
+          <label className="it ro">
+            <span className="tx">{repeat === "once" ? "Lancement" : "Premier lancement"}</span>
             <input
+              className="dte"
               type="datetime-local"
+              aria-label="Quand"
               required
               value={when}
               onChange={(e) => setWhen(e.target.value)}
             />
           </label>
-          <label className="field">
-            Répéter
-            <select value={repeat} onChange={(e) => setRepeat(e.target.value as ScheduleRepeat)}>
-              {REPEATS.map((r) => (
-                <option key={r.repeat} value={r.repeat}>
-                  {r.label}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
-        {schedule ? (
-          <p className="hint">
-            Avec {agent?.name ?? schedule.agentId}
-            {schedule.permissionMode === "full"
-              ? ", en accès complet"
-              : ", qui demande avant d'agir"}
-            . Pour changer d'agent, planifie une nouvelle tâche.
-          </p>
-        ) : (
-          <>
-            <label className="field">
-              Modèle
-              <ModelSelect
-                label="Modèle"
-                agents={agents}
-                favorites={favorites}
-                value={pick}
-                onChange={setPick}
-                projectId={project.id}
+        <div className="gl2">Où et avec qui</div>
+        <div className="ins">
+          {schedule ? (
+            <>
+              <div className="it ro">
+                <span className="tx">Projet</span>
+                <span className="rt">{project?.name}</span>
+              </div>
+              <div className="it ro">
+                <span className="tx">Agent</span>
+                <span className="rt">{agent?.name ?? schedule.agentId}</span>
+              </div>
+              <div className="it ro">
+                <span className="tx">Accès</span>
+                <span className="rt">
+                  {schedule.permissionMode === "full" ? "Accès complet" : "Me demander"}
+                </span>
+              </div>
+            </>
+          ) : (
+            <>
+              <ChoiceRow
+                title="Projet"
+                value={projectId ?? ""}
+                shown={project?.name ?? ""}
+                choices={projects.map((p) => ({ value: p.id, label: p.name }))}
+                onPick={setProjectId}
               />
-            </label>
-            <label className="field">
-              Accès de l'agent
-              <select value={mode} onChange={(e) => setMode(e.target.value as PermissionMode)}>
-                <option value="supervised">Il me demande avant d'agir (dans « À traiter »)</option>
-                <option value="full">Accès complet, sans rien demander</option>
-              </select>
-            </label>
-            {!agents.some((a) => a.available) && (
-              <p className="error">Aucun agent n'est prêt : ouvre les Connexions.</p>
-            )}
+              <ChoiceRow
+                title="Modèle"
+                value={value}
+                shown={
+                  models.find((c) => c.value === value)?.label ??
+                  (agents.some((a) => a.available) ? "" : "Aucun agent prêt")
+                }
+                choices={models}
+                {...(favoritesOnly || all
+                  ? {
+                      more: {
+                        label: all ? "Favoris" : "Tous",
+                        on: all,
+                        toggle: () => setAll((on) => !on),
+                      },
+                    }
+                  : {})}
+                onPick={(v) => setPick(parseRouteValue(v))}
+              />
+            </>
+          )}
+        </div>
+        {!schedule && (
+          <>
+            <div className="gl2">Accès</div>
+            <div className="seg" role="radiogroup" aria-label="Accès de l'agent">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={mode === "supervised"}
+                aria-pressed={mode === "supervised"}
+                onClick={() => setMode("supervised")}
+              >
+                <I n="hand" s={16} />
+                Me demander
+              </button>
+              <button
+                type="button"
+                role="radio"
+                className="f"
+                aria-checked={mode === "full"}
+                aria-pressed={mode === "full"}
+                onClick={() => setMode("full")}
+              >
+                <I n="bolt" s={16} />
+                Accès complet
+              </button>
+            </div>
           </>
         )}
-        {error && <p className="error">{error}</p>}
-        <div className="row">
-          <button type="button" className="btn quiet" disabled={busy} onClick={onClose}>
-            Annuler
-          </button>
-          <button
-            className="btn pri"
-            disabled={busy || !text.trim() || at === null || (!schedule && !agentId)}
-          >
-            {busy ? "Enregistrement…" : schedule ? "Enregistrer" : "Planifier"}
-          </button>
-        </div>
+        {error && (
+          <p className="ppill err" role="alert">
+            {error}
+          </p>
+        )}
       </form>
-    </div>
+    </Sheet>
   );
 }

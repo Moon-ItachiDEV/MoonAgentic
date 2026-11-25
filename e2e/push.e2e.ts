@@ -124,7 +124,6 @@ describe("web push", () => {
     expect(await push.getAttribute("aria-checked")).toBe("false");
     await push.click();
     await expect.poll(() => push.getAttribute("aria-checked")).toBe("true");
-    await page.getByText("chiffrées pour cet appareil").waitFor();
     if (shots) {
       await page.waitForTimeout(400);
       await page.screenshot({ path: path.join(shots, "push-reglage.png") });
