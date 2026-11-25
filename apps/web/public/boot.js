@@ -29,21 +29,24 @@
   window.addEventListener(
     "error",
     function (event) {
+      // Once the app is shown, it handles its own failures: a lazy part that fails to load
+      // must not reload the page under the user's feet.
+      if (!document.getElementById("boot")) return;
       var target = event.target;
-      // A script or style sheet of the app that did not arrive.
+      // A script or style sheet of the app that did not arrive. An icon or the manifest
+      // that fails is no reason to reload.
+      var rel = target && target.tagName === "LINK" ? String(target.rel) : "";
       if (
         target &&
         target !== window &&
-        (target.tagName === "SCRIPT" || target.tagName === "LINK")
+        (target.tagName === "SCRIPT" || rel === "stylesheet" || rel === "modulepreload")
       ) {
         var file = target.src || target.href || "";
         failures.push(file);
         if (!reloadOnce()) show("Fichier non chargé : " + file.replace(location.origin, ""));
         return;
       }
-      if (document.getElementById("boot")) {
-        show(event.message || (event.error && event.error.message) || "Erreur inconnue");
-      }
+      show(event.message || (event.error && event.error.message) || "Erreur inconnue");
     },
     true,
   );
@@ -52,6 +55,15 @@
     if (!document.getElementById("boot")) return;
     var reason = event.reason;
     show((reason && reason.message) || String(reason));
+  });
+
+  // « Recharger » keeps the address as it is, a pairing code or an open thread included;
+  // its plain link to / is only for a browser where this script did not run.
+  document.addEventListener("click", function (event) {
+    var link = event.target && event.target.closest ? event.target.closest("#boot-reload") : null;
+    if (!link) return;
+    event.preventDefault();
+    location.reload();
   });
 
   window.__moonagenticBoot = { failures: failures };

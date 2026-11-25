@@ -952,9 +952,13 @@ export function createHttpServer(options: {
     stream.once("open", () => {
       res.writeHead(200, {
         "content-type": TYPES[path.extname(file)] ?? "application/octet-stream",
+        // The page is never kept: an iPhone app on the home screen that kept an old one
+        // would ask for files a newer build no longer has.
         "cache-control": file.includes(`${path.sep}assets${path.sep}`)
           ? "public, max-age=31536000, immutable"
-          : "no-cache",
+          : path.extname(file) === ".html"
+            ? "no-store"
+            : "no-cache",
       });
       if (req.method === "HEAD") {
         stream.destroy();

@@ -116,4 +116,57 @@ describe("before the app", () => {
     await expect.poll(() => failed.isVisible(), { timeout: 15_000 }).toBe(true);
     await context.close();
   });
+
+  it("leaves the app alone once shown: a part that fails later does not reload it", async () => {
+    const context = await freshPhone();
+    const page = await context.newPage();
+    let loads = 0;
+    page.on("load", () => (loads += 1));
+    await page.goto(`${origin}/`);
+    await expect.poll(() => page.getByText("Appairer cet appareil").isVisible()).toBe(true);
+    // As a lazy screen of an older build would, after an update of the server.
+    await page.evaluate(() => {
+      const script = document.createElement("script");
+      script.src = "/assets/gone-0000.js";
+      document.head.append(script);
+    });
+    await page.waitForTimeout(1000);
+    expect(loads).toBe(1);
+    expect(await page.getByText("Appairer cet appareil").isVisible()).toBe(true);
+    await context.close();
+  });
+
+  it("does not reload for an icon or the manifest that fails", async () => {
+    const context = await freshPhone();
+    const page = await context.newPage();
+    let loads = 0;
+    page.on("load", () => (loads += 1));
+    await page.route(/\/(manifest\.webmanifest|icon\.svg|apple-touch-icon\.png)$/, (route) =>
+      route.fulfill({ status: 404, body: "" }),
+    );
+    await page.goto(`${origin}/`);
+    await expect.poll(() => page.getByText("Appairer cet appareil").isVisible()).toBe(true);
+    await page.waitForTimeout(500);
+    expect(loads).toBe(1);
+    await context.close();
+  });
+
+  it("keeps the address on « Recharger », a pairing code included", async () => {
+    const context = await freshPhone();
+    const page = await context.newPage();
+    await page.route(/\/assets\/index-[^/]+\.js$/, (route) =>
+      route.fulfill({ status: 404, body: "" }),
+    );
+    await page.goto(`${origin}/t/abc#pair=ABCD-EFGH`);
+    const reload = page.getByRole("link", { name: "Recharger" });
+    await expect.poll(() => reload.isVisible()).toBe(true);
+    await Promise.all([page.waitForEvent("load"), reload.click()]);
+    expect(page.url()).toBe(`${origin}/t/abc#pair=ABCD-EFGH`);
+    await context.close();
+  });
+
+  it("never lets a browser keep the page itself", async () => {
+    const res = await fetch(`${origin}/`);
+    expect(res.headers.get("cache-control")).toBe("no-store");
+  });
 });
