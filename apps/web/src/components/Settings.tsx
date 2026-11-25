@@ -43,6 +43,8 @@ import { I } from "../v2/I.tsx";
 import type { IconName } from "../v2/sprite.ts";
 import { Sheet } from "../v2/Sheet.tsx";
 import { AppUpdateSettings, useApp } from "./AppUpdate.tsx";
+import { openUpdateCard, pillOf, updateShown } from "../app-update.ts";
+import type { AppInfo } from "@moonagentic/protocol";
 import { MascotSettings } from "./MascotSettings.tsx";
 import { ModelFavorites } from "./ModelFavorites.tsx";
 import { RemoteAccess } from "./RemoteAccess.tsx";
@@ -91,6 +93,26 @@ function Row(props: { title: string; text?: ReactNode; children?: ReactNode }) {
       </span>
       {props.children}
     </div>
+  );
+}
+
+/** Foot of the settings list: a badge when a newer version is there, opening the update card. */
+function VersionBadge(props: { app: AppInfo }) {
+  if (!updateShown(props.app)) return <> · À jour</>;
+  const pill = pillOf(props.app);
+  return (
+    <button
+      className={`upbg press ${pill.tone}`}
+      aria-haspopup="dialog"
+      onClick={() => openUpdateCard()}
+    >
+      <svg className="upi" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+        <circle className="r" cx="8" cy="8" r="6.5" />
+        <path className="a" d="M8 11.2V5M5.4 7.5 8 4.9l2.6 2.6" />
+      </svg>
+      {pill.text}
+      {pill.tail && <span className="tl">{pill.tail}</span>}
+    </button>
   );
 }
 
@@ -275,14 +297,13 @@ function LockGroup(props: { projects: Project[]; lockPin: boolean }) {
   const projects = props.projects.filter((p) => !isDiscussionsProject(p));
   return (
     <>
-      <div className="gl2">
-        <I n="lock" s={14} />
-        Verrouillage
-      </div>
+      <div className="gl2">Verrouillage</div>
       <div className="ins">
-        <button className="it acc" onClick={() => lockApp(props.lockPin)}>
-          <span className="tx">Verrouiller maintenant</span>
-        </button>
+        <Row title="Verrouiller l'app">
+          <button className="mini press" onClick={() => lockApp(props.lockPin)}>
+            Verrouiller
+          </button>
+        </Row>
         <ChoiceRow
           title="Verrouiller après"
           value={after}
@@ -395,21 +416,25 @@ function DiagnosticsGroup() {
     <>
       <div className="gl2">Diagnostic</div>
       <div className="ins">
-        <button className="it acc" disabled={busy !== null} onClick={() => void run("copy")}>
-          <span className="tx">
-            {busy === "copy" ? "Préparation…" : done === "copy" ? "Copié" : "Copier le diagnostic"}
-            {error && <small className="erx">{error}</small>}
-          </span>
-        </button>
-        <button className="it acc" disabled={busy !== null} onClick={() => void run("download")}>
-          <span className="tx">
+        <Row
+          title="Rapport de diagnostic"
+          text={error ? <span className="erx">{error}</span> : undefined}
+        >
+          <button className="mini press" disabled={busy !== null} onClick={() => void run("copy")}>
+            {busy === "copy" ? "Préparation…" : done === "copy" ? "Copié" : "Copier"}
+          </button>
+          <button
+            className="mini press"
+            disabled={busy !== null}
+            onClick={() => void run("download")}
+          >
             {busy === "download"
               ? "Préparation…"
               : done === "download"
                 ? "Téléchargé"
                 : "Télécharger"}
-          </span>
-        </button>
+          </button>
+        </Row>
       </div>
     </>
   );
@@ -795,7 +820,6 @@ export function SettingsLayer(
   const [query, setQuery] = useState("");
   const github = useGithubStatus();
   const [githubOpen, setGithubOpen] = useState(false);
-  const login = github.status?.login;
   const theme = useSyncExternalStore(subscribeTheme, readTheme);
   const quotas = useQuotas();
   const { app } = useApp();
@@ -844,6 +868,28 @@ export function SettingsLayer(
     props.onPick(section);
   };
 
+  const search = (
+    <label className={`ssearch${props.wide ? " hs" : ""}`}>
+      <I n="search" s={17} />
+      <input
+        type="search"
+        placeholder="Rechercher un réglage"
+        aria-label="Rechercher un réglage"
+        autoComplete="off"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          const first = SECTIONS.find((s) => shown.has(s.id));
+          if (e.key === "Enter" && first) pick(first.id);
+          if (e.key === "Escape" && query) {
+            e.preventDefault();
+            setQuery("");
+          }
+        }}
+      />
+    </label>
+  );
+
   return (
     <div className={`setl${on ? " on" : ""}`} id="setl">
       <div
@@ -855,49 +901,19 @@ export function SettingsLayer(
       >
         <div className="shdr">
           <button
-            className="gb glass press"
+            className="gb sback press"
             aria-label="Fermer les réglages"
             onClick={props.onClose}
           >
-            <I n="x" s={19} />
+            <I n="back" s={19} />
           </button>
+          {props.wide && search}
           <b className="stitle">Réglages</b>
           <span className="sph" />
         </div>
         <div className="sscroll" onScroll={root.onScroll}>
           <h1 className="lt">Réglages</h1>
-          <label className="ssearch">
-            <I n="search" s={17} />
-            <input
-              type="search"
-              placeholder="Rechercher un réglage"
-              aria-label="Rechercher un réglage"
-              autoComplete="off"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                const first = SECTIONS.find((s) => shown.has(s.id));
-                if (e.key === "Enter" && first) pick(first.id);
-                if (e.key === "Escape" && query) {
-                  e.preventDefault();
-                  setQuery("");
-                }
-              }}
-            />
-          </label>
-          {!query && (
-            <button className="prof press" onClick={() => setGithubOpen(true)}>
-              <span className="me sm">{(login ?? "M").slice(0, 1).toUpperCase()}</span>
-              <span className="tx">
-                <b>{login ?? "MoonAgentic"}</b>
-                <small>
-                  <I n="gh" s={13} />
-                  {login ? "GitHub" : "GitHub non connecté"}
-                </small>
-              </span>
-              <I n="right" s={15} />
-            </button>
-          )}
+          {!props.wide && search}
           {GROUPS.map((group) => {
             const rows = group.filter((s) => shown.has(s.id));
             if (!rows.length) return null;
@@ -927,6 +943,7 @@ export function SettingsLayer(
           {app && (
             <p className="sver">
               <b>MoonAgentic</b> {app.version}
+              <VersionBadge app={app} />
             </p>
           )}
         </div>

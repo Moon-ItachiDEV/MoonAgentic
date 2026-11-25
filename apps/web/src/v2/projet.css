@@ -1,0 +1,145 @@
+/* Réglages : flèche retour sans tuile, recherche à côté sur grand écran, version en bas */
+.shdr .sback {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: none;
+  box-shadow: none;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    transform 160ms var(--out);
+}
+@media (hover: hover) and (pointer: fine) {
+  .shdr .sback:hover {
+    background: var(--hover);
+    color: var(--fg);
+  }
+}
+.shdr .sback:active {
+  transform: scale(0.97);
+}
+.scr.wide #sroot .shdr {
+  display: flex;
+  gap: 6px;
+}
+.scr.wide #sroot .shdr .stitle,
+.scr.wide #sroot .shdr .sph {
+  display: none;
+}
+.scr.wide #sroot .shdr .ssearch.hs {
+  flex: 1;
+  height: 36px;
+  margin: 0;
+  border-radius: 10px;
+}
+.scr.wide #sroot .shdr .ssearch.hs input {
+  font-size: 14px;
+}
+.scr.wide #sroot .sscroll {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+.scr.wide #sroot .ins.sg {
+  margin: 0 0 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.scr.wide #sroot .it {
+  min-height: 40px;
+}
+.scr.wide #sroot .sver {
+  margin: auto 0 0;
+  padding: 32px 0 20px;
+}
+
+/* Pastille de mise à jour au pied des réglages */
+.sver .upbg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  margin-left: 8px;
+  padding: 0 11px 0 7px;
+  border-radius: 13px;
+  vertical-align: middle;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  transition:
+    background-color 150ms ease,
+    transform 160ms var(--out);
+}
+.sver .upbg.fail {
+  color: var(--err);
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+.sver .upbg .tl {
+  opacity: 0.75;
+}
+@media (hover: hover) and (pointer: fine) {
+  .sver .upbg:hover {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+}
+.sver .upbg:active {
+  transform: scale(0.97);
+}
+.upi {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  overflow: visible;
+}
+.upi .r {
+  stroke-dasharray: 41;
+  stroke-dashoffset: 41;
+  transform: rotate(-90deg);
+  transform-origin: 8px 8px;
+  animation: upR 700ms var(--out) 200ms forwards;
+}
+.upi .a {
+  animation: upA 2.4s cubic-bezier(0.77, 0, 0.175, 1) 900ms infinite;
+}
+@keyframes upR {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes upA {
+  0%,
+  55%,
+  100% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  25% {
+    transform: translateY(-2.2px);
+  }
+  40% {
+    transform: translateY(-3px);
+    opacity: 0;
+  }
+  41% {
+    transform: translateY(3px);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .upi .r {
+    animation: none;
+    stroke-dashoffset: 0;
+  }
+  .upi .a {
+    animation: none;
+  }
+}
