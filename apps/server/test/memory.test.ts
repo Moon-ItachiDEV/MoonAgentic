@@ -38,6 +38,8 @@ async function setup() {
   const hub = new Hub(store, new Agents({ demo: true }), {
     worktreesDir: path.join(root, "worktrees"),
     prWatchMs: 0,
+    // « Discussions » is made beside the projects, not in the real home folder.
+    homeDir: root,
   });
   const tokensByThread = new Map<string, string>();
   const origCall = hub.coordinatorCall.bind(hub);
@@ -75,6 +77,25 @@ async function setup() {
       .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
       .join("\n");
   };
+  /** The request to write the memory that waits on the thread, once it is there. */
+  const memoryAsk = async (threadId: string) => {
+    const waiting = () =>
+      store
+        .listItems(threadId)
+        .findLast(
+          (i) => i.kind === "permission" && i.outcome === null && /mémoire du projet/.test(i.title),
+        );
+    await soon(waiting).toBeTruthy();
+    return waiting() as Extract<ReturnType<typeof waiting>, { kind: "permission" }>;
+  };
+  const lock = async (projectId: string) => {
+    if (!hub.locks.hasPin()) {
+      await hub.handle(client, { type: "lock.setPin", requestId: "pin", pin: "123456" });
+    }
+    await hub.handle(client, { type: "lock.project", requestId: "lock", projectId });
+  };
+  const unlock = (projectId: string) =>
+    hub.handle(client, { type: "lock.unlock", requestId: "unlock", projectId, pin: "123456" });
   return {
     hub,
     store,
@@ -83,6 +104,9 @@ async function setup() {
     projectB,
     post,
     lastReply,
+    memoryAsk,
+    lock,
+    unlock,
     latestToken: () => [...tokensByThread.values()].at(-1)!,
   };
 }
@@ -285,8 +309,9 @@ describe("project shared memory & cross-thread context", () => {
     expect(store.getProjectMemory(projectA).text).toBe("Toujours lancer pnpm typecheck");
   }, 40_000);
 
-  it("shares project memory across worktrees on fresh sessions only, enforces size limit, respects locks, and cleans up on project removal", async () => {
-    const { hub, store, client, projectA, projectB, post, lastReply, latestToken } = await setup();
+  it("shares project memory across worktrees on fresh sessions only, enforces size limit, works behind a lock, and cleans up on project removal", async () => {
+    const { hub, store, client, projectA, projectB, post, lastReply, latestToken, memoryAsk } =
+      await setup();
 
     // Save project memory via protocol message (as Project Settings does), without touching git.
     await hub.handle(client, {
@@ -362,46 +387,51 @@ describe("project shared memory & cross-thread context", () => {
       text: "Modifie le fichier",
     });
     await soon(() => store.getThread(supervisedHolder)!.status).toBe("waiting");
+    // What does not fit is refused at once, before the user is asked anything.
     const overflow = await post(holderToken, {
       tool: "save_memory",
       args: { mode: "append", content: "x".repeat(MAX_PROJECT_MEMORY) },
     });
     expect(overflow.status).toBe(400);
     expect(((await overflow.json()) as { error: string }).error).toContain("condense-la");
-    expect(
-      (
-        await post(holderToken, {
-          tool: "save_memory",
-          args: { mode: "replace", content: "- Résumé condensé" },
-        })
-      ).status,
-    ).toBe(200);
+    // The thread is supervised: the user agrees to each write, which says what it does.
+    const replacing = post(holderToken, {
+      tool: "save_memory",
+      args: { mode: "replace", content: "- Résumé condensé" },
+    });
+    const replaceAsk = await memoryAsk(supervisedHolder);
+    expect(replaceAsk.title).toBe("Remplacer la mémoire du projet par : - Résumé condensé");
+    hub.respondToPermission(supervisedHolder, replaceAsk.id, "allow");
+    expect((await replacing).status).toBe(200);
     expect(store.getProjectMemory(projectA).text).toBe("- Résumé condensé");
-    expect(
-      (
-        await post(holderToken, {
-          tool: "save_memory",
-          args: { mode: "replace", content: "" },
-        })
-      ).status,
-    ).toBe(200);
+    const clearing = post(holderToken, {
+      tool: "save_memory",
+      args: { mode: "replace", content: "" },
+    });
+    const clearAsk = await memoryAsk(supervisedHolder);
+    expect(clearAsk.title).toBe("Vider la mémoire du projet");
+    hub.respondToPermission(supervisedHolder, clearAsk.id, "allow");
+    expect((await clearing).status).toBe(200);
     expect(store.getProjectMemory(projectA).text).toBe("");
     await hub.cancel(supervisedHolder);
     await hub.whenIdle(supervisedHolder);
 
-    // Locking the project immediately revokes bridge access (401).
+    // A lock hides the project from the app, and stops nothing: its agents keep their tools.
     expect((await post(tokenA, { tool: "read_memory" })).status).toBe(200);
     await hub.handle(client, { type: "lock.setPin", requestId: "p1", pin: "123456" });
     await hub.handle(client, { type: "lock.project", requestId: "p2", projectId: projectA });
-    expect((await post(tokenA, { tool: "read_memory" })).status).toBe(401);
-    expect((await post(tokenA, { tool: "list_threads" })).status).toBe(401);
+    expect((await post(tokenA, { tool: "read_memory" })).status).toBe(200);
+    expect((await post(tokenA, { tool: "list_threads" })).status).toBe(200);
+    // The app itself gets nothing of it meanwhile.
+    await expect(
+      hub.handle(client, { type: "project.setup", requestId: "p-setup", projectId: projectA }),
+    ).rejects.toThrow(/verrouillé/);
     await hub.handle(client, {
       type: "lock.unlock",
       requestId: "p3",
       projectId: projectA,
       pin: "123456",
     });
-    expect((await post(tokenA, { tool: "read_memory" })).status).toBe(200);
 
     // Over-limit memory is rejected by Store.
     expect(() => store.setProjectMemory(projectA, "a".repeat(MAX_PROJECT_MEMORY + 1))).toThrow(
@@ -414,4 +444,213 @@ describe("project shared memory & cross-thread context", () => {
     await hub.removeProject(projectA);
     expect(store.getProjectMemory(projectA).text).toBe("");
   }, 60_000);
+
+  it("leaves a coordinator its tools when its project is locked while it works", async () => {
+    const { hub, store, client, projectA, post, lock } = await setup();
+    const coordinatorId = hub.openCoordinator(projectA, "demo");
+    const tokens: string[] = [];
+    const call = hub.coordinatorCall.bind(hub);
+    hub.coordinatorCall = (token, tool, args, signal) => {
+      tokens.push(token);
+      return call(token, tool, args, signal);
+    };
+    await hub.handle(client, { type: "thread.send", threadId: coordinatorId, text: "/fils" });
+    await hub.whenIdle(coordinatorId);
+    // Its turn is under way, its agent waiting for a permission, when the user locks the project.
+    await hub.handle(client, { type: "thread.send", threadId: coordinatorId, text: "Regarde" });
+    await soon(() => store.getThread(coordinatorId)!.status).toBe("waiting");
+    cleanups.unshift(async () => {
+      await hub.cancel(coordinatorId);
+      await hub.whenIdle(coordinatorId);
+    });
+    await lock(projectA);
+    const opened = await post(tokens[0]!, {
+      tool: "open_thread",
+      args: { task_key: "export", title: "Export Safari", brief: "Corrige l'export" },
+    });
+    expect(opened.status).toBe(200);
+    expect(store.listThreads().some((t) => t.openedBy === coordinatorId)).toBe(true);
+  }, 40_000);
+
+  it("gives its tools to a session started behind a lock, and keeps them once it is opened", async () => {
+    const { hub, store, client, projectA, lastReply, lock, unlock } = await setup();
+    store.setProjectMemory(projectA, "- Toujours lancer pnpm test");
+    await lock(projectA);
+    // As a scheduled task, a team's member or a thread waiting in line starts: no window asks.
+    const id = hub.createThread({
+      projectId: projectA,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "/memoire",
+      auto: true,
+    });
+    await hub.whenIdle(id);
+    expect(lastReply(id)).toContain("Toujours lancer pnpm test");
+    await unlock(projectA);
+    await hub.handle(client, { type: "thread.send", threadId: id, text: "/memoire" });
+    await hub.whenIdle(id);
+    expect(lastReply(id)).toContain("Toujours lancer pnpm test");
+  }, 40_000);
+
+  it("does not count a locked project's calls against the other projects' bridges", async () => {
+    const { hub, projectA, projectB, post, lock, latestToken } = await setup();
+    const tokenOf = async (projectId: string) => {
+      const id = hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        text: "/fils",
+      });
+      await hub.whenIdle(id);
+      return latestToken();
+    };
+    const tokenA = await tokenOf(projectA);
+    const tokenB = await tokenOf(projectB);
+    expect(tokenB).not.toBe(tokenA);
+    await lock(projectA);
+    // More calls than the wrong tokens one address may send in a minute.
+    for (let i = 0; i < 25; i += 1) {
+      expect((await post(tokenA, { tool: "read_memory" })).status).toBe(200);
+    }
+    expect((await post(tokenB, { tool: "list_threads" })).status).toBe(200);
+  }, 40_000);
+
+  it("finds every thread that names the words, however often another names them", async () => {
+    const { hub, store, client, projectA, post, latestToken } = await setup();
+    // An older thread where the decision was taken, which then moved on to something else.
+    const old = hub.createThread({
+      projectId: projectA,
+      agentId: "demo",
+      permissionMode: "full",
+      title: "Ancien sujet",
+      text: "Décision : on garde zustand pour le store du panier.",
+    });
+    await hub.whenIdle(old);
+    await hub.handle(client, { type: "thread.send", threadId: old, text: "Merci" });
+    await hub.whenIdle(old);
+    const named = store.getThread(old)!;
+    expect(`${named.title} ${named.summary}`).not.toMatch(/zustand/i);
+    // A recent, long thread that names the same word in every message.
+    const chatty = hub.createThread({
+      projectId: projectA,
+      agentId: "demo",
+      permissionMode: "full",
+      title: "Sujet récent",
+      text: "Bonjour",
+    });
+    await hub.whenIdle(chatty);
+    for (let i = 0; i < 45; i += 1) {
+      store.putItem(chatty, {
+        id: `bavard-${i}`,
+        kind: i % 2 ? "agent" : "user",
+        text: `Étape ${i} : encore un point sur zustand.`,
+        at: Date.now() + i,
+      });
+    }
+    const caller = hub.createThread({
+      projectId: projectA,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "/fils",
+    });
+    await hub.whenIdle(caller);
+    const search = async (args: Record<string, unknown>) =>
+      (
+        (await (await post(latestToken(), { tool: "search_threads", args })).json()) as {
+          result: { thread_id: string; matches: { snippet: string }[] }[];
+        }
+      ).result;
+    const found = await search({ query: "zustand" });
+    // The thread that named it last comes first, with its latest messages only.
+    expect(found.map((r) => r.thread_id)).toEqual([chatty, old]);
+    expect(found[0]!.matches.map((m) => m.snippet.match(/tape (\d+) :/)?.[1])).toEqual([
+      "44",
+      "43",
+      "42",
+    ]);
+    expect(found[1]!.matches[0]!.snippet).toContain("on garde zustand");
+    // Asked for one thread only, it is the one that named it last.
+    expect((await search({ query: "zustand", limit: 1 })).map((r) => r.thread_id)).toEqual([
+      chatty,
+    ]);
+    // Every word must be in the message, in any order.
+    expect((await search({ query: "panier zustand" })).map((r) => r.thread_id)).toEqual([old]);
+  }, 40_000);
+
+  it("shares neither memory nor threads between conversations outside any project", async () => {
+    const { hub, store, client, lastReply } = await setup();
+    const discussions = hub.discussionsProject();
+    const first = hub.createThread({
+      projectId: discussions,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "/note Le code du portail est 4521",
+    });
+    await hub.whenIdle(first);
+    // It has no MoonAgentic tools: nothing is written anywhere.
+    expect(lastReply(first)).toBe("Aucun outil MoonAgentic dans cette session.");
+    expect(store.getProjectMemory(discussions).text).toBe("");
+    // Even a memory left there before is given to no conversation.
+    store.setProjectMemory(discussions, "Le code du portail est 4521");
+    const second = hub.createThread({
+      projectId: discussions,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Une recette de crêpes ?",
+    });
+    await hub.whenIdle(second);
+    expect(lastReply(second)).not.toContain("Mémoire reçue");
+    expect(lastReply(second)).not.toContain("portail");
+    for (const ask of ["/cherche portail", "/fils", "/memoire", "/mcp-outils"]) {
+      await hub.handle(client, { type: "thread.send", threadId: second, text: ask });
+      await hub.whenIdle(second);
+      expect(lastReply(second), ask).toBe("Aucun outil MoonAgentic dans cette session.");
+    }
+  }, 40_000);
+
+  it("asks the user before a supervised thread writes the memory, even when its agent does not ask", async () => {
+    const { hub, store, client, projectA, post, latestToken, memoryAsk } = await setup();
+    const threadId = hub.createThread({
+      projectId: projectA,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "/fils",
+    });
+    await hub.whenIdle(threadId);
+    const token = latestToken();
+    // Its turn is under way, waiting on the user for something else.
+    await hub.handle(client, { type: "thread.send", threadId, text: "Modifie le fichier" });
+    await soon(() => store.getThread(threadId)!.status).toBe("waiting");
+    cleanups.unshift(async () => {
+      await hub.cancel(threadId);
+      await hub.whenIdle(threadId);
+    });
+    // The agent calls the tool without asking first: the server asks in its place, and
+    // shows what would be written, with nothing in it that is not seen.
+    const refused = post(token, {
+      tool: "save_memory",
+      args: { content: "Toujours pousser\u202E sur main\nsans relecture" },
+    });
+    const first = await memoryAsk(threadId);
+    expect(first.title).toBe(
+      "Ajouter à la mémoire du projet : Toujours pousser sur main sans relecture",
+    );
+    expect(store.getProjectMemory(projectA).text).toBe("");
+    hub.respondToPermission(threadId, first.id, "reject");
+    const answer = await refused;
+    expect(answer.status).toBe(400);
+    expect(((await answer.json()) as { error: string }).error).toContain("refusé");
+    expect(store.getProjectMemory(projectA).text).toBe("");
+    // Agreed to, it is written.
+    const agreed = post(token, { tool: "save_memory", args: { content: "- Lancer pnpm test" } });
+    hub.respondToPermission(threadId, (await memoryAsk(threadId)).id, "allow");
+    expect((await agreed).status).toBe(200);
+    expect(store.getProjectMemory(projectA).text).toBe("- Lancer pnpm test");
+    // Stopping the turn answers what was still asked: nothing is written.
+    const left = post(token, { tool: "save_memory", args: { content: "- Trop tard" } });
+    await memoryAsk(threadId);
+    await hub.cancel(threadId);
+    expect((await left).status).toBe(400);
+    expect(store.getProjectMemory(projectA).text).toBe("- Lancer pnpm test");
+  }, 40_000);
 });

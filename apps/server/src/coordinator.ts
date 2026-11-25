@@ -126,8 +126,11 @@ export interface CoordinatorHost extends Pick<
   checkAgent(agentId: string): void;
   /** Whether the project is being removed. */
   removing(projectId: string): boolean;
-  /** Whether the project is locked behind the user's PIN. */
-  isLocked(projectId: string): boolean;
+  /**
+   * Whether the project is « Discussions »: conversations started outside any project, with
+   * nothing in common but where they are kept. They share no memory and do not read each other.
+   */
+  outsideProjects(projectId: string): boolean;
   /** Whether a turn is running on the thread. */
   running(threadId: string): boolean;
   /** A team's real state, for a message to its lead. */
@@ -146,6 +149,16 @@ export interface CoordinatorHost extends Pick<
     task: string,
     signal?: AbortSignal,
   ): Promise<PermissionMode | null>;
+  /**
+   * Asks the user before a thread outside full access writes the project's shared memory,
+   * with the same card as an agent's own requests. False when refused or cancelled.
+   */
+  confirmMemoryWrite(
+    threadId: string,
+    content: string,
+    replace: boolean,
+    signal?: AbortSignal,
+  ): Promise<boolean>;
 }
 
 /**
@@ -290,9 +303,11 @@ export class Coordinators {
    * trades, once, for its token: a command the agent runs later finds nothing to use.
    * Regular threads only receive read-only project context + shared memory tools; read-only
    * team roles only receive read tools; only a project's coordinator can orchestrate threads.
+   * A conversation outside any project gets none: there is no project to share.
    */
   coordinatorServer(thread: Thread): McpServerRecord[] {
     if (!this.url) return [];
+    if (thread.kind !== "coordinator" && this.host.outsideProjects(thread.projectId)) return [];
     this.dropCoordinatorAccess(thread.id);
     const mode = bridgeModeOf(thread);
     const bootstrap = randomBytes(32).toString("base64url");
@@ -325,14 +340,9 @@ export class Coordinators {
   coordinatorExchange(bootstrap: string): string {
     const scope = this.bootstraps.get(bootstrap);
     const thread = scope && this.store.getThread(scope.threadId);
-    if (
-      !scope ||
-      !thread ||
-      thread.projectId !== scope.projectId ||
-      this.host.isLocked(scope.projectId)
-    ) {
-      throw new CoordinatorRefused();
-    }
+    // A locked project is out of sight, not stopped: its agents keep their tools, which
+    // never reach beyond their own project anyway.
+    if (!scope || !thread || thread.projectId !== scope.projectId) throw new CoordinatorRefused();
     this.dropCoordinatorAccess(scope.threadId);
     const token = randomBytes(32).toString("base64url");
     this.tokens.set(token, scope);
@@ -440,8 +450,9 @@ export class Coordinators {
 
   /**
    * One tool call from a thread's or coordinator's bridge. The token fixes both its project
-   * and its role: another project, a locked project, a team's sub-member, a coordinator, or
-   * any tool outside the thread's role is never reached.
+   * and its role: another project, a team's sub-member, a coordinator, or any tool outside
+   * the thread's role is never reached. A lock changes nothing here: the project's agents
+   * keep working behind it, and what they read stays in threads the lock hides.
    */
   async coordinatorCall(
     token: string,
@@ -451,14 +462,7 @@ export class Coordinators {
   ): Promise<unknown> {
     const scope = this.tokens.get(token);
     const caller = scope && this.store.getThread(scope.threadId);
-    if (
-      !scope ||
-      !caller ||
-      caller.projectId !== scope.projectId ||
-      this.host.isLocked(scope.projectId)
-    ) {
-      throw new CoordinatorRefused();
-    }
+    if (!scope || !caller || caller.projectId !== scope.projectId) throw new CoordinatorRefused();
     const mode = bridgeModeOf(caller);
     if (mode !== scope.mode) throw new CoordinatorRefused();
     const allowed = toolsForBridgeMode(mode);
@@ -533,10 +537,13 @@ export class Coordinators {
           string,
           { thread: Thread; matches: { from: "utilisateur" | "agent"; snippet: string }[] }
         >();
+        // The store gives each thread its own few matches: a thread that names the words
+        // often takes no other thread's place.
         for (const hit of this.store.searchProjectItems(
           scope.projectId,
           query,
-          limit * 4,
+          limit,
+          SEARCH_SNIPPETS_PER_THREAD,
           excludeId,
         )) {
           const thread = byId.get(hit.threadId);
@@ -645,15 +652,39 @@ export class Coordinators {
         if (saveMode === "append" && !normalized) {
           throw new Error("« content » est requis en mode append.");
         }
-        const current = this.store.getProjectMemory(scope.projectId).text;
-        const next =
-          saveMode === "replace" ? normalized : current ? `${current}\n${normalized}` : normalized;
-        if (utf8Bytes(next) > MAX_PROJECT_MEMORY) {
-          throw new Error(
-            `La mémoire du projet dépasserait ${MAX_PROJECT_MEMORY} octets : lis-la avec read_memory puis condense-la avec mode « replace ».`,
+        const written = () => {
+          const current = this.store.getProjectMemory(scope.projectId).text;
+          const next =
+            saveMode === "replace"
+              ? normalized
+              : current
+                ? `${current}\n${normalized}`
+                : normalized;
+          if (utf8Bytes(next) > MAX_PROJECT_MEMORY) {
+            throw new Error(
+              `La mémoire du projet dépasserait ${MAX_PROJECT_MEMORY} octets : lis-la avec read_memory puis condense-la avec mode « replace ».`,
+            );
+          }
+          return next;
+        };
+        // What cannot be saved is refused before the user is asked anything.
+        written();
+        // Outside full access the user agrees to what is written. Asked here rather than left
+        // to the agent, which may call its tools without asking first; the coordinator acts
+        // on its own, as for its other tools.
+        if (mode !== "coordinator" && caller.permissionMode !== "full") {
+          const agreed = await this.host.confirmMemoryWrite(
+            caller.id,
+            normalized,
+            saveMode === "replace",
+            signal,
           );
+          if (!agreed) {
+            throw new Error("L'utilisateur a refusé d'enregistrer dans la mémoire du projet.");
+          }
         }
-        const saved = this.store.setProjectMemory(scope.projectId, next);
+        // The memory may have changed while the user was deciding.
+        const saved = this.store.setProjectMemory(scope.projectId, written());
         return {
           saved: true,
           empty: !saved.text,
