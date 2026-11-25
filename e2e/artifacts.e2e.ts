@@ -237,6 +237,24 @@ describe("artifacts", () => {
     await page.close();
   });
 
+  it("lists the latest ones in the phone's tab opened before the connection is open", async () => {
+    const page = await browser.newPage({ viewport: { width: 390, height: 780 } });
+    await page.goto(url);
+    const tabs = page.getByRole("navigation", { name: "Sections" });
+    await tabs.getByRole("button", { name: "Artefacts" }).waitFor();
+    await page.route("**/api/ws-ticket", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.continue();
+    });
+    await page.reload();
+    await tabs.getByRole("button", { name: "Artefacts" }).click();
+    await page
+      .getByRole("menu", { name: "Artefacts" })
+      .getByRole("menuitem", { name: /^accueil\.html/ })
+      .waitFor({ timeout: 15_000 });
+    await page.close();
+  });
+
   it("is the phone's fourth tab", async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 780 } });
     await page.goto(url);

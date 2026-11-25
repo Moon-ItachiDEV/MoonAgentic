@@ -329,14 +329,18 @@ function formatSampleLine(sample: PerfSample, prefix = "[perf]"): string {
 
 /**
  * At most `max` characters of a text, masked before it is cut: a secret cut in two would no
- * longer be known for one. What is read is bounded first, at a space, so that a payload made
- * long is not read whole.
+ * longer be known for one. What is read is bounded first, at a space when there is one, so
+ * that a payload made long is not read whole; a text with no space is kept up to the bound.
  */
 function sanitizeText(value: unknown, max: number): string {
   if (typeof value !== "string") return "";
   let text = value.replace(/\r\n/g, "\n");
   const bound = max * 4 + 256;
-  if (text.length > bound) text = text.slice(0, bound).replace(/\S+$/, "");
+  if (text.length > bound) {
+    const cut = text.slice(0, bound);
+    const word = /\S+$/.exec(cut);
+    text = word && word.index > 0 ? cut.slice(0, word.index) : cut;
+  }
   return redact(text).trim().slice(0, max);
 }
 

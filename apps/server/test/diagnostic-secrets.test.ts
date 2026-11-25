@@ -281,3 +281,151 @@ describe("a secret at the place a text is cut", () => {
     expect(`${failure}${reason ?? ""}`).toContain("OPENAI_API_KEY=…");
   });
 });
+
+/** Forms the second review of this PR found: none of them real. */
+const SECOND: [string, string, string][] = [
+  ["une option --token=", "cmd --token=fauxSecret50", "fauxSecret50"],
+  ["une option --ticket=", "cmd --ticket=fauxSecret51", "fauxSecret51"],
+  ["une option --password=", "psql --password=fauxSecret52", "fauxSecret52"],
+  ["une option --api-key=", "tool --api-key=fauxSecret53", "fauxSecret53"],
+  ["un cookie en JSON", '{"cookie": "sid=fauxSecret54; a=b"}', "fauxSecret54"],
+  ["Set-Cookie en JSON", '{"Set-Cookie": "session=fauxSecret55; HttpOnly"}', "fauxSecret55"],
+  ["un cookie en JSON échappé", '{\\"cookie\\":\\"sid=fauxSecret56\\"}', "fauxSecret56"],
+  ["un guillemet échappé dedans", '{"password": "my\\"fauxSecret57"}', "fauxSecret57"],
+  ["une apostrophe échappée dedans", "{ password: 'it\\'sfauxSecret58' }", "fauxSecret58"],
+  [
+    "un guillemet échappé en JSON échappé",
+    '{\\"password\\":\\"my\\\\\\"fauxSecret59\\"}',
+    "fauxSecret59",
+  ],
+  ["Authorization: OAuth", "Authorization: OAuth fauxSecret60", "fauxSecret60"],
+  ["Authorization: ApiKey", "Authorization: ApiKey fauxSecret61", "fauxSecret61"],
+  ["Authorization: Bot", "Authorization: Bot fauxSecret62", "fauxSecret62"],
+  ["après un \\n échappé", JSON.stringify("erreur\npassword=fauxSecret63"), "fauxSecret63"],
+  [
+    "après un \\n échappé, en variable",
+    JSON.stringify("x\nOPENAI_API_KEY=fauxSecret64"),
+    "fauxSecret64",
+  ],
+  ["un guillemet jamais fermé", "password: 'fauxSecret65 et la suite", "fauxSecret65"],
+  ["un nom qui contient password", "PGPASSWORD=fauxSecret66 psql", "fauxSecret66"],
+];
+
+describe("secrets the second review of this PR found", () => {
+  it.each(SECOND)("%s", (_label, line, secret) => {
+    expect(redact(line)).not.toContain(secret);
+  });
+
+  it("keeps the line readable around them", () => {
+    expect(redact("cmd --token=fauxSecret50 --verbose")).toBe("cmd --token=… --verbose");
+    expect(redact('{\\"cookie\\":\\"sid=fauxSecret56\\"}')).toBe('{\\"cookie\\":\\"…\\"}');
+    expect(redact('{"password": "my\\"fauxSecret57", "u": "moi"}')).toBe(
+      '{"password": "…", "u": "moi"}',
+    );
+    expect(redact("Authorization: OAuth fauxSecret60")).toBe("Authorization: OAuth …");
+    expect(redact(JSON.stringify("erreur\npassword=fauxSecret63\nsuite"))).toBe(
+      '"erreur\\npassword=…\\nsuite"',
+    );
+  });
+
+  it.each([
+    '{"url":"http://localhost:4747","email":"alice@example.com"}',
+    "url=http://127.0.0.1:4747&email=alice@example.com",
+    "my-password-reset est arrivé",
+  ])("leaves what holds no secret as it is: %s", (line) => {
+    expect(redact(line)).toBe(line);
+  });
+
+  it("masks a Bearer in compact JSON without eating what follows", () => {
+    expect(redact('{"Authorization":"Bearer abc123456","model":"m1"}')).toBe(
+      '{"Authorization":"…","model":"m1"}',
+    );
+    expect(redact('{"h":"Bearer abc123456","model":"m1"}')).toBe('{"h":"Bearer …","model":"m1"}');
+  });
+
+  it.each([
+    ["des options --password= sans valeur", "--password="],
+    ["des \\n avant un nom", "\\npassword="],
+    ["des cookies JSON ouverts", '{"cookie":"'],
+    ["des guillemets échappés jamais fermés", 'password=\\"a\\\\'],
+    ["des schémas sans secret", "Authorization: OAuth "],
+    ["des adresses sans @", "http://a:b"],
+  ])("is still masked at once: %s", (_label, piece) => {
+    const line = piece.repeat(Math.ceil((256 * 1024) / piece.length));
+    const started = performance.now();
+    redact(line);
+    expect(performance.now() - started).toBeLessThan(400);
+  });
+});
+
+describe("a long text with no space in it", () => {
+  const monitor = () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-diag-long-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const made = new DiagnosticsMonitor({
+      dataDir: dir,
+      logDir: path.join(dir, "logs"),
+      worktreesDir: path.join(dir, "worktrees"),
+      getAgents: () => [],
+      getRunningTurns: () => 0,
+      getStartingAgents: () => 0,
+      hasLockedProjects: () => false,
+      sampleProcesses: async () => [],
+      sampleIntervalMs: 0,
+      lagCheckMs: 0,
+      log: () => undefined,
+      error: () => undefined,
+    });
+    cleanups.push(() => made.stop());
+    return made;
+  };
+
+  it("is kept by its start, not dropped", async () => {
+    const watch = monitor();
+    const json = `{"error":"${"e".repeat(3000)}"}`;
+    expect(watch.recordClientError({ message: json, route: `/t/${"r".repeat(700)}` }, "ordi")).toBe(
+      true,
+    );
+    const { text } = await watch.buildReport();
+    expect(text).toContain('{"error":"eee');
+    expect(text).toContain("/t/rrr");
+  });
+});
+
+describe("a stderr line longer than what is kept of it", () => {
+  it("keeps none of a secret cut where it is cut", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-stderr-long-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const agent = path.join(dir, "agent.mjs");
+    // A GitHub token across the 2000 characters kept of a line, in two writes.
+    writeFileSync(
+      agent,
+      `process.stderr.write("y".repeat(1997) + " ghp_fauxSecret67");
+       setTimeout(() => {
+         process.stderr.write("fauxSecret68 fin\\nderniere ligne\\n");
+         setTimeout(() => process.exit(3), 50);
+       }, 150);`,
+    );
+    let reason: string | undefined;
+    const started = AgentSession.start({
+      launch: { command: process.execPath, args: [agent] },
+      cwd: dir,
+      previousSessionId: null,
+      handlers: {
+        onUpdate: () => undefined,
+        requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+        onExit: (why) => {
+          reason = why;
+        },
+      },
+    });
+    const failure = await started.then(
+      () => "",
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    const said = `${failure}${reason ?? ""}`;
+    expect(said).not.toContain("fauxSecret68");
+    expect(said).not.toContain("fauxSecret67");
+    expect(said).toContain("derniere ligne");
+  });
+});

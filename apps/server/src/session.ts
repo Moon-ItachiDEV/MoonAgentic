@@ -277,6 +277,12 @@ export const needsSignIn = (error: unknown): boolean =>
 const SIGN_IN_LINE = /open the following link to authenticate|\bauthenticate\b.*https?:\/\//i;
 const OTHER_LINE_MAX = 2000;
 
+/** A text cut at a length, back to its last space when it has one. */
+const wholeWords = (cut: string): string => {
+  const word = /\S+$/.exec(cut);
+  return word && word.index > 0 ? cut.slice(0, word.index) : cut;
+};
+
 /**
  * Lets an agent's messages through, one JSON object per line, and hands every other line to
  * `onOther` instead: plain text there would be answered with a protocol error and leave the
@@ -613,10 +619,23 @@ export class AgentSession {
       stderrRest = "";
     };
     child.stderr.setEncoding("utf8");
+    // A line longer than that is kept by its start only: the rest of it, read later, is
+    // dropped up to its end, never added to that start.
+    let stderrCut = false;
     child.stderr.on("data", (chunk: string) => {
-      const lines = (stderrRest + chunk).split("\n");
-      // The start of a very long line is what tells a sign-in line from another.
-      stderrRest = (lines.pop() ?? "").slice(0, OTHER_LINE_MAX);
+      let text = chunk;
+      if (stderrCut) {
+        const end = text.indexOf("\n");
+        if (end === -1) return;
+        stderrCut = false;
+        text = text.slice(end);
+      }
+      const lines = (stderrRest + text).split("\n");
+      // The start of a very long line is what tells a sign-in line from another. Cut, it ends
+      // at its last space, so a secret it was cut in is not kept by its first half.
+      const rest = lines.pop() ?? "";
+      stderrCut = rest.length > OTHER_LINE_MAX;
+      stderrRest = stderrCut ? wholeWords(rest.slice(0, OTHER_LINE_MAX)) : rest;
       for (const line of lines) textLine(line);
     });
     child.stderr.on("end", flushStderr);
