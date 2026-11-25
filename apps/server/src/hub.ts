@@ -1,3 +1,4 @@
+import { grantKey, readOnlyCall, THREAD_GRANT_OPTION } from "./permission-rules.ts";
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import type { AgentProcessRef, DiagnosticsMonitor } from "./diagnostics.ts";
@@ -375,8 +376,15 @@ export class Hub {
   private readonly turnIds = new Map<string, string>();
   private readonly pendingPermissions = new Map<
     string,
-    { threadId: string; resolve: (r: acp.RequestPermissionResponse) => void }
+    {
+      threadId: string;
+      resolve: (r: acp.RequestPermissionResponse) => void;
+      /** « Autoriser pour ce fil »: what it remembers, and the agent's own option it answers. */
+      grant?: { key: string; optionId: string };
+    }
   >();
+  /** What « Autoriser pour ce fil » allowed, by thread: similar calls then pass without asking. */
+  private readonly threadGrants = new Map<string, Set<string>>();
   /**
    * Questions an agent holds its turn on, by item: each also waits in `pendingPermissions`,
    * so whatever cancels a permission request (a stop, the agent ending) cancels it too.
@@ -3534,6 +3542,11 @@ export class Hub {
     }
     if (!item.options.some((o) => o.optionId === optionId)) throw new Error("Choix inconnu.");
     this.pendingPermissions.delete(itemId);
+    if (optionId === THREAD_GRANT_OPTION && pending.grant) {
+      const grants = this.threadGrants.get(threadId) ?? new Set<string>();
+      grants.add(pending.grant.key);
+      this.threadGrants.set(threadId, grants);
+    }
     if (followUp?.trim() && this.turns.has(threadId)) this.followUps.set(threadId, followUp.trim());
     // The answer is given: the agent gets it even when the database refuses to write it,
     // which is then kept to be written later. A turn never waits on a lost answer.
@@ -3542,7 +3555,9 @@ export class Hub {
     if (![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)) {
       this.wrote(() => this.updateThread(threadId, { status: "running" }));
     }
-    pending.resolve({ outcome: { outcome: "selected", optionId } });
+    const answer =
+      optionId === THREAD_GRANT_OPTION && pending.grant ? pending.grant.optionId : optionId;
+    pending.resolve({ outcome: { outcome: "selected", optionId: answer } });
   }
 
   /** Answers a question the agent holds its turn on; the turn goes on with it. */
@@ -4537,10 +4552,16 @@ export class Hub {
         ? ownPattern.test(named)
         : ownPattern.test(request.toolCall.title ?? "") &&
           (!request.toolCall.kind || request.toolCall.kind === "other"));
-    if ((thread.permissionMode === "full" && !readOnlyDenied) || own) {
-      const allow =
-        request.options.find((o) => o.kind === "allow_once") ??
-        request.options.find((o) => o.kind === "allow_always");
+    const allow =
+      request.options.find((o) => o.kind === "allow_once") ??
+      request.options.find((o) => o.kind === "allow_always");
+    // In « Demande d'abord », a call that only reads passes (a review reads thirty files),
+    // and so does one like a call the user allowed « pour ce fil ». A coordinator runs no
+    // command, even one that reads.
+    const key = grantKey(request.toolCall, named);
+    const reads = readOnlyCall(request.toolCall) && !readOnlyDenied;
+    const granted = this.threadGrants.get(threadId)?.has(key) ?? false;
+    if ((thread.permissionMode === "full" && !readOnlyDenied) || own || reads || granted) {
       if (allow)
         return Promise.resolve({ outcome: { outcome: "selected", optionId: allow.optionId } });
     }
@@ -4552,11 +4573,22 @@ export class Hub {
         kind: "permission",
         // What the user decides by reads as it is written: no character in it reorders or hides.
         title: plainLabel(request.toolCall.title ?? "") || "L'agent demande une autorisation",
-        options: request.options.map((o) => ({
-          optionId: o.optionId,
-          name: plainLabel(o.name),
-          kind: o.kind,
-        })),
+        options: [
+          ...(allow
+            ? [
+                {
+                  optionId: THREAD_GRANT_OPTION,
+                  name: "Autoriser pour ce fil",
+                  kind: "allow_always" as const,
+                },
+              ]
+            : []),
+          ...request.options.map((o) => ({
+            optionId: o.optionId,
+            name: plainLabel(o.name),
+            kind: o.kind,
+          })),
+        ],
         outcome: null,
         at: Date.now(),
       },
@@ -4568,7 +4600,11 @@ export class Hub {
     // Waiting for the user takes no place: the next turn in line may start.
     this.admit();
     return new Promise((resolve) => {
-      this.pendingPermissions.set(id, { threadId, resolve });
+      this.pendingPermissions.set(id, {
+        threadId,
+        resolve,
+        ...(allow ? { grant: { key, optionId: allow.optionId } } : {}),
+      });
       this.broadcastRequests();
       signal.addEventListener("abort", () => this.settlePermission(id), { once: true });
     });

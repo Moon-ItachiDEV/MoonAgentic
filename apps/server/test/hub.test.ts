@@ -218,6 +218,7 @@ describe("Hub with the demo agent", () => {
     // « Refuser » backwards behind the same one: the user is shown what is really there.
     expect(request.item.title).toBe("Lire le fichier hs.tixe-lruc README.md");
     expect(request.item.options).toEqual([
+      { optionId: "moon:thread", name: "Autoriser pour ce fil", kind: "allow_always" },
       { optionId: "allow", name: "Autoriser", kind: "allow_once" },
       { optionId: "reject", name: "resufeR", kind: "reject_once" },
     ]);
@@ -310,6 +311,36 @@ describe("Hub with the demo agent", () => {
     hub.respondToPermission(threadId, open()!.id, "allow");
     await hub.whenIdle(threadId);
     expect(store.getThread(threadId)).toMatchObject({ status: "idle" });
+  });
+
+  it("lets reads pass in « Demande d'abord », and remembers « Autoriser pour ce fil »", async () => {
+    const { hub, store, client, projectId } = setup();
+    const asked = client.next(isPermissionRequest);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "/autorisations",
+    });
+    client.openThreadIds = new Set([threadId]);
+    const open = () =>
+      store.listItems(threadId).filter((i) => i.kind === "permission" && i.outcome === null);
+    // The read and the read-only git commands passed: the first question is the test command.
+    const first = await asked;
+    if (first.type !== "item" || first.item.kind !== "permission") throw new Error("unreachable");
+    expect(first.item.title).toBe("npm test");
+    hub.respondToPermission(threadId, first.item.id, "moon:thread");
+    // `npm test -- --run` is like it and passes; `rm` asks.
+    await expect
+      .poll(() => open().map((i) => i.kind === "permission" && i.title))
+      .toEqual(["rm -rf dist"]);
+    hub.respondToPermission(threadId, open()[0]!.id, "reject");
+    await hub.whenIdle(threadId);
+    expect(lastTurnSaid(store.listItems(threadId))).toContain(
+      "Réponses : allow, allow, allow, allow, reject.",
+    );
+    // Only two questions were asked in the thread.
+    expect(store.listItems(threadId).filter((i) => i.kind === "permission")).toHaveLength(2);
   });
 
   it("answers permission requests itself in full access", async () => {

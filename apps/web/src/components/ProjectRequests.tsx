@@ -1,6 +1,7 @@
 import type { PendingRequest, Thread } from "@moonagentic/protocol";
 import { useState } from "react";
 import { connection } from "../connection.ts";
+import { permissionChoices } from "../decision.ts";
 
 /** The requests of a project's threads, its teams' members included; never the coordinator's own. */
 export function projectRequests(
@@ -40,22 +41,22 @@ export function ProjectRequests(props: {
             {title(r.threadId)}
             <small>{r.title}</small>
           </button>
-          {r.options.map((o) => (
+          {permissionChoices(r.options).map((c, i, all) => (
             <button
-              key={o.optionId}
-              className={`b2 press ${o.kind === "allow_once" ? "ink" : "soft"}`}
+              key={c.value}
+              className={`b2 press ${(all.some((x) => x.recommended) ? c.recommended : i === 0) ? "ink" : "soft"}`}
               disabled={answered.has(r.itemId)}
               onClick={() => {
                 const sent = connection.send({
                   type: "permission.respond",
                   threadId: r.threadId,
                   itemId: r.itemId,
-                  optionId: o.optionId,
+                  optionId: c.value,
                 });
                 if (sent) setAnswered((a) => new Set(a).add(r.itemId));
               }}
             >
-              {o.name}
+              {c.label}
             </button>
           ))}
         </div>

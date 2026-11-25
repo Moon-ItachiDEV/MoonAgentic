@@ -665,7 +665,8 @@ const app = acp
       const call = {
         toolCallId: "read-odd",
         title: `Lire le fichier ${RLO}hs.tixe-lruc${PDF} README.md\n`,
-        kind: "read" as const,
+        // A fetch asks even in « Demande d'abord », where a read would pass.
+        kind: "fetch" as const,
         status: "pending" as const,
       };
       await update({ sessionUpdate: "tool_call", ...call });
@@ -687,6 +688,59 @@ const app = acp
       });
       const picked = odd.outcome.outcome === "selected" ? odd.outcome.optionId : "rien";
       await say(`Réponse reçue : ${picked}.`, "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
+    if (ask.trim() === "/autorisations") {
+      // As a review runs: reads and read-only commands, then a test command twice.
+      const calls = [
+        { toolCallId: "p-read", title: "Lire README.md", kind: "read" as const },
+        {
+          toolCallId: "p-diff",
+          title: "git diff main",
+          kind: "execute" as const,
+          rawInput: { command: ["bash", "-lc", "git diff main --stat && git log -3"] },
+        },
+        {
+          toolCallId: "p-test",
+          title: "npm test",
+          kind: "execute" as const,
+          rawInput: { command: "npm test" },
+        },
+        {
+          toolCallId: "p-test2",
+          title: "npm test -- --run",
+          kind: "execute" as const,
+          rawInput: { command: "npm test -- --run" },
+        },
+        {
+          toolCallId: "p-rm",
+          title: "rm -rf dist",
+          kind: "execute" as const,
+          rawInput: { command: "rm -rf dist" },
+        },
+      ];
+      const picked: string[] = [];
+      for (const call of calls) {
+        await update({ sessionUpdate: "tool_call", ...call, status: "pending" });
+        const answer: acp.RequestPermissionResponse = await client.request(
+          "session/request_permission",
+          {
+            sessionId,
+            toolCall: call,
+            options: [
+              { optionId: "allow", name: "Allow", kind: "allow_once" },
+              { optionId: "reject", name: "Reject", kind: "reject_once" },
+            ],
+          } satisfies acp.RequestPermissionRequest,
+        );
+        picked.push(answer.outcome.outcome === "selected" ? answer.outcome.optionId : "rien");
+        await update({
+          sessionUpdate: "tool_call_update",
+          toolCallId: call.toolCallId,
+          status: "completed",
+        });
+      }
+      await say(`Réponses : ${picked.join(", ")}.`, "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
     if (ask.trim() === "/question") {
