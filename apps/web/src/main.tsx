@@ -7,6 +7,7 @@ import "./v2/tokens.css";
 import "./v2/app.css";
 import "./v2/wide.css";
 import "./v2/real.css";
+import "./v2/thread.css";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";

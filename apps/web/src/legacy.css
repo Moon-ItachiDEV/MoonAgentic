@@ -1,7 +1,6 @@
 /* The styles from before the v2 redesign, kept below it until each screen is ported. */
 @layer reset, legacy;
 @import "./styles.css" layer(legacy);
-@import "./picker.css" layer(legacy);
 @import "./planner.css" layer(legacy);
 @import "./review.css" layer(legacy);
 @import "./review-sync.css" layer(legacy);

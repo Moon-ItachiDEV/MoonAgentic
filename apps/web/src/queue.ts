@@ -7,8 +7,8 @@ export const turnUnderWay = (thread: Pick<Thread, "status">): boolean =>
   thread.status === "running" || thread.status === "waiting";
 
 /**
- * Why the messages wait, in words for the user. While a turn is under way they go by
- * themselves at its end; after a stop or an error nothing does, until the user says so.
+ * How many messages wait, and whether they will go by themselves. While a turn is under way
+ * they go at its end; after a stop or an error nothing does, until the user says so.
  */
 export function queueState(thread: Pick<Thread, "status" | "queue">): {
   /** None waits: nothing is shown. */
@@ -18,22 +18,11 @@ export function queueState(thread: Pick<Thread, "status" | "queue">): {
   paused: boolean;
 } {
   const count = thread.queue?.length ?? 0;
-  const many = count > 1;
-  if (turnUnderWay(thread)) {
-    return {
-      count,
-      label: many
-        ? `${count} messages en file · ils partent un par un, à la fin de chaque tour`
-        : "1 message en file · il part à la fin du tour",
-      paused: false,
-    };
-  }
+  if (turnUnderWay(thread)) return { count, label: `En file · ${count}`, paused: false };
   return {
     count,
     label:
-      thread.status === "error"
-        ? `${count} message${many ? "s" : ""} en attente · le dernier tour a échoué`
-        : `${count} message${many ? "s" : ""} en attente · rien ne part tout seul après un arrêt`,
+      thread.status === "error" ? `En attente · ${count} · tour échoué` : `En attente · ${count}`,
     paused: true,
   };
 }

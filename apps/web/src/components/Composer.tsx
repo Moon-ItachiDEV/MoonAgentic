@@ -54,7 +54,6 @@ import { type ComposerContext, PlusPop, PlusSheet, WhereSheet } from "./Composer
 import type { TrayQuota } from "./ComposerTray.tsx";
 import { GoalBar } from "./GoalBar.tsx";
 import { MessageQueue } from "./MessageQueue.tsx";
-import { Presence } from "./Presence.tsx";
 import { Picker } from "./Picker.tsx";
 import { type Suggestion, Suggestions } from "./Suggestions.tsx";
 import { I } from "../v2/I.tsx";
@@ -278,24 +277,6 @@ export function Composer(props: {
       });
   };
 
-  // Close the picker on Escape or on any press outside the composer.
-  useEffect(() => {
-    if (!pickerOpen) return;
-    const close = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setMenu(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      setMenu(false);
-      input.current?.focus();
-    };
-    document.addEventListener("pointerdown", close);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", close);
-      document.removeEventListener("keydown", escape);
-    };
-  }, [pickerOpen]);
   // The « + » menu and the context's figures close the same way; the menu shrinks back first.
   const [plusOut, setPlusOut] = useState(false);
   const setPlusOpen = (on: boolean) => {
@@ -1090,16 +1071,8 @@ export function Composer(props: {
               </button>
             </div>
           )}
-          {thread?.goal && (
-            <div className="legacy">
-              <GoalBar thread={thread} goal={thread.goal} />
-            </div>
-          )}
-          {thread && (
-            <div className="legacy">
-              <MessageQueue thread={thread} />
-            </div>
-          )}
+          {thread?.goal && <GoalBar thread={thread} goal={thread.goal} />}
+          {thread && <MessageQueue thread={thread} />}
         </div>
       )}
       <div
@@ -1342,78 +1315,54 @@ export function Composer(props: {
           )}
         </div>
       )}
-      <div className="legacy ag-wrap pick-at">
-        <Presence show={pickerOpen}>
-          <Picker
-            agents={agents}
-            agent={agent}
-            model={model}
-            favorites={props.favorites}
-            projectId={(project ?? looseFolder)?.id}
-            inThread={!!thread}
-            agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
-            settings={settings}
-            {...(thread?.usage
-              ? {
-                  context: {
-                    used: thread.usage.used,
-                    size: thread.usage.size,
-                    ...(thread.canCompact && !running
-                      ? {
-                          onCompact: () => {
-                            setMenu(false);
-                            connection.send({
-                              type: "thread.send",
-                              threadId: thread.id,
-                              text: "/compact",
-                            });
-                          },
-                        }
-                      : {}),
-                  },
-                }
-              : {})}
-            onPickSetting={pickSetting}
-            onPickAgent={pickAgent}
-            onPickAgentModel={(id, model, stay) => {
-              if (thread) {
-                // The model is set once the new agent has the thread: the server takes one change at a time.
-                if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
-                connection.send({
-                  type: "thread.switchAgent",
-                  threadId: thread.id,
-                  agentId: id,
-                });
-              } else if (props.loose) {
-                setLoosePick({ agentId: id, ...(model ? { model } : {}) });
-              } else {
-                setPickedAgentId(id);
-                writePref("agent", id);
-                if (model) {
-                  setModelPicks((p) => ({ ...p, [id]: model }));
-                  writePref(`model.${id}`, model);
-                }
-              }
-              if (stay) return;
-              setMenu(false);
-              input.current?.focus();
-            }}
-            onPickModel={(id, stay) => {
-              if (thread)
-                connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
-              else if (agent && props.loose) setLoosePick({ agentId: agent.id, model: id });
-              else if (agent) {
-                setModelPicks((p) => ({ ...p, [agent.id]: id }));
-                writePref(`model.${agent.id}`, id);
-              }
-              if (stay) return;
-              setMenu(false);
-              input.current?.focus();
-            }}
-            onClose={() => setMenu(false)}
-          />
-        </Presence>
-      </div>
+      <Picker
+        open={pickerOpen}
+        agents={agents}
+        agent={agent}
+        model={model}
+        favorites={props.favorites}
+        projectId={(project ?? looseFolder)?.id}
+        inThread={!!thread}
+        agentsTitle={thread ? "Passer à un autre agent" : "Agent"}
+        settings={settings}
+        onPickSetting={pickSetting}
+        onPickAgent={pickAgent}
+        onPickAgentModel={(id, model, stay) => {
+          if (thread) {
+            // The model is set once the new agent has the thread: the server takes one change at a time.
+            if (model) setHandoffModel({ threadId: thread.id, agentId: id, model });
+            connection.send({
+              type: "thread.switchAgent",
+              threadId: thread.id,
+              agentId: id,
+            });
+          } else if (props.loose) {
+            setLoosePick({ agentId: id, ...(model ? { model } : {}) });
+          } else {
+            setPickedAgentId(id);
+            writePref("agent", id);
+            if (model) {
+              setModelPicks((p) => ({ ...p, [id]: model }));
+              writePref(`model.${id}`, model);
+            }
+          }
+          if (stay) return;
+          setMenu(false);
+          input.current?.focus();
+        }}
+        onPickModel={(id, stay) => {
+          if (thread) connection.send({ type: "thread.setModel", threadId: thread.id, model: id });
+          else if (agent && props.loose) setLoosePick({ agentId: agent.id, model: id });
+          else if (agent) {
+            setModelPicks((p) => ({ ...p, [agent.id]: id }));
+            writePref(`model.${agent.id}`, id);
+          }
+          if (stay) return;
+          setMenu(false);
+          input.current?.focus();
+        }}
+        onClose={() => setMenu(false)}
+      />
       {suggesting && trigger && (
         <Suggestions
           kind={trigger.kind}

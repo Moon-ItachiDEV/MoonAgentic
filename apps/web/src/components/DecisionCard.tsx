@@ -10,7 +10,6 @@ import {
   refusal,
   type Wait,
 } from "../decision.ts";
-import { AgentBadge } from "./AgentBadge.tsx";
 
 const icon = (d: string) => (
   <svg
@@ -249,7 +248,6 @@ export function DecisionCard(props: {
   if (!wait) return null;
 
   const thread = props.threads.find((t) => t.id === wait.threadId);
-  const agent = props.agents.find((a) => a.id === thread?.agentId);
   const elsewhere = wait.threadId !== props.threadId;
   const title =
     wait.kind === "permission" ? wait.title : (question?.question ?? wait.questions[0]?.question);
@@ -271,13 +269,10 @@ export function DecisionCard(props: {
 
   const steps = wait.kind === "question" && wait.questions.length > 1;
   const source = (
-    <>
-      <AgentBadge agent={agent} small />
-      <span>
-        {thread?.title ?? "Fil"}
-        {steps && ` · question ${p.step + 1} sur ${wait.questions.length}`}
-      </span>
-    </>
+    <span>
+      {elsewhere && (thread?.title ?? "Fil")}
+      {steps && `${elsewhere ? " · " : ""}question ${p.step + 1} sur ${wait.questions.length}`}
+    </span>
   );
   const cap = (index: number, on: boolean) => (
     <span className="dcard-k">{multi && on ? CHECK : index + 1}</span>

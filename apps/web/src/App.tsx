@@ -430,25 +430,23 @@ export function App() {
         </div>
       )}
       {t && !t.archived && (
-        <div className="legacy">
-          <DecisionCard
-            waits={waits({
-              thread: t,
-              items: state.items[t.id],
-              requests: state.requests,
-              questions: state.questions,
-              // A coordinator's page already lists what its project's threads wait for.
-              own: t.kind === "coordinator",
-            })}
-            threadId={t.id}
-            threads={state.threads}
-            agents={state.agents}
-            onOpenThread={(id, itemId) => {
-              focusItem(id, itemId);
-              openThread(id);
-            }}
-          />
-        </div>
+        <DecisionCard
+          waits={waits({
+            thread: t,
+            items: state.items[t.id],
+            requests: state.requests,
+            questions: state.questions,
+            // A coordinator's page already lists what its project's threads wait for.
+            own: t.kind === "coordinator",
+          })}
+          threadId={t.id}
+          threads={state.threads}
+          agents={state.agents}
+          onOpenThread={(id, itemId) => {
+            focusItem(id, itemId);
+            openThread(id);
+          }}
+        />
       )}
       <Composer
         key={t?.id ?? "new"}
@@ -792,29 +790,32 @@ export function App() {
             </ErrorBoundary>,
           )
         ) : route.name === "thread" ? (
-          legacyPage(
-            thread ? (
-              <ThreadView
-                thread={thread}
-                items={state.items[thread.id]}
-                held={state.held[thread.id]}
-                agents={state.agents}
-                threads={state.threads}
-                onOpenThread={(id) => navigate({ name: "thread", threadId: id })}
-              />
-            ) : (
-              <div className="view">
-                <div className="home">
-                  <p className="greet-sub">
-                    {!state.ready
-                      ? "Chargement…"
-                      : state.projects.some((p) => p.locked)
-                        ? "Ce fil n'existe plus, ou son projet est verrouillé."
-                        : "Ce fil n'existe plus."}
-                  </p>
-                </div>
+          thread ? (
+            <ThreadView
+              thread={thread}
+              items={state.items[thread.id]}
+              held={state.held[thread.id]}
+              agents={state.agents}
+              threads={state.threads}
+              onOpenThread={(id) => navigate({ name: "thread", threadId: id })}
+            />
+          ) : (
+            <div className="view" id="view">
+              <div className="empty">
+                {state.ready && (
+                  <>
+                    <span className="ei">
+                      <I n="bubble" s={24} />
+                    </span>
+                    <b>
+                      {state.projects.some((p) => p.locked)
+                        ? "Ce fil n'existe plus, ou son projet est verrouillé"
+                        : "Ce fil n'existe plus"}
+                    </b>
+                  </>
+                )}
               </div>
-            ),
+            </div>
           )
         ) : route.name === "project" ? (
           legacyPage(
