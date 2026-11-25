@@ -45,6 +45,7 @@ import { Sheet } from "../v2/Sheet.tsx";
 import { AppUpdateSettings, useApp } from "./AppUpdate.tsx";
 import { openUpdateCard, pillOf, updateShown } from "../app-update.ts";
 import type { AppInfo } from "@moonagentic/protocol";
+import { RoleMascots } from "./RoleMascots.tsx";
 import { MascotSettings } from "./MascotSettings.tsx";
 import { ModelFavorites } from "./ModelFavorites.tsx";
 import { RemoteAccess } from "./RemoteAccess.tsx";
@@ -697,7 +698,12 @@ function SectionBody(props: PageProps & GithubProps & { section: SettingsSection
     case "agents":
       return <AgentsPage agents={props.agents} />;
     case "mascots":
-      return <MascotSettings agents={props.agents} />;
+      return (
+        <>
+          <MascotSettings agents={props.agents} />
+          <RoleMascots />
+        </>
+      );
     case "models":
       return (
         <>

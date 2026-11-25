@@ -5,6 +5,8 @@ import {
   defaultTeam,
   MAX_PROJECT_MEMORY,
   ORIGIN_MARK,
+  REPLY_MARK,
+  VERDICT_FENCE,
   type TeamPreset,
   teamPresets,
   threadGroup,
@@ -48,14 +50,31 @@ const SEARCH_DEFAULT_LIMIT = 10;
 const SEARCH_MAX_LIMIT = 20;
 const SEARCH_SNIPPETS_PER_THREAD = 3;
 
-/** The user's own words, joined to the brief of a thread opened for them. */
-const withOrigin = (brief: string, asked: string | undefined) =>
-  asked
-    ? `${brief}${ORIGIN_MARK}${asked
-        .split("\n")
-        .map((line) => `> ${line}`)
-        .join("\n")}`
-    : brief;
+/**
+ * How a thread's agent answers, so the user reads it at a glance: in French, the result first.
+ * A review ends with a block the thread shows as a card (`VERDICT_FENCE`).
+ */
+export function replyGuide(kind: string | undefined): string {
+  const lines = [
+    "Réponds en français, en phrases simples. Commence par le résultat en une ou deux phrases, puis seulement le détail utile.",
+  ];
+  if (kind === "relecture")
+    lines.push(
+      `Pour une relecture, commence par ton verdict en une phrase, puis termine ta réponse par un bloc \`\`\`${VERDICT_FENCE} contenant ce JSON, en français, sans rien après : {"verdict": "prete | a-corriger", "bloquants": [{"texte": "le problème en une phrase", "ou": "fichier:ligne"}], "importants": [...], "remarques": [...], "verifs": [{"texte": "Pas de conflit avec main", "ok": true}]}. Les listes vides restent [].`,
+    );
+  return lines.join("\n");
+}
+
+/** The user's own words, joined to the brief of a thread opened for them, with how to answer. */
+const withOrigin = (brief: string, asked: string | undefined, kind?: string) =>
+  `${brief}${REPLY_MARK}${replyGuide(kind)}${
+    asked
+      ? `${ORIGIN_MARK}${asked
+          .split("\n")
+          .map((line) => `> ${line}`)
+          .join("\n")}`
+      : ""
+  }`;
 
 /** The user's messages joined to a brief, at most: the latest ones. */
 const ASKED_MESSAGES = 6;
@@ -734,7 +753,7 @@ export class Coordinators {
           permissionMode: coordinator.permissionMode,
           isolated: true,
           title,
-          text: withOrigin(brief, this.askedSince(coordinator.id)),
+          text: withOrigin(brief, this.askedSince(coordinator.id), kind),
           openedBy: coordinator.id,
           taskKey,
           // Past what it may run at once, the thread waits in line, in plain sight.

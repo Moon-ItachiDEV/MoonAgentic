@@ -32,6 +32,7 @@ import {
 } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
+  RoleMascots,
   FavoriteRef,
   Defaults,
   AgentSetting,
@@ -268,6 +269,8 @@ const OWN_THREAD_TOOL = new RegExp(
 
 /** A known, open pull request is asked about again this often. */
 const PR_WATCH_MS = 60_000;
+/** The setting that keeps the mascot of each role the user changed. */
+const ROLE_MASCOTS = "roleMascots";
 /** Characters kept of what an agent last said, for lists of threads. */
 const SUMMARY_LIMIT = 160;
 
@@ -280,6 +283,14 @@ export function summaryOf(reply: string, limit = SUMMARY_LIMIT): string {
     .replace(/\s+/g, " ")
     .trim();
   return flat.length > limit ? `${flat.slice(0, limit - 1).trimEnd()}…` : flat;
+}
+
+/** A reply's first sentences, as one short line: a thread's result read at a glance. */
+export function leadOf(reply: string, sentences = 2, limit = SUMMARY_LIMIT): string {
+  // Titles say what a part is about, not the result.
+  const flat = summaryOf(reply.replace(/^\s{0,3}#{1,6}\s.*$/gm, ""), Number.MAX_SAFE_INTEGER);
+  const parts = flat.split(/(?<=[.!?…])\s+(?=[A-ZÀ-ÖØ-Þ«"(0-9])/);
+  return summaryOf(parts.slice(0, sentences).join(" "), limit);
 }
 
 const settingValues = (settings: AgentSetting[]) =>
@@ -828,6 +839,7 @@ export class Hub {
       ...(pairedDevice ? { pairedDevice: true } : {}),
       ...(defaults ? { defaults } : {}),
       ...(presets ? { teamPresets: presets } : {}),
+      roleMascots: this.store.getSetting<RoleMascots>(ROLE_MASCOTS, {}, "object"),
       app: this.app.info(),
       ...(this.storageDown ? { storageError: this.storageNotice()! } : {}),
     };
@@ -1261,6 +1273,14 @@ export class Hub {
         };
         this.store.setSetting(DEFAULTS, defaults);
         this.broadcast({ type: "defaults", defaults });
+        return;
+      }
+      case "roleMascots.set": {
+        const current = this.store.getSetting<RoleMascots>(ROLE_MASCOTS, {}, "object");
+        const { [message.job]: _old, ...rest } = current;
+        const mascots: RoleMascots = message.look ? { ...rest, [message.job]: message.look } : rest;
+        this.store.setSetting(ROLE_MASCOTS, mascots);
+        this.broadcast({ type: "roleMascots", mascots });
         return;
       }
       case "teamPresets.set":
@@ -2709,7 +2729,7 @@ export class Hub {
     if (asked?.kind !== "user" || asked.from !== "coordinator") return;
     // Its conclusion: what it said last, after its tools, not how it set out.
     const last = this.items(threadId).findLast((i) => i.kind === "agent" || i.kind === "user");
-    const summary = last?.kind === "agent" ? summaryOf(last.text, RESULT_LIMIT) : "";
+    const summary = last?.kind === "agent" ? leadOf(last.text, 2, RESULT_LIMIT) : "";
     if (!summary) return;
     const changed = await this.review(threadId).catch(() => undefined);
     // Meanwhile the thread may have started again, or gone with its coordinator.

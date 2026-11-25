@@ -10,7 +10,7 @@ import {
 } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
-import { type Client, Hub, summaryOf } from "../src/hub.ts";
+import { type Client, Hub, leadOf, summaryOf } from "../src/hub.ts";
 import {
   type GhRun,
   ghPullRequests,
@@ -508,5 +508,16 @@ describe("a thread's summary", () => {
       summaryOf("## Fait\n\nLe **bouton** marche, voir [la PR](https://x.y/1).\n```ts\ncode\n```"),
     ).toBe("Fait Le bouton marche, voir la PR.");
     expect(summaryOf("a".repeat(400))).toHaveLength(160);
+  });
+
+  it("tells a finished thread's result in its first two sentences", () => {
+    expect(
+      leadOf(
+        "## Résultat\n\nLa PR 155 n'est pas prête. Deux secrets passent encore. Le reste est bon.\n\n```moon-revue\n{}\n```",
+        2,
+        400,
+      ),
+    ).toBe("La PR 155 n'est pas prête. Deux secrets passent encore.");
+    expect(leadOf("Fait : v0.1.10 publiée. Rien d'autre.", 1)).toBe("Fait : v0.1.10 publiée.");
   });
 });

@@ -1,4 +1,5 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useSyncExternalStore } from "react";
+import { connection } from "../connection.ts";
 import type { FrostMoonColor, FrostMoonPhase, FrostMoonState } from "../components/FrostMoon.tsx";
 
 // The moons are heavy drawings: they are fetched the first time a team or a review shows.
@@ -8,6 +9,19 @@ const FrostMoon = lazy(() =>
 
 /** The work a mascot stands for, in a team or in a review. */
 export type MascJob = "chef" | "code" | "relit" | "tests" | "fusion" | "rev" | "arb";
+
+/** The role's look: the one the user picked in Réglages › Mascottes, else its own. */
+export function useMascLook(job: MascJob): {
+  phase: FrostMoonPhase;
+  color: FrostMoonColor;
+  own: boolean;
+} {
+  const saved = useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().roleMascots[job],
+  );
+  return saved ? { ...saved, own: false } : { ...MASC_LOOK[job], own: true };
+}
 
 /** One moon per kind of work: its shape says the role, its tint tells the roles apart. */
 export const MASC_LOOK: Record<MascJob, { phase: FrostMoonPhase; color: FrostMoonColor }> = {
@@ -42,12 +56,13 @@ export function Masc({
   /** Another shape than the job's own, to tell three reviewers apart. */
   phase?: FrostMoonPhase;
 }) {
-  const look = MASC_LOOK[job];
+  const look = useMascLook(job);
   return (
     <span className={`msk fzm x-${state}`}>
       <Suspense fallback={null}>
         <FrostMoon
-          phase={phase ?? look.phase}
+          // Three reviewers keep three shapes, until the user picks one for them.
+          phase={look.own ? (phase ?? look.phase) : look.phase}
           color={look.color}
           state={state}
           size="100%"

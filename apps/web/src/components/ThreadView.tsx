@@ -1,3 +1,5 @@
+import { splitVerdict } from "../review-verdict.ts";
+import { VerdictCard } from "./VerdictCard.tsx";
 import {
   AGENT_SILENCE_STOP_MS,
   AGENT_STOPPED,
@@ -17,6 +19,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -735,9 +738,19 @@ function Who({ agent, thread }: { agent: AgentInfo | undefined; thread: Thread }
   );
 }
 
-/** An answer: while it is being written, its Markdown is worked out a few times a second. */
+/**
+ * An answer: while it is being written, its Markdown is worked out a few times a second.
+ * A review it ends with is shown as a card under it.
+ */
 function Answer({ text, live, threadId }: { text: string; live: boolean; threadId: string }) {
-  return <Markdown text={useLiveText(text, live)} threadId={threadId} />;
+  const shown = useLiveText(text, live);
+  const { text: body, verdict } = useMemo(() => splitVerdict(shown), [shown]);
+  return (
+    <>
+      <Markdown text={body} threadId={threadId} />
+      {verdict && <VerdictCard verdict={verdict} />}
+    </>
+  );
 }
 
 /**

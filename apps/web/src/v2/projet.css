@@ -564,3 +564,126 @@ html[data-dev="desk"] .scr.wide .mtop .plabel {
     var(--fg2) 100%
   );
 }
+
+/* Carte de relecture : le verdict qu'un agent écrit à la fin de sa réponse */
+.rv {
+  display: grid;
+  gap: 2px;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 20px;
+  background: var(--group);
+  animation: rvIn 320ms var(--out, cubic-bezier(0.23, 1, 0.32, 1)) both;
+}
+@keyframes rvIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.rvh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 2px 0 6px;
+}
+.rv .tg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 11px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.rv .tg::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.rv .tg.err {
+  background: var(--errbg);
+  color: var(--err-tx);
+}
+.rv .tg.ok {
+  background: var(--okbg);
+  color: var(--ok-tx);
+}
+.rv .rvc {
+  font-size: 13px;
+  color: var(--muted);
+}
+.rv .rvc b {
+  font-weight: 500;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+.rv .fd {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  gap: 8px;
+  align-items: baseline;
+  padding: 5px 0;
+  font-size: 14px;
+  color: var(--fg2);
+}
+.rv .fd i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--err);
+  transform: translateY(-2px);
+}
+.rv .fd.warn i {
+  background: var(--warn-dot);
+}
+.rv .fd.note i {
+  background: var(--faint);
+}
+.rv .fd em {
+  font: normal 400 12px var(--mono);
+  color: var(--faint);
+}
+.rv .rvm {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  font-size: 13px;
+  color: var(--muted);
+  justify-self: start;
+}
+.rv .rvm svg {
+  transition: transform 220ms var(--out, cubic-bezier(0.23, 1, 0.32, 1));
+}
+.rv .rvm.on svg {
+  transform: rotate(180deg);
+}
+.rv .rvmore {
+  display: grid;
+  animation: pFade 220ms var(--out, cubic-bezier(0.23, 1, 0.32, 1)) both;
+}
+.rv .ck {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--fg2);
+  padding: 3px 0;
+}
+.rv .ck svg {
+  color: var(--ok);
+}
+.rv .ck.no svg {
+  color: var(--err);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rv,
+  .rv .rvmore {
+    animation: none;
+  }
+}

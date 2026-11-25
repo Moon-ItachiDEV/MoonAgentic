@@ -690,6 +690,34 @@ const app = acp
       await say(`Réponse reçue : ${picked}.`, "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
+    if (ask.trim() === "/verdict") {
+      // As a reviewer answers a coordinator: the verdict in a sentence, then the card's block.
+      await say(
+        "La PR 155 n'est pas prête : le masquage des secrets laisse encore passer des mots de passe et des cookies. Pas de conflit avec main.\n\n" +
+          "```moon-revue\n" +
+          JSON.stringify({
+            verdict: "a-corriger",
+            bloquants: [
+              {
+                texte: "Les options --token= et --password= ne sont plus masquées",
+                ou: "redact.ts:36",
+              },
+              { texte: "Les cookies écrits en JSON passent en clair", ou: "redact.ts:43" },
+            ],
+            importants: [
+              { texte: "Un guillemet échappé laisse fuiter la fin du secret", ou: "redact.ts:38" },
+            ],
+            remarques: [{ texte: "Le nom de la fonction ne dit pas ce qu'elle masque" }],
+            verifs: [
+              { texte: "Pas de conflit avec main", ok: true },
+              { texte: "Tests Windows, installeurs Mac et Windows", ok: true },
+            ],
+          }) +
+          "\n```",
+        "agent_message_chunk",
+      );
+      return { stopReason: "end_turn" };
+    }
     if (ask.trim() === "/autorisations") {
       // As a review runs: reads and read-only commands, then a test command twice.
       const calls = [

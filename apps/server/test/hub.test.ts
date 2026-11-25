@@ -343,6 +343,27 @@ describe("Hub with the demo agent", () => {
     expect(store.listItems(threadId).filter((i) => i.kind === "permission")).toHaveLength(2);
   });
 
+  it("keeps the mascot the user picked for a role, for every device, until put back", async () => {
+    const { hub, client } = setup();
+    await hub.handle(client, {
+      type: "roleMascots.set",
+      job: "relit",
+      look: { phase: "star", color: "rose" },
+    });
+    expect(client.messages.at(-1)).toEqual({
+      type: "roleMascots",
+      mascots: { relit: { phase: "star", color: "rose" } },
+    });
+    const other = new TestClient();
+    hub.connect(other);
+    const snapshot = other.messages.find((m) => m.type === "snapshot");
+    expect(snapshot?.type === "snapshot" && snapshot.snapshot.roleMascots).toEqual({
+      relit: { phase: "star", color: "rose" },
+    });
+    await hub.handle(client, { type: "roleMascots.set", job: "relit", look: null });
+    expect(client.messages.at(-1)).toEqual({ type: "roleMascots", mascots: {} });
+  });
+
   it("answers permission requests itself in full access", async () => {
     const { hub, store, projectId } = setup();
     const threadId = hub.createThread({

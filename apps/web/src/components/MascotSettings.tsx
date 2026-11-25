@@ -23,7 +23,7 @@ export function MascotSettings({ agents: all }: { agents: AgentInfo[] }) {
   const [picked, setPicked] = useState<string>();
   const agent = agents.find((a) => a.id === picked);
   const mascot = agent?.mascot;
-  if (!agents.length) return <p className="snone">Réservé à Hermes</p>;
+  if (!agents.length) return null;
 
   const choose = (next: MascotChoice | null) =>
     agent && connection.send({ type: "agent.setMascot", agentId: agent.id, mascot: next });
