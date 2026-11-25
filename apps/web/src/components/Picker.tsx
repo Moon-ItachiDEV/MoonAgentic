@@ -642,7 +642,7 @@ function EffortSlide(props: {
  * warp streaks, a light front, two shock waves and a burst of sparks; then it stays calm.
  * Drawn only while the menu shows it, and still when motion is reduced.
  */
-function Galaxy({ intro: wanted }: { intro: boolean }) {
+export function Galaxy({ intro: wanted }: { intro: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const c = canvas.current;

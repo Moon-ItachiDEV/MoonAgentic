@@ -34,9 +34,8 @@ import { Clamp } from "./Clamp.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { MessageImages } from "./MessageImages.tsx";
-import { TeamCard } from "./TeamCard.tsx";
 import { ReviewCard } from "./ReviewCard.tsx";
-import { TeamStrip } from "./TeamStrip.tsx";
+import { TeamPanel } from "./TeamPanel.tsx";
 import { withoutTeamJson } from "../team-json.ts";
 import { isTeamThread, teamFeed } from "../team-feed.ts";
 import {
@@ -363,40 +362,25 @@ function Conversation({
     >
       <div className="feed" ref={feed}>
         {intro}
-        {/* A team started before the timeline was recorded has nothing to draw. */}
-        {!!strip?.team.timeline?.length && (
-          <div className="legacy">
-            <TeamStrip
-              key={strip.lead.id}
-              lead={strip.lead}
-              team={strip.team}
-              threads={threads}
-              agents={agents}
-              onOpenThread={onOpenThread}
-              defaultOpen={strip.lead.id === thread.id}
-            />
-          </div>
-        )}
-        {thread.team && (
-          <div className="legacy">
-            <TeamCard
-              thread={thread}
-              team={thread.team}
-              threads={threads}
-              onOpenThread={onOpenThread}
-            />
-          </div>
+        {strip && (
+          <TeamPanel
+            key={strip.lead.id}
+            lead={strip.lead}
+            team={strip.team}
+            threads={threads}
+            agents={agents}
+            onOpenThread={onOpenThread}
+            own={strip.lead.id === thread.id}
+          />
         )}
         {thread.prReview && (
-          <div className="legacy">
-            <ReviewCard
-              thread={thread}
-              review={thread.prReview}
-              threads={threads}
-              agents={agents}
-              onOpenThread={onOpenThread}
-            />
-          </div>
+          <ReviewCard
+            thread={thread}
+            review={thread.prReview}
+            threads={threads}
+            agents={agents}
+            onOpenThread={onOpenThread}
+          />
         )}
         {lead && (
           <button className="hook up" onClick={() => onOpenThread(lead.id)}>

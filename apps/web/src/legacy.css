@@ -11,7 +11,6 @@
 @import "./pairing.css" layer(legacy);
 @import "./pull-request.css" layer(legacy);
 @import "./pr-watch.css" layer(legacy);
-@import "./pr-review.css" layer(legacy);
 @import "./pr-remarks.css" layer(legacy);
 @import "./composer.css" layer(legacy);
 @import "./mascot.css" layer(legacy);
@@ -28,7 +27,6 @@
 @import "./offline.css" layer(legacy);
 @import "./update.css" layer(legacy);
 @import "./plan.css" layer(legacy);
-@import "./team-tree.css" layer(legacy);
 @import "./pr-board.css" layer(legacy);
 @import "./app-update.css" layer(legacy);
 @import "./team-presets.css" layer(legacy);

@@ -48,6 +48,7 @@ import { coordinatorOf, listedThreads, waitingCount } from "./project-threads.ts
 import { Sidebar as PlainSidebar } from "./components/Sidebar.tsx";
 import { TabBar, type TabPop, TabPopover } from "./components/TabBar.tsx";
 import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
+import { teamActive } from "./team-rows.ts";
 import { TeamDialog } from "./components/TeamDialog.tsx";
 import { ReviewDialog } from "./components/ReviewDialog.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
@@ -357,6 +358,20 @@ export function App() {
               },
             ]),
         { label: "Exporter en Markdown", icon: "file", run: () => exportThread() },
+        // A team at work is stopped from here only, never by a button in its way.
+        ...(thread.team && teamActive(thread.team)
+          ? [
+              {
+                label: "Arrêter l'équipe",
+                icon: "stop" as const,
+                danger: true,
+                sep: true,
+                run: () => {
+                  connection.send({ type: "team.stop", threadId: thread.id });
+                },
+              },
+            ]
+          : []),
         {
           label: thread.archived ? "Rouvrir" : "Marquer résolu",
           icon: "check",
@@ -1094,38 +1109,33 @@ export function App() {
         </ErrorBoundary>
       )}
       <div className="legacy legacy-over">
-        <Presence show={teamTask !== null && !!project}>
-          {teamTask !== null && project && (
-            <TeamDialog
-              project={project}
-              agents={state.agents}
-              favorites={state.favorites}
-              task={teamTask}
-              onClose={() => setTeamTask(null)}
-              onStarted={(id) => {
-                setTeamTask(null);
-                navigate({ name: "thread", threadId: id });
-              }}
-            />
-          )}
-        </Presence>
-        <Presence show={reviewPr !== null && !!project}>
-          {reviewPr !== null && project && (
-            <ReviewDialog
-              project={project}
-              agents={state.agents}
-              favorites={state.favorites}
-              saved={state.coordinator.review}
-              savedJudge={state.coordinator.reviewJudge}
-              pr={reviewPr}
-              onClose={() => setReviewPr(null)}
-              onStarted={(id) => {
-                setReviewPr(null);
-                navigate({ name: "thread", threadId: id });
-              }}
-            />
-          )}
-        </Presence>
+        <TeamDialog
+          open={teamTask !== null && !!project}
+          project={project}
+          agents={state.agents}
+          favorites={state.favorites}
+          task={teamTask ?? ""}
+          onClose={() => setTeamTask(null)}
+          onStarted={(id) => {
+            setTeamTask(null);
+            navigate({ name: "thread", threadId: id });
+          }}
+        />
+        <ReviewDialog
+          open={reviewPr !== null && !!project}
+          project={project}
+          agents={state.agents}
+          favorites={state.favorites}
+          threads={state.threads}
+          saved={state.coordinator.review}
+          savedJudge={state.coordinator.reviewJudge}
+          pr={reviewPr ?? ""}
+          onClose={() => setReviewPr(null)}
+          onStarted={(id) => {
+            setReviewPr(null);
+            navigate({ name: "thread", threadId: id });
+          }}
+        />
         <ScheduleDialog
           open={scheduling !== null}
           projects={openProjects}

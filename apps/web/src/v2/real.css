@@ -1036,3 +1036,123 @@ a.b2 {
 .sheet.artsh .sbody {
   flex: 1;
 }
+
+/* /equipe: what the real team adds to the mockup's card */
+.tmr:disabled {
+  cursor: default;
+}
+.tmr .ds.mer {
+  color: var(--err-tx);
+}
+.tmc > .pcw {
+  margin: 8px 6px 2px;
+}
+.tmpr a.b2 {
+  text-decoration: none;
+}
+.tmpr .b2 + .b2 {
+  margin-left: -2px;
+}
+button.tmc.tmlk {
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+.tmlk .tmh {
+  margin: 0;
+}
+.tmlk .tmo {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tmc > * {
+  min-width: 0;
+}
+.tmr {
+  min-width: 0;
+}
+
+/* /revue: a line holds its thread's button and, when it failed, the way to start it again */
+.tmr > .tmrb {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: inherit;
+  text-align: left;
+  color: inherit;
+}
+.tmrb:disabled {
+  cursor: default;
+}
+.tmr > .mini {
+  flex: none;
+  margin: 0;
+}
+.rvf .w .wl {
+  display: block;
+}
+.rvf .w .wl + .wl {
+  margin-top: 6px;
+}
+.rvf .w b {
+  font-weight: 500;
+  color: var(--fg);
+}
+.rva.one {
+  grid-template-columns: 1fr;
+}
+.rva a.b2 {
+  text-decoration: none;
+}
+.tmh .tmo {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Until « Modifications » is ported, its own .rvc (a comment on a line) must not show here. */
+.tmc .rvc {
+  margin: 0;
+  max-width: none;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  font: inherit;
+  white-space: normal;
+}
+.tmh .ppill {
+  flex: none;
+  white-space: nowrap;
+}
+.tmh .tmt {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* /equipe and /revue: their launch sheets */
+.tmsh .ins.tmrs,
+.rvsh .ins {
+  margin-bottom: 14px;
+}
+.tmm.tmno {
+  background: none;
+  animation: none;
+}
+.ppill.tmkeep {
+  gap: 6px;
+  margin: -4px 0 14px 4px;
+}
+.tmsh .pcw,
+.rvsh .pcw {
+  margin: 0 0 14px;
+}
+.rvsh .fld {
+  margin-bottom: 10px;
+}
+.rvsh .it.fva .prn {
+  flex: none;
+}

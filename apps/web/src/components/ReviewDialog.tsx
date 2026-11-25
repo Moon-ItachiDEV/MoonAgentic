@@ -6,11 +6,13 @@ import {
   type Favorites,
   type Project,
   type TeamMember,
+  type Thread,
 } from "@moonagentic/protocol";
 import { useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
-import { parseRouteValue, routeChoices, routeValue } from "../route-choices.ts";
-import { AgentBadge } from "./AgentBadge.tsx";
+import { I } from "../v2/I.tsx";
+import { ModelPill } from "../v2/ModelPill.tsx";
+import { Sheet } from "../v2/Sheet.tsx";
 
 /** What was typed after « /revue », as the number the server reads: 113, #113 or its address. */
 export const prRef = (typed: string) => typed.trim().split(/\s+/)[0] ?? "";
@@ -20,18 +22,24 @@ export const prRef = (typed: string) => typed.trim().split(/\s+/)[0] ?? "";
  * starts on the maker's best model for code review, or on the last ones picked here.
  */
 export function ReviewDialog({
+  open,
   project,
   agents,
   favorites,
+  threads,
   saved,
   savedJudge,
   pr: initialPr,
   onClose,
   onStarted,
 }: {
-  project: Project;
+  open: boolean;
+  /** The project whose pull request is read; none while the sheet is closed on a page without one. */
+  project: Project | undefined;
   agents: AgentInfo[];
   favorites: Favorites;
+  /** The threads, for the open pull requests of the project: one tap picks one. */
+  threads: Thread[];
   /** The menus of the last review started, one per maker, kept by the server. */
   saved: (TeamMember | null)[] | undefined;
   /** Its judge; `null` when the user chose none. */
@@ -44,10 +52,21 @@ export function ReviewDialog({
   // Until the user picks, a slot follows its default as the agents' models arrive; `null`
   // once the user said nobody.
   const [choices, setChoices] = useState<(TeamMember | null | undefined)[]>([]);
-  const [showAll, setShowAll] = useState(false);
   const [supervised, setSupervised] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [judgeChoice, setJudgeChoice] = useState<TeamMember | null | undefined>(undefined);
+
+  // Each opening starts from the pull request given and from the reviewers as kept.
+  useEffect(() => {
+    if (!open) return;
+    setPr(prRef(initialPr));
+    setChoices([]);
+    setJudgeChoice(undefined);
+    setSupervised(false);
+    setBusy(false);
+    setError(null);
+  }, [open, initialPr]);
 
   const reviewer = (i: number): TeamMember | undefined => {
     const chosen = choices[i];
@@ -59,7 +78,6 @@ export function ReviewDialog({
     return slotReviewer(REVIEW_SLOTS[i]!, agents, favorites);
   };
   const reviewers = REVIEW_SLOTS.map((_, i) => reviewer(i));
-  const [judgeChoice, setJudgeChoice] = useState<TeamMember | null | undefined>(undefined);
   const judge: TeamMember | undefined =
     judgeChoice !== undefined
       ? (judgeChoice ?? undefined)
@@ -70,27 +88,35 @@ export function ReviewDialog({
           : slotReviewer(REVIEW_JUDGE, agents, favorites);
   const picked = reviewers.filter((r): r is TeamMember => !!r);
   const valid = /^#?\d{1,9}$/.test(pr) || /^https:\/\/github\.com\/[^\s]+\/pull\/\d+/.test(pr);
+  const noGit = !!project && !project.git;
+  // The project's pull requests still open, newest first: what a review is most often for.
+  const known = threads
+    .filter(
+      (t) =>
+        t.projectId === project?.id &&
+        !t.archived &&
+        t.pr &&
+        (t.pr.state === "open" || t.pr.state === "draft"),
+    )
+    .sort((a, b) => (b.pr?.number ?? 0) - (a.pr?.number ?? 0))
+    .slice(0, 6);
+  const number = pr.replace(/^#/, "");
 
   // The models come from the agents themselves: each is asked once, as the model picker does.
   const asked = useRef(new Set<string>());
   useEffect(() => {
+    if (!open || !project) return;
     for (const agent of agents) {
       if (!agent.available || agent.models || agent.modelsError) continue;
       if (asked.current.has(agent.id)) continue;
       asked.current.add(agent.id);
       connection.send({ type: "agent.discover", agentId: agent.id, projectId: project.id });
     }
-  }, [agents, project.id]);
+  }, [open, agents, project]);
 
-  useEffect(() => {
-    const escape = (event: KeyboardEvent) => event.key === "Escape" && !busy && onClose();
-    document.addEventListener("keydown", escape);
-    return () => document.removeEventListener("keydown", escape);
-  }, [onClose, busy]);
-
-  const submit = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!valid || !picked.length || !project.git) return;
+  const ready = !!project && valid && picked.length > 0 && !noGit;
+  const submit = async () => {
+    if (!ready || busy || !project) return;
     setBusy(true);
     setError(null);
     try {
@@ -98,7 +124,7 @@ export function ReviewDialog({
         type: "review.start",
         requestId: newId(),
         projectId: project.id,
-        pr: pr.replace(/^#/, ""),
+        pr: number,
         reviewers: picked,
         slots: reviewers.map((r) => r ?? null),
         ...(supervised ? { supervised: true } : {}),
@@ -112,41 +138,69 @@ export function ReviewDialog({
   };
 
   return (
-    <div className="scrim" onMouseDown={(e) => e.target === e.currentTarget && !busy && onClose()}>
+    <Sheet
+      open={open}
+      onClose={() => !busy && onClose()}
+      title="Relire une PR"
+      tall
+      className="rvsh"
+    >
       <form
-        className="dialog prr-dialog"
-        role="dialog"
-        aria-modal
-        aria-labelledby="prr-title"
-        onSubmit={(e) => void submit(e)}
+        className="sbody"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit();
+        }}
       >
-        <h2 id="prr-title">Relire une PR à {picked.length || 3}</h2>
-        <p>
-          Chaque agent lit la PR dans son fil, sans rien modifier, puis juge les constats des
-          autres. L'arbitre tranche ce qui reste contesté.
-        </p>
-        <label className="field">
-          Pull request
+        <div className="gl2">PR</div>
+        <label className="fld">
           <input
-            autoFocus={!pr}
+            // Focused when the sheet opens with no pull request yet.
+            ref={(el) => {
+              if (el && open && !pr && !known.length && document.activeElement !== el) el.focus();
+            }}
             required
             value={pr}
-            placeholder="113"
+            inputMode="url"
+            placeholder="Numéro ou adresse"
             aria-label="Numéro ou adresse de la PR"
             onChange={(e) => setPr(e.target.value.trim())}
           />
         </label>
-        <div className="prr-slots">
+        {known.length > 0 && (
+          <div className="ins" role="radiogroup" aria-label="Pull requests ouvertes">
+            {known.map((t) => {
+              const on = number === String(t.pr!.number);
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  className="it fva"
+                  role="radio"
+                  aria-checked={on}
+                  aria-pressed={on}
+                  onClick={() => setPr(String(t.pr!.number))}
+                >
+                  <span className="prn mono">#{t.pr!.number}</span>
+                  <span className="tx">{t.title}</span>
+                  <span className="fvc">
+                    <I n="check" s={14} />
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+        <div className="gl2">Relecteurs</div>
+        <div className="ins">
           {REVIEW_SLOTS.map((slot, i) => (
-            <div key={slot.vendor} className="prr-slot">
-              <span className="prr-maker">{slot.label}</span>
-              <SlotSelect
-                className="prr-pick"
+            <div key={slot.vendor} className={`it ro tmrow${reviewers[i] ? "" : " off"}`}>
+              <span className="tx">{slot.label}</span>
+              <ModelPill
                 label={`Relecteur ${slot.label}`}
                 agents={agents}
                 favorites={favorites}
                 value={reviewers[i]}
-                showAll={showAll}
                 none="Personne"
                 onChange={(m) =>
                   setChoices((c) => {
@@ -158,96 +212,54 @@ export function ReviewDialog({
               />
             </div>
           ))}
-          {picked.length > 1 && (
-            <div className="prr-slot">
-              <span className="prr-maker">Arbitre</span>
-              <SlotSelect
-                className="prr-pick"
-                label="Arbitre"
-                agents={agents}
-                favorites={favorites}
-                value={judge}
-                showAll={showAll}
-                none="Personne"
-                onChange={(m) => setJudgeChoice(m ?? null)}
-              />
-            </div>
-          )}
-          <button type="button" className="prr-all" onClick={() => setShowAll((s) => !s)}>
-            {showAll ? "Seulement mes favoris" : "Afficher tous les modèles"}
-          </button>
         </div>
-        <label className="field team-ship">
-          <input
-            type="checkbox"
-            checked={supervised}
-            onChange={(e) => setSupervised(e.target.checked)}
-          />
-          <span>
-            Accès supervisé
-            <small>
-              Pour la PR de quelqu'un d'autre : chaque commande des relecteurs attend ton accord, au
-              cas où le code leur dirait d'en lancer une.
-            </small>
-          </span>
-        </label>
-        {!project.git && (
-          <p className="error">« {project.name} » n'est pas un dépôt git relié à GitHub.</p>
+        {picked.length > 1 && (
+          <>
+            <div className="gl2">Arbitre</div>
+            <div className="ins">
+              <div className={`it ro tmrow${judge ? "" : " off"}`}>
+                <span className="tx">Désaccords</span>
+                <ModelPill
+                  label="Arbitre"
+                  agents={agents}
+                  favorites={favorites}
+                  value={judge}
+                  none="Personne"
+                  onChange={(m) => setJudgeChoice(m ?? null)}
+                />
+              </div>
+            </div>
+          </>
         )}
-        {error && <p className="error">{error}</p>}
-        <div className="row">
-          <button type="button" className="btn quiet" disabled={busy} onClick={onClose}>
-            Annuler
-          </button>
-          <button
-            className="btn pri"
-            autoFocus={!!pr}
-            disabled={busy || !valid || !picked.length || !project.git}
-          >
+        <div className="ins">
+          <div className="it ro">
+            <span className="tx">Accès supervisé</span>
+            <button
+              type="button"
+              className="tog"
+              role="switch"
+              aria-checked={supervised}
+              aria-label="Accès supervisé : chaque commande des relecteurs attend ton accord"
+              onClick={() => setSupervised(!supervised)}
+            />
+          </div>
+        </div>
+        {noGit && project && (
+          <p className="pcw t-err" role="alert">
+            « {project.name} » n'est pas un dépôt git relié à GitHub
+          </p>
+        )}
+        {error && (
+          <p className="pcw t-err" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="mga">
+          <button className="b2 ink press" disabled={!ready || busy}>
             {busy ? "Lancement…" : "Lancer la revue"}
           </button>
         </div>
       </form>
-    </div>
-  );
-}
-
-/**
- * One slot's menu: the favorite models, grouped by agent, or every model with `showAll`
- * (one switch for the whole dialog). The chosen agent's badge sits beside it.
- */
-function SlotSelect(props: {
-  label: string;
-  agents: AgentInfo[];
-  favorites: Favorites;
-  value: TeamMember | undefined;
-  showAll: boolean;
-  none: string;
-  onChange: (member: TeamMember | undefined) => void;
-  className: string;
-}) {
-  const { value } = props;
-  const { groups } = routeChoices(props.agents, props.favorites, value, props.showAll);
-  const agent = value && props.agents.find((a) => a.id === value.agentId);
-  return (
-    <label className={props.className}>
-      {value && <AgentBadge agent={agent ?? { id: value.agentId, short: "?" }} small />}
-      <select
-        aria-label={props.label}
-        value={value ? routeValue(value.agentId, value.model) : ""}
-        onChange={(e) => props.onChange(parseRouteValue(e.target.value))}
-      >
-        <option value="">{props.none}</option>
-        {groups.map((g) => (
-          <optgroup key={g.agent.id} label={g.agent.name}>
-            {g.options.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </optgroup>
-        ))}
-      </select>
-    </label>
+    </Sheet>
   );
 }
