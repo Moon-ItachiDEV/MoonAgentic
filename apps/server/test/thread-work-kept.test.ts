@@ -12,6 +12,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   unlinkSync,
   utimesSync,
   writeFileSync,
@@ -187,7 +188,9 @@ describe("a thread's folder when git fails", () => {
 
   it("writes again a `.git` file a power cut emptied, without touching the work", async () => {
     const { repo, base, dir } = await worktreeWithWork();
-    writeFileSync(path.join(dir, ".git"), "");
+    // Emptied in place: git hides this file on Windows, where a hidden file cannot be
+    // written over as a new one.
+    truncateSync(path.join(dir, ".git"));
     await ensureWorktree(repo, dir, "moon/fil-abcd12", base);
     expect(workIn(dir)).toEqual(WORK);
     expect(git(dir, "status", "--porcelain")).toContain("notes.txt");
