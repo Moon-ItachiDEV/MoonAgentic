@@ -112,8 +112,8 @@ const hostile = (app: string) =>
     ...APP_LINKS.map(([text, href]) => `<a href="${href.replace("APP", app)}">${text}</a>`),
     `[Ouvre ce lien pour rafraîchir](#token=jeton-pose-par-l-agent)`,
     `<svg width="200" height="40"><a href="https://exemple.invalid/x"><text y="20">Reconnecte-toi</text></a></svg>`,
-    // A piece of a formula carrying an address, which Safari and Firefox follow, and the
-    // app's own mark for a file, written by hand with a token after it.
+    // A piece of a formula carrying an address, which Chromium ignores and other browsers
+    // may follow, and the app's own mark for a file, written by hand with a token after it.
     `<math><mi href="${app}/#token=jeton-pose-par-l-agent">Formule</mi></math>`,
     `<a href="#moon-file:notes.txt&amp;token=jeton-pose-par-l-agent">Ouvrir la pièce jointe</a>`,
     // And what an honest answer links to: a page of another site, a letter to write.
