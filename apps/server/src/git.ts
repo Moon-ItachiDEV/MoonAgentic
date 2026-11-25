@@ -2,8 +2,11 @@ import { execFile, execFileSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdtempSync,
+  readdirSync,
   realpathSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -33,6 +36,9 @@ const NETWORK_TIMEOUT_MS = 5 * 60_000;
  * `git add -A` in a big repository can take a while.
  */
 export const LOCAL_TIMEOUT_MS = 2 * 60_000;
+
+/** What a git command that was given up on is said to have done. */
+const NO_ANSWER = "git n'a pas répondu à temps.";
 
 /** Git calls slower than this are reported to performance diagnostics (subcommand only). */
 const SLOW_GIT_MS = 3_000;
@@ -75,7 +81,7 @@ export function git(
         const elapsed = Date.now() - startedAt;
         if (elapsed >= SLOW_GIT_MS) slowGitListener?.(gitSubcommand(args), elapsed);
         if (error?.killed && error.code !== "ERR_CHILD_PROCESS_STDIO_MAXBUFFER")
-          reject(new Error("git n'a pas répondu à temps.", { cause: error }));
+          reject(new Error(NO_ANSWER, { cause: error }));
         else if (error) reject(new Error(stderr.trim() || error.message, { cause: error }));
         else resolve(stdout);
       },
@@ -101,7 +107,7 @@ export function isGitRepo(dir: string): boolean {
 }
 
 /** A branch name a person can read: `moon/<title words>-<short id>`. */
-export function branchName(title: string, id: string): string {
+export function branchName(title: string, id: string, idLength = 6): string {
   const slug = title
     .normalize("NFD")
     .replace(/[̀-ͯ]/g, "")
@@ -110,7 +116,7 @@ export function branchName(title: string, id: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 40)
     .replace(/-+$/, "");
-  return `moon/${slug ? `${slug}-` : ""}${id.slice(0, 6)}`;
+  return `moon/${slug ? `${slug}-` : ""}${id.slice(0, idLength)}`;
 }
 
 /**
@@ -136,13 +142,27 @@ export const branchExists = (dir: string, branch: string): Promise<boolean> =>
     () => false,
   );
 
-/** True when `dir` is the top of a git work tree, rather than a folder inside another one. */
-async function isWorktreeRoot(dir: string): Promise<boolean> {
+/**
+ * Why `dir` is not known to be the top of a git work tree, or undefined when it is one. Git
+ * failing is a reason like another: it says nothing of the folder, least of all that it is
+ * to be made again.
+ */
+async function notWorktreeRoot(dir: string): Promise<string | undefined> {
   try {
     const top = (await git(dir, ["rev-parse", "--show-toplevel"])).trim();
-    return samePath(top, dir);
-  } catch {
-    return false;
+    return samePath(top, dir) ? undefined : `git le range dans ${top}`;
+  } catch (error) {
+    return (error instanceof Error ? error.message : String(error)).split("\n")[0]!;
+  }
+}
+
+/** Whether something is at `dir` that removing it would lose: anything but an empty folder. */
+function holdsFiles(dir: string): boolean {
+  try {
+    return readdirSync(dir).length > 0;
+  } catch (error) {
+    // A file by that name, a folder that cannot be read: it is there, and not ours to judge.
+    return (error as NodeJS.ErrnoException).code !== "ENOENT";
   }
 }
 
@@ -257,8 +277,9 @@ function oneAtATime<T>(repoDir: string, work: () => Promise<T>): Promise<T> {
 
 /**
  * Makes sure the thread's worktree is there, on its branch. Safe to run again after a stop
- * at any point: a half-made folder is made again, and a branch that exists is reused with
- * its commits rather than started over from `base`.
+ * at any point: a branch that exists is reused with its commits rather than started over
+ * from `base`. A folder that holds files is never made again: it is the worktree, or the
+ * call fails and leaves it as it is.
  */
 export async function ensureWorktree(
   repoDir: string,
@@ -275,13 +296,26 @@ async function makeWorktree(
   branch: string,
   base: string,
 ): Promise<void> {
-  if (existsSync(worktree) && (await isWorktreeRoot(worktree))) return;
+  if (holdsFiles(worktree)) {
+    // Its files may be all there is of a thread's work not yet committed, and a checkpoint
+    // of them needs the same git that just failed: nothing here removes them.
+    let why = await notWorktreeRoot(worktree);
+    if (why && why !== NO_ANSWER) {
+      // What a power cut leaves of git's own notes on the folder (an empty `.git` file) is
+      // written again, no file of the thread is touched; then git is asked once more, which
+      // is also what a failure that does not last needs.
+      await git(repoDir, ["worktree", "repair"]).catch(() => undefined);
+      why = await notWorktreeRoot(worktree);
+    }
+    if (!why) return;
+    throw new Error(
+      `Le dossier de ce fil (${worktree}) contient des fichiers, mais git ne le reconnaît pas comme sa copie de travail : ${why.replace(/[.\s]+$/, "")}. Rien n'a été effacé. Réessaie ; si l'erreur revient, déplace ce dossier ailleurs pour que le fil reparte de sa branche.`,
+    );
+  }
   // What git remembers of a folder that is gone, or was never finished, is dropped first.
   await git(repoDir, ["worktree", "prune"]);
-  if (existsSync(worktree)) {
-    await git(repoDir, ["worktree", "remove", "--force", worktree]).catch(() => undefined);
-    rmSync(worktree, { recursive: true, force: true });
-  }
+  // Only an empty folder is left to remove: `git worktree add` makes its own.
+  if (existsSync(worktree)) rmdirSync(worktree);
   if (await branchExists(repoDir, branch)) {
     await git(repoDir, ["worktree", "add", worktree, branch]);
   } else {
@@ -430,22 +464,76 @@ export function reviewChanges(
   });
 }
 
+/** An ignored file heavier than this is not kept with a folder about to go. */
+const MAX_KEPT_IGNORED_BYTES = 50 * 1024 * 1024;
+
+/**
+ * The files an ignore rule names one by one (`.env.local`, `*.log`): local settings, keys,
+ * what no command makes again. A folder ignored whole (`node_modules/`, `dist/`) is left
+ * out: git does not look inside it, and it is what an install or a build brings back.
+ */
+async function ignoredFiles(dir: string, env: NodeJS.ProcessEnv): Promise<string[]> {
+  const listed = await git(
+    dir,
+    ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
+    env,
+  );
+  return listed.split("\0").filter((entry) => {
+    if (!entry || entry.endsWith("/")) return false;
+    try {
+      const found = lstatSync(path.join(dir, entry));
+      return (found.isFile() || found.isSymbolicLink()) && found.size <= MAX_KEPT_IGNORED_BYTES;
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * Writes the folder's files, ignored ones aside, as a git tree, with the index `env` names.
+ * `beforeRemoval` adds the files ignored one by one.
+ */
+async function filesTree(
+  dir: string,
+  env: NodeJS.ProcessEnv,
+  beforeRemoval: boolean,
+): Promise<string> {
+  await git(dir, ["add", "-A"], env);
+  const ignored = beforeRemoval ? await ignoredFiles(dir, env) : [];
+  if (ignored.length) {
+    await withPathspecFile(ignored, (file) =>
+      git(dir, ["--literal-pathspecs", "add", "--force", ...pathspecArgs(file)], env),
+    );
+  }
+  return (await git(dir, ["write-tree"], env)).trim();
+}
+
 /**
  * Saves the folder's files, ignored ones aside, as a git tree kept alive by `ref`, which
- * no branch or commit shows. Returns the tree's hash.
+ * no branch or commit shows. Returns the tree's hash. `beforeRemoval` is for a folder about
+ * to go: the files ignored one by one are saved too, as the folder was their only place.
  */
-export function saveCheckpoint(dir: string, ref: string): Promise<string> {
+export function saveCheckpoint(dir: string, ref: string, beforeRemoval = false): Promise<string> {
   return withScratchIndex(dir, async (env) => {
-    await git(dir, ["add", "-A"], env);
-    const tree = (await git(dir, ["write-tree"], env)).trim();
+    const tree = await filesTree(dir, env, beforeRemoval);
     await git(dir, ["update-ref", ref, tree]);
     return tree;
   });
 }
 
+/** Whether the folder's files are still, one for one, those `saveCheckpoint` gave as `tree`. */
+export function matchesCheckpoint(
+  dir: string,
+  tree: string,
+  beforeRemoval = false,
+): Promise<boolean> {
+  return withScratchIndex(dir, async (env) => (await filesTree(dir, env, beforeRemoval)) === tree);
+}
+
 /**
  * Puts the folder's files back as a checkpoint saved them: changed files are rewritten and
- * files made since are removed. Ignored files, the branch and its commits stay as they are.
+ * files made since are removed. Ignored files, the branch and its commits stay as they are;
+ * the ignored files a checkpoint holds (one saved before its folder went) come back with it.
  */
 export async function restoreCheckpoint(dir: string, tree: string): Promise<void> {
   // The ignore rules go back first, so a file they ignored then is not taken for a new one.
@@ -906,6 +994,25 @@ const safeRelative = (file: string): boolean =>
   !file.split(/[\\/]/).some((part) => part === ".." || part === ".git");
 
 /**
+ * Whether `base` holds something at this path. A `cat-file -e` ends the same way when the
+ * answer is no and when git fails, so its no is asked again of a command that tells the two
+ * apart: a failure is heard, and never taken for a file to remove.
+ */
+async function inTree(dir: string, base: string, file: string): Promise<boolean> {
+  if ((await gitCode(dir, ["cat-file", "-e", `${base}:${file}`])).code === 0) return true;
+  const listed = await git(dir, [
+    "--literal-pathspecs",
+    "ls-tree",
+    "-z",
+    "--name-only",
+    base,
+    "--",
+    file,
+  ]);
+  return listed !== "";
+}
+
+/**
  * Puts one file of a review back as it was at `base`, the start of the branch: a changed or
  * removed file comes back, a new one goes. For a rename, `from` comes back and the new name
  * goes. Committed changes too: their undoing is committed then, on these paths alone, so the
@@ -915,8 +1022,7 @@ export async function rejectFile(dir: string, base: string, file: string, from?:
   const paths = from ? [file, from] : [file];
   if (!paths.every(safeRelative)) throw new Error("Ce chemin n'est pas dans la copie de travail.");
   for (const p of paths) {
-    const existed = (await gitCode(dir, ["cat-file", "-e", `${base}:${p}`])).code === 0;
-    if (existed) {
+    if (await inTree(dir, base, p)) {
       await git(dir, ["--literal-pathspecs", "checkout", base, "--", p]);
     } else {
       await git(dir, [

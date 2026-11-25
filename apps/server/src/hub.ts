@@ -83,12 +83,14 @@ import {
   deleteBranch,
   worktreeStart,
   branchName,
+  canonicalPath,
   dropCheckpoints,
   gitCommonDir,
   gitRootCommonDir,
   isGitRepo,
   isSameOrInside,
   pathsOverlap,
+  matchesCheckpoint,
   restoreCheckpoint,
   reviewChanges,
   samePath,
@@ -279,6 +281,24 @@ const checkpointRef = (threadId: string, itemId: string) =>
   `refs/moonagentic/${threadId}/${itemId.replace(/^user:/, "")}`;
 /** Keeps the files of an archived thread, uncommitted ones included, until it comes back. */
 const archiveRef = (threadId: string) => `refs/moonagentic/${threadId}/archive`;
+/** Where the files a step back takes away are kept, one ref for each step back. */
+const undoneRef = (threadId: string, at: number) => `refs/moonagentic/${threadId}/undone-${at}`;
+
+/** How a folder's name compares on this system: Windows does not tell `A` from `a`. */
+const folderKey = (name: string) => (process.platform === "win32" ? name.toLowerCase() : name);
+
+/**
+ * `find` asked once for each folder: many threads, and few ways their folders' place was
+ * ever written, so the disk is looked at a few times, not once a thread.
+ */
+function onceEach(find: (folder: string) => string): (folder: string) => string {
+  const known = new Map<string, string>();
+  return (folder) => {
+    let found = known.get(folder);
+    if (found === undefined) known.set(folder, (found = find(folder)));
+    return found;
+  };
+}
 
 /** The folder the agent works in: the worktree, or the project's folder inside it. */
 const workFolder = (workspace: Workspace) =>
@@ -637,13 +657,84 @@ export class Hub {
 
   /** The folders of the worktrees folder that a thread holds, archived ones included. */
   private heldWorktrees(): string[] {
+    const real = onceEach(canonicalPath);
     const held: string[] = [];
     for (const thread of this.store.listThreads()) {
-      const dir = thread.workspace?.path;
-      if (!dir || !this.isOurWorktree(dir)) continue;
-      held.push(path.relative(this.worktreesDir, dir).split(/[\\/]/)[0]!);
+      const name = thread.workspace && this.ourFolder(thread.workspace.path, real);
+      if (name) held.push(name);
     }
     return held;
+  }
+
+  /**
+   * The name of the folder of ours that `dir` is, or is in; undefined for any other folder.
+   * Ours are told by where they are on disk, not by how their path is written: the data
+   * folder reached through a link or a junction one day and by its own path the next is the
+   * same folder, and a thread's folder taken for nobody's would be swept away.
+   */
+  private ourFolder(
+    dir: string,
+    real: (folder: string) => string = canonicalPath,
+  ): string | undefined {
+    const within = (parent: string, child: string) => {
+      const inside = path.relative(parent, child);
+      return inside && !inside.startsWith("..") && !path.isAbsolute(inside)
+        ? inside.split(path.sep)[0]
+        : undefined;
+    };
+    return (
+      // A path made from this very folder's, as nearly all are: no look at the disk.
+      within(this.worktreesDir, dir) ??
+      // The folder that holds it is resolved, not the thread's own: it is named by its place.
+      within(real(this.worktreesDir), path.join(real(path.dirname(dir)), path.basename(dir)))
+    );
+  }
+
+  /**
+   * A folder and a branch of its own for a thread, named by the start of its id: short, to
+   * keep deep projects under Windows' path length limit. Two ids can start alike; a name
+   * that a thread holds, or that is on disk, is left to it and more of the id is taken, or
+   * the second thread would work in the first one's folder and take it along when deleted.
+   */
+  private ownWorkspace(title: string, id: string): { branch: string; path: string } {
+    const folders = new Set(this.heldWorktrees().map(folderKey));
+    const branches = new Set(this.store.listThreads().map((t) => t.workspace?.branch));
+    // The id's own groups, then all of it, which no other thread has.
+    const longer = [13, 18, 23, id.length];
+    const folder = [8, ...longer]
+      .map((length) => id.slice(0, length))
+      .find(
+        (name) => !folders.has(folderKey(name)) && !existsSync(path.join(this.worktreesDir, name)),
+      );
+    const branch = [6, ...longer]
+      .map((length) => branchName(title, id, length))
+      .find((name) => !branches.has(name));
+    if (!folder || !branch) throw new Error("Aucun dossier libre pour ce fil : réessaie.");
+    return { branch, path: path.join(this.worktreesDir, folder) };
+  }
+
+  /**
+   * The other threads that hold this folder too, oldest first: two ids that start alike once
+   * gave two threads one folder. It is the oldest one's, and nobody's to remove meanwhile.
+   */
+  private sharingFolder(threadId: string, dir: string): Thread[] {
+    const real = onceEach(canonicalPath);
+    const name = this.ourFolder(dir, real);
+    if (!name) return [];
+    return this.store
+      .listThreads()
+      .filter(
+        (t) =>
+          t.id !== threadId &&
+          !!t.workspace &&
+          folderKey(this.ourFolder(t.workspace.path, real) ?? "") === folderKey(name),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  }
+
+  /** Whether the folder is one of ours that only this thread holds: its own to remove. */
+  private ownFolder(threadId: string, dir: string): boolean {
+    return this.isOurWorktree(dir) && !this.sharingFolder(threadId, dir).length;
   }
 
   /** The agents, their models and checks, the MCP servers and the favorites. */
@@ -1773,8 +1864,7 @@ export class Hub {
     // The worktree itself is made when the agent first starts, so creating stays instant.
     const workspace =
       input.isolated && !input.worksIn && this.withGit(project).git
-        ? // A short folder name keeps deep projects under Windows' path length limit.
-          { branch: branchName(title, id), path: path.join(this.worktreesDir, id.slice(0, 8)) }
+        ? this.ownWorkspace(title, id)
         : undefined;
     const thread: Thread = {
       id,
@@ -1975,8 +2065,7 @@ export class Hub {
     // The folder starts at the pull request's last commit; its changes are counted from
     // where it leaves its base, so the review panel shows the pull request.
     const workspace: Workspace = {
-      branch: branchName(`revue-pr-${number}`, threadId),
-      path: path.join(this.worktreesDir, threadId.slice(0, 8)),
+      ...this.ownWorkspace(`revue-pr-${number}`, threadId),
       base: mergeBase,
       ...(start.subdir ? { subdir: start.subdir } : {}),
     };
@@ -2959,6 +3048,15 @@ export class Hub {
     await this.exclusive(threadId, "Attends la fin du retour en arrière.", async () => {
       // The agent stops first, so nothing it started holds a file about to change (Windows).
       await this.forgetSession(threadId);
+      // What the step back takes away is kept first: the last turn's files and those put
+      // there by hand since are in no message's checkpoint. Without it, no step back.
+      try {
+        await saveCheckpoint(workspace.path, undoneRef(threadId, Date.now()));
+      } catch (error) {
+        throw new Error(
+          `Retour en arrière annulé : les fichiers actuels n'ont pas pu être gardés d'abord (${describe(error)}).`,
+        );
+      }
       // Files and messages go back together: written down first, a step back that a stop
       // cuts in half is finished when the server starts again.
       this.setPendingRestore(threadId, { itemId, tree });
@@ -3092,19 +3190,31 @@ export class Hub {
       }
       await this.releaseFolder(threadId);
       await this.forgetSession(threadId);
-      const workspace = thread.workspace;
-      if (workspace?.base && project && this.isOurWorktree(workspace.path)) {
-        if (existsSync(workspace.path)) {
-          // Written down before the folder goes: a stop in between loses nothing.
-          const archivedTree = await saveCheckpoint(workspace.path, archiveRef(threadId));
-          this.updateThread(threadId, { workspace: { ...workspace, archivedTree } });
-          try {
-            await removeWorktree(project.path, workspace.path);
-          } catch (error) {
-            // The folder stays in use: the thread stays out of the archive, its files as they are.
-            this.updateThread(threadId, { workspace });
-            throw error;
+      const workspace = this.store.getThread(threadId)?.workspace;
+      if (
+        workspace?.base &&
+        project &&
+        this.ownFolder(threadId, workspace.path) &&
+        existsSync(workspace.path)
+      ) {
+        // Written down before the folder goes: a stop in between loses nothing. The files
+        // git ignores one by one go with it (`.env.local`), as the folder is all they had.
+        // Not saved again after a removal cut short: what it left is not all the thread had.
+        const kept =
+          workspace.archivedTree ??
+          (await saveCheckpoint(workspace.path, archiveRef(threadId), true));
+        this.updateThread(threadId, { workspace: { ...workspace, archivedTree: kept } });
+        try {
+          await removeWorktree(project.path, workspace.path);
+        } catch (error) {
+          // The folder stays in use (Windows): the thread stays out of the archive, its files
+          // as they are if none went. Otherwise they are those of the checkpoint from now
+          // on, which stays written down and comes back with the thread's next step.
+          if (await matchesCheckpoint(workspace.path, kept, true).catch(() => false)) {
+            const { archivedTree: _whole, ...asItWas } = workspace;
+            this.updateThread(threadId, { workspace: asItWas });
           }
+          throw error;
         }
       }
       this.updateThread(threadId, { archived: true, status: "idle" });
@@ -3138,7 +3248,8 @@ export class Hub {
       const project = this.store.getProject(thread.projectId);
       const workspace = thread.workspace;
       if (workspace && project) {
-        if (this.isOurWorktree(workspace.path)) await removeWorktree(project.path, workspace.path);
+        if (this.ownFolder(threadId, workspace.path))
+          await removeWorktree(project.path, workspace.path);
         await dropRefs(project.path, `refs/moonagentic/${threadId}/`).catch(() => undefined);
       }
       this.setPendingRestore(threadId, undefined);
@@ -3195,8 +3306,7 @@ export class Hub {
 
   /** Only folders MoonAgentic made for a thread are ever removed. */
   private isOurWorktree(dir: string): boolean {
-    const inside = path.relative(this.worktreesDir, dir);
-    return !!inside && !inside.startsWith("..") && !path.isAbsolute(inside);
+    return this.ourFolder(dir) !== undefined;
   }
 
   /** Hands the thread to another agent between turns; it gets the conversation so far. */
@@ -3669,8 +3779,33 @@ export class Hub {
       workspace = { ...workspace, ...start };
       this.updateThread(threadId, { workspace });
     }
+    // A folder two threads were given stays the first one's.
+    const [first] = this.sharingFolder(threadId, workspace.path);
+    const self = this.store.getThread(threadId);
+    if (
+      first &&
+      self &&
+      (first.createdAt - self.createdAt || first.id.localeCompare(self.id)) < 0
+    ) {
+      throw new Error(
+        `Le dossier de ce fil est celui du fil « ${first.title} », créé avant lui : ce fil ne peut pas y travailler sans toucher au sien. Reprends la tâche dans un nouveau fil.`,
+      );
+    }
     // Made, or made again when its folder went missing, from the branch and its commits.
-    await ensureWorktree(project.path, workspace.path, workspace.branch, workspace.base!);
+    try {
+      await ensureWorktree(project.path, workspace.path, workspace.branch, workspace.base!);
+    } catch (error) {
+      // What a removal cut short left of the folder (a file held open on Windows) is no
+      // worktree any more. All its files were saved for that removal and come back below:
+      // it is finished, and the folder made again. Any other folder stays as it is.
+      const cutShort =
+        workspace.archivedTree &&
+        existsSync(workspace.path) &&
+        this.ownFolder(threadId, workspace.path);
+      if (!cutShort) throw error;
+      await removeWorktree(project.path, workspace.path);
+      await ensureWorktree(project.path, workspace.path, workspace.branch, workspace.base!);
+    }
     if (workspace.archivedTree) {
       // Back from the archive: the files it had, uncommitted ones included.
       await restoreCheckpoint(workspace.path, workspace.archivedTree);
