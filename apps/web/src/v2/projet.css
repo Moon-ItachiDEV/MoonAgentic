@@ -538,3 +538,29 @@ html[data-dev="desk"] .scr.wide .mtop .plabel {
     transition: none;
   }
 }
+
+/* Coordinateur : une seule ligne « Réfléchit », lisible, pas cliquable */
+.det.quiet .think {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--fg2);
+  cursor: default;
+  animation: pFade 220ms var(--out);
+}
+.det.quiet .gl {
+  color: var(--accent);
+}
+.det.quiet .shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--fg2) 0%,
+    var(--fg2) 40%,
+    var(--accent) 50%,
+    var(--fg2) 60%,
+    var(--fg2) 100%
+  );
+}

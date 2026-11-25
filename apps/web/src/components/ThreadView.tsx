@@ -2,6 +2,7 @@ import {
   AGENT_SILENCE_STOP_MS,
   AGENT_STOPPED,
   agentStopped,
+  briefOf,
   threadGroup,
   type AgentInfo,
   type Item,
@@ -428,6 +429,7 @@ function Conversation({
                   onFold={() => setReveal(undefined)}
                   render={renderItem}
                   mascot={mascot && agent ? { mascot, name: agent.name } : undefined}
+                  quiet={thread.kind === "coordinator"}
                 />
                 {drafting && <ImageDraft since={drafting.at} />}
                 {made.length > 0 && (
@@ -750,6 +752,7 @@ function ActivityDetail({
   onFold,
   render,
   mascot,
+  quiet,
 }: {
   items: Item[];
   indices: number[];
@@ -760,8 +763,22 @@ function ActivityDetail({
   render: (index: number) => ReactNode;
   /** The agent's moon, which stands in for the picture while the stretch is at work. */
   mascot?: { mascot: MascotChoice; name: string };
+  /**
+   * The coordinator's conversation: its steps are not shown, only one plain « Réfléchit »
+   * line while it works, gone once it answers.
+   */
+  quiet?: boolean;
 }) {
   const [opened, setOpened] = useState(false);
+  if (quiet)
+    return live ? (
+      <div className="det quiet" role="status">
+        <span className="think">
+          <Glyph />
+          <span className="nm shimmer">Réfléchit</span>
+        </span>
+      </div>
+    ) : null;
   const open = opened || revealed;
   const { steps, failed } = activitySteps(items, indices);
   const last = items[indices.at(-1)!];
@@ -840,17 +857,18 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
       )}
       {!!item.images?.length && <MessageImages threadId={thread.id} images={item.images} />}
       {item.text && (
-        <div className="u">
-          {messageTokens(item.text).map((part, i) =>
-            part.kind ? (
-              <span key={i} className={`tok ${part.kind}`}>
-                {part.text}
-              </span>
-            ) : (
-              prParts(part.text).map((bit, j) =>
-                "link" in bit ? <PrChip key={`${i}-${j}`} link={bit.link} /> : bit.text,
-              )
-            ),
+        <div className={`u${item.from === "coordinator" ? " brief" : ""}`}>
+          {messageTokens(item.from === "coordinator" ? briefOf(item.text) : item.text).map(
+            (part, i) =>
+              part.kind ? (
+                <span key={i} className={`tok ${part.kind}`}>
+                  {part.text}
+                </span>
+              ) : (
+                prParts(part.text).map((bit, j) =>
+                  "link" in bit ? <PrChip key={`${i}-${j}`} link={bit.link} /> : bit.text,
+                )
+              ),
           )}
         </div>
       )}

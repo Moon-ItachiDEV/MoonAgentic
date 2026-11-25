@@ -464,6 +464,17 @@ export const AGENT_SILENCE_STOP_MS = 30 * 60_000;
  */
 export const AGENT_STOPPED = "L'agent s'est arrêté avant la fin de sa réponse.";
 /** What « Reprendre » asks the agent, after a stop. */
+/**
+ * What a coordinator's brief to a thread is followed by when the user's own words are joined
+ * to it: the agent gets both, the thread shows only the brief.
+ */
+export const ORIGIN_MARK =
+  "\n\n---\nMessage d'origine de l'utilisateur, transmis tel quel par MoonAgentic :\n\n";
+/** The part of a coordinator's message the thread shows: its brief, without the quoted origin. */
+export const briefOf = (text: string): string => {
+  const at = text.indexOf(ORIGIN_MARK);
+  return at === -1 ? text : text.slice(0, at);
+};
 export const RESUME_TEXT = "Tu as été interrompu : reprends là où tu t'es arrêté.";
 
 /** True for a thread error that says its agent stopped, as said now or by an older server. */

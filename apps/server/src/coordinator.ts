@@ -4,6 +4,7 @@ import {
   DEFAULT_PARALLEL,
   defaultTeam,
   MAX_PROJECT_MEMORY,
+  ORIGIN_MARK,
   type TeamPreset,
   teamPresets,
   threadGroup,
@@ -50,7 +51,7 @@ const SEARCH_SNIPPETS_PER_THREAD = 3;
 /** The user's own words, joined to the brief of a thread opened for them. */
 const withOrigin = (brief: string, asked: string | undefined) =>
   asked
-    ? `${brief}\n\n---\nMessage d'origine de l'utilisateur, transmis tel quel par MoonAgentic :\n\n${asked
+    ? `${brief}${ORIGIN_MARK}${asked
         .split("\n")
         .map((line) => `> ${line}`)
         .join("\n")}`
@@ -90,14 +91,14 @@ export const coordinatorPrompt = (project: string) =>
 Ce que tu fais :
 - Une question rapide ou un point d'avancement : tu réponds toi-même, en quelques phrases. Pour l'avancement, lis l'état réel avec list_threads, puis read_thread si on te demande le détail d'un fil. Pour retrouver une décision ou un sujet passé, utilise search_threads. N'invente jamais un état.
 - Pour la mémoire durable du projet (partagée entre tous les agents, fils et branches), utilise read_memory et save_memory pour noter les décisions, conventions ou pièges durables.
-- Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne complète, car l'agent du fil ne voit pas cette conversation. Donne toujours kind : les réglages de l'utilisateur en déduisent l'agent. Si l'outil répond que le fil est en file, dis-le : il démarrera seul.
+- Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne claire, car l'agent du fil ne voit pas cette conversation. La consigne s'affiche dans le fil sous « Coordinateur » : écris-la en français, en deux à quatre phrases simples (ce qu'il faut faire, où, et ce qui est attendu), sans liste de commandes, sans titres ni notes internes, sans recopier le message de l'utilisateur (MoonAgentic le joint déjà). Donne toujours kind : les réglages de l'utilisateur en déduisent l'agent. Si l'outil répond que le fil est en file, dis-le : il démarrera seul.
 - Une tâche trop grosse pour un seul fil, avec plusieurs morceaux indépendants, ou quand l'utilisateur demande une équipe : start_team.
 - Un sujet qui a déjà son fil : tu le relances avec message_thread plutôt que d'en ouvrir un second. Si son agent travaille, ton message attend la fin de son tour ; mode steer seulement pour une correction urgente, car il coupe le travail en cours.
 - resolve_thread seulement quand l'utilisateur dit que le sujet est clos.
 
 Si un outil échoue, dis-le tout de suite à l'utilisateur en une phrase, avec ce qu'il peut faire, au lieu de chercher longtemps un autre chemin. N'utilise pas le mode plan : tu ne codes pas, tu ouvres des fils.
 
-Après un outil, dis en une phrase ce que tu as fait. Reste bref : pas de plan, pas de récapitulatif. Réponds dans la langue de l'utilisateur.`;
+Après un outil, dis en une phrase ce que tu as fait : l'interface montre déjà le fil ouvert et son état juste en dessous, ne le décris pas. Reste bref : pas de plan, pas de récapitulatif, pas de liste des outils utilisés. Réponds dans la langue de l'utilisateur.`;
 
 /** A bridge's call that came with no valid token of this server's: answered 401. */
 export class CoordinatorRefused extends Error {
