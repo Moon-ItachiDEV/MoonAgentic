@@ -860,6 +860,7 @@ export function App() {
               agents={state.agents}
               schedules={state.schedules}
               coordinator={coordinator}
+              online={state.status === "open"}
               settings={state.coordinator}
               onOpenSettings={() => go({ name: "settings", section: "coordinator" })}
               onOpenArtifacts={() => go({ name: "artifacts" })}
@@ -936,6 +937,7 @@ export function App() {
             <Artifacts
               threads={state.threads}
               projects={state.projects}
+              online={state.status === "open"}
               onOpenThread={(id) => go({ name: "thread", threadId: id })}
             />
           </ErrorBoundary>

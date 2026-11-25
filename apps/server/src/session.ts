@@ -6,6 +6,7 @@ import type { AgentLaunch } from "./agents.ts";
 import type { ImageBlock } from "./attachments.ts";
 import type { PromptLink } from "./files.ts";
 import { acpMcpServers, type McpServerRecord } from "./mcp.ts";
+import { redact } from "./redact.ts";
 import { killTree, spawnPlan } from "./spawn.ts";
 
 /**
@@ -275,6 +276,12 @@ export const needsSignIn = (error: unknown): boolean =>
  */
 const SIGN_IN_LINE = /open the following link to authenticate|\bauthenticate\b.*https?:\/\//i;
 const OTHER_LINE_MAX = 2000;
+
+/** A text cut at a length, back to its last space when it has one. */
+const wholeWords = (cut: string): string => {
+  const word = /\S+$/.exec(cut);
+  return word && word.index > 0 ? cut.slice(0, word.index) : cut;
+};
 
 /**
  * Lets an agent's messages through, one JSON object per line, and hands every other line to
@@ -600,7 +607,9 @@ export class AgentSession {
         signInSeen = true;
         askSignIn();
       } else {
-        stderr = `${stderr}${line}\n`.slice(-STDERR_TAIL);
+        // Masked line by line, before the tail is cut: cut first, a secret's beginning could
+        // go with what tells it for one, and the rest be kept.
+        stderr = `${stderr}${redact(line)}\n`.slice(-STDERR_TAIL);
       }
     };
     // Whole lines only, so a link cut in two by a read is never kept by halves.
@@ -610,10 +619,23 @@ export class AgentSession {
       stderrRest = "";
     };
     child.stderr.setEncoding("utf8");
+    // A line longer than that is kept by its start only: the rest of it, read later, is
+    // dropped up to its end, never added to that start.
+    let stderrCut = false;
     child.stderr.on("data", (chunk: string) => {
-      const lines = (stderrRest + chunk).split("\n");
-      // The start of a very long line is what tells a sign-in line from another.
-      stderrRest = (lines.pop() ?? "").slice(0, OTHER_LINE_MAX);
+      let text = chunk;
+      if (stderrCut) {
+        const end = text.indexOf("\n");
+        if (end === -1) return;
+        stderrCut = false;
+        text = text.slice(end);
+      }
+      const lines = (stderrRest + text).split("\n");
+      // The start of a very long line is what tells a sign-in line from another. Cut, it ends
+      // at its last space, so a secret it was cut in is not kept by its first half.
+      const rest = lines.pop() ?? "";
+      stderrCut = rest.length > OTHER_LINE_MAX;
+      stderrRest = stderrCut ? wholeWords(rest.slice(0, OTHER_LINE_MAX)) : rest;
       for (const line of lines) textLine(line);
     });
     child.stderr.on("end", flushStderr);

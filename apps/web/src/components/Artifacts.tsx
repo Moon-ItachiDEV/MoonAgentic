@@ -17,8 +17,11 @@ import { Sheet } from "../v2/Sheet.tsx";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/** An address that shows the artifact for some minutes, asked for when `on`. */
-function useArtifactUrl(artifact: Artifact | null, on: boolean) {
+/**
+ * An address that shows the artifact for some minutes, asked for when `on` and the connection
+ * is open, and again when it opens anew: one asked while it was closed failed at once.
+ */
+function useArtifactUrl(artifact: Artifact | null, on: boolean, online: boolean) {
   const [url, setUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const asked = useRef(0);
@@ -34,17 +37,17 @@ function useArtifactUrl(artifact: Artifact | null, on: boolean) {
     );
   }, [threadId, path]);
   useEffect(() => {
-    if (!on) return;
+    if (!on || !online) return;
     load();
     return () => {
       asked.current += 1;
     };
-  }, [load, on]);
+  }, [load, on, online]);
   return { url, error, load };
 }
 
 /** An image's own picture as its thumbnail, asked for once it comes into sight. */
-function ImageThumb({ artifact }: { artifact: Artifact }) {
+function ImageThumb({ artifact, online }: { artifact: Artifact; online: boolean }) {
   const box = useRef<HTMLSpanElement>(null);
   const [seen, setSeen] = useState(false);
   useEffect(() => {
@@ -57,7 +60,7 @@ function ImageThumb({ artifact }: { artifact: Artifact }) {
     watch.observe(el);
     return () => watch.disconnect();
   }, [seen]);
-  const { url } = useArtifactUrl(artifact, seen);
+  const { url } = useArtifactUrl(artifact, seen, online);
   const [broken, setBroken] = useState(false);
   return (
     <span ref={box} className={`thumb ${url && !broken ? "img" : "ic"}`}>
@@ -73,12 +76,14 @@ function ImageThumb({ artifact }: { artifact: Artifact }) {
 /** One artifact shown as it is, from an address that works for some minutes. */
 function Preview({
   artifact,
+  online,
   onOpenThread,
 }: {
   artifact: Artifact;
+  online: boolean;
   onOpenThread: (id: string) => void;
 }) {
-  const { url, error, load } = useArtifactUrl(artifact, true);
+  const { url, error, load } = useArtifactUrl(artifact, true, online);
   const name = fileName(artifact.path);
   return (
     <div className="sbody artv">
@@ -93,7 +98,7 @@ function Preview({
               <I n="errc" s={24} />
             </span>
             <b>{error}</b>
-            <button className="newth press" onClick={load}>
+            <button className="newth press" disabled={!online} onClick={load}>
               Réessayer
             </button>
           </div>
@@ -110,7 +115,12 @@ function Preview({
         )}
       </div>
       <div className="rqa">
-        <button className="b2 soft press" aria-label="Recharger l'aperçu" onClick={load}>
+        <button
+          className="b2 soft press"
+          aria-label="Recharger l'aperçu"
+          disabled={!online}
+          onClick={load}
+        >
           <I n="refresh" s={16} />
           Recharger
         </button>
@@ -135,10 +145,13 @@ function Preview({
 export function Artifacts({
   threads,
   projects,
+  online,
   onOpenThread,
 }: {
   threads: Thread[];
   projects: Project[];
+  /** Asked only once the connection is open: an ask before then fails at once. */
+  online: boolean;
   onOpenThread: (id: string) => void;
 }) {
   const [list, setList] = useState<{ artifacts: Artifact[]; capped: boolean } | null>(null);
@@ -150,6 +163,7 @@ export function Artifacts({
   const asked = useRef(0);
   const load = useCallback(() => {
     const seq = ++asked.current;
+    setError(null);
     setLoading(true);
     connection.ask({ type: "artifacts.list", requestId: newId() }).then(
       (reply) => {
@@ -169,8 +183,8 @@ export function Artifacts({
   // Asked again whenever a turn starts or ends: what the agent wrote is then on disk.
   const working = workingKey(threads);
   useEffect(() => {
-    load();
-  }, [load, working]);
+    if (online) load();
+  }, [load, working, online]);
   useEffect(
     () => () => {
       asked.current += 1;
@@ -199,7 +213,7 @@ export function Artifacts({
             </button>
           ))}
           <span className="sp" />
-          <button aria-label="Actualiser la liste" disabled={loading} onClick={load}>
+          <button aria-label="Actualiser la liste" disabled={loading || !online} onClick={load}>
             <I n="refresh" s={15} />
           </button>
         </div>
@@ -210,7 +224,7 @@ export function Artifacts({
             <I n="errc" s={24} />
           </span>
           <b>{error}</b>
-          <button className="newth press" onClick={load}>
+          <button className="newth press" disabled={loading || !online} onClick={load}>
             Réessayer
           </button>
         </div>
@@ -235,7 +249,7 @@ export function Artifacts({
                 onClick={() => setOpen(a)}
               >
                 {a.kind === "image" ? (
-                  <ImageThumb artifact={a} />
+                  <ImageThumb artifact={a} online={online} />
                 ) : (
                   <span className="thumb ic">
                     <I n={a.kind === "html" ? "code" : "file"} s={26} />
@@ -266,6 +280,7 @@ export function Artifacts({
           <Preview
             key={`${open.threadId}:${open.path}`}
             artifact={open}
+            online={online}
             onOpenThread={onOpenThread}
           />
         )}

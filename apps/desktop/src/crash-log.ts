@@ -3,6 +3,7 @@
 // per day, pruned after 14 days, and never throws.
 import { appendFileSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
+import { redact } from "./redact.ts";
 
 /** Days of desktop log files kept. */
 export const DESKTOP_LOG_DAYS = 14;
@@ -15,16 +16,10 @@ const dayOf = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(
 const timeOf = (d: Date) => `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 
 /**
- * Strips tokens, tickets, Bearer headers, GitHub tokens and API keys before logging.
- * Kept self-contained so `@moonagentic/desktop` stays dependency-free inside `app.asar`;
- * mirrors `redact()` in `apps/server/src/supervisor.ts`.
+ * What gives access, masked before a line is written: the same as the server's `redact()`,
+ * from a copy kept in this package so `@moonagentic/desktop` stays dependency-free.
  */
-export const redactDesktopLine = (line: string): string =>
-  line
-    .replace(/(token|ticket)=[\w-]+/gi, "$1=…")
-    .replace(/\b(Bearer)\s+(?:(?=\S*[0-9._~+/=-])\S{6,}|[A-Za-z0-9._~+/=-]{16,})/gi, "$1 …")
-    .replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{6,}\b/g, "$1…")
-    .replace(/\b(sk-(?:ant-|proj-|live-|test-)?)[A-Za-z0-9_-]{12,}\b/g, "$1…");
+export const redactDesktopLine = (line: string): string => redact(line);
 
 /** Formats an unknown thrown value into a concise redacted message + stack. */
 export function formatDesktopError(error: unknown): string {

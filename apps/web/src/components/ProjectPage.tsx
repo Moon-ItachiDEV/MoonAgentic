@@ -276,6 +276,8 @@ export function ProjectOverview(
     schedules: Schedule[];
     coordinator: Thread | undefined;
     settings: CoordinatorSettings | undefined;
+    /** Its artifacts are asked once the connection is open: an ask before then fails at once. */
+    online: boolean;
     onOpenSettings: () => void;
     onOpenArtifacts: () => void;
     onSchedule: (schedule?: Schedule) => void;
@@ -286,7 +288,9 @@ export function ProjectOverview(
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
   const now = useNow();
   const projectId = props.project.id;
+  const online = props.online;
   useEffect(() => {
+    if (!online) return;
     let live = true;
     connection.ask({ type: "artifacts.list", requestId: newId() }).then(
       (reply) =>
@@ -301,7 +305,7 @@ export function ProjectOverview(
     return () => {
       live = false;
     };
-  }, [projectId]);
+  }, [projectId, online]);
   const groups = groupThreads(props.threads, projectId);
   const members = membersByLead(props.threads);
   const { bind, menu } = useThreadRowMenu(props.threads, props);

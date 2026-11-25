@@ -3,6 +3,7 @@ import { appendFileSync, fstatSync, mkdirSync, readdirSync, rmSync, statSync } f
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { ALREADY_RUNNING } from "./instance.ts";
+import { redact } from "./redact.ts";
 
 /** Days of log files kept. */
 export const LOG_DAYS = 14;
@@ -25,16 +26,7 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const dayOf = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 const timeOf = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 
-/**
- * Strips access tokens, WebSocket tickets, Bearer credentials, GitHub tokens and common API keys
- * before anything reaches a log file or a service manager's journal.
- */
-export const redact = (line: string) =>
-  line
-    .replace(/(token|ticket)=[\w-]+/gi, "$1=…")
-    .replace(/\b(Bearer)\s+(?:(?=\S*[0-9._~+/=-])\S{6,}|[A-Za-z0-9._~+/=-]{16,})/gi, "$1 …")
-    .replace(/\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{6,}\b/g, "$1…")
-    .replace(/\b(sk-(?:ant-|proj-|live-|test-)?)[A-Za-z0-9_-]{12,}\b/g, "$1…");
+export { redact };
 
 const currentStdStreams = (): string[] => {
   const streams: string[] = [];

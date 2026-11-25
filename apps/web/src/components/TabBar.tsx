@@ -66,7 +66,7 @@ export function TabBar(props: {
 
 /** What a tab lists, above it. */
 export function TabPopover(props: {
-  state: Pick<State, "threads" | "requests" | "projects">;
+  state: Pick<State, "threads" | "requests" | "projects" | "status">;
   pop: Exclude<TabPop, null>;
   onPickProject: (id: string) => void;
   onNewProject: () => void;
@@ -147,14 +147,24 @@ export function TabPopover(props: {
           </button>
         </>
       )}
-      {pop === "artifacts" && <RecentArtifacts onOpenArtifacts={props.onOpenArtifacts} />}
+      {pop === "artifacts" && (
+        <RecentArtifacts online={state.status === "open"} onOpenArtifacts={props.onOpenArtifacts} />
+      )}
     </div>
   );
 }
 
-function RecentArtifacts({ onOpenArtifacts }: { onOpenArtifacts: () => void }) {
+function RecentArtifacts({
+  online,
+  onOpenArtifacts,
+}: {
+  /** Asked once the connection is open: an ask before then fails at once. */
+  online: boolean;
+  onOpenArtifacts: () => void;
+}) {
   const [list, setList] = useState<Artifact[] | null>(null);
   useEffect(() => {
+    if (!online) return;
     let current = true;
     connection
       .ask({ type: "artifacts.list", requestId: newId() })
@@ -163,7 +173,7 @@ function RecentArtifacts({ onOpenArtifacts }: { onOpenArtifacts: () => void }) {
     return () => {
       current = false;
     };
-  }, []);
+  }, [online]);
   const now = Date.now();
   return (
     <>

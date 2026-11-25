@@ -6,7 +6,7 @@ import { closeSync, fstatSync, openSync, readdirSync, readSync, statSync } from 
 import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import { redact } from "./supervisor.ts";
+import { redact } from "./redact.ts";
 
 type LoopHistogram = ReturnType<typeof monitorEventLoopDelay>;
 
@@ -327,15 +327,27 @@ function formatSampleLine(sample: PerfSample, prefix = "[perf]"): string {
   return `${prefix ? `${prefix} ` : ""}${ram} · ${srv} · ${agents} · ${lag}`;
 }
 
+/**
+ * At most `max` characters of a text, masked before it is cut: a secret cut in two would no
+ * longer be known for one. What is read is bounded first, at a space when there is one, so
+ * that a payload made long is not read whole; a text with no space is kept up to the bound.
+ */
 function sanitizeText(value: unknown, max: number): string {
   if (typeof value !== "string") return "";
-  return redact(value.replace(/\r\n/g, "\n")).trim().slice(0, max);
+  let text = value.replace(/\r\n/g, "\n");
+  const bound = max * 4 + 256;
+  if (text.length > bound) {
+    const cut = text.slice(0, bound);
+    const word = /\S+$/.exec(cut);
+    text = word && word.index > 0 ? cut.slice(0, word.index) : cut;
+  }
+  return redact(text).trim().slice(0, max);
 }
 
 function sanitizeRoute(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
-  const clean = value.split(/[?#]/)[0]?.trim().slice(0, 80);
-  return clean ? redact(clean) : undefined;
+  const clean = sanitizeText(value.split(/[?#]/)[0] ?? "", 80);
+  return clean || undefined;
 }
 
 const nsToMs = (ns: number) => (Number.isFinite(ns) && ns > 0 ? ns / 1e6 : 0);
@@ -633,14 +645,7 @@ export class DiagnosticsMonitor {
   /** Records a browser / phone UI error, rate-limited and redacted before logging. */
   recordClientError(input: ClientErrorInput, device: string): boolean {
     const at = this.now();
-    const message = sanitizeText(input.message, 400);
-    if (!message) return false;
-    const source = sanitizeText(input.source, 32) || "ui";
-    const stack = sanitizeText(input.stack, 1500) || undefined;
-    const route = sanitizeRoute(input.route);
-    const cleanDevice = sanitizeText(device, 60) || "client";
-
-    // Prune rate window.
+    // The rate first: what is refused is not read.
     while (
       this.clientErrorTimes.length > 0 &&
       at - this.clientErrorTimes[0]! > CLIENT_ERROR_WINDOW_MS
@@ -648,6 +653,13 @@ export class DiagnosticsMonitor {
       this.clientErrorTimes.shift();
     }
     if (this.clientErrorTimes.length >= CLIENT_ERROR_MAX_PER_WINDOW) return false;
+
+    const message = sanitizeText(input.message, 400);
+    if (!message) return false;
+    const source = sanitizeText(input.source, 32) || "ui";
+    const stack = sanitizeText(input.stack, 1500) || undefined;
+    const route = sanitizeRoute(input.route);
+    const cleanDevice = sanitizeText(device, 60) || "client";
 
     const last = this.clientErrors.at(-1);
     if (
@@ -766,6 +778,12 @@ export class DiagnosticsMonitor {
     lines.push("--- Erreurs côté interface (navigateur / téléphone) ---");
     if (this.clientErrors.length === 0) {
       lines.push("Aucune erreur interface signalée depuis le démarrage.");
+    } else if (locked) {
+      // One may name a locked project's thread, written before the lock: none is shown.
+      const n = this.clientErrors.length;
+      lines.push(
+        `${n} erreur${n > 1 ? "s" : ""} d'interface masquée${n > 1 ? "s" : ""} tant qu'un projet est verrouillé (/lock).`,
+      );
     } else {
       for (const err of this.clientErrors.slice(-15)) {
         const route = err.route ? ` (${err.route})` : "";

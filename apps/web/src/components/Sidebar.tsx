@@ -369,10 +369,12 @@ function DrawerSearch(props: {
   const [hits, setHits] = useState<{ query: string; hits: SearchHit[] } | null>(null);
   const list = useRef<HTMLDivElement>(null);
   const q = query.trim();
+  const online = state.status === "open";
 
-  // Messages are searched on the server, which holds every thread's timeline.
+  // Messages are searched on the server, which holds every thread's timeline. A search typed
+  // before the connection opens is sent once it does: an ask before then fails at once.
   useEffect(() => {
-    if (q.length < 2) return;
+    if (q.length < 2 || !online) return;
     let current = true;
     const timer = setTimeout(() => {
       connection
@@ -384,7 +386,7 @@ function DrawerSearch(props: {
       current = false;
       clearTimeout(timer);
     };
-  }, [q]);
+  }, [q, online]);
 
   const projectName = (id: string) => state.projects.find((p) => p.id === id)?.name ?? "";
   const threadTitle = (id: string) => state.threads.find((t) => t.id === id)?.title ?? "";

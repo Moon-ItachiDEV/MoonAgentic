@@ -199,6 +199,62 @@ describe("artifacts", () => {
     await page.close();
   });
 
+  /** A page whose connection opens late: its ticket is answered after `ms`. */
+  const slowConnection = async (ms: number) => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // The token is kept first, as on any device already paired.
+    await page.goto(url);
+    await page.getByRole("button", { name: "Rechercher", exact: true }).waitFor();
+    await page.route("**/api/ws-ticket", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+      await route.continue();
+    });
+    return page;
+  };
+
+  it("lists the artifacts when opened at its address, before the connection is open", async () => {
+    const page = await slowConnection(1_500);
+    await page.goto(new URL("/artefacts", url).href);
+    await page
+      .getByRole("region", { name: "Artefacts" })
+      .getByRole("button", { name: /^accueil\.html/ })
+      .waitFor({ timeout: 15_000 });
+    expect(await page.getByText("Pas de connexion").count()).toBe(0);
+    await page.close();
+  });
+
+  it("finds messages for a search typed before the connection is open", async () => {
+    const page = await slowConnection(1_500);
+    await page.reload();
+    await page.getByRole("button", { name: "Rechercher", exact: true }).waitFor();
+    await page.keyboard.press("Control+k");
+    await page.getByRole("combobox", { name: "Rechercher" }).fill("réponse vaut");
+    await page
+      .getByRole("dialog", { name: "Recherche" })
+      .getByRole("option", { name: /la réponse vaut 42/ })
+      .first()
+      .waitFor({ timeout: 15_000 });
+    await page.close();
+  });
+
+  it("lists the latest ones in the phone's tab opened before the connection is open", async () => {
+    const page = await browser.newPage({ viewport: { width: 390, height: 780 } });
+    await page.goto(url);
+    const tabs = page.getByRole("navigation", { name: "Sections" });
+    await tabs.getByRole("button", { name: "Artefacts" }).waitFor();
+    await page.route("**/api/ws-ticket", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.continue();
+    });
+    await page.reload();
+    await tabs.getByRole("button", { name: "Artefacts" }).click();
+    await page
+      .getByRole("menu", { name: "Artefacts" })
+      .getByRole("menuitem", { name: /^accueil\.html/ })
+      .waitFor({ timeout: 15_000 });
+    await page.close();
+  });
+
   it("is the phone's fourth tab", async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 780 } });
     await page.goto(url);
