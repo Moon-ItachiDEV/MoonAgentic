@@ -807,3 +807,232 @@ button.ico-pick {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* The menu's pages. */
+.pdot {
+  background: var(--pc, var(--pc-moon));
+}
+.scr.wide .view > .empty,
+.scr.wide .view > .empty2 {
+  grid-column: 1/-1;
+}
+.prc2 {
+  max-height: none;
+  flex: none;
+}
+.prc2 .wkp .t2-spin {
+  width: 12px;
+  height: 12px;
+}
+a.stp2 {
+  text-decoration: none;
+  color: inherit;
+}
+.ins.prm {
+  margin: 0;
+  flex: none;
+}
+.ins.prm .ic.mg {
+  color: var(--pc-violet);
+}
+.rq {
+  flex: none;
+}
+.rqa {
+  flex-wrap: wrap;
+}
+.rqa .b2 {
+  flex: 1 1 120px;
+}
+
+/* Planner: what the real board adds to the mockup's (drag and drop, a card's own launch). */
+.empty2 .eic.n {
+  background: var(--hover);
+  color: var(--muted);
+}
+.empty2 .eic.e {
+  background: var(--errbg);
+  color: var(--err);
+}
+.empty2 .newth {
+  margin-top: 12px;
+}
+.chips .sp {
+  flex: 1;
+  min-width: 6px;
+}
+.chips button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.chips button > i:not(.pdot) {
+  font-style: normal;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+.chips button[aria-pressed="true"] > i:not(.pdot) {
+  color: color-mix(in srgb, var(--on-ink) 60%, transparent);
+}
+.chips button:disabled {
+  opacity: 0.45;
+}
+.kbc.over {
+  border-radius: 20px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.pc {
+  cursor: pointer;
+}
+.pc.drag {
+  opacity: 0.4;
+}
+.pc .mini {
+  margin: 2px 0 0;
+}
+.pcw.t-live {
+  color: var(--accent);
+  background: var(--accbg);
+}
+.pcw.t-wait {
+  color: var(--warn);
+}
+.pcw.t-err {
+  color: var(--err);
+  background: var(--errbg);
+}
+.kba {
+  height: 40px;
+  border-radius: 20px;
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+  transition:
+    background-color 200ms var(--out),
+    color 200ms var(--out);
+}
+.kba:hover {
+  background: var(--hover);
+  color: var(--fg2);
+}
+.chips.plst {
+  margin-bottom: 22px;
+}
+input.dte {
+  border: 0;
+  background: none;
+  font: 400 16px var(--sans);
+  color: var(--fg2);
+  text-align: right;
+  outline: none;
+  color-scheme: light dark;
+  min-width: 0;
+}
+.pll {
+  margin-bottom: 22px;
+}
+.pll .cfa {
+  margin-top: 12px;
+}
+
+/* Tâches planifiées */
+button.sct {
+  text-align: left;
+  color: var(--fg);
+}
+.sc2 .pcm {
+  flex-wrap: wrap;
+  gap: 4px 7px;
+}
+.sc2 .scs {
+  min-width: 0;
+}
+.scf .mini {
+  flex: none;
+  margin-right: 0;
+}
+.mini.ic {
+  width: 30px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.ins.stw {
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.schd .chips.wrap {
+  margin-bottom: 10px;
+}
+.schd .ppill.err {
+  margin-bottom: 12px;
+}
+
+/* Artefacts */
+.acard .thumb.ic {
+  display: grid;
+  place-items: center;
+  color: var(--faint);
+}
+.acard .thumb.img {
+  padding: 0;
+}
+.acard .thumb.img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.artv {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+.artv .pcm {
+  flex-wrap: wrap;
+}
+.artv .pcm .mono {
+  overflow-wrap: anywhere;
+}
+.artst {
+  flex: 1;
+  min-height: 320px;
+  border-radius: 18px;
+  background: var(--sunken);
+  box-shadow: 0 0 0 0.5px var(--glass-ring);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.artst img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.artst iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+.artv .rqa {
+  flex-wrap: wrap;
+}
+a.b2 {
+  text-decoration: none;
+}
+.scr.wide .sheet.artsh {
+  width: min(960px, calc(100% - 48px));
+}
+.rqa .b2 {
+  flex: 1 1 auto;
+  padding: 0 14px;
+  white-space: nowrap;
+  min-width: 0;
+}
+.sheet.artsh .sbody {
+  flex: 1;
+}

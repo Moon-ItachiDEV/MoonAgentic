@@ -26,6 +26,7 @@ export function ChoiceRow(props: {
   return (
     <>
       <button
+        type="button"
         className="it"
         aria-haspopup="dialog"
         aria-label={`${props.label ?? props.title} : ${props.shown}`}
@@ -44,6 +45,7 @@ export function ChoiceRow(props: {
         right={
           props.more && (
             <button
+              type="button"
               className="hmore press"
               aria-pressed={props.more.on}
               onClick={props.more.toggle}
@@ -61,6 +63,7 @@ export function ChoiceRow(props: {
                 {g.choices.map((c) => (
                   <button
                     key={c.value}
+                    type="button"
                     className="it"
                     role="radio"
                     aria-checked={c.value === props.value}

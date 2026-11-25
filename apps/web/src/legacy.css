@@ -1,12 +1,10 @@
 /* The styles from before the v2 redesign, kept below it until each screen is ported. */
 @layer reset, legacy;
 @import "./styles.css" layer(legacy);
-@import "./planner.css" layer(legacy);
 @import "./review.css" layer(legacy);
 @import "./review-sync.css" layer(legacy);
 @import "./worktree-files.css" layer(legacy);
 @import "./branch-cleanup.css" layer(legacy);
-@import "./artifacts.css" layer(legacy);
 @import "./settings.css" layer(legacy);
 @import "./sidebar.css" layer(legacy);
 @import "./github.css" layer(legacy);
@@ -21,7 +19,6 @@
 @import "./long-threads.css" layer(legacy);
 @import "./queue.css" layer(legacy);
 @import "./goal.css" layer(legacy);
-@import "./planner-run.css" layer(legacy);
 @import "./images.css" layer(legacy);
 @import "./local-files.css" layer(legacy);
 @import "./mcp-scope.css" layer(legacy);

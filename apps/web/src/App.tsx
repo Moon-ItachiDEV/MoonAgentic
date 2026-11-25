@@ -41,7 +41,7 @@ import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { PairGate } from "./components/PairGate.tsx";
 import { CoordinatorStart, ProjectOverview, ProjectThreads } from "./components/ProjectPage.tsx";
 import { ProjectIcon } from "./components/ProjectIcon.tsx";
-import { SidePullRequests } from "./components/SidePullRequests.tsx";
+import { PullRequests } from "./components/PullRequests.tsx";
 import { steady, useSame } from "./steady.tsx";
 import { modelNameOf } from "./model-label.ts";
 import { coordinatorOf, listedThreads, waitingCount } from "./project-threads.ts";
@@ -721,10 +721,6 @@ export function App() {
       </>
     );
 
-  /** A page not ported to the new design yet: it keeps its old styles, untouched by the new ones. */
-  const legacyPage = (content: React.ReactNode) => (
-    <div className={`legacy legacy-main center${bottom ? " with-bottom" : ""}`}>{content}</div>
-  );
   /** What is written from, floating at the bottom of the page: none where there is nothing to write to. */
   const bottom =
     route.name === "home"
@@ -919,56 +915,46 @@ export function App() {
             />
           )
         ) : route.name === "artifacts" ? (
-          legacyPage(
-            <ErrorBoundary key="artifacts">
-              <Artifacts
-                threads={state.threads}
-                projects={state.projects}
-                onOpenThread={(id) => go({ name: "thread", threadId: id })}
-              />
-            </ErrorBoundary>,
-          )
-        ) : route.name === "planner" ? (
-          legacyPage(
-            <ErrorBoundary key={`planner:${project?.id ?? ""}`}>
-              <Suspense fallback={<div className="view" />}>
-                <Planner
-                  key={project?.id}
-                  project={project}
-                  view={route.view}
-                  onView={(view) => go(view ? { name: "planner", view } : { name: "planner" })}
-                  plan={state.plan}
-                  schedules={state.schedules}
-                  onSchedule={(schedule) =>
-                    setScheduling(schedule ? { text: "", schedule } : { text: "" })
-                  }
-                  threads={state.threads}
-                  agents={state.agents}
-                  onOpenThread={(id) => go({ name: "thread", threadId: id })}
-                  onNewProject={() => setCreatingProject(true)}
-                />
-              </Suspense>
-            </ErrorBoundary>,
-          )
-        ) : route.name === "inbox" ? (
-          legacyPage(
-            <RequestsDialog
-              page
-              requests={state.requests}
+          <ErrorBoundary key="artifacts">
+            <Artifacts
               threads={state.threads}
-              onOpenThread={(id, itemId) => {
-                focusItem(id, itemId);
-                openThread(id);
-              }}
-              onClose={() => go({ name: "home" })}
-            />,
-          )
+              projects={state.projects}
+              onOpenThread={(id) => go({ name: "thread", threadId: id })}
+            />
+          </ErrorBoundary>
+        ) : route.name === "planner" ? (
+          <ErrorBoundary key={`planner:${project?.id ?? ""}`}>
+            <Suspense fallback={<div className="view" />}>
+              <Planner
+                key={project?.id}
+                project={project}
+                view={route.view}
+                onView={(view) => go(view ? { name: "planner", view } : { name: "planner" })}
+                plan={state.plan}
+                schedules={state.schedules}
+                projects={openProjects}
+                onSchedule={(schedule) =>
+                  setScheduling(schedule ? { text: "", schedule } : { text: "" })
+                }
+                threads={state.threads}
+                agents={state.agents}
+                onOpenThread={(id) => go({ name: "thread", threadId: id })}
+                onNewProject={() => setCreatingProject(true)}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        ) : route.name === "inbox" ? (
+          <RequestsDialog
+            requests={state.requests}
+            threads={state.threads}
+            projects={state.projects}
+            onOpenThread={(id, itemId) => {
+              focusItem(id, itemId);
+              openThread(id);
+            }}
+          />
         ) : (
-          legacyPage(
-            <div className="view">
-              <SidePullRequests threads={state.threads} onOpenThread={openThread} />
-            </div>,
-          )
+          <PullRequests threads={state.threads} onOpenThread={openThread} />
         )}
         <div className="tfade" />
         {bottom && <div className="bfade" />}
@@ -1140,23 +1126,21 @@ export function App() {
             />
           )}
         </Presence>
-        <Presence show={scheduling !== null && !!project}>
-          {scheduling && project && (
-            <ScheduleDialog
-              project={project}
-              agents={state.agents}
-              favorites={state.favorites}
-              text={scheduling.text}
-              schedule={scheduling.schedule}
-              onClose={() => setScheduling(null)}
-              onSaved={() => {
-                setScheduling(null);
-                // The planned tasks are listed in the planner, at their own address.
-                go({ name: "planner", view: "planifiees" });
-              }}
-            />
-          )}
-        </Presence>
+        <ScheduleDialog
+          open={scheduling !== null}
+          projects={openProjects}
+          projectId={project?.id}
+          agents={state.agents}
+          favorites={state.favorites}
+          text={scheduling?.text ?? ""}
+          schedule={scheduling?.schedule}
+          onClose={() => setScheduling(null)}
+          onSaved={() => {
+            setScheduling(null);
+            // The planned tasks are listed at their own address.
+            go({ name: "planner", view: "planifiees" });
+          }}
+        />
         <Presence show={creatingProject}>
           <NewProjectDialog
             onClose={() => setCreatingProject(false)}
