@@ -22,7 +22,10 @@ afterEach(async () => {
 
 const TOKEN = "jeton-du-proprietaire-quotas";
 
-async function serve(onConnect: (client: { send: (m: unknown) => void }) => () => void) {
+async function serve(
+  onConnect: (client: { send: (m: unknown) => void }) => () => void,
+  options: { maxBufferedBytes?: number } = {},
+) {
   const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-quotas-"));
   const webDir = path.join(root, "web");
   const folder = path.join(root, "fil");
@@ -52,6 +55,7 @@ async function serve(onConnect: (client: { send: (m: unknown) => void }) => () =
     webDir,
     devices: new Devices(),
     rateLimit: { maxApiRequests: 50 },
+    ...options,
     remoteAccess: async (_h, port): Promise<RemoteAccess> => ({
       port,
       exposed: false,
@@ -142,6 +146,35 @@ describe("the name a request is sent to (N8)", () => {
     expect(allowedHost("a.maison.lan", "pc", ".maison.lan")).toBe(true);
   });
 
+  it("takes the machine's name under a local suffix only, not under any domain", () => {
+    // A public domain made of the machine's name: its owner could point it at this machine.
+    for (const host of ["nucbox-k12.attacker.com:4747", "nucbox-k12.example", "pc.evil.io"])
+      expect(allowedHost(host, host.startsWith("pc") ? "pc" : "nucbox-k12", ""), host).toBe(false);
+    for (const host of [
+      "nucbox-k12.local",
+      "nucbox-k12.lan",
+      "nucbox-k12.home",
+      "nucbox-k12.home.arpa",
+      "nucbox-k12.internal:4747",
+    ])
+      expect(allowedHost(host, "nucbox-k12", ""), host).toBe(true);
+    // On a Mac the machine's name already ends in .local.
+    expect(allowedHost("macbook.local:4747", "MacBook.local", "")).toBe(true);
+    expect(allowedHost("macbook.lan", "MacBook.local", "")).toBe(true);
+    expect(allowedHost("macbook.attacker.com", "MacBook.local", "")).toBe(false);
+  });
+
+  it("takes a name alone, not one with a user, a path, a query or a fragment", () => {
+    for (const host of [
+      "evil.com@localhost:4747",
+      "localhost/evil",
+      "localhost?x=1",
+      "localhost#x",
+      "a:b@127.0.0.1",
+    ])
+      expect(allowedHost(host, "nucbox-k12", ""), host).toBe(false);
+  });
+
   it("answers nothing to a page whose name was pointed at this machine", async () => {
     const { port, status } = await serve(() => () => undefined);
     const codes: number[] = [];
@@ -215,6 +248,25 @@ describe("the WebSocket places (N17)", () => {
       client!.send(chunk);
       await new Promise((resolve) => setImmediate(resolve));
     }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(cut).toBe(true);
+  });
+  it("cuts at once a connection a single message leaves over its limit", async () => {
+    let client: { send: (m: unknown) => void } | undefined;
+    let cut = false;
+    const { origin, ticket } = await serve(
+      (c) => {
+        client = c;
+        return () => void (cut = true);
+      },
+      { maxBufferedBytes: 64 * 1024 },
+    );
+    const ws = new WebSocket(`ws://${origin}/ws?ticket=${await ticket()}`);
+    await new Promise((resolve) => ws.once("open", resolve));
+    cleanups.push(() => ws.terminate());
+    (ws as unknown as { _socket: { pause(): void } })._socket.pause();
+    // One message far over the limit, and none after it.
+    client!.send({ type: "item", threadId: "t", item: { text: "x".repeat(8 * 1024 * 1024) } });
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(cut).toBe(true);
   });

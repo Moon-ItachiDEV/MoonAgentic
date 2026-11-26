@@ -212,6 +212,9 @@ export interface RateLimitOptions {
  * another site whose name was pointed at 127.0.0.1 (DNS rebinding) is the same origin for
  * the browser: it could send anything, and lock the computer out of its own quotas (N8).
  */
+/** What a local network adds to a machine's name: never a public domain. */
+const LOCAL_SUFFIXES = [".local", ".lan", ".home", ".home.arpa", ".internal"];
+
 export function allowedHost(
   hostHeader: string | undefined,
   machine = os.hostname(),
@@ -221,15 +224,32 @@ export function allowedHost(
   if (hostHeader === undefined) return true;
   let name: string;
   try {
-    name = new URL(`http://${hostHeader}`).hostname.toLowerCase();
+    const target = new URL(`http://${hostHeader}`);
+    // A name and a port, nothing more: `evil.com@localhost` or `localhost/evil` is no Host.
+    if (
+      target.username ||
+      target.password ||
+      target.pathname !== "/" ||
+      target.search ||
+      target.hash ||
+      hostHeader.includes("/") ||
+      hostHeader.includes("?") ||
+      hostHeader.includes("#")
+    )
+      return false;
+    name = target.hostname.toLowerCase();
   } catch {
     return false;
   }
   if (name.startsWith("[") || isIP(name)) return true;
   if (name === "localhost" || name.endsWith(".localhost")) return true;
   if (name.endsWith(".ts.net")) return true;
+  // The machine's name, alone or under a suffix only a local network gives: under any other
+  // domain, whoever owns it could point it at this machine. A Mac's name ends in .local.
   const own = machine.toLowerCase();
-  if (own && (name === own || name.startsWith(`${own}.`))) return true;
+  const label = own.split(".")[0];
+  if (own && name === own) return true;
+  if (label && LOCAL_SUFFIXES.some((suffix) => name === `${label}${suffix}`)) return true;
   return extra
     .split(",")
     .map((h) => h.trim().toLowerCase())
@@ -1183,6 +1203,8 @@ export function createHttpServer(options: {
         if (settled) return;
         settled = true;
         count(upgrading, -1);
+        socket.off("close", finishUpgrade);
+        socket.off("error", finishUpgrade);
       };
       socket.once("close", finishUpgrade);
       socket.once("error", finishUpgrade);
@@ -1199,6 +1221,8 @@ export function createHttpServer(options: {
               return;
             }
             ws.send(JSON.stringify(message));
+            // Left over the limit by this one message: it would read no more of it either.
+            if (ws.bufferedAmount > maxBuffered) ws.terminate();
           },
           ...(who.owner ? {} : { deviceId: who.deviceId }),
         };
