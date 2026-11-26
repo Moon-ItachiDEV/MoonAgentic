@@ -1215,8 +1215,9 @@ export function packSnapshot(snapshot: Snapshot): Snapshot {
   const lists: AgentCommand[][] = [];
   const places = new Map<string, number>();
   const threads = snapshot.threads.map((thread) => {
+    // An empty list stays as it is: it says the agent has none, which is not « not known yet ».
+    if (!thread.commands?.length) return thread;
     const { commands, ...rest } = thread;
-    if (!commands?.length) return rest;
     const key = JSON.stringify(commands);
     let place = places.get(key);
     if (place === undefined) {
@@ -1234,9 +1235,14 @@ export function unpackSnapshot(snapshot: Snapshot): Snapshot {
   return {
     ...rest,
     threads: snapshot.threads.map((thread) => {
+      if (thread.commandList === undefined) return thread;
       const { commandList, ...kept } = thread;
-      const commands = commandList === undefined ? undefined : commandLists?.[commandList];
-      return commands ? { ...kept, commands } : kept;
+      // A place that names no list leaves the thread without one, never with something else.
+      const commands =
+        Array.isArray(commandLists) && Number.isInteger(commandList) && commandList >= 0
+          ? commandLists[commandList]
+          : undefined;
+      return Array.isArray(commands) ? { ...kept, commands } : kept;
     }),
   };
 }
