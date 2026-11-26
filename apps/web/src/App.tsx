@@ -97,8 +97,28 @@ export function App() {
   const [threadMenuOut, setThreadMenuOut] = useState(false);
   const setThreadMenu = (on: boolean) => {
     if (!on && threadMenu) setThreadMenuOut(true);
+    if (on) setThreadPage({ page: "main" });
     setThreadMenuNow(on);
   };
+  /**
+   * The page the menu shows: its actions, or the projects to move the conversation to. A turn of
+   * page slides its lines in from the side it goes to, while the menu takes its new height.
+   */
+  const [threadPage, setThreadPage] = useState<{ page: "main" | "move"; from?: number }>({
+    page: "main",
+  });
+  const threadMenuRef = useRef<HTMLDivElement>(null);
+  const turnMenuPage = (page: "main" | "move") =>
+    setThreadPage({ page, from: threadMenuRef.current?.offsetHeight });
+  useLayoutEffect(() => {
+    const menu = threadMenuRef.current;
+    if (!menu || threadPage.from === undefined) return;
+    if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    menu.animate([{ height: `${threadPage.from}px` }, { height: `${menu.offsetHeight}px` }], {
+      duration: 380,
+      easing: "cubic-bezier(0.32, 1.25, 0.5, 1)",
+    });
+  }, [threadPage]);
   useEffect(() => {
     if (!threadMenuOut) return;
     const timer = setTimeout(() => setThreadMenuOut(false), 230);
@@ -226,6 +246,9 @@ export function App() {
 
   const thread: Thread | undefined =
     route.name === "thread" ? state.threads.find((t) => t.id === route.threadId) : undefined;
+  /** A chat outside any project (« Discussions »): no changes to look at, no « <> ». */
+  const looseThread =
+    !!thread && isDiscussionsProject(state.projects.find((p) => p.id === thread.projectId));
   // A project's page shows that project; elsewhere, the open thread's or the one last picked.
   const routeProject =
     route.name === "project" ? state.projects.find((p) => p.id === route.projectId) : undefined;
@@ -399,6 +422,8 @@ export function App() {
     danger?: boolean;
     /** A line above it: what follows ends or removes the thread. */
     sep?: boolean;
+    /** Opens another page of the menu rather than closing it. */
+    keep?: boolean;
   }[] = thread
     ? [
         {
@@ -426,6 +451,17 @@ export function App() {
               },
             ]),
         { label: "Exporter en Markdown", icon: "file", run: () => exportThread() },
+        // A conversation outside any project can go into one, to go on there.
+        ...(looseThread && !thread.archived && codeProjects.some((p) => !p.locked)
+          ? [
+              {
+                label: "Déplacer vers un projet",
+                icon: "folder" as const,
+                keep: true,
+                run: () => turnMenuPage("move"),
+              },
+            ]
+          : []),
         // A team at work is stopped from here only, never by a button in its way.
         ...(thread.team && teamActive(thread.team)
           ? [
@@ -677,9 +713,6 @@ export function App() {
     </button>
   );
   const threadAgent = thread && state.agents.find((a) => a.id === thread.agentId);
-  /** A chat outside any project (« Discussions »): no changes to look at, no « <> ». */
-  const looseThread =
-    !!thread && isDiscussionsProject(state.projects.find((p) => p.id === thread.projectId));
   const topBar =
     route.name === "home" ? (
       <>
@@ -1088,28 +1121,66 @@ export function App() {
         )}
         {(threadMenu || threadMenuOut) && thread && (
           <div
-            className={`pmenu tmn${threadMenu ? "" : " out"}`}
+            ref={threadMenuRef}
+            className={`pmenu tmn${threadMenu ? "" : " out"}${threadPage.from === undefined ? "" : ` still tsw ${threadPage.page === "move" ? "fw" : "bk"}`}`}
             role="menu"
-            aria-label="Actions du fil"
+            aria-label={threadPage.page === "move" ? "Déplacer vers un projet" : "Actions du fil"}
             aria-hidden={!threadMenu}
+            key={threadPage.page}
           >
-            {threadActions.map((a, i) => (
-              <Fragment key={a.label}>
-                {a.sep && <div className="psep" style={{ "--i": i } as React.CSSProperties} />}
+            {threadPage.page === "move" ? (
+              <>
                 <button
-                  className={`pi2${a.danger ? " dng" : ""}`}
+                  className="pi2"
                   role="menuitem"
-                  style={{ "--i": i } as React.CSSProperties}
-                  onClick={() => {
-                    setThreadMenu(false);
-                    a.run();
-                  }}
+                  style={{ "--i": 0 } as React.CSSProperties}
+                  onClick={() => turnMenuPage("main")}
                 >
-                  <I n={a.icon} s={20} />
-                  <span className="nm">{a.label}</span>
+                  <I n="back" s={20} />
+                  <span className="nm">Déplacer vers</span>
                 </button>
-              </Fragment>
-            ))}
+                <div className="psep" style={{ "--i": 1 } as React.CSSProperties} />
+                {codeProjects
+                  .filter((p) => !p.locked)
+                  .map((p, i) => (
+                    <button
+                      key={p.id}
+                      className="pi2"
+                      role="menuitem"
+                      style={{ "--i": i + 2 } as React.CSSProperties}
+                      onClick={() => {
+                        setThreadMenu(false);
+                        connection.send({
+                          type: "thread.move",
+                          threadId: thread.id,
+                          projectId: p.id,
+                        });
+                      }}
+                    >
+                      <I n="folder" s={20} />
+                      <span className="nm">{p.name}</span>
+                    </button>
+                  ))}
+              </>
+            ) : (
+              threadActions.map((a, i) => (
+                <Fragment key={a.label}>
+                  {a.sep && <div className="psep" style={{ "--i": i } as React.CSSProperties} />}
+                  <button
+                    className={`pi2${a.danger ? " dng" : ""}`}
+                    role="menuitem"
+                    style={{ "--i": i } as React.CSSProperties}
+                    onClick={() => {
+                      if (!a.keep) setThreadMenu(false);
+                      a.run();
+                    }}
+                  >
+                    <I n={a.icon} s={20} />
+                    <span className="nm">{a.label}</span>
+                  </button>
+                </Fragment>
+              ))
+            )}
           </div>
         )}
         {route.name === "home" && !screen.wide && (

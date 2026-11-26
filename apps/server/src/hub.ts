@@ -1723,6 +1723,9 @@ export class Hub {
         this.requireThread(message.threadId);
         this.updateThread(message.threadId, { pinned: message.pinned });
         return;
+      case "thread.move":
+        await this.moveThread(message.threadId, message.projectId);
+        return;
       case "thread.rename": {
         this.requireThread(message.threadId);
         // One line: a name pasted with its line breaks would break the lists of threads.
@@ -3608,6 +3611,49 @@ export class Hub {
           at: Date.now(),
         });
       }
+    });
+  }
+
+  /**
+   * Takes a conversation started outside any project (« Discussions ») into a project, between
+   * two turns. Its agent starts again there, in that project's folder, with the conversation so
+   * far and the project's memory. A copy of work it had in « Discussions » is kept in git first.
+   */
+  async moveThread(threadId: string, projectId: string): Promise<void> {
+    const thread = this.requireLiveThread(threadId);
+    if (thread.projectId === projectId) return;
+    if (!this.isDiscussions(thread.projectId)) {
+      throw new Error("Seule une discussion hors projet se déplace dans un projet.");
+    }
+    const from = this.store.getProject(thread.projectId);
+    const to = this.store.getProject(projectId);
+    if (!to || this.removingProjects.has(projectId)) throw new Error("Projet introuvable.");
+    if (this.isDiscussions(projectId)) throw new Error("Choisis un projet.");
+    if (this.locks.isLocked(projectId)) throw new Error("Ce projet est verrouillé.");
+    await this.exclusive(threadId, "Attends la fin du déplacement.", async () => {
+      await this.releaseFolder(threadId);
+      await this.forgetSession(threadId);
+      const workspace = this.store.getThread(threadId)?.workspace;
+      if (
+        workspace?.base &&
+        from &&
+        this.ownFolder(threadId, workspace.path) &&
+        existsSync(workspace.path)
+      ) {
+        await saveCheckpoint(workspace.path, archiveRef(threadId), true);
+        await removeWorktree(from.path, workspace.path);
+      }
+      this.store.moveThread(threadId, projectId);
+      // In its new project the thread works in the project's folder, like any thread
+      // started there without a branch of its own.
+      this.updateThread(threadId, {
+        workspace: undefined,
+        usage: undefined,
+        canCompact: undefined,
+        commands: undefined,
+        status: "idle",
+        error: null,
+      });
     });
   }
 

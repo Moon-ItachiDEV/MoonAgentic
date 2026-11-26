@@ -4700,7 +4700,32 @@
 }
 
 /* thread « … » menu */
+/* A turn of the menu's page: the lines slide in from the side it goes to. */
+.pmenu.tsw .pi2,
+.pmenu.tsw .psep {
+  animation: tmfw 340ms var(--spring) both;
+  animation-delay: calc(var(--i, 0) * 14ms);
+}
+.pmenu.tsw.bk .pi2,
+.pmenu.tsw.bk .psep {
+  animation-name: tmbk;
+}
+@keyframes tmfw {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+    filter: blur(3px);
+  }
+}
+@keyframes tmbk {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+    filter: blur(3px);
+  }
+}
 .tmn {
+  overflow: hidden;
   left: auto;
   right: 12px;
   top: calc(var(--st) + 54px);
