@@ -129,7 +129,7 @@ import { AppUpdates, type GitSource, type ShellChannel } from "./app-update.ts";
 import { backupBeforeUpdate } from "./backups.ts";
 import { redact } from "./redact.ts";
 import { isTeamPreset } from "./saved-shapes.ts";
-import { isRecord, type Store, StorageRefused, storageTrouble } from "./store.ts";
+import { isRecord, type Store, StorageRefused, storageTrouble, type ThreadPlace } from "./store.ts";
 import {
   forecastFor,
   listedWorktreeFile,
@@ -354,7 +354,7 @@ function within(work: Promise<unknown>, ms: number): Promise<void> {
 }
 
 /** How many of a deleted thread's messages go at once, between two answers to screens. */
-const DELETE_BATCH = 1000;
+const DELETE_BATCH = 250;
 /** Lets what waits on the server run (a screen's message, a timer) before going on. */
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -758,8 +758,8 @@ export class Hub {
   private sharingFolder(
     threadId: string,
     dir: string,
-    threads: Thread[] = this.store.listThreads(),
-  ): Thread[] {
+    threads: ThreadPlace[] = this.store.listThreadPlaces(),
+  ): ThreadPlace[] {
     const real = onceEach(canonicalPath);
     const name = this.ourFolder(dir, real);
     if (!name) return [];
@@ -774,7 +774,7 @@ export class Hub {
   }
 
   /** Whether the folder is one of ours that only this thread holds: its own to remove. */
-  private ownFolder(threadId: string, dir: string, threads?: Thread[]): boolean {
+  private ownFolder(threadId: string, dir: string, threads?: ThreadPlace[]): boolean {
     return this.isOurWorktree(dir) && !this.sharingFolder(threadId, dir, threads).length;
   }
 
@@ -3364,7 +3364,7 @@ export class Hub {
    * `threads`, when given, are all the threads there are: a project's removal reads them
    * once for all of its own, instead of once for each.
    */
-  private async deleteOneThread(threadId: string, threads?: Thread[]): Promise<void> {
+  private async deleteOneThread(threadId: string, threads?: ThreadPlace[]): Promise<void> {
     const thread = this.requireThread(threadId);
     await this.exclusive(threadId, "Attends la fin de la suppression.", async () => {
       await this.releaseFolder(threadId, threads);
@@ -3399,7 +3399,7 @@ export class Hub {
     if (!this.store.getProject(projectId)) throw new Error("Projet introuvable.");
     if (this.removingProjects.has(projectId))
       throw new Error("Ce projet est déjà en cours de retrait.");
-    const all = this.store.listThreads();
+    const all = this.store.listThreadPlaces();
     const threads = all.filter((t) => t.projectId === projectId);
     if (
       threads.some((t) => this.turns.has(t.id) || this.busy.has(t.id) || this.groupActive(t.id))
@@ -3511,7 +3511,7 @@ export class Hub {
    */
   private async releaseFolder(
     threadId: string,
-    threads: Thread[] = this.store.listThreads(),
+    threads: ThreadPlace[] = this.store.listThreadPlaces(),
   ): Promise<void> {
     const borrowers = threads.filter((t) => t.worksIn === threadId);
     const busy = borrowers.find((t) => this.turns.has(t.id) || this.busy.has(t.id));

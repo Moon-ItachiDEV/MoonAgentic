@@ -1,4 +1,5 @@
 import { chmodSync } from "node:fs";
+import { Checkpoints } from "./checkpoints.ts";
 import { backup, DatabaseSync, type StatementSync } from "node:sqlite";
 import {
   MAX_PROJECT_MEMORY,
@@ -77,6 +78,12 @@ type ThreadExtra = Pick<
   | "worksIn"
   | "team"
   | "prReview"
+>;
+
+/** What says where a thread works. */
+export type ThreadPlace = Pick<
+  Thread,
+  "id" | "projectId" | "title" | "workspace" | "worksIn" | "createdAt"
 >;
 
 const extraOf = (thread: ThreadExtra): string | null => {
@@ -501,6 +508,7 @@ export class Store {
   readonly db: DatabaseSync;
   /** The path opened for this database, or `:memory:`. */
   readonly file: string;
+  private readonly checkpoints?: Checkpoints;
 
   constructor(file: string) {
     this.file = file;
@@ -526,6 +534,7 @@ export class Store {
     // the database.
     this.db.exec(`PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;`);
     migrate(this.db, file);
+    if (file !== ":memory:") this.checkpoints = new Checkpoints(file, this.db);
   }
 
   /**
@@ -858,6 +867,36 @@ export class Store {
       `SELECT * FROM threads ORDER BY updated_at DESC`,
     ).all() as unknown as ThreadRow[];
     return rows.flatMap((row) => this.readable(`le fil ${row.id}`, () => toThread(row)) ?? []);
+  }
+
+  /**
+   * Where each thread works, without the rest: what a removal looks at, thread by thread.
+   * Reading every thread whole held the server 40 ms with 2 000 of them.
+   */
+  listThreadPlaces(): ThreadPlace[] {
+    const rows = this.sql(
+      `SELECT id, project_id, title, workspace, created_at,
+              CASE WHEN json_valid(extra) THEN json_extract(extra, '$.worksIn') END AS works_in
+         FROM threads ORDER BY updated_at DESC`,
+    ).all() as unknown as {
+      id: string;
+      project_id: string;
+      title: string;
+      workspace: string | null;
+      created_at: number;
+      works_in: unknown;
+    }[];
+    return rows.flatMap(
+      (row) =>
+        this.readable(`le fil ${row.id}`, (): ThreadPlace => ({
+          id: row.id,
+          projectId: row.project_id,
+          title: row.title,
+          ...(row.workspace ? { workspace: recordOf<Workspace>(row.workspace) } : {}),
+          ...(typeof row.works_in === "string" ? { worksIn: row.works_in } : {}),
+          createdAt: row.created_at,
+        })) ?? [],
+    );
   }
 
   getThread(id: string): Thread | undefined {
@@ -1407,6 +1446,7 @@ export class Store {
   }
 
   close(): void {
+    this.checkpoints?.close();
     this.db.close();
   }
 }
