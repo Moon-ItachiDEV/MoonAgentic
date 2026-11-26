@@ -1,4 +1,5 @@
 import { splitVerdict } from "../review-verdict.ts";
+import { HERMES_AVATAR } from "../hermes.ts";
 import { VerdictCard } from "./VerdictCard.tsx";
 import { NEW_FOR, newMarkLabel } from "../new-mark.ts";
 import {
@@ -326,6 +327,7 @@ function Conversation({
     return () => clearTimeout(timer);
   }, [newAt]);
   const newLabel = newAt === undefined ? "Nouveau" : newMarkLabel(newAt);
+  const relayed = items ? relayedAnswers(items, working) : new Set<number>();
 
   const team = isTeamThread(thread);
   const blocks = items ? (team ? teamFeed(thread, items, earlier > 0) : activityFeed(items)) : [];
@@ -365,6 +367,12 @@ function Conversation({
           threads={threads}
           onOpenThread={onOpenThread}
         />
+        {relayed.has(i) && (
+          <div className="hsent">
+            <I n="check" s={13} />
+            Envoyé sur Discord
+          </div>
+        )}
       </div>
     );
   };
@@ -598,6 +606,27 @@ function QuietNotice({ since, name, threadId }: { since: number; name: string; t
       </button>
     </div>
   );
+}
+
+/**
+ * The answers Hermes took back to Discord: after a message written there, the last answer
+ * before the next message, once the agent is done with it.
+ */
+export function relayedAnswers(items: Item[], working: boolean): Set<number> {
+  const relayed = new Set<number>();
+  items.forEach((item, u) => {
+    if (item.kind !== "user" || item.from !== "hermes") return;
+    const next = items.findIndex((it, n) => n > u && it.kind === "user");
+    const end = next < 0 ? items.length : next;
+    if (next < 0 && working) return;
+    for (let a = end - 1; a > u; a--) {
+      if (items[a]?.kind === "agent") {
+        relayed.add(a);
+        return;
+      }
+    }
+  });
+  return relayed;
 }
 
 const startsAgentBlock = (items: Item[], index: number) =>
@@ -893,6 +922,12 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
   return (
     <div className="uw">
       {item.from === "coordinator" && <div className="ufrom">Coordinateur</div>}
+      {item.from === "hermes" && (
+        <div className="ufrom hermes">
+          <img className="hav" src={HERMES_AVATAR} alt="" width={20} height={20} />
+          <b>Hermes</b> · Discord
+        </div>
+      )}
       {item.from === "goal" && <div className="ufrom">Objectif · relance automatique</div>}
       {item.from === "pr" && <div className="ufrom">Pull request · correction automatique</div>}
       {item.from === "remarks" && (

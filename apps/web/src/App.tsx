@@ -1335,6 +1335,7 @@ export function App() {
               projectId={project?.id}
               mcpServers={state.mcpServers}
               mcpSecretsError={state.mcpSecretsError}
+              hermes={state.hermes}
               onPickProject={pickProject}
             />
           </Suspense>

@@ -1,4 +1,6 @@
-import type { RemoteAccess as Access, PairedDevice } from "@moonagentic/protocol";
+import type { RemoteAccess as Access, HermesStatus, PairedDevice } from "@moonagentic/protocol";
+import { navigate } from "../router.ts";
+import { HERMES_AVATAR } from "../hermes.ts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { encode } from "uqr";
 import { connection } from "../connection.ts";
@@ -17,7 +19,7 @@ import { Sheet } from "../v2/Sheet.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 
 /** Copies text, also on a page opened over plain HTTP, where the clipboard API is missing. */
-async function copyText(text: string): Promise<boolean> {
+export async function copyText(text: string): Promise<boolean> {
   try {
     await navigator.clipboard.writeText(text);
     return true;
@@ -67,7 +69,7 @@ function QrCode({ text }: { text: string }) {
  * How to open this MoonAgentic from another device. Everything shown is what the server
  * finds when asked: an address is listed only if it answers.
  */
-export function RemoteAccess() {
+export function RemoteAccess({ hermes }: { hermes?: HermesStatus | null }) {
   const [access, setAccess] = useState<Access | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -305,6 +307,24 @@ export function RemoteAccess() {
                 </button>
               </div>
             ))}
+            {hermes?.connected && (
+              <button
+                className="it"
+                onClick={() => navigate({ name: "settings", section: "hermes" }, { replace: true })}
+              >
+                <img className="hav" src={HERMES_AVATAR} alt="" width={28} height={28} />
+                <span className="tx">
+                  Hermes
+                  <small>
+                    Discord
+                    {hermes.lastSeen ? ` · vu ${seenAgo(hermes.lastSeen, Date.now())}` : ""}
+                  </small>
+                </span>
+                <span className="rt">
+                  <I n="right" s={15} />
+                </span>
+              </button>
+            )}
             {address && (
               <button className="it acc" onClick={startPairing}>
                 <I n="plus" s={18} />

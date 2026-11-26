@@ -10,7 +10,8 @@ export type SettingsSection =
   | "coordinator"
   | "teams"
   | "mcp"
-  | "remote";
+  | "remote"
+  | "hermes";
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   "general",
   "appearance",
@@ -22,6 +23,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   "teams",
   "mcp",
   "remote",
+  "hermes",
 ];
 
 /** The planner's views other than its board, each at its own address. */

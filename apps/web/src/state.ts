@@ -8,6 +8,7 @@ import type {
   AgentInfo,
   FavoriteRef,
   Favorites,
+  HermesStatus,
   Item,
   McpServerInfo,
   PendingQuestion,
@@ -49,6 +50,8 @@ export interface State {
   /** The order of the favorites wheel, as the user set it. */
   favoriteOrder: FavoriteRef[];
   coordinator: CoordinatorSettings;
+  /** Hermes on Discord, once asked with `hermes.get` or changed. */
+  hermes: HermesStatus | null;
   /** Permission requests waiting in every thread. */
   requests: PendingRequest[];
   /** Questions agents hold their turn on, in every thread. */
@@ -139,6 +142,8 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, roleMascots: message.mascots };
     case "coordinatorSettings":
       return { ...state, coordinator: message.settings };
+    case "hermes":
+      return { ...state, hermes: message.hermes };
     case "requests":
       return { ...state, requests: message.requests };
     case "questions":
@@ -330,6 +335,7 @@ export const initialState: State = {
   favorites: {},
   favoriteOrder: [],
   coordinator: { routes: {} },
+  hermes: null,
   requests: [],
   questions: [],
   mcpServers: [],

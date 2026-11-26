@@ -627,8 +627,8 @@ export const MAX_QUEUED_MESSAGES = 20;
 export interface QueuedMessage {
   id: string;
   text: string;
-  /** Left by the project's coordinator, not written by the user. */
-  from?: "coordinator";
+  /** Left by the project's coordinator, or sent by the user through Hermes on Discord. */
+  from?: "coordinator" | "hermes";
   /** When it was written. */
   at: number;
 }
@@ -829,8 +829,11 @@ export interface PlanTask {
    * thread, or the team's piece, is really doing.
    */
   status: PlanStatus;
-  /** `lead` when a team's lead planned it, `user` when written by hand. */
-  source: "user" | "lead";
+  /**
+   * `lead` when a team's lead planned it, `hermes` when Hermes laid it down from Discord,
+   * `user` when written by hand.
+   */
+  source: "user" | "lead" | "hermes";
   /** The thread that works on it: started from the card, or linked by the user. */
   threadId?: string;
   /** The piece of a team it stands for: its status then follows that piece. */
@@ -927,7 +930,7 @@ export type Item =
        * the server to take the thread's goal one turn further, to fix its pull request, or
        * with the review remarks the user picked on GitHub.
        */
-      from?: "coordinator" | "goal" | "pr" | "remarks";
+      from?: "coordinator" | "goal" | "pr" | "remarks" | "hermes";
       /** The thread's files just before this message, for threads with their own branch. */
       checkpoint?: string;
       at: number;
@@ -1059,7 +1062,65 @@ export interface Schedule {
   lastThreadId?: string;
   /** Why its last time did not start, in words for the user. */
   lastError?: string;
+  /** Planned by Hermes from Discord rather than by hand. */
+  by?: "hermes";
   createdAt: number;
+}
+
+/** What Hermes may do in MoonAgentic, set in Réglages › Hermes · Discord. */
+export interface HermesAllow {
+  /** Write to a project's coordinator, and read its answer. */
+  coordinators: boolean;
+  /** Write to one thread of a project. */
+  threads: boolean;
+  /** Add cards to the planner and planned tasks. */
+  plan: boolean;
+  /** Answer the agents' permission requests and questions. */
+  requests: boolean;
+}
+
+/** What MoonAgentic tells the Discord channel by itself. */
+export interface HermesNotify {
+  /** A thread finished its turn. */
+  done: boolean;
+  /** A thread waits for an answer. */
+  waiting: boolean;
+  /** A thread's pull request is ready to merge. */
+  prReady: boolean;
+}
+
+/** One thing Hermes did, for the list under « Dernières actions ». */
+export interface HermesAction {
+  what: string;
+  /** The project's name, when it was about one. */
+  project?: string;
+  at: number;
+}
+
+export const DEFAULT_HERMES_ALLOW: HermesAllow = {
+  coordinators: true,
+  threads: true,
+  plan: true,
+  requests: false,
+};
+export const DEFAULT_HERMES_NOTIFY: HermesNotify = { done: true, waiting: true, prReady: true };
+
+/**
+ * Hermes Agent, driven from Discord, as MoonAgentic sees it: whether it has an access, what
+ * it may do, where notices go, and what it did lately.
+ */
+export interface HermesStatus {
+  /** An access exists: Hermes's MCP server can call this MoonAgentic. */
+  connected: boolean;
+  /** When Hermes last called a tool. */
+  lastSeen?: number;
+  allow: HermesAllow;
+  notify: HermesNotify;
+  /** A Discord webhook is set for the notices; its address is never sent back. */
+  webhook: boolean;
+  /** The lines to put in Hermes's `config.yaml`, under `mcp_servers:`; no secret in them. */
+  config: string;
+  log: HermesAction[];
 }
 
 export type { PullRequestCheck, PullRequestInfo, PullRequestRemark } from "./pull-request.ts";
@@ -1388,6 +1449,8 @@ export type ServerMessage =
   | { type: "agents"; agents: AgentInfo[] }
   | { type: "favorites"; favorites: Favorites; order?: FavoriteRef[] }
   | { type: "coordinatorSettings"; settings: CoordinatorSettings }
+  /** Hermes's state, after it changed or when asked with `hermes.get`. */
+  | { type: "hermes"; hermes: HermesStatus }
   /** Every permission request still waiting, after one is added or answered. */
   | { type: "requests"; requests: PendingRequest[] }
   /** Every question an agent holds its turn on, after one is asked or answered. */
@@ -2230,6 +2293,36 @@ export const ClientMessage = z.discriminatedUnion("type", [
     requestId: id,
     endpoint: z.string().max(2048),
   }),
+  /** Asks for Hermes's state; answered with `hermes`. */
+  z.object({ type: z.literal("hermes.get") }),
+  /** Gives Hermes an access, or a new one in place of the old one. */
+  z.object({ type: z.literal("hermes.connect"), requestId: id }),
+  /** Takes Hermes's access away: its next call is refused. */
+  z.object({ type: z.literal("hermes.cut"), requestId: id }),
+  /**
+   * Changes what Hermes may do and what is told on Discord; those not given stay. `webhook`
+   * is a Discord webhook address, or null to stop the notices.
+   */
+  z.object({
+    type: z.literal("hermes.set"),
+    requestId: id,
+    allow: z
+      .object({
+        coordinators: z.boolean(),
+        threads: z.boolean(),
+        plan: z.boolean(),
+        requests: z.boolean(),
+      })
+      .partial()
+      .optional(),
+    notify: z
+      .object({ done: z.boolean(), waiting: z.boolean(), prReady: z.boolean() })
+      .partial()
+      .optional(),
+    webhook: z.string().max(500).nullable().optional(),
+  }),
+  /** Sends a test message to the Discord webhook. */
+  z.object({ type: z.literal("hermes.test"), requestId: id }),
   /** Looks for a newer version of MoonAgentic now. */
   z.object({ type: z.literal("app.check") }),
   /** Installs the version downloaded: once no thread is at work, or at once. */

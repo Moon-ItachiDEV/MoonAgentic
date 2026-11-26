@@ -6,6 +6,7 @@ import {
   MAX_MAX_TURNS,
   MAX_PARALLEL,
   type Favorites,
+  type HermesStatus,
   type McpServerInfo,
   type Project,
   type TeamMember,
@@ -49,6 +50,7 @@ import { RoleMascots } from "./RoleMascots.tsx";
 import { MascotSettings } from "./MascotSettings.tsx";
 import { ModelFavorites } from "./ModelFavorites.tsx";
 import { RemoteAccess } from "./RemoteAccess.tsx";
+import { HermesSettings } from "./HermesSettings.tsx";
 import { Subscriptions } from "./Subscriptions.tsx";
 import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
 import { TeamPresets } from "./TeamPresets.tsx";
@@ -79,7 +81,10 @@ const GROUPS: { id: SettingsSection; label: string; icon: IconName | "half" }[][
     { id: "teams", label: "Équipes", icon: "users" },
     { id: "mcp", label: "Connexions et MCP", icon: "plug" },
   ],
-  [{ id: "remote", label: "Accès distant", icon: "wifi" }],
+  [
+    { id: "remote", label: "Accès distant", icon: "wifi" },
+    { id: "hermes", label: "Hermes · Discord", icon: "tbubble" },
+  ],
 ];
 const SECTIONS = GROUPS.flat();
 const THEMES: Record<Theme, string> = { system: "Système", light: "Clair", dark: "Sombre" };
@@ -493,6 +498,7 @@ interface PageProps {
   projectId: string | undefined;
   mcpServers: McpServerInfo[];
   mcpSecretsError?: string | null;
+  hermes: HermesStatus | null;
   onPickProject: (id: string) => void;
 }
 
@@ -809,7 +815,9 @@ function SectionBody(props: PageProps & GithubProps & { section: SettingsSection
     case "teams":
       return <TeamPresets agents={props.agents} projectId={props.projectId} />;
     case "remote":
-      return <RemoteAccess />;
+      return <RemoteAccess hermes={props.hermes} />;
+    case "hermes":
+      return <HermesSettings hermes={props.hermes} />;
     case "subscriptions":
       return <Subscriptions agents={props.agents} />;
   }
@@ -848,6 +856,8 @@ export function SettingsLayer(
   const sub = useScrolled();
   // The layer slides in once it is there.
   const [on, setOn] = useState(false);
+  // Hermes's state is asked once: its line says whether it is connected.
+  useEffect(() => void connection.send({ type: "hermes.get" }), []);
   useEffect(() => {
     const frame = requestAnimationFrame(() => setOn(true));
     return () => cancelAnimationFrame(frame);
@@ -880,6 +890,7 @@ export function SettingsLayer(
         "")
       : "",
     mcp: servers ? `${servers} ${servers > 1 ? "actifs" : "actif"}` : "",
+    hermes: props.hermes ? (props.hermes.connected ? "Connecté" : "Non connecté") : "",
   };
   const shown = new Set(matchSections(SECTIONS, query).map((s) => s.id));
   const title = SECTIONS.find((s) => s.id === props.section)?.label ?? "";
