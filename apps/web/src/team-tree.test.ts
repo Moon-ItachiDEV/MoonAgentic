@@ -229,4 +229,30 @@ describe("memberThreadIds", () => {
     });
     expect(memberThreadIds(t)).toEqual(["c1", "r1", "c2", "t2", "m"]);
   });
+
+  it("says the reviewers are done while the judge weighs, and a judge never called was not", () => {
+    const withJudge = (extra: Partial<Team["tasks"][number]>) =>
+      teamTree({
+        lead,
+        team: team({
+          reviewer2: { agentId: "agy", model: "neon" },
+          judge: { agentId: "claude", model: "opus" },
+          tasks: tasks({ threadId: "c1", reviewThreadId: "r1", review2ThreadId: "r2", ...extra }),
+        } as Partial<Team>),
+        threads: [lead],
+        agents,
+        items: {},
+      }).pieces[0]!;
+    const judging = withJudge({ status: "judging", judgeThreadId: "j1" });
+    expect(judging.reviewer).toMatchObject({ tone: "ok", label: "Relu" });
+    expect(judging.reviewer2).toMatchObject({ tone: "ok", label: "Relu" });
+    // Both reviewers found nothing: the judge had nothing to weigh.
+    const done = withJudge({ status: "done" });
+    expect(done.reviewer).toMatchObject({ tone: "ok", label: "Validé" });
+    expect(done.judge).toMatchObject({ tone: "idle", label: "Pas appelé" });
+    expect(withJudge({ status: "done", judgeThreadId: "j1" }).judge).toMatchObject({
+      tone: "ok",
+      label: "Validé",
+    });
+  });
 });

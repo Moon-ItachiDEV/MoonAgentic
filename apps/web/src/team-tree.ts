@@ -412,6 +412,14 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
       mine: "reviewing" | "judging" | "testing",
       passed: boolean,
     ): Pick<TreeNode, "tone" | "label" | "action"> => {
+      // The reviews are in: the judge weighs them.
+      if (mine === "reviewing" && task.status === "judging") {
+        return { tone: "ok", label: "Relu", action: "Chez l'arbitre" };
+      }
+      // Nothing was found to weigh: the judge was never asked.
+      if (mine === "judging" && finished && !task.judgeThreadId) {
+        return { tone: "idle", label: "Pas appelé", action: "Rien à peser" };
+      }
       if (passed) return { tone: "ok", label: "Validé", action: "Rien à corriger" };
       if (sentBack && from === mine) {
         return {
@@ -426,9 +434,10 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
       return { tone: "idle", label: "En attente", action: "Attend la sous-tâche" };
     };
     const tested = task.status === "testing" && !!team.tester;
-    const reviewed = task.status === "done" || tested;
-    // Weighed by the judge: its reviewers are done, whatever they found.
-    const judged = task.status === "done" || tested;
+    const finished = task.status === "done" || tested;
+    const reviewed = finished;
+    // Weighed by the judge, once it was asked to.
+    const judged = finished && !!task.judgeThreadId;
     return {
       coder: node(
         {
