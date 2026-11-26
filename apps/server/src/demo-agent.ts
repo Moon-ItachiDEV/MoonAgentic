@@ -2,7 +2,7 @@
 // asks permission before a fake edit, and shares a plan, like a real coding agent would.
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -325,6 +325,18 @@ const app = acp
     };
 
     if (ask.includes("boom")) throw new Error("Le démo a planté exprès.");
+    // A subscription quota run out, for the models the file lists (« model » or « model|words »):
+    // read at every message, so a test can spend a quota and give it back.
+    const quotaFile = process.env.MOONAGENTIC_DEMO_QUOTA_FILE;
+    if (quotaFile && existsSync(quotaFile)) {
+      const model = models.get(sessionId) ?? "rapide";
+      for (const line of readFileSync(quotaFile, "utf8").split("\n")) {
+        const [spent, words] = line.trim().split("|");
+        if (spent === model) {
+          throw new Error(words || "You've hit your usage limit. Try again in 2 hours.");
+        }
+      }
+    }
 
     // As Hydrogen does out of any project: its tool at work for a while, the image made in its
     // own folder, and an answer that only links to it by its name.

@@ -1,12 +1,23 @@
 import {
+  type AgentInfo,
+  type FavoriteRef,
+  MAX_FALLBACK_MODELS,
   PROJECT_COLORS,
   type Project,
   type ProjectColor,
   type ProjectSetup,
   type ProjectSkill,
 } from "@moonagentic/protocol";
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { connection, newId } from "../connection.ts";
+import { modelLabel } from "../model-label.ts";
 import { COLOR_NAME } from "../project-colors.ts";
 import {
   claudeAction,
@@ -28,11 +39,21 @@ import { ProjectIcon } from "./ProjectIcon.tsx";
 
 const why = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-type Pane = "main" | "commands" | "skills";
+type Pane = "main" | "commands" | "skills" | "fallback";
 const PANE_TITLE: Record<Pane, string> = {
   main: "Réglages du projet",
   commands: "Commandes",
   skills: "Skills",
+  fallback: "Modèle de secours",
+};
+
+/** A project's fallback models while none were set: off, coming back once the quota is reset. */
+const NO_FALLBACK = { on: false, back: true, models: [] as FavoriteRef[] };
+
+/** The name a model goes by, from its agent's list, or its id while that is not known. */
+const modelName = (agents: AgentInfo[], ref: FavoriteRef) => {
+  const known = agents.find((a) => a.id === ref.agentId)?.models?.find((m) => m.id === ref.model);
+  return known ? modelLabel(known) : ref.model;
 };
 
 /**
@@ -68,6 +89,10 @@ export function ProjectSettings(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [iconOpen, setIconOpen] = useState(false);
+  const agents = useSyncExternalStore(connection.subscribe, connection.getState).agents;
+  const fallback = project.quota?.fallback ?? NO_FALLBACK;
+  const setFallback = (next: typeof fallback) =>
+    connection.send({ type: "project.setQuotaRules", projectId, fallback: next });
 
   useEffect(() => {
     if (!props.open) return;
@@ -154,6 +179,8 @@ export function ProjectSettings(props: {
       <p className="snone">{loadError}</p>
     ) : !setup ? (
       <p className="snone">Lecture du dossier…</p>
+    ) : pane === "fallback" ? (
+      <FallbackPane agents={agents} fallback={fallback} onChange={setFallback} />
     ) : pane === "commands" ? (
       <CommandsTab setup={setup} projectId={projectId} change={change} onConfirm={setConfirm} />
     ) : (
@@ -287,6 +314,32 @@ export function ProjectSettings(props: {
             <span className="tx">{props.coordinator ?? "Aucun"}</span>
             <span className="rt">
               Régler
+              <I n="right" s={15} />
+            </span>
+          </button>
+          <div className="it ro">
+            <span className="tx">Reprendre les fils quand les quotas sont remis à zéro</span>
+            <button
+              className="tog"
+              role="switch"
+              aria-checked={!!project.quota?.resume}
+              aria-label="Reprendre les fils quand les quotas sont remis à zéro"
+              onClick={() =>
+                connection.send({
+                  type: "project.setQuotaRules",
+                  projectId,
+                  resume: !project.quota?.resume,
+                })
+              }
+            />
+          </div>
+          <button className="it" onClick={() => setPane("fallback")}>
+            <span className="tx">Modèle de secours</span>
+            <span className="rt">
+              {!fallback.on || !fallback.models.length
+                ? "Non"
+                : modelName(agents, fallback.models[0]!) +
+                  (fallback.models.length > 1 ? ` +${fallback.models.length - 1}` : "")}
               <I n="right" s={15} />
             </span>
           </button>
@@ -443,6 +496,113 @@ type SetupRequest = Extract<
   }
 >;
 type Change = (message: SetupRequest) => Promise<void>;
+
+/**
+ * « Modèle de secours »: when a model's quota runs out, the thread goes on with the first of
+ * these that still has some, in the order they were picked; and goes back to its own once
+ * that one's quota is reset, unless told not to.
+ */
+function FallbackPane(props: {
+  agents: AgentInfo[];
+  fallback: { on: boolean; back: boolean; models: FavoriteRef[] };
+  onChange: (next: { on: boolean; back: boolean; models: FavoriteRef[] }) => void;
+}) {
+  const { agents, fallback, onChange } = props;
+  const ready = agents.filter((a) => a.available && a.models?.length !== 0);
+  // The check each agent had when « Lire ses modèles » was pressed: over once it has another.
+  const [asked, setAsked] = useState<Record<string, number | null>>({});
+  const discover = (agent: AgentInfo) => {
+    if (!connection.send({ type: "agent.discover", agentId: agent.id })) {
+      connection.notify("Pas de connexion au serveur MoonAgentic.");
+      return;
+    }
+    setAsked((was) => ({ ...was, [agent.id]: agent.check?.at ?? null }));
+  };
+  const reading = (agent: AgentInfo) =>
+    asked[agent.id] !== undefined && asked[agent.id] === (agent.check?.at ?? null);
+  const rankOf = (agentId: string, model: string) =>
+    fallback.models.findIndex((m) => m.agentId === agentId && m.model === model);
+  const toggle = (agentId: string, model: string) => {
+    const rank = rankOf(agentId, model);
+    const models =
+      rank >= 0
+        ? fallback.models.filter((_, i) => i !== rank)
+        : [...fallback.models, { agentId, model }].slice(0, MAX_FALLBACK_MODELS);
+    onChange({ ...fallback, models });
+  };
+  return (
+    <>
+      <div className="ins">
+        <div className="it ro">
+          <span className="tx">Passer au secours</span>
+          <button
+            className="tog"
+            role="switch"
+            aria-checked={fallback.on}
+            aria-label="Passer au secours"
+            onClick={() => onChange({ ...fallback, on: !fallback.on })}
+          />
+        </div>
+        <div className="it ro">
+          <span className="tx">Revenir quand le quota repart</span>
+          <button
+            className="tog"
+            role="switch"
+            aria-checked={fallback.back}
+            aria-label="Revenir quand le quota repart"
+            onClick={() => onChange({ ...fallback, back: !fallback.back })}
+          />
+        </div>
+      </div>
+      <div className={fallback.on ? "" : "fboff"}>
+        {ready.map((agent) => (
+          <div key={agent.id}>
+            <div className="gl2">
+              {agent.name}
+              <span className="sp" />
+              {reading(agent) ? (
+                <span className="ppill" role="status">
+                  Lecture des modèles…
+                </span>
+              ) : (
+                !agent.models && (
+                  <button className="lk" onClick={() => discover(agent)}>
+                    {agent.modelsError ? "Réessayer" : "Lire ses modèles"}
+                  </button>
+                )
+              )}
+            </div>
+            {agent.models && (
+              <div className="ins">
+                {agent.models.map((m) => {
+                  const rank = rankOf(agent.id, m.id);
+                  const name = modelLabel(m);
+                  const full = rank < 0 && fallback.models.length >= MAX_FALLBACK_MODELS;
+                  return (
+                    <button
+                      key={m.id}
+                      className="it fva"
+                      aria-pressed={rank >= 0}
+                      aria-label={name}
+                      disabled={!fallback.on || full}
+                      onClick={() => toggle(agent.id, m.id)}
+                    >
+                      <span className="tx">{name}</span>
+                      {rank >= 0 && <span className="fvr">{rank + 1}</span>}
+                      <span className="fvc">
+                        <I n="check" s={14} />
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
 
 function LookTab({
   project,

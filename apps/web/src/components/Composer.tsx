@@ -57,6 +57,7 @@ import { type ComposerContext, PlusPop, PlusSheet, WhereSheet } from "./Composer
 import type { TrayQuota } from "../composer-tray.ts";
 import { GoalBar } from "./GoalBar.tsx";
 import { MessageQueue } from "./MessageQueue.tsx";
+import { QuotaBar } from "./QuotaBar.tsx";
 import { Picker } from "./Picker.tsx";
 import { type Suggestion, Suggestions } from "./Suggestions.tsx";
 import { I } from "../v2/I.tsx";
@@ -1066,7 +1067,8 @@ export function Composer(props: {
     >
       {!suggesting && (
         <div className="dcw">
-          {trayQuota && !voice && (
+          {thread?.quota && <QuotaBar thread={thread} quota={thread.quota} />}
+          {trayQuota && !voice && !thread?.quota && (
             <div className={`updb glass qw ${trayQuota.level}`} role="status">
               <span className="tx">
                 {trayQuota.text}

@@ -12,6 +12,15 @@ export {
 import type { AppInfo } from "./app-update.ts";
 export { type Notice, noticesFor, settledTags, waitingTag } from "./notices.ts";
 export {
+  limitsModel,
+  MAX_FALLBACK_MODELS,
+  type ProjectQuotaRules,
+  spentUntil,
+  type ThreadQuota,
+  tightest,
+} from "./quota.ts";
+import { MAX_FALLBACK_MODELS, type ProjectQuotaRules, type ThreadQuota } from "./quota.ts";
+export {
   defaultTeam,
   pickMember,
   presetMembers,
@@ -239,6 +248,8 @@ export interface Project {
   icon?: string;
   /** The tint of its icon, among {@link PROJECT_COLORS}. */
   color?: ProjectColor;
+  /** What its threads do when a model's quota runs out; nothing while unset. */
+  quota?: ProjectQuotaRules;
 }
 
 /** The tints a project's icon can take; the web app gives each its shade in both themes. */
@@ -646,6 +657,8 @@ export interface Thread {
   goal?: ThreadGoal;
   /** Watches its pull request and has the agent fix it; see `PrWatch`. */
   prWatch?: PrWatch;
+  /** What it does about a quota that ran out: waits for it, or goes on with a fallback. */
+  quota?: ThreadQuota;
   /** The team lead's thread, for a coder's thread. */
   parentId?: string;
   /** The thread's part in a team. */
@@ -1702,6 +1715,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
    */
   z.object({ type: z.literal("thread.resume"), threadId: id, sendId: sendId.optional() }),
   /**
+   * « Attendre »: a thread on a fallback model goes back to its own and waits for its quota,
+   * to start again by itself once it is reset. Its turn on the fallback, if any, is stopped.
+   */
+  z.object({ type: z.literal("thread.quotaWait"), threadId: id }),
+  /** The thread no longer starts again by itself when its quota is reset. */
+  z.object({ type: z.literal("thread.quotaCancel"), threadId: id }),
+  /**
    * Keeps a message for after the turn under way. Sent at once instead when the thread
    * is free and nothing waits before it.
    */
@@ -1968,6 +1988,28 @@ export const ClientMessage = z.discriminatedUnion("type", [
       .regex(/^[^\s\p{Cc}]+$/u)
       .nullable(),
     color: z.enum(PROJECT_COLORS).nullable(),
+  }),
+  /**
+   * What the project's threads do when a model's quota runs out. Each part left out stays as
+   * it is.
+   */
+  z.object({
+    type: z.literal("project.setQuotaRules"),
+    projectId: id,
+    resume: z.boolean().optional(),
+    fallback: z
+      .object({
+        on: z.boolean(),
+        back: z.boolean(),
+        models: z
+          .array(z.object({ agentId: id, model: id }))
+          .max(MAX_FALLBACK_MODELS)
+          .refine(
+            (list) => new Set(list.map((m) => `${m.agentId}\u0000${m.model}`)).size === list.length,
+            "Modèle en double.",
+          ),
+      })
+      .optional(),
   }),
   /** What the project gives its agents, read from its folder: answered with projectSetup. */
   z.object({ type: z.literal("project.setup"), requestId: id, projectId: id }),

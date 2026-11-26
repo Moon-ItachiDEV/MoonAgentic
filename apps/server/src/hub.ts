@@ -28,8 +28,10 @@ import {
   MAX_QUEUED_MESSAGES,
   PR_WATCH_TRIES,
   RESUME_TEXT,
+  spentUntil,
   threadPullRequest,
 } from "@moonagentic/protocol";
+import type { ProjectQuotaRules, ThreadQuota } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   RoleMascots,
@@ -130,6 +132,14 @@ import { sweepWorktrees } from "./worktree-sweep.ts";
 import { AppUpdates, type GitSource, type ShellChannel } from "./app-update.ts";
 import { backupBeforeUpdate } from "./backups.ts";
 import { redact } from "./redact.ts";
+import {
+  GIVE_UP_AFTER_MS,
+  nextFallback,
+  quotaStopped,
+  RESET_MARGIN_MS,
+  resetFromText,
+  UNKNOWN_RESET_RETRY_MS,
+} from "./quota-relief.ts";
 import { isTeamPreset } from "./saved-shapes.ts";
 import { isRecord, type Store, StorageRefused, storageTrouble, type ThreadPlace } from "./store.ts";
 import {
@@ -232,6 +242,8 @@ export interface HubOptions {
   quotaReaders?: Record<string, QuotaReader>;
   /** How often every quota is read again; 0 for only when asked or after a turn. */
   quotaEveryMs?: number;
+  /** How often threads waiting on a quota, or on a fallback model, look whether it is back. */
+  quotaTickMs?: number;
   /** Where the images sent with messages are kept; beside the worktrees unless given. */
   attachmentsDir?: string;
   /** The desktop app's channel, when it started this server. */
@@ -251,6 +263,10 @@ const DEFAULTS = "defaults";
 /** Each project's icon and tint, as set in its settings. */
 const PROJECT_LOOKS = "projectLooks";
 type ProjectLook = Pick<Project, "icon" | "color">;
+/** Each project's rules for a quota that runs out, by project id. */
+const PROJECT_QUOTA = "projectQuotaRules";
+/** How often threads waiting on a quota look whether it is back, unless told otherwise. */
+const QUOTA_TICK_MS = 60_000;
 
 /** The level a coordinator starts on, as agents name it. */
 const LOW_EFFORT = /^(low|bas)$/i;
@@ -513,6 +529,13 @@ export class Hub {
   private watching = false;
   private readonly prTimer: NodeJS.Timeout | undefined;
   private sweepTimer: NodeJS.Timeout | undefined;
+  private quotaTimer: NodeJS.Timeout | undefined;
+  /** Threads that wait on a quota or run on a fallback: the only ones the tick looks at. */
+  private readonly quotaThreads = new Set<string>();
+  /** When a thread whose quota gives no reset time is tried again, by thread id. */
+  private readonly quotaRetryAt = new Map<string, number>();
+  /** Threads the tick is putting back or starting again right now. */
+  private readonly quotaActing = new Set<string>();
 
   constructor(store: Store, agents: Agents, options: HubOptions) {
     this.store = store;
@@ -687,6 +710,7 @@ export class Hub {
     void this.recovered.then(() => {
       if (this.closed) return;
       this.scheduler.start();
+      this.startQuotaTick(options.quotaTickMs ?? QUOTA_TICK_MS);
       // Threads left in line when the server stopped start once places are free: until
       // now, only the end of another turn of their coordinator made them move.
       for (const t of this.store.listThreads()) {
@@ -1279,6 +1303,13 @@ export class Hub {
       case "thread.resume":
         this.resume(message.threadId);
         return;
+      case "thread.quotaWait":
+        await this.waitInsteadOfFallback(message.threadId);
+        return;
+      case "thread.quotaCancel":
+        this.requireThread(message.threadId);
+        this.setThreadQuota(message.threadId, null);
+        return;
       case "item.get": {
         this.requireThread(message.threadId);
         const item = this.itemOf(message.threadId, message.itemId);
@@ -1298,6 +1329,8 @@ export class Hub {
       case "thread.switchAgent":
         await this.switchAgent(message.threadId, message.agentId);
         this.coordinators.keepChoice(message.threadId);
+        // The user's own choice: no fallback to come back from.
+        this.dropRelief(message.threadId);
         return;
       case "thread.setPermissionMode":
         this.setPermissionMode(message.threadId, message.permissionMode);
@@ -1305,6 +1338,7 @@ export class Hub {
       case "thread.setModel":
         await this.setModel(message.threadId, message.model);
         this.coordinators.keepChoice(message.threadId);
+        this.dropRelief(message.threadId);
         return;
       case "thread.setSetting":
         await this.setSetting(message.threadId, message.settingId, message.value);
@@ -1356,6 +1390,26 @@ export class Hub {
         this.store.setSetting(TEAM_PRESETS_SETTING, message.presets);
         this.broadcast({ type: "teamPresets", presets: message.presets });
         return;
+      case "project.setQuotaRules": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        const all = Object.fromEntries(
+          Object.entries(
+            this.store.getSetting<Record<string, ProjectQuotaRules>>(PROJECT_QUOTA, {}),
+          )
+            // Projects removed since are dropped on the way.
+            .filter(([p]) => p !== project.id && this.store.getProject(p)),
+        );
+        const current = this.quotaRules(project.id) ?? {};
+        const next: ProjectQuotaRules = {
+          ...current,
+          ...(message.resume !== undefined ? { resume: message.resume } : {}),
+          ...(message.fallback ? { fallback: message.fallback } : {}),
+        };
+        this.store.setSetting(PROJECT_QUOTA, { ...all, [project.id]: next });
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
       case "project.setLook": {
         const project = this.store.getProject(message.projectId);
         if (!project) throw new Error("Ce projet n'existe plus.");
@@ -2660,7 +2714,13 @@ export class Hub {
       ...(from ? { from } : {}),
       at: Date.now(),
     });
-    this.updateThread(threadId, { status: "running", error: null });
+    this.updateThread(threadId, {
+      status: "running",
+      error: null,
+      // A turn on its way: nothing waits for the quota any more.
+      ...(thread.quota?.state === "wait" ? { quota: null } : {}),
+    });
+    this.quotaRetryAt.delete(threadId);
     // This turn's own end is the one that counts from here.
     this.unsettled.delete(threadId);
     this.turnIds.set(threadId, randomUUID());
@@ -2752,6 +2812,14 @@ export class Hub {
     const now = this.store.getThread(threadId);
     const failed = !!now && this.asEnded(now).status === "error";
     const atOnce = this.sendAfterStop.delete(threadId);
+    // A quota that ran out: a fallback model takes over, or the thread waits for the reset.
+    // Either is the thread's next step, never both, and nothing else goes on meanwhile.
+    if (!cancelled && !this.closed && !this.turns.has(threadId) && this.onQuotaStop(threadId)) {
+      this.prFixing.delete(threadId);
+      return;
+    }
+    // A thread that got through a turn on its fallback, with no going back, is just on it now.
+    if (!this.closed && !failed) this.settleRelief(threadId);
     // A fix of the pull request whose words after a refusal go on in a new turn is pushed
     // when that one ends.
     if (this.prFixing.has(threadId) && this.turns.has(threadId)) return;
@@ -3604,6 +3672,262 @@ export class Hub {
     });
   }
 
+  /** The project's rules for a quota that runs out, once set. */
+  private quotaRules(projectId: string): ProjectQuotaRules | undefined {
+    return this.store.getSetting<Record<string, ProjectQuotaRules>>(PROJECT_QUOTA, {})[projectId];
+  }
+
+  /** The words a model goes by, for the quota windows: its id and the name its agent gives. */
+  private modelNames(agentId: string, model: string): (string | undefined)[] {
+    const name = this.store.getAgentModels(agentId)?.models.find((c) => c.id === model)?.name;
+    return [model, name];
+  }
+
+  /** When the figures, or else the agent's own words, say this model's quota is back. */
+  private quotaBackAt(ref: FavoriteRef, said: string, now = Date.now()): number | undefined {
+    const left = spentUntil(
+      this.quotas.get(ref.agentId),
+      this.modelNames(ref.agentId, ref.model),
+      now,
+    );
+    return (left && left.until) || resetFromText(said, now);
+  }
+
+  private setThreadQuota(threadId: string, quota: ThreadQuota | null): void {
+    if (!this.store.getThread(threadId)) return;
+    this.updateThread(threadId, { quota });
+    if (quota) this.quotaThreads.add(threadId);
+    else {
+      this.quotaThreads.delete(threadId);
+      this.quotaRetryAt.delete(threadId);
+    }
+  }
+
+  /** The user picked a model or an agent themselves: the thread is no longer on a fallback. */
+  private dropRelief(threadId: string): void {
+    if (this.store.getThread(threadId)?.quota?.state === "relief")
+      this.setThreadQuota(threadId, null);
+  }
+
+  /** After a turn that went through on a fallback that does not go back: just its model now. */
+  private settleRelief(threadId: string): void {
+    const thread = this.store.getThread(threadId);
+    const relief = thread?.quota?.state === "relief" ? thread.quota : undefined;
+    if (!thread || !relief) return;
+    if (this.quotaRules(thread.projectId)?.fallback?.back) return;
+    this.wrote(() => this.setThreadQuota(threadId, null));
+  }
+
+  /**
+   * Called as a turn ends, before anything else goes on: when its quota stopped it, the
+   * project's rules say what follows. A fallback with quota left takes over at once and goes
+   * on; with none, the thread waits on its own model for the reset, when the project asks;
+   * the user's other messages wait meanwhile. True when it took the thread's next step.
+   * Teams and reviews keep their own way of handling a failure.
+   */
+  private onQuotaStop(threadId: string): boolean {
+    const thread = this.store.getThread(threadId);
+    if (!thread || thread.archived || thread.parentId || thread.role) return false;
+    if (thread.team || thread.prReview) return false;
+    const ended = this.asEnded(thread);
+    const error = ended.status === "error" ? ended.error : undefined;
+    const turn = this.lastTurn(threadId);
+    const answer = turn.some((i) => i.kind === "tool")
+      ? undefined
+      : turn
+          .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
+          .join("\n")
+          .trim();
+    if (!quotaStopped(error, answer)) return false;
+    const rules = this.quotaRules(thread.projectId);
+    const said = [error, answer].filter(Boolean).join("\n");
+    const now = Date.now();
+    const spent: FavoriteRef = { agentId: thread.agentId, model: thread.model ?? "" };
+    const relief = thread.quota?.state === "relief" ? thread.quota : undefined;
+    // On a fallback, its own model is the one to come back to.
+    const own = relief?.from ?? spent;
+    const ownBack = relief ? relief.back : this.quotaBackAt(spent, said, now);
+    const next = nextFallback(rules, spent, {
+      tried: relief ? [relief.from] : [],
+      installed: (agentId) => !!this.catalog.list().find((a) => a.id === agentId && a.available),
+      quota: (agentId) => this.quotas.get(agentId),
+      names: (agentId, model) => this.modelNames(agentId, model),
+      now,
+    });
+    if (next) {
+      const back = rules?.fallback?.back ? ownBack : undefined;
+      this.runQuotaStep(threadId, () => this.takeOver(threadId, own, next, back));
+      return true;
+    }
+    if (rules?.resume) {
+      this.runQuotaStep(threadId, () => this.waitForQuota(threadId, own, ownBack));
+      return true;
+    }
+    // Nothing to do but say it: a thread left on a spent fallback goes back to its own model.
+    if (relief) this.runQuotaStep(threadId, () => this.putBack(threadId, own));
+    return false;
+  }
+
+  /** Runs one step of a thread's quota handling, kept for `close` to wait on. */
+  private runQuotaStep(threadId: string, work: () => Promise<void>): void {
+    if (this.quotaActing.has(threadId)) return;
+    this.quotaActing.add(threadId);
+    const step = work()
+      .catch((error: unknown) => {
+        if (!this.closed && !this.storageFailed(error)) console.error("Quota :", error);
+      })
+      .finally(() => this.quotaActing.delete(threadId));
+    this.steps.add(step);
+    void step.finally(() => this.steps.delete(step));
+  }
+
+  /** Puts the thread on a model, changing agent when it is another one's. */
+  private async putOn(threadId: string, ref: FavoriteRef): Promise<void> {
+    const thread = this.requireLiveThread(threadId);
+    if (thread.agentId !== ref.agentId) {
+      await this.switchAgent(threadId, ref.agentId);
+      // The new agent starts on it: its models may not be known before its first start.
+      if (ref.model) this.updateThread(threadId, { model: ref.model });
+    } else if (ref.model && thread.model !== ref.model) {
+      await this.setModel(threadId, ref.model);
+    }
+  }
+
+  /** The fallback takes over, and the agent goes on where the quota stopped it. */
+  private async takeOver(
+    threadId: string,
+    own: FavoriteRef,
+    to: FavoriteRef,
+    back: number | undefined,
+  ): Promise<void> {
+    await this.putOn(threadId, to);
+    if (this.closed) return;
+    this.setThreadQuota(threadId, {
+      state: "relief",
+      from: own,
+      to,
+      since: Date.now(),
+      ...(back ? { back } : {}),
+    });
+    this.send(threadId, RESUME_TEXT, undefined, undefined, undefined, true);
+  }
+
+  /** The thread waits on its own model for its quota, to start again by itself. */
+  private async waitForQuota(
+    threadId: string,
+    own: FavoriteRef,
+    until: number | undefined,
+  ): Promise<void> {
+    await this.putOn(threadId, own);
+    if (this.closed) return;
+    this.setThreadQuota(threadId, {
+      state: "wait",
+      agentId: own.agentId,
+      ...(own.model ? { model: own.model } : {}),
+      since: Date.now(),
+      ...(until ? { until } : {}),
+    });
+    if (!until) this.quotaRetryAt.set(threadId, Date.now() + UNKNOWN_RESET_RETRY_MS);
+  }
+
+  /** Back on its own model, with nothing more to do about the quota. */
+  private async putBack(threadId: string, own: FavoriteRef): Promise<void> {
+    await this.putOn(threadId, own);
+    this.setThreadQuota(threadId, null);
+  }
+
+  /**
+   * « Attendre »: the thread leaves its fallback, its turn there stopped, and waits on its own
+   * model for its quota, to start again by itself.
+   */
+  private async waitInsteadOfFallback(threadId: string): Promise<void> {
+    const thread = this.requireLiveThread(threadId);
+    const relief = thread.quota?.state === "relief" ? thread.quota : undefined;
+    if (!relief) throw new Error("Ce fil n'est pas sur un modèle de secours.");
+    if (this.quotaActing.has(threadId)) throw new Error("Attends la fin du changement de modèle.");
+    const turn = this.turns.get(threadId);
+    if (turn) {
+      await this.cancel(threadId);
+      await turn.catch(() => undefined);
+    }
+    // Nothing sent in between, so the thread is still the user's to put back.
+    await this.waitForQuota(threadId, relief.from, relief.back);
+  }
+
+  private startQuotaTick(everyMs: number): void {
+    for (const thread of this.store.listThreads()) {
+      if (thread.quota) this.quotaThreads.add(thread.id);
+    }
+    if (everyMs <= 0) return;
+    this.quotaTimer = setInterval(() => void this.quotaTick(), everyMs);
+    this.quotaTimer.unref();
+    void this.quotaTick();
+  }
+
+  /**
+   * Looks at each thread that waits on a quota or runs on a fallback that goes back: once its
+   * own model has quota again, the waiting one starts again and the other goes back to it.
+   * The figures, when readable, have the last word on whether the quota is back.
+   */
+  async quotaTick(now = Date.now()): Promise<void> {
+    for (const threadId of Array.from(this.quotaThreads)) {
+      if (this.closed) return;
+      const thread = this.store.getThread(threadId);
+      const quota = thread?.quota;
+      if (!thread || !quota || thread.archived) {
+        if (thread?.quota) this.setThreadQuota(threadId, null);
+        else this.quotaThreads.delete(threadId);
+        continue;
+      }
+      if (this.quotaActing.has(threadId) || this.turns.has(threadId) || this.busy.has(threadId)) {
+        continue;
+      }
+      if (quota.state === "relief" && !this.quotaRules(thread.projectId)?.fallback?.back) continue;
+      const own: FavoriteRef =
+        quota.state === "wait" ? { agentId: quota.agentId, model: quota.model ?? "" } : quota.from;
+      const at = quota.state === "wait" ? quota.until : quota.back;
+      const due = at !== undefined ? at + RESET_MARGIN_MS : this.quotaRetryAt.get(threadId);
+      if (due !== undefined && now < due) continue;
+      if (now - quota.since > GIVE_UP_AFTER_MS) {
+        this.setThreadQuota(threadId, null);
+        continue;
+      }
+      // The figures may say it is not back yet, and when it will be.
+      await this.quotas.refresh(own.agentId, RESET_MARGIN_MS).catch(() => undefined);
+      if (this.closed) return;
+      const left = spentUntil(
+        this.quotas.get(own.agentId),
+        this.modelNames(own.agentId, own.model),
+        now,
+      );
+      if (left) {
+        if (left.until && left.until !== at) {
+          this.setThreadQuota(
+            threadId,
+            quota.state === "wait"
+              ? { ...quota, until: left.until }
+              : { ...quota, back: left.until },
+          );
+        } else if (!left.until) {
+          this.quotaRetryAt.set(threadId, now + UNKNOWN_RESET_RETRY_MS);
+        }
+        continue;
+      }
+      // Unknown figures and no time given: tried now, and again later if it stops again.
+      if (at === undefined) this.quotaRetryAt.set(threadId, now + UNKNOWN_RESET_RETRY_MS);
+      if (quota.state === "wait") {
+        this.setThreadQuota(threadId, null);
+        try {
+          this.resume(threadId);
+        } catch (error) {
+          if (!this.storageFailed(error)) console.error("Reprise après le quota :", error);
+        }
+      } else {
+        this.runQuotaStep(threadId, () => this.putBack(threadId, own));
+      }
+    }
+  }
+
   /** How many agents run for threads right now, starting ones included. */
   get liveAgents(): number {
     return this.pool.live;
@@ -3816,6 +4140,7 @@ export class Hub {
     clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
     clearInterval(this.sweepTimer);
+    clearInterval(this.quotaTimer);
     clearInterval(this.storageTimer);
     this.app.close();
     this.quotas.close();
@@ -4153,7 +4478,8 @@ export class Hub {
     const pinned = this.store.getSetting<string[]>(PINNED_PROJECTS, []).includes(project.id);
     const locked = this.locks.isLocked(project.id);
     const look = this.store.getSetting<Record<string, ProjectLook>>(PROJECT_LOOKS, {})[project.id];
-    return git || pinned || locked || look
+    const quota = this.quotaRules(project.id);
+    return git || pinned || locked || look || quota
       ? {
           ...project,
           ...(git ? { git } : {}),
@@ -4161,6 +4487,7 @@ export class Hub {
           ...(locked ? { locked } : {}),
           ...(look?.icon ? { icon: look.icon } : {}),
           ...(look?.color ? { color: look.color } : {}),
+          ...(quota ? { quota } : {}),
         }
       : project;
   }

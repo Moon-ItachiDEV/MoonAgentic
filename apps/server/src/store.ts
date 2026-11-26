@@ -74,6 +74,7 @@ type ThreadExtra = Pick<
   | "queue"
   | "goal"
   | "prWatch"
+  | "quota"
   | "parentId"
   | "role"
   | "worksIn"
@@ -110,6 +111,7 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.queue?.length ? { queue: thread.queue } : {}),
     ...(thread.goal ? { goal: thread.goal } : {}),
     ...(thread.prWatch ? { prWatch: thread.prWatch } : {}),
+    ...(thread.quota ? { quota: thread.quota } : {}),
     ...(thread.parentId ? { parentId: thread.parentId } : {}),
     ...(thread.role ? { role: thread.role } : {}),
     ...(thread.worksIn ? { worksIn: thread.worksIn } : {}),
@@ -976,6 +978,8 @@ export class Store {
       goal?: Thread["goal"] | null;
       /** « Corriger tout seul » now; null turns it off. */
       prWatch?: Thread["prWatch"] | null;
+      /** What it does about a quota that ran out; null: nothing any more. */
+      quota?: Thread["quota"] | null;
       quietSince?: number | null;
       inLine?: true | null;
       error?: string | null;
@@ -986,7 +990,18 @@ export class Store {
     if (!current) throw new Error(`Unknown thread ${id}`);
     // Only activity moves a thread up the sidebar, not a settings change.
     const active = patch.status !== undefined || patch.title !== undefined;
-    const { pr, held, queue, goal, prWatch, quietSince, inLine, error: _error, ...rest } = patch;
+    const {
+      pr,
+      held,
+      queue,
+      goal,
+      prWatch,
+      quota,
+      quietSince,
+      inLine,
+      error: _error,
+      ...rest
+    } = patch;
     const next: Thread = {
       ...current,
       ...rest,
@@ -1000,6 +1015,8 @@ export class Store {
     else if (goal) next.goal = goal;
     if (prWatch === null) delete next.prWatch;
     else if (prWatch) next.prWatch = prWatch;
+    if (quota === null) delete next.quota;
+    else if (quota) next.quota = quota;
     if (inLine === null) delete next.inLine;
     else if (inLine) next.inLine = true;
     if (quietSince === null) delete next.quietSince;
