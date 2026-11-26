@@ -493,7 +493,10 @@ describe("a thread whose quota runs out", () => {
       text: "Un",
     });
     await settled(hub, store, threadId, () => store.getThread(threadId)?.quota?.state === "wait");
-    const inner = hub as unknown as { quotaThreads: Set<string>; quotaRetryAt: Map<string, number> };
+    const inner = hub as unknown as {
+      quotaThreads: Set<string>;
+      quotaRetryAt: Map<string, number>;
+    };
     inner.quotaRetryAt.set(threadId, Date.now());
     await hub.handle(client, { type: "thread.delete", requestId: "d1", threadId });
     expect(inner.quotaThreads.has(threadId)).toBe(false);

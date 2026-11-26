@@ -1,5 +1,5 @@
 import type { AgentInfo, McpServerInfo, McpTool, Project } from "@moonagentic/protocol";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { mcpServerInput } from "../mcp-input.ts";
 import { type McpScope, mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
@@ -138,19 +138,25 @@ function ToolRows({ server }: { server: McpServerInfo }) {
   const [tools, setTools] = useState<McpTool[]>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  // Each reading counts: one that answers after the server changed is not shown for it.
+  const asked = useRef(0);
   useEffect(() => {
+    asked.current += 1;
     setOpen(false);
     setTools(undefined);
     setError(undefined);
+    setBusy(false);
   }, [server.id, server.target]);
   const load = () => {
+    const mine = ++asked.current;
+    const still = () => mine === asked.current;
     setBusy(true);
     setError(undefined);
     connection
       .ask({ type: "mcp.tools", requestId: newId(), id: server.id })
-      .then((reply) => setTools(reply.tools))
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false));
+      .then((reply) => still() && setTools(reply.tools))
+      .catch((e: unknown) => still() && setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => still() && setBusy(false));
   };
   return (
     <>
