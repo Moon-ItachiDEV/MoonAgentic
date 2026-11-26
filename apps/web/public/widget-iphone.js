@@ -55,6 +55,57 @@ function discordLink(text) {
   return found ? `discord://-/channels/${found[1]}/${found[2]}` : "";
 }
 
+const escapeHtml = (value) =>
+  String(value).replace(
+    /[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+  );
+
+/**
+ * The same three fields on a page of their own, for an iPhone whose alerts give back nothing
+ * of what was typed. Null when the page is closed without « Relier ».
+ */
+async function askForm(saved) {
+  const field = (id, label, value, more) =>
+    `<label for="${id}">${label}</label>` +
+    `<input id="${id}" value="${escapeHtml(value)}" autocapitalize="off" autocorrect="off" spellcheck="false" ${more}>`;
+  const html = `<!doctype html><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 17px -apple-system, sans-serif; margin: 24px 20px; }
+  label { display: block; margin: 18px 0 6px; font-size: 13px; opacity: 0.6; }
+  input { width: 100%; box-sizing: border-box; font: inherit; padding: 12px 14px; border: 0;
+    border-radius: 12px; background: rgba(127, 127, 127, 0.16); color: inherit; }
+  button { width: 100%; margin-top: 28px; font: inherit; font-weight: 600; padding: 13px;
+    border: 0; border-radius: 12px; background: #3a55d6; color: #fff; }
+</style>
+<form id="f">
+${field("u", "Adresse de MoonAgentic", saved ? saved.url : "", 'type="url" placeholder="https://…ts.net"')}
+${field("c", "Code d'appairage", "", 'inputmode="numeric"')}
+${field("d", "Lien du salon Discord (facultatif)", saved ? saved.discordText || "" : "", 'type="url"')}
+<button>Relier</button>
+</form>`;
+  const view = new WebView();
+  await view.loadHTML(html);
+  const sent = view.evaluateJavaScript(
+    `document.getElementById("f").addEventListener("submit", (e) => {
+       e.preventDefault();
+       const read = (id) => document.getElementById(id).value;
+       const values = [read("u"), read("c"), read("d")];
+       document.body.textContent = "C'est noté. Ferme cette page pour terminer.";
+       completion(values);
+     });`,
+    true,
+  );
+  const closed = view.present(false).then(() => null);
+  const values = await Promise.race([sent, closed]);
+  if (!Array.isArray(values)) return null;
+  // What comes next shows alerts: they wait for the page to be closed.
+  await closed;
+  return values.map((value) => (typeof value === "string" ? value.trim() : ""));
+}
+
 async function setUp(saved) {
   const ask = new Alert();
   ask.title = "MoonAgentic";
@@ -65,19 +116,32 @@ async function setUp(saved) {
     ask.addTextField("Code d'appairage", ""),
     ask.addTextField("Lien du salon Discord (facultatif)", saved ? saved.discordText || "" : ""),
   ];
-  // On some iPhones `textFieldValue` gives back null, even for a filled field: the field
-  // itself is then read.
+  // No capital letter nor correction on an address.
+  if (fields[0] && fields[0].setURLKeyboard) fields[0].setURLKeyboard();
+  // On some iPhones `textFieldValue` gives back null: the field itself is then read, which
+  // may still hold only what it started with.
+  let lost = false;
   const typed = (place) => {
     let value = ask.textFieldValue(place);
-    if (typeof value !== "string" && fields[place]) value = fields[place].text;
+    if (typeof value !== "string") {
+      lost = true;
+      value = fields[place] ? fields[place].text : "";
+    }
     return typeof value === "string" ? value.trim() : "";
   };
   ask.addAction("Relier");
   ask.addCancelAction("Annuler");
   if ((await ask.presentAlert()) === -1) return null;
-  const url = typed(0).replace(/\/+$/, "");
-  const code = typed(1);
-  const discordText = typed(2);
+  let values = [typed(0), typed(1), typed(2)];
+  // Nothing came back of what was typed: asked again on a page, which does give it back.
+  if (lost && !values[1]) {
+    values = await askForm(saved);
+    if (!values) return null;
+  }
+  let url = values[0].replace(/\/+$/, "");
+  const code = values[1];
+  const discordText = values[2];
+  if (url && !/^https?:\/\//i.test(url)) url = `https://${url}`;
   if (!url) throw new Error("Il faut l'adresse de MoonAgentic et un code d'appairage.");
   const discord = discordLink(discordText);
   // Said before the code is used: a pairing code only serves once.

@@ -457,26 +457,64 @@ describe("review of PR 177", () => {
 
 // The first try on a real iPhone, 26 November 2026.
 describe("first try on a real iPhone", () => {
-  it("links on an iPhone whose alert gives back no field value", async () => {
+  const paired = () => ({ status: 200, body: JSON.stringify({ token: "jeton" }) });
+
+  it("asks on a page when the alert gives back nothing of what was typed", async () => {
     const run = await runScript(SCRIPT, {
       fieldValuesLost: true,
-      alerts: [{ pick: 0 }, { pick: 0, fields: [`${URL}/`, " 123-456 ", ""] }],
-      answer: () => ({ status: 200, body: JSON.stringify({ token: "jeton" }) }),
+      alerts: [{ pick: 0 }, { pick: 0, fields: [URL, "123-456", ""] }],
+      form: [` ${URL}/ `, " 123-456 ", ""],
+      answer: paired,
     });
+    expect(run.pages).toHaveLength(1);
+    expect(run.pages[0]).toContain("Code d'appairage");
+    expect(run.asked).toEqual([`POST ${URL}/api/pair`]);
     expect(run.alerts.at(-1)).toMatchObject({ title: "Relié" });
     expect(JSON.parse(run.keychain.get(KEY)!)).toMatchObject({ url: URL, token: "jeton" });
   });
 
-  it("says what is missing when nothing was typed, on such an iPhone too", async () => {
-    for (const fieldValuesLost of [false, true]) {
-      const run = await runScript(SCRIPT, {
-        fieldValuesLost,
-        alerts: [{ pick: 0 }, { pick: 0 }],
-        answer: () => ({ status: 500 }),
-      });
-      expect(run.alerts.at(-1)).toMatchObject({ title: "Pas relié" });
-      expect(run.alerts.at(-1)!.message).toMatch(/adresse/);
-      expect(run.asked).toEqual([]);
-    }
+  it("links nothing when that page is closed without being sent", async () => {
+    const run = await runScript(SCRIPT, {
+      fieldValuesLost: true,
+      alerts: [{ pick: 0 }, { pick: 0, fields: [URL, "123-456", ""] }],
+      answer: paired,
+    });
+    expect(run.pages).toHaveLength(1);
+    expect(run.asked).toEqual([]);
+    expect(run.keychain.has(KEY)).toBe(false);
+  });
+
+  it("shows no page on an iPhone whose alert works, and says what is missing", async () => {
+    const run = await runScript(SCRIPT, {
+      alerts: [{ pick: 0 }, { pick: 0 }],
+      answer: () => ({ status: 500 }),
+    });
+    expect(run.pages).toEqual([]);
+    expect(run.alerts.at(-1)).toMatchObject({ title: "Pas relié" });
+    expect(run.alerts.at(-1)!.message).toMatch(/adresse/);
+    expect(run.asked).toEqual([]);
+  });
+
+  it("puts back the address already known into that page, safely", async () => {
+    const keychain = new Map([
+      [KEY, JSON.stringify({ url: 'https://a"><b>.ts.net', token: "t", discordText: "" })],
+    ]);
+    const run = await runScript(SCRIPT, {
+      fieldValuesLost: true,
+      keychain,
+      alerts: [{ pick: 8 }, { pick: 0 }],
+      answer: paired,
+    });
+    expect(run.pages[0]).toContain('value="https://a&quot;&gt;&lt;b&gt;.ts.net"');
+  });
+
+  it("adds https:// to an address typed without it, on a keyboard made for addresses", async () => {
+    const run = await runScript(SCRIPT, {
+      alerts: [{ pick: 0 }, { pick: 0, fields: ["mini.example.ts.net/", "123-456", ""] }],
+      answer: paired,
+    });
+    expect(run.keyboards.map((k) => k.keyboard)).toEqual(["url", "default", "default"]);
+    expect(run.asked).toEqual([`POST ${URL}/api/pair`]);
+    expect(JSON.parse(run.keychain.get(KEY)!).url).toBe(URL);
   });
 });

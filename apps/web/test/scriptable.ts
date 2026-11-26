@@ -288,8 +288,13 @@ export interface Phone {
   };
   /** The answers typed into each alert in turn: the button's place, and the fields. */
   alerts?: { pick: number; fields?: string[] }[];
-  /** True for an iPhone whose alerts lose what `textFieldValue` should give back. */
+  /**
+   * True for an iPhone whose alerts lose what was typed: `textFieldValue` gives back null and
+   * each field keeps the text it started with.
+   */
   fieldValuesLost?: boolean;
+  /** What is typed into the page shown instead; none when the page is closed unsent. */
+  form?: string[];
   keychain?: Map<string, string>;
   files?: Map<string, string | Picture | null>;
 }
@@ -304,12 +309,17 @@ export async function runScript(
   keychain: Map<string, string>;
   alerts: { title: string; message: string; actions: string[] }[];
   asked: string[];
+  /** The pages shown, and each alert field with the keyboard it asked for. */
+  pages: string[];
+  keyboards: { text: string; keyboard: string }[];
 }> {
   const keychain = phone.keychain ?? new Map<string, string>();
   const files = phone.files ?? new Map<string, string | Picture | null>();
   const alerts = [...(phone.alerts ?? [])];
   const shown: { title: string; message: string; actions: string[] }[] = [];
   const asked: string[] = [];
+  const pages: string[] = [];
+  const keyboards: { text: string; keyboard: string }[] = [];
   let widget: ListWidget | undefined;
 
   class Request {
@@ -352,7 +362,14 @@ export async function runScript(
     }
     addCancelAction(_label: string) {}
     addTextField(_placeholder: string, text = "") {
-      const field = { text };
+      const field = {
+        text,
+        keyboard: "default",
+        setURLKeyboard() {
+          this.keyboard = "url";
+        },
+      };
+      keyboards.push(field);
       this.fields.push(field);
       return field;
     }
@@ -364,7 +381,7 @@ export async function runScript(
       shown.push({ title: this.title, message: this.message, actions: this.actions });
       const next = alerts.shift() ?? { pick: 0 };
       (next.fields ?? []).forEach((text, place) => {
-        if (this.fields[place]) this.fields[place].text = text;
+        if (this.fields[place] && !phone.fieldValuesLost) this.fields[place].text = text;
       });
       return next.pick;
     }
@@ -375,7 +392,21 @@ export async function runScript(
       return this.present();
     }
   }
+  /** A page shown over the app: what it sends comes back through `completion`. */
+  class WebView {
+    async loadHTML(html: string) {
+      pages.push(html);
+    }
+    evaluateJavaScript(_script: string, _useCallback = false): Promise<unknown> {
+      return phone.form ? Promise.resolve(phone.form) : new Promise(() => {});
+    }
+    /** Ends when the user closes the page. */
+    present(_fullscreen = false): Promise<void> {
+      return new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
   const globals = {
+    WebView,
     Color,
     Font,
     Size,
@@ -431,5 +462,12 @@ export async function runScript(
       name === "ListWidget" ? Tracked : globals[name as keyof typeof globals],
     ),
   );
-  return { widget: widget ?? made.find((w) => w.presented), keychain, alerts: shown, asked };
+  return {
+    widget: widget ?? made.find((w) => w.presented),
+    keychain,
+    alerts: shown,
+    asked,
+    pages,
+    keyboards,
+  };
 }
