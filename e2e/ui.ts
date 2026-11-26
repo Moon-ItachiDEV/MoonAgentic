@@ -1,5 +1,6 @@
 // Steps every browser check starts with, written once: they follow the app's screens.
 import type { Locator, Page } from "playwright";
+import { expect } from "vitest";
 
 /**
  * « Nouveau projet » on a folder of this machine, then the composer of a new thread in that
@@ -20,7 +21,10 @@ export async function addProject(page: Page, folder: string, thread = true) {
  */
 export async function directThread(page: Page) {
   await page.goto(new URL("/", page.url()).href);
-  await page.getByRole("combobox", { name: "Message" }).waitFor();
+  const composer = page.getByRole("combobox", { name: "Message" });
+  await composer.waitFor();
+  // Back on the server after the reload: until then it cannot be written in.
+  await expect.poll(() => composer.isEnabled()).toBe(true);
 }
 
 /**
