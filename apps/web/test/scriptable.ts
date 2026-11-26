@@ -293,8 +293,12 @@ export interface Phone {
    * each field keeps the text it started with.
    */
   fieldValuesLost?: boolean;
+  /** True for an iPhone whose alerts give back null for a field left empty, and no other. */
+  emptyFieldsNull?: boolean;
   /** What is typed into the page shown instead; none when the page is closed unsent. */
   form?: string[];
+  /** True when closing the page unsent ends the wait for what it sends on an error. */
+  formRejectsOnClose?: boolean;
   keychain?: Map<string, string>;
   files?: Map<string, string | Picture | null>;
 }
@@ -375,7 +379,8 @@ export async function runScript(
     }
     /** Some iPhones give back nothing here, even for a field that was filled. */
     textFieldValue(place: number) {
-      return phone.fieldValuesLost ? null : (this.fields[place]?.text ?? null);
+      const text = this.fields[place]?.text ?? null;
+      return phone.fieldValuesLost || (phone.emptyFieldsNull && !text) ? null : text;
     }
     private present() {
       shown.push({ title: this.title, message: this.message, actions: this.actions });
@@ -398,7 +403,10 @@ export async function runScript(
       pages.push(html);
     }
     evaluateJavaScript(_script: string, _useCallback = false): Promise<unknown> {
-      return phone.form ? Promise.resolve(phone.form) : new Promise(() => {});
+      if (phone.form) return Promise.resolve(phone.form);
+      return new Promise((_resolve, reject) => {
+        if (phone.formRejectsOnClose) setTimeout(() => reject(new Error("La page est fermée.")), 0);
+      });
     }
     /** Ends when the user closes the page. */
     present(_fullscreen = false): Promise<void> {

@@ -65,7 +65,7 @@ const escapeHtml = (value) =>
  * The same three fields on a page of their own, for an iPhone whose alerts give back nothing
  * of what was typed. Null when the page is closed without « Relier ».
  */
-async function askForm(saved) {
+async function askForm(known) {
   const field = (id, label, value, more) =>
     `<label for="${id}">${label}</label>` +
     `<input id="${id}" value="${escapeHtml(value)}" autocapitalize="off" autocorrect="off" spellcheck="false" ${more}>`;
@@ -80,10 +80,10 @@ async function askForm(saved) {
   button { width: 100%; margin-top: 28px; font: inherit; font-weight: 600; padding: 13px;
     border: 0; border-radius: 12px; background: #3a55d6; color: #fff; }
 </style>
-<form id="f">
-${field("u", "Adresse de MoonAgentic", saved ? saved.url : "", 'type="url" placeholder="https://…ts.net"')}
-${field("c", "Code d'appairage", "", 'inputmode="numeric"')}
-${field("d", "Lien du salon Discord (facultatif)", saved ? saved.discordText || "" : "", 'type="url"')}
+<form id="f" novalidate>
+${field("u", "Adresse de MoonAgentic", known[0], 'type="url" placeholder="https://…ts.net"')}
+${field("c", "Code d'appairage", known[1], "")}
+${field("d", "Lien du salon Discord (facultatif)", known[2], 'type="url"')}
 <button>Relier</button>
 </form>`;
   const view = new WebView();
@@ -98,8 +98,10 @@ ${field("d", "Lien du salon Discord (facultatif)", saved ? saved.discordText || 
      });`,
     true,
   );
+  // A page closed unsent may end that wait on an error: it is the same as nothing sent.
+  const answered = sent.catch(() => null);
   const closed = view.present(false).then(() => null);
-  const values = await Promise.race([sent, closed]);
+  const values = await Promise.race([answered, closed]);
   if (!Array.isArray(values)) return null;
   // What comes next shows alerts: they wait for the page to be closed.
   await closed;
@@ -135,7 +137,8 @@ async function setUp(saved) {
   let values = [typed(0), typed(1), typed(2)];
   // Nothing came back of what was typed: asked again on a page, which does give it back.
   if (lost && !values[1]) {
-    values = await askForm(saved);
+    // What the alert did give back, or what was known before, is already in the page.
+    values = await askForm(values);
     if (!values) return null;
   }
   let url = values[0].replace(/\/+$/, "");
