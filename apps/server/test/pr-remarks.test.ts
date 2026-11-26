@@ -115,6 +115,17 @@ describe("reading review remarks from gh", () => {
         body: "Nom peu clair.\n\n@moon : Je renomme.",
         url: "https://github.com/moon/demo/pull/42#c",
       },
+      // Resolved on GitHub: kept, as settled, for the list of those done.
+      {
+        id: "T2",
+        kind: "thread",
+        author: "x",
+        path: "a.ts",
+        line: 1,
+        body: "Réglé",
+        url: "https://github.com/moon/demo/pull/42#c",
+        settled: true,
+      },
       {
         id: "T3",
         kind: "thread",
@@ -242,6 +253,7 @@ async function setup() {
     pr: pr as PullRequestInfo | undefined,
     remarks: [] as PullRequestRemark[],
     asked: 0,
+    resolved: [] as string[],
   };
   const pullRequests: PullRequests = {
     find: async () => github.pr,
@@ -249,6 +261,10 @@ async function setup() {
     remarks: async () => {
       github.asked += 1;
       return github.remarks;
+    },
+    resolveRemark: async (id) => {
+      github.resolved.push(id);
+      github.remarks = github.remarks.map((r) => (r.id === id ? { ...r, settled: true } : r));
     },
   };
   const store = new Store(path.join(root, "state.sqlite"));
@@ -393,5 +409,51 @@ describe("a thread sent its pull request's remarks", { timeout: 90_000 }, () => 
     answer();
     await expect(locked).rejects.toThrow(/verrouillé/);
     expect(sent()).toEqual([]);
+  });
+
+  it("« Réglé » resolves a conversation on GitHub, keeps a review settled, and sends neither", async () => {
+    const { hub, github, threadId, sent } = await setup();
+    github.remarks = [
+      { id: "T1", kind: "thread", author: "neon", path: "README.md", line: 1, body: "Titre ?" },
+      { id: "R1", kind: "review", author: "neon", changes: true, body: "Ajoute un test." },
+    ];
+    const replies: unknown[] = [];
+    const client: Client = { send: (m) => replies.push(m) };
+    await hub.handle(client, {
+      type: "workspace.settleRemark",
+      requestId: "a1",
+      threadId,
+      id: "T1",
+    });
+    expect(github.resolved).toEqual(["T1"]);
+    await hub.handle(client, {
+      type: "workspace.settleRemark",
+      requestId: "a2",
+      threadId,
+      id: "R1",
+    });
+    // GitHub cannot resolve a review: it stays settled in MoonAgentic, read after read.
+    expect(github.resolved).toEqual(["T1"]);
+    await hub.handle(client, { type: "workspace.prRemarks", requestId: "r1", threadId });
+    expect(replies.at(-1)).toMatchObject({
+      type: "prRemarks",
+      requestId: "r1",
+      remarks: [
+        { id: "T1", settled: true },
+        { id: "R1", settled: true },
+      ],
+    });
+    await expect(hub.sendRemarks(threadId, ["T1", "R1"])).rejects.toThrow(/plus ouvertes/);
+    expect(sent()).toEqual([]);
+    await hub.handle(client, {
+      type: "workspace.settleRemark",
+      requestId: "a3",
+      threadId,
+      id: "inventé",
+    });
+    expect(replies.at(-1)).toMatchObject({
+      requestId: "a3",
+      error: expect.stringContaining("actualise"),
+    });
   });
 });

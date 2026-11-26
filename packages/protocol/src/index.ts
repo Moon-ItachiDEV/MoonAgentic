@@ -2329,6 +2329,17 @@ export const ClientMessage = z.discriminatedUnion("type", [
     threadId: id,
     ids: z.array(z.string().min(1).max(200)).min(1).max(100),
   }),
+  /**
+   * « Réglé »: a remark of the thread's pull request is done with. A conversation is resolved
+   * on GitHub; a review, which GitHub cannot resolve, is kept settled in MoonAgentic. Answered
+   * with prRemarks, read again.
+   */
+  z.object({
+    type: z.literal("workspace.settleRemark"),
+    requestId: id,
+    threadId: id,
+    id: z.string().min(1).max(200),
+  }),
   /** Asks GitHub for the state of the pull request at this address, to draw its link. */
   z.object({
     type: z.literal("github.pr"),

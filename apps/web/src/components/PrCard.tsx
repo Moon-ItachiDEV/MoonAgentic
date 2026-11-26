@@ -128,11 +128,28 @@ function RemarksSheet(props: {
   /** The agent is at work: nothing can be sent to it now. */
   busy: boolean;
   onSend: (ids: string[]) => Promise<void>;
+  /** « Réglé »: the remark is done with, resolved on GitHub when it can be. */
+  onSettle: (id: string) => Promise<void>;
   onClose: () => void;
 }) {
   const { loaded, error } = props;
   const [sending, setSending] = useState(false);
-  const waiting = loaded?.list.filter((r) => !loaded.sent.has(r.id)) ?? [];
+  const [settling, setSettling] = useState<string | null>(null);
+  const [showDone, setShowDone] = useState(false);
+  const open = loaded?.list.filter((r) => !r.settled) ?? [];
+  const done = loaded?.list.filter((r) => r.settled) ?? [];
+  const waiting = open.filter((r) => !loaded?.sent.has(r.id));
+  const settle = (id: string) => {
+    if (settling) return;
+    setSettling(id);
+    void props.onSettle(id).finally(() => setSettling(null));
+  };
+  const toggleDone = (
+    <button key="done" className="rvw" onClick={() => setShowDone(!showDone)}>
+      <I n={showDone ? "down" : "right"} s={14} />
+      {done.length} {done.length > 1 ? "réglées" : "réglée"}
+    </button>
+  );
   const send = (ids: string[]) => {
     if (!ids.length || sending) return;
     setSending(true);
@@ -148,11 +165,14 @@ function RemarksSheet(props: {
             <span className="shimmer">Lecture sur GitHub…</span>
           </p>
         )}
-        {loaded && !loaded.list.length && !error && <p className="pcw">Aucune remarque ouverte</p>}
-        {loaded?.list.map((remark) => {
-          const sent = loaded.sent.has(remark.id);
-          return (
-            <div key={remark.id} className={`rmc ${sent ? "sent" : "open"}`}>
+        {loaded && !open.length && !error && <p className="pcw">Aucune remarque ouverte</p>}
+        {[...open, ...(showDone ? done : [])].map((remark) => {
+          const sent = loaded!.sent.has(remark.id);
+          const card = (
+            <div
+              key={remark.id}
+              className={`rmc ${remark.settled ? "done" : sent ? "sent" : "open"}`}
+            >
               <div className="rmh">
                 <b>{remark.author}</b>
                 {remark.url && (
@@ -168,26 +188,41 @@ function RemarksSheet(props: {
                 <span className="mono">{remarkPlace(remark)}</span>
               </div>
               <p>{remark.body}</p>
-              <div className="rma">
-                {sent ? (
-                  <span className="ppill">
-                    <Glyph />
-                    Chez l'agent
-                  </span>
-                ) : (
-                  <button
-                    className="b2 ink press"
-                    disabled={props.busy || sending}
-                    onClick={() => send([remark.id])}
-                  >
-                    <I n="up" s={15} />
-                    Envoyer à l'agent
-                  </button>
-                )}
-              </div>
+              {!remark.settled && (
+                <div className="rma">
+                  {sent ? (
+                    <span className="ppill">
+                      <Glyph />
+                      Chez l'agent
+                    </span>
+                  ) : (
+                    <>
+                      <button
+                        className="b2 soft press"
+                        disabled={!!settling}
+                        onClick={() => settle(remark.id)}
+                      >
+                        <I n="check" s={15} />
+                        Réglé
+                      </button>
+                      <button
+                        className="b2 ink press"
+                        disabled={props.busy || sending}
+                        onClick={() => send([remark.id])}
+                      >
+                        <I n="up" s={15} />
+                        Envoyer à l'agent
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           );
+          // The ones done with come after a line that folds them away.
+          return remark === done[0] ? [toggleDone, card] : card;
         })}
+        {!showDone && done.length > 0 && toggleDone}
         {waiting.length > 1 && (
           <div className="mga">
             <button
@@ -290,8 +325,23 @@ export function PrCard({ thread }: { thread: Thread }) {
       setRemarksError(e instanceof Error ? e.message : String(e));
     }
   };
-  const waiting = loaded?.list.filter((r) => !loaded.sent.has(r.id)).length ?? 0;
-  const atAgent = loaded?.list.filter((r) => loaded.sent.has(r.id)).length ?? 0;
+  const settleRemark = async (id: string) => {
+    setRemarksError(null);
+    try {
+      const reply = await connection.ask({
+        type: "workspace.settleRemark",
+        requestId: newId(),
+        threadId,
+        id,
+      });
+      if (reply.error) setRemarksError(reply.error);
+      else setLoaded((now) => ({ list: reply.remarks, sent: now?.sent ?? new Set() }));
+    } catch (e) {
+      setRemarksError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const waiting = loaded?.list.filter((r) => !r.settled && !loaded.sent.has(r.id)).length ?? 0;
+  const atAgent = loaded?.list.filter((r) => !r.settled && loaded.sent.has(r.id)).length ?? 0;
   const watch = () => {
     setWatchBusy(true);
     setError(null);
@@ -381,6 +431,7 @@ export function PrCard({ thread }: { thread: Thread }) {
         error={remarksError}
         busy={running}
         onSend={sendRemarks}
+        onSettle={settleRemark}
         onClose={() => setRemarks(false)}
       />
     </div>

@@ -264,6 +264,8 @@ const DEFAULTS = "defaults";
 /** Each project's icon and tint, as set in its settings. */
 const PROJECT_LOOKS = "projectLooks";
 type ProjectLook = Pick<Project, "icon" | "color">;
+/** The reviews of each pull request the user marked « Réglé », by the pull request's address. */
+const SETTLED_REVIEWS = "settledReviews";
 /** The projects that keep a thread's branch once its pull request is merged. */
 const KEEP_MERGED_BRANCHES = "keepMergedBranches";
 /** Each project's rules for a quota that runs out, by project id. */
@@ -1185,6 +1187,24 @@ export class Hub {
       }
       case "workspace.prRemarks": {
         const reply = await this.pullRequestRemarks(message.threadId).then(
+          (found) => ({
+            type: "prRemarks" as const,
+            requestId: message.requestId,
+            remarks: found?.remarks ?? [],
+            ...(found ? { number: found.pr.number } : {}),
+          }),
+          (error: unknown) => ({
+            type: "prRemarks" as const,
+            requestId: message.requestId,
+            remarks: [],
+            error: describe(error),
+          }),
+        );
+        client.send(reply);
+        return;
+      }
+      case "workspace.settleRemark": {
+        const reply = await this.settleRemark(message.threadId, message.id).then(
           (found) => ({
             type: "prRemarks" as const,
             requestId: message.requestId,
@@ -3185,7 +3205,48 @@ export class Hub {
     if (!on?.github.remarks) return undefined;
     const pr = await on.github.find(on.repo, on.branch);
     if (!pr || (pr.state !== "open" && pr.state !== "draft")) return undefined;
-    return { pr, remarks: await on.github.remarks(on.repo, pr.number) };
+    const settled = new Set(
+      this.store.getSetting<Record<string, string[]>>(SETTLED_REVIEWS, {})[pr.url] ?? [],
+    );
+    const remarks = (await on.github.remarks(on.repo, pr.number)).map((r) =>
+      r.kind === "review" && settled.has(r.id) ? { ...r, settled: true as const } : r,
+    );
+    return { pr, remarks };
+  }
+
+  /**
+   * « Réglé »: the remark is done with. A conversation is resolved on GitHub, by the user's own
+   * `gh`; a review is kept settled here, for this pull request. Returns the remarks read again.
+   */
+  async settleRemark(
+    threadId: string,
+    remarkId: string,
+  ): Promise<{ pr: PullRequestInfo; remarks: PullRequestRemark[] } | undefined> {
+    this.requireThread(threadId);
+    const found = await this.pullRequestRemarks(threadId);
+    if (!found) throw new Error("Cette branche n'a plus de pull request ouverte sur GitHub.");
+    const remark = found.remarks.find((r) => r.id === remarkId);
+    if (!remark) throw new Error("Cette remarque n'est plus sur GitHub : actualise la liste.");
+    if (remark.settled) return found;
+    if (remark.kind === "thread") {
+      const on = await this.branchOnGithub(threadId);
+      if (!on?.github.resolveRemark)
+        throw new Error("GitHub CLI (gh) est requis pour régler une remarque.");
+      await on.github.resolveRemark(remark.id);
+    } else {
+      const all = this.store.getSetting<Record<string, string[]>>(SETTLED_REVIEWS, {});
+      // Pull requests no thread has any more are dropped on the way.
+      const kept = Object.fromEntries(
+        Object.entries(all).filter(([url]) =>
+          this.store.listThreads().some((t) => t.pr?.url === url),
+        ),
+      );
+      this.store.setSetting(SETTLED_REVIEWS, {
+        ...kept,
+        [found.pr.url]: [...(all[found.pr.url] ?? []), remark.id],
+      });
+    }
+    return this.pullRequestRemarks(threadId);
   }
 
   /**
@@ -3201,7 +3262,7 @@ export class Hub {
     const found = await this.pullRequestRemarks(threadId);
     if (!found) throw new Error("Cette branche n'a plus de pull request ouverte sur GitHub.");
     const wanted = new Set(ids);
-    const picked = found.remarks.filter((r) => wanted.has(r.id));
+    const picked = found.remarks.filter((r) => wanted.has(r.id) && !r.settled);
     if (!picked.length) {
       throw new Error("Ces remarques ne sont plus ouvertes sur GitHub : actualise la liste.");
     }

@@ -35,6 +35,7 @@ export const LONG_ASKS_MS: Readonly<Record<string, number>> = {
   // GitHub is asked for the pull request, then for its remarks: 30 s each at most.
   "workspace.prRemarks": 75_000,
   "workspace.sendRemarks": 75_000,
+  "workspace.settleRemark": 2 * 75_000,
   // The remote is asked for its branch first, then git merges.
   "workspace.forecast": 2 * 60_000,
   "workspace.sync": 3 * 60_000,
@@ -248,7 +249,7 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
                     ? Extract<ServerMessage, { type: "localClones" }>
                     : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
                       ? Extract<ServerMessage, { type: "pullRequest" }>
-                      : T extends "workspace.prRemarks"
+                      : T extends "workspace.prRemarks" | "workspace.settleRemark"
                         ? Extract<ServerMessage, { type: "prRemarks" }>
                         : T extends "workspace.forecast"
                           ? Extract<ServerMessage, { type: "forecast" }>
