@@ -50,9 +50,19 @@ function fakeHermes(root: string) {
     "model.provider": "openai-codex",
   };
   const fail: { on?: string } = {};
+  /** `old`: a Hermes from before August 2026, which keeps a JSON value as a string. */
+  const mode = { old: false, gatewayUp: true };
+  /** A command held until `release()`: for what happens while it runs. */
+  const hold: { on?: string; release?: () => void } = {};
   const run = async (args: string[]): Promise<HermesRun> => {
     calls.push(args);
     const said = args.join(" ");
+    if (hold.on && said.startsWith(hold.on)) {
+      delete hold.on;
+      await new Promise<void>((resolve) => {
+        hold.release = resolve;
+      });
+    }
     if (fail.on && said.startsWith(fail.on)) return { code: 1, out: "", err: "✗ Ça a raté.\n" };
     if (said === "config path") return { code: 0, out: `${configFile}\n`, err: "" };
     if (args[0] === "config" && args[1] === "set") {
@@ -69,11 +79,21 @@ function fakeHermes(root: string) {
         err: "",
       };
     }
+    if (said === "config get mcp_servers.moonagentic --json") {
+      const value = config["mcp_servers.moonagentic"];
+      if (value === undefined) return { code: 1, out: "", err: "✗ Not set\n" };
+      return { code: 0, out: mode.old ? JSON.stringify(value) : value, err: "" };
+    }
+    if (said === "gateway ensure --json --timeout 60") {
+      return mode.gatewayUp
+        ? { code: 0, out: '{"state":"running"}\n', err: "" }
+        : { code: 1, out: '{"state":"stopped","message":"Discord refuse le jeton"}\n', err: "" };
+    }
     if (said === "gateway restart --yes --detach")
       return { code: 0, out: "✓ Restarted\n", err: "" };
     return { code: 2, out: "", err: `inconnu : ${said}` };
   };
-  return { configFile, calls, config, fail, run };
+  return { configFile, calls, config, fail, mode, hold, run };
 }
 
 /** The real server with a project and its coordinator on the demo agent, Hermes not connected. */
@@ -358,13 +378,14 @@ describe("Hermes · réglage de Hermes depuis MoonAgentic", () => {
     expect(h.cli.config["mcp_servers.moonagentic"]).not.toContain(h.token());
     expect(readFileSync(`${h.cli.configFile}${BACKUP_SUFFIX}`, "utf8")).toBe(original);
     // Then its model is read again, for the page.
-    expect(h.cli.calls.map((c) => c.slice(0, 2).join(" "))).toEqual([
+    expect(h.cli.calls.map((c) => c.slice(0, 3).join(" "))).toEqual([
       "config path",
-      "config set",
-      "gateway restart",
-      "config get",
+      "config set mcp_servers.moonagentic",
+      "config get mcp_servers.moonagentic",
+      "gateway restart --yes",
+      "config get model",
     ]);
-    expect(h.cli.calls[2]).toEqual(["gateway", "restart", "--yes", "--detach"]);
+    expect(h.cli.calls[3]).toEqual(["gateway", "restart", "--yes", "--detach"]);
   });
 
   it("dit pourquoi le réglage a échoué, et Réessayer le refait", async () => {
@@ -400,7 +421,8 @@ describe("Hermes · réglage de Hermes depuis MoonAgentic", () => {
       model: "openrouter:anthropic/claude-sonnet-4",
     });
     await h.hub.hermes.settled();
-    expect(h.status().setup).toMatchObject({ what: "model", state: "done" });
+    expect(h.status().modelSetup).toMatchObject({ what: "model", state: "done" });
+    expect(h.status().setup).toBeUndefined();
     const sets = h.cli.calls.filter((c) => c[1] === "set");
     expect(sets).toEqual([
       ["config", "set", "model.provider", "openrouter"],
@@ -761,5 +783,137 @@ describe("Hermes · pont MCP", () => {
     const reply = JSON.parse(out) as { result: { content: { text: string }[] } };
     expect(reply.result.content[0]!.text).not.toContain("JSON");
     expect(reply.result.content[0]!.text).toMatch(/\d{3}/);
+  });
+});
+
+describe("Hermes · relecture de Neon (réglage depuis MoonAgentic)", () => {
+  it("1. un « en cours » laissé par un arrêt n'est pas montré, et fermer attend la fin du réglage", async () => {
+    const h = await withHermes();
+    h.store.setSetting("hermes", { setup: { what: "connect", state: "running", at: 1 } });
+    expect(h.status().setup).toBeUndefined();
+    h.store.setSetting("hermes", {});
+    h.cli.hold.on = "gateway restart";
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await soon(() => !!h.cli.hold.release).toBe(true);
+    // Never saved: only what is under way in this server.
+    expect(h.store.getSetting<{ setup?: unknown }>("hermes", {}).setup).toBeUndefined();
+    let closed = false;
+    const closing = h.hub.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(closed).toBe(false);
+    h.cli.hold.release!();
+    await closing;
+    expect(h.store.getSetting<{ setup?: unknown }>("hermes", {}).setup).toMatchObject({
+      state: "done",
+    });
+  });
+
+  it("2. le changement de modèle a son propre état, et Couper efface celui de la connexion", async () => {
+    const h = await withHermes();
+    h.cli.fail.on = "config set model.default";
+    await h.hub.handle(h.client, {
+      type: "hermes.setModel",
+      requestId: "m1",
+      model: "nous:hermes-5",
+    });
+    await h.hub.hermes.settled();
+    expect(h.status().modelSetup).toMatchObject({ state: "failed" });
+    expect(h.status().setup).toBeUndefined();
+    delete h.cli.fail.on;
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    expect(h.status().setup).toMatchObject({ state: "done" });
+    expect(h.status().modelSetup).toMatchObject({ state: "failed" });
+    await h.hub.handle(h.client, { type: "hermes.cut", requestId: "r2" });
+    expect(h.status().setup).toBeUndefined();
+  });
+
+  it("3. une lecture du modèle commencée avant un changement ne remet pas l'ancien", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.get" });
+    await soon(() => h.status().model?.model).toBe("gpt-6.2-sol");
+    // An old read held, then the model changed meanwhile.
+    h.cli.hold.on = "config get model";
+    // @ts-expect-error -- the throttle, reset for the test.
+    h.hub.hermes.modelReadAt = 0;
+    const oldRead = h.hub.hermes.readModel();
+    await soon(() => !!h.cli.hold.release).toBe(true);
+    // The model known stays shown while it is read.
+    expect(h.status().model?.model).toBe("gpt-6.2-sol");
+    const release = h.cli.hold.release!;
+    h.cli.hold.release = undefined;
+    await h.hub.handle(h.client, {
+      type: "hermes.setModel",
+      requestId: "m1",
+      model: "nous:hermes-5",
+    });
+    await h.hub.hermes.settled();
+    await soon(() => h.status().model).toEqual({ provider: "nous", model: "hermes-5" });
+    // The held read now answers what Hermes said before the change: it is not kept.
+    h.cli.config["model.default"] = "gpt-6.2-sol";
+    release();
+    await oldRead;
+    expect(h.status().model).toEqual({ provider: "nous", model: "hermes-5" });
+  });
+
+  it("4. un hermes.cmd qui ne peut pas recevoir le réglage dit de le copier", async () => {
+    const { hermesRunner, reason } = await import("../src/hermes-cli.ts");
+    const done = await hermesRunner("C:\\hermes\\hermes.cmd", "win32")(
+      ["config", "set", "mcp_servers.moonagentic", '{"command": "node"}'],
+      1000,
+    );
+    expect(done.code).toBe(1);
+    expect(reason(done)).toContain("copie le réglage dans config.yaml");
+  });
+
+  it("6. Connecter pendant un changement de modèle écrit l'entrée juste après", async () => {
+    const h = await withHermes();
+    h.cli.hold.on = "gateway restart";
+    await h.hub.handle(h.client, {
+      type: "hermes.setModel",
+      requestId: "m1",
+      model: "nous:hermes-5",
+    });
+    await soon(() => !!h.cli.hold.release).toBe(true);
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    expect(h.status().setup).toMatchObject({ state: "running" });
+    h.cli.hold.release!();
+    await h.hub.hermes.settled();
+    expect(h.cli.config["mcp_servers.moonagentic"]).toContain("hermes-bridge");
+    expect(h.status().setup).toMatchObject({ state: "done" });
+    expect(h.status().modelSetup).toMatchObject({ state: "done" });
+  });
+
+  it("7. dit que Hermes n'a pas répondu à temps", async () => {
+    const { hermesRunner, reason } = await import("../src/hermes-cli.ts");
+    const done = await hermesRunner(process.execPath)(["-e", "setTimeout(() => {}, 5000)"], 300);
+    expect(done.code).not.toBe(0);
+    expect(reason(done)).toContain("délai dépassé");
+  });
+
+  it("8. un Hermes trop ancien qui garde le JSON en texte est signalé", async () => {
+    const h = await withHermes();
+    h.cli.mode.old = true;
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    expect(h.status().setup).toMatchObject({ state: "failed" });
+    expect(h.status().setup?.error).toContain("hermes update");
+    expect(h.cli.calls.some((c) => c[1] === "restart")).toBe(false);
+  });
+
+  it("passerelle : la regarde une fois connecté, la dit arrêtée et pourquoi", async () => {
+    const h = await withHermes();
+    await h.hub.hermes.watchGateway();
+    expect(h.status().gateway).toBeUndefined();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    h.cli.mode.gatewayUp = false;
+    await h.hub.handle(h.client, { type: "hermes.gateway", requestId: "g1" });
+    expect(h.status().gateway).toMatchObject({ running: false, reason: "Discord refuse le jeton" });
+    h.cli.mode.gatewayUp = true;
+    await h.hub.handle(h.client, { type: "hermes.gateway", requestId: "g2" });
+    expect(h.status().gateway).toMatchObject({ running: true });
   });
 });

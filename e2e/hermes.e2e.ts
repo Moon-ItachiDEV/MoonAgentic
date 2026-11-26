@@ -93,18 +93,18 @@ describe("Réglages › Hermes · Discord", () => {
     expect(await page.getByText("Connexion coupée").count()).toBe(0);
 
     await connect.click();
-    await page.getByRole("button", { name: "Copier", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Copier le réglage pour config.yaml", exact: true }).waitFor();
 
     const field = page.getByLabel("Adresse du webhook Discord");
     await field.fill("https://exemple.fr/pas-discord");
-    await page.getByRole("button", { name: "Enregistrer", exact: true }).click();
+    await page.getByRole("button", { name: "Enregistrer le webhook", exact: true }).click();
     await page.getByText("Ce n'est pas l'adresse d'un webhook Discord").waitFor();
     expect(await field.inputValue()).toBe("https://exemple.fr/pas-discord");
 
     await field.fill("https://discord.com/api/webhooks/123456/abc-DEF_9");
-    await page.getByRole("button", { name: "Enregistrer", exact: true }).click();
-    await page.getByRole("button", { name: "Tester", exact: true }).waitFor();
-    await page.getByRole("button", { name: "Retirer", exact: true }).click();
+    await page.getByRole("button", { name: "Enregistrer le webhook", exact: true }).click();
+    await page.getByRole("button", { name: "Envoyer un message de test", exact: true }).waitFor();
+    await page.getByRole("button", { name: "Retirer le webhook", exact: true }).click();
     await page.getByLabel("Adresse du webhook Discord").waitFor();
     expect(await page.getByLabel("Adresse du webhook Discord").inputValue()).toBe("");
     expect(errors).toEqual([]);

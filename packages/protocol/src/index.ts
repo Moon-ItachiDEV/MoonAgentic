@@ -1130,15 +1130,16 @@ export interface HermesStatus {
   /** The lines to put in Hermes's `config.yaml`, under `mcp_servers:`; no secret in them. */
   config: string;
   log: HermesAction[];
-  /**
-   * What MoonAgentic last did to Hermes's own setup: wrote its `mcp_servers` entry and
-   * restarted its gateway (`connect`), or changed its model (`model`).
-   */
+  /** MoonAgentic writing its `mcp_servers` entry in Hermes's setup and restarting its gateway. */
   setup?: HermesSetupState;
+  /** MoonAgentic changing Hermes's default model, apart from the connection. */
+  modelSetup?: HermesSetupState;
   /** Hermes's default model, as its `config.yaml` says; absent until read. */
   model?: { provider?: string; model: string };
   /** Why the model could not be read, when it could not. */
   modelError?: string;
+  /** Hermes's Discord gateway as last looked at; started again by MoonAgentic when it stops. */
+  gateway?: { running: boolean; at: number; reason?: string };
 }
 
 export interface HermesSetupState {
@@ -2349,6 +2350,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   /** Sends a test message to the Discord webhook. */
   z.object({ type: z.literal("hermes.test"), requestId: id }),
+  /** Looks at Hermes's gateway now, and starts it if it stopped. */
+  z.object({ type: z.literal("hermes.gateway"), requestId: id }),
   /** Writes Hermes's `mcp_servers` entry again and restarts its gateway. */
   z.object({ type: z.literal("hermes.install"), requestId: id }),
   /** Sets Hermes's default model, a model as Hermes lists it (`provider:model`). */

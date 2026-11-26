@@ -23,14 +23,24 @@ const RESTART_MS = 180_000;
 /** Where a copy of `config.yaml` is kept before MoonAgentic changes it. */
 export const BACKUP_SUFFIX = ".avant-moonagentic";
 
-export function hermesRunner(command: string): HermesRunner {
+export function hermesRunner(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): HermesRunner {
   return (args, timeoutMs) =>
     new Promise((resolve) => {
       let plan;
       try {
-        plan = spawnPlan(command, args);
+        plan = spawnPlan(command, args, platform);
       } catch (error) {
-        resolve({ code: 1, out: "", err: error instanceof Error ? error.message : String(error) });
+        // A `.cmd` on Windows takes no JSON or spaces: the lines are then copied by hand.
+        resolve({
+          code: 1,
+          out: "",
+          err: `MoonAgentic ne peut pas passer ce réglage à ${command} (${
+            error instanceof Error ? error.message : String(error)
+          }) : copie le réglage dans config.yaml.`,
+        });
         return;
       }
       execFile(
@@ -45,6 +55,14 @@ export function hermesRunner(command: string): HermesRunner {
           env: { ...process.env, PYTHONIOENCODING: "utf-8", NO_COLOR: "1" },
         },
         (error, out, err) => {
+          if (error && (error as { killed?: boolean }).killed) {
+            resolve({
+              code: 124,
+              out: String(out),
+              err: `Erreur : délai dépassé, Hermes n'a pas répondu en ${Math.round(timeoutMs / 1000)} s.`,
+            });
+            return;
+          }
           const code =
             error && typeof (error as { code?: unknown }).code === "number"
               ? ((error as { code: number }).code as number)
@@ -140,6 +158,17 @@ export class HermesCli {
   async install(entry: Record<string, unknown>): Promise<void> {
     await this.backup();
     await this.must(["config", "set", "mcp_servers.moonagentic", JSON.stringify(entry)]);
+    // A Hermes from before August 2026 writes the JSON as a string, which it cannot use.
+    const written = (await this.must(["config", "get", "mcp_servers.moonagentic", "--json"])).out;
+    let value: unknown;
+    try {
+      value = JSON.parse(written.trim());
+    } catch {
+      value = undefined;
+    }
+    if (typeof value !== "object" || value === null || !("command" in value)) {
+      throw new Error("Hermes trop ancien pour ce réglage : mets-le à jour (hermes update).");
+    }
   }
 
   /**
@@ -149,6 +178,25 @@ export class HermesCli {
    */
   async restart(): Promise<void> {
     await this.must(["gateway", "restart", "--yes", "--detach"], RESTART_MS);
+  }
+
+  /**
+   * Finds Hermes's gateway, or starts it when none runs (`hermes gateway ensure`, which never
+   * replaces a gateway already there). Ready, or why not.
+   */
+  async ensureGateway(): Promise<{ running: boolean; reason?: string }> {
+    const done = await this.run(["gateway", "ensure", "--json", "--timeout", "60"], 90_000);
+    if (done.code === 0) return { running: true };
+    let said: Record<string, unknown> = {};
+    try {
+      said = JSON.parse(done.out.trim().split(/\r?\n/).at(-1) ?? "") as Record<string, unknown>;
+    } catch {
+      // Not JSON: its last line says why.
+    }
+    const text = [said.message, said.reason_code, said.state].find(
+      (v): v is string => typeof v === "string" && !!v.trim(),
+    );
+    return { running: false, reason: (text ?? reason(done)).slice(0, 300) };
   }
 
   async model(): Promise<{ provider?: string; model: string } | undefined> {
