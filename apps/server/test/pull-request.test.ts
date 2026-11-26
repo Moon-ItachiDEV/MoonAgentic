@@ -68,6 +68,21 @@ describe("reading a pull request from gh", () => {
     expect(of({ mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" })?.conflicts).toBe(true);
     expect(of({ mergeable: "UNKNOWN" })?.conflicts).toBeNull();
     expect(of({ mergeStateStatus: "BLOCKED" })?.blocked).toBe(true);
+    expect(
+      of({
+        author: { login: "moon" },
+        createdAt: "2026-11-25T23:50:00Z",
+        additions: 2456,
+        deletions: 380,
+        changedFiles: 35,
+      }),
+    ).toMatchObject({
+      author: "moon",
+      createdAt: Date.parse("2026-11-25T23:50:00Z"),
+      additions: 2456,
+      deletions: 380,
+      files: 35,
+    });
     expect(parsePullRequest("pas du JSON", "moon/demo")).toBeUndefined();
     expect(parsePullRequest("{}", "moon/demo")).toBeUndefined();
   });

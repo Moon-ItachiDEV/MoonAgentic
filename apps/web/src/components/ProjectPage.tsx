@@ -1,3 +1,4 @@
+import { PrPeek } from "./PrPeek.tsx";
 import {
   type AgentInfo,
   type Artifact,
@@ -244,34 +245,53 @@ export function ProjectOverview(
 
   const row = (group: ThreadGroup, t: Thread) => {
     const line = threadLine(t, members.get(t.id));
+    const used = artifacts.filter((a) => a.threadId === t.id).slice(0, 3);
     return (
-      <button
-        key={t.id}
-        className={`trow${t.unread ? " unread" : ""}`}
-        data-group={group}
-        onClick={() => props.onOpenThread(t.id)}
-        {...bind(t)}
-      >
-        <span className="ld">
-          <Lead group={group} thread={t} />
-        </span>
-        <span className="t">{t.title}</span>
-        <span className="tm">{shortAgo(t.updatedAt, now)}</span>
-        {line && (
-          <span className={`s${t.status === "error" ? " e" : group === "waiting" ? " w" : ""}`}>
-            {line}
+      <div key={t.id} className="trw">
+        <button
+          className={`trow${t.unread ? " unread" : ""}`}
+          data-group={group}
+          onClick={() => props.onOpenThread(t.id)}
+          {...bind(t)}
+        >
+          <span className="ld">
+            <Lead group={group} thread={t} />
           </span>
-        )}
-        {(t.workspace?.base || t.pr) && (
-          <span className="chip">
-            <I n="branch" s={12} />
-            <span>
-              {t.pr ? `#${t.pr.number} · ` : ""}
-              {t.workspace?.branch ?? ""}
+          <span className="t">{t.title}</span>
+          <span className="tm">{shortAgo(t.updatedAt, now)}</span>
+          {line && (
+            <span className={`s${t.status === "error" ? " e" : group === "waiting" ? " w" : ""}`}>
+              {line}
             </span>
-          </span>
+          )}
+          {t.pr ? (
+            <span className={`prline ${prTone(t.pr)}`}>
+              <PrPeek url={t.pr.url}>
+                <I n={t.pr.state === "merged" ? "merge" : "branch"} s={14} />
+                <span className="n">#{t.pr.number}</span>
+              </PrPeek>
+              <span className="w">— {prWord(t.pr)}</span>
+            </span>
+          ) : (
+            t.workspace?.base && (
+              <span className="chip">
+                <I n="branch" s={12} />
+                <span>{t.workspace.branch}</span>
+              </span>
+            )
+          )}
+        </button>
+        {used.length > 0 && (
+          <div className="tarts">
+            {used.map((a) => (
+              <button key={a.path} className="tart press" onClick={props.onOpenArtifacts}>
+                <I n={a.kind === "image" ? "image" : a.kind === "html" ? "code" : "file"} s={16} />
+                <span>{fileName(a.path)}</span>
+              </button>
+            ))}
+          </div>
         )}
-      </button>
+      </div>
     );
   };
 
@@ -417,6 +437,26 @@ export function ProjectOverview(
  * A project without a coordinator yet. With Antigravity's Neon orchestrator at hand it starts
  * by itself; otherwise the user picks who coordinates, among their favorite models.
  */
+/** The pull request's state in a few words, as a thread's row tells it. */
+function prWord(pr: NonNullable<Thread["pr"]>): string {
+  if (pr.state === "merged") return "Fusionnée";
+  if (pr.state === "closed") return "Fermée";
+  if (pr.conflicts) return "En conflit";
+  if (pr.checks === "failed") return "Vérifications en échec";
+  if (pr.checks === "pending") return "Vérifications en cours";
+  if (pr.state === "draft") return "Brouillon";
+  if (pr.blocked) return "En attente de relecture";
+  return pr.checks === "passed" ? "Prête à fusionner" : "Ouverte";
+}
+
+function prTone(pr: NonNullable<Thread["pr"]>): string {
+  if (pr.state === "merged") return "merged";
+  if (pr.state === "closed") return "closed";
+  if (pr.conflicts || pr.checks === "failed") return "failed";
+  if (pr.checks === "pending") return "pending";
+  return "open";
+}
+
 export function CoordinatorStart(props: {
   project: Project;
   agents: AgentInfo[];

@@ -3,6 +3,7 @@ import { useSyncExternalStore } from "react";
 import { connection } from "../connection.ts";
 import { type PrLink, prKey, repoOfUrl } from "../pr-links.ts";
 import { I } from "../v2/I.tsx";
+import { PrPeek } from "./PrPeek.tsx";
 
 /** What the app knows of a pull request from its threads: its state, read from GitHub. */
 function known(threads: Thread[], link: PrLink) {
@@ -62,14 +63,16 @@ export function PrChip(props: { link: PrLink; onRemove?: () => void }) {
       </span>
     );
   return (
-    <a
-      className={`prl${toneOf(pr)}`}
-      href={link.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      title={`${link.owner}/${link.repo} #${link.number}`}
-    >
-      {body}
-    </a>
+    <PrPeek url={link.url}>
+      <a
+        className={`prl${toneOf(pr)}`}
+        href={link.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        title={`${link.owner}/${link.repo} #${link.number}`}
+      >
+        {body}
+      </a>
+    </PrPeek>
   );
 }

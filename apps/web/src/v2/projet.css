@@ -702,3 +702,188 @@ html:not([data-dev="desk"]) .scr.roomy .mtop .gb:active,
 html:not([data-dev="desk"]) .scr.roomy .dtop .gb:active {
   background: var(--hover);
 }
+
+/* Ligne de PR sous un fil : « #158 — Vérifications en cours », et sa carte au survol */
+.trow .prline {
+  grid-column: 2/4;
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.trow .prline .prpw {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.trow .prline svg {
+  color: var(--ok-tx);
+}
+.trow .prline.merged svg {
+  color: var(--accent);
+}
+.trow .prline.failed svg,
+.trow .prline.closed svg {
+  color: var(--err-tx);
+}
+.trow .prline .n {
+  color: var(--fg2);
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 3px;
+}
+.trow .prline.pending .w::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: prPulse 1.4s ease-in-out infinite;
+}
+@keyframes prPulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+.prpw {
+  position: relative;
+}
+.prpk {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 8px);
+  left: -8px;
+  width: 380px;
+  max-width: 80vw;
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow:
+    0 10px 30px rgba(20, 20, 30, 0.14),
+    0 0 0 0.5px var(--glass-ring, rgba(0, 0, 0, 0.08));
+  text-align: left;
+  cursor: default;
+  transform-origin: 18px 0;
+  animation: prpkIn 180ms var(--out) both;
+}
+@keyframes prpkIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-2px);
+  }
+}
+.prpk.wait {
+  width: 340px;
+  height: 104px;
+  background: var(--surface);
+}
+.prpk .tt {
+  font-size: 15px;
+  line-height: 1.4;
+  color: var(--fg);
+  font-weight: 500;
+}
+.prpk .rp,
+.prpk .fx {
+  font-size: 13px;
+  color: var(--muted);
+}
+.prpk .fx {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  white-space: pre;
+}
+.prpk .fx b {
+  display: inline;
+}
+.prpk .fx .au {
+  color: var(--fg2);
+}
+.prpk .fx .ad {
+  color: var(--ok-tx);
+  font-weight: 500;
+}
+.prpk .fx .dl {
+  color: var(--err-tx);
+  font-weight: 500;
+  margin-left: 4px;
+}
+.prpk .st {
+  justify-self: start;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--okbg);
+  color: var(--ok-tx);
+}
+.prpk .st.merged {
+  background: var(--accbg);
+  color: var(--accent);
+}
+.prpk .st.closed {
+  background: var(--errbg);
+  color: var(--err-tx);
+}
+.prpk .st.draft {
+  background: var(--hover);
+  color: var(--muted);
+}
+
+/* Artefacts utilisés par un fil, sous sa ligne */
+.trw {
+  display: grid;
+}
+.tarts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 0 0 10px 32px;
+}
+.tart {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 220px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: var(--card);
+  font-size: 13px;
+  color: var(--fg2);
+  transition: background-color 150ms ease;
+}
+.tart span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tart svg {
+  color: var(--muted);
+  flex: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .tart:hover {
+    background: var(--hover);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .prpk {
+    animation: none;
+  }
+  .trow .prline.pending .w::after {
+    animation: none;
+  }
+}
