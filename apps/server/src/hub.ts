@@ -1723,6 +1723,13 @@ export class Hub {
         this.requireThread(message.threadId);
         this.updateThread(message.threadId, { pinned: message.pinned });
         return;
+      case "thread.rename": {
+        this.requireThread(message.threadId);
+        // One line: a name pasted with its line breaks would break the lists of threads.
+        const title = message.title.replace(/\s+/g, " ").trim();
+        if (title) this.updateThread(message.threadId, { title });
+        return;
+      }
       case "files.search": {
         const dir = this.folderOf(message.projectId, message.threadId);
         const files = searchFiles(await listFiles(dir), message.query, message.limit);

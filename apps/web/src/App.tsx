@@ -92,7 +92,20 @@ export function App() {
   /** The list open above one of the phone's tabs, on the home page. */
   const [tabPop, setTabPop] = useState<TabPop>(null);
   /** The open thread's « … » menu. */
-  const [threadMenu, setThreadMenu] = useState(false);
+  const [threadMenu, setThreadMenuNow] = useState(false);
+  /** The menu shrinks back to its button before it leaves the page. */
+  const [threadMenuOut, setThreadMenuOut] = useState(false);
+  const setThreadMenu = (on: boolean) => {
+    if (!on && threadMenu) setThreadMenuOut(true);
+    setThreadMenuNow(on);
+  };
+  useEffect(() => {
+    if (!threadMenuOut) return;
+    const timer = setTimeout(() => setThreadMenuOut(false), 230);
+    return () => clearTimeout(timer);
+  }, [threadMenuOut]);
+  /** The thread being renamed from its « … » menu, and the name typed so far. */
+  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
   // Escape closes the menu open above the page, as a click beside it does.
   useEffect(() => {
     if (!threadMenu && !tabPop) return;
@@ -389,6 +402,11 @@ export function App() {
   }[] = thread
     ? [
         {
+          label: "Renommer",
+          icon: "edit",
+          run: () => setRenaming({ id: thread.id, title: thread.title }),
+        },
+        {
           label: thread.pinned ? "Désépingler" : "Épingler",
           icon: "star",
           run: () => togglePin(thread.id, !thread.pinned),
@@ -659,6 +677,9 @@ export function App() {
     </button>
   );
   const threadAgent = thread && state.agents.find((a) => a.id === thread.agentId);
+  /** A chat outside any project (« Discussions »): no changes to look at, no « <> ». */
+  const looseThread =
+    !!thread && isDiscussionsProject(state.projects.find((p) => p.id === thread.projectId));
   const topBar =
     route.name === "home" ? (
       <>
@@ -753,7 +774,7 @@ export function App() {
         </div>
         {thread ? (
           <div className="gcap glass">
-            {thread.workspace && !thread.archived && (
+            {thread.workspace && !thread.archived && !looseThread && (
               <button
                 aria-label={
                   reviewCount ? `Modifications : ${reviewCount} à revoir` : "Modifications"
@@ -1065,8 +1086,13 @@ export function App() {
             onOpenArtifacts={() => go({ name: "artifacts" })}
           />
         )}
-        {threadMenu && thread && (
-          <div className="pmenu tmn" role="menu" aria-label="Actions du fil">
+        {(threadMenu || threadMenuOut) && thread && (
+          <div
+            className={`pmenu tmn${threadMenu ? "" : " out"}`}
+            role="menu"
+            aria-label="Actions du fil"
+            aria-hidden={!threadMenu}
+          >
             {threadActions.map((a, i) => (
               <Fragment key={a.label}>
                 {a.sep && <div className="psep" style={{ "--i": i } as React.CSSProperties} />}
@@ -1273,6 +1299,37 @@ export function App() {
       />
       <LockSheet />
       <AppUpdateHostOnDemand />
+      <Sheet open={!!renaming} onClose={() => setRenaming(null)} title="Renommer la discussion">
+        {renaming && (
+          <form
+            className="sbody"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const title = renaming.title.trim();
+              if (title) connection.send({ type: "thread.rename", threadId: renaming.id, title });
+              setRenaming(null);
+            }}
+          >
+            <div className="rnb">
+              <input
+                className="rni"
+                aria-label="Nom de la discussion"
+                value={renaming.title}
+                maxLength={200}
+                autoComplete="off"
+                autoFocus
+                onFocus={(e) => e.currentTarget.select()}
+                onChange={(e) => setRenaming({ ...renaming, title: e.target.value })}
+              />
+            </div>
+            <div className="mga">
+              <button className="b2 ink press" type="submit" disabled={!renaming.title.trim()}>
+                Renommer
+              </button>
+            </div>
+          </form>
+        )}
+      </Sheet>
       <Presence show={!!confirm}>
         {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
       </Presence>

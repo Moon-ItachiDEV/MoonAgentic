@@ -1239,6 +1239,29 @@ describe("composer", () => {
     expect(recent).toBeLessThan(rows.findIndex((r) => r.includes("Une question hors projet")));
     await shot(page, "c23-discussions-recents");
 
+    // Outside a project, the header keeps only « … »: no changes to look at.
+    expect(await page.getByRole("button", { name: /^Modifications/ }).count()).toBe(0);
+    // Renamed from its « … » menu, for every list of threads.
+    await page.getByRole("button", { name: "Actions du fil" }).click();
+    await page.getByRole("menuitem", { name: "Renommer" }).hover();
+    await shot(page, "c23b-menu-hors-projet");
+    await page.getByRole("menuitem", { name: "Renommer" }).click();
+    const name = page.getByRole("textbox", { name: "Nom de la discussion" });
+    await name.fill("Nouveautés IA");
+    await shot(page, "c23c-renommer");
+    await name.press("Enter");
+    await side
+      .getByRole("button", { name: /^Nouveautés IA/ })
+      .first()
+      .waitFor();
+    await page.locator(".ttl b", { hasText: "Nouveautés IA" }).waitFor();
+    await page.setViewportSize({ width: 390, height: 780 });
+    await page.getByRole("button", { name: "Actions du fil" }).click();
+    await page.getByRole("menuitem", { name: "Renommer" }).waitFor();
+    await shot(page, "c23d-menu-telephone");
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 1280, height: 820 });
+
     // Resolved, it has no project to sit under: « Résolus » below « Récents » keeps it.
     // The demo agent waits for a yes to change a file: stopped first, so the turn is over.
     await page.getByRole("button", { name: "Arrêter", exact: true }).click();
@@ -1248,9 +1271,10 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Actions du fil" }).click();
     await page.getByRole("menuitem", { name: "Marquer résolu" }).click();
     await page.getByText("Ce fil est résolu").waitFor();
-    await expect.poll(() => line.count()).toBe(0);
+    const renamed = side.getByRole("button", { name: /^Nouveautés IA/ });
+    await expect.poll(() => renamed.count()).toBe(0);
     await side.getByRole("button", { name: /^Résolus \(\d+\)$/ }).click();
-    await line.first().waitFor();
+    await renamed.first().waitFor();
     await page.close();
   });
 });

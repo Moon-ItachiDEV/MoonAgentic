@@ -1641,6 +1641,23 @@ describe("Composer: files, skills, commands, pins and search", () => {
     expect(store.getThread(threadId)?.pinned).toBeUndefined();
   });
 
+  it("renames a thread with the user's own name", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    await hub.handle(client, { type: "thread.rename", threadId, title: "  Nouveautés IA  " });
+    expect(store.getThread(threadId)?.title).toBe("Nouveautés IA");
+    expect(client.messages.at(-1)).toMatchObject({
+      type: "thread",
+      thread: { title: "Nouveautés IA" },
+    });
+  });
+
   it("holds a message sent while the model is being switched", async () => {
     const { hub, projectId } = setup();
     const threadId = hub.createThread({

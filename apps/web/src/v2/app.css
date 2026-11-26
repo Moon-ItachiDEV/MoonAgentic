@@ -1229,6 +1229,26 @@
 .pi2:active {
   background: var(--hover);
 }
+.pi2 {
+  transition:
+    background-color 160ms ease,
+    color 160ms ease;
+}
+.pi2 > svg {
+  transition: transform 260ms var(--spring);
+}
+/* With a mouse, the line under it lights up and its icon leans in. */
+@media (hover: hover) {
+  .pi2:hover {
+    background: var(--hover);
+  }
+  .pi2:hover > svg {
+    transform: translateX(2px);
+  }
+  .pmenu .pi2.dng:hover {
+    background: color-mix(in srgb, var(--err) 10%, transparent);
+  }
+}
 .pi2 .nm {
   flex: 1;
   min-width: 0;
