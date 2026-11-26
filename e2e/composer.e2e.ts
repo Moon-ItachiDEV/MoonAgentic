@@ -1331,6 +1331,23 @@ describe("composer", () => {
     await composer(page).fill("Et dans le projet ?");
     await composer(page).press("Enter");
     await page.getByText("Et dans le projet ?").first().waitFor();
+
+    // A thread of a project is renamed from its line too: a right click in the sidebar.
+    await side
+      .getByRole("button", { name: /^Une question à déplacer/ })
+      .first()
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Renommer" }).click();
+    await page.getByRole("dialog", { name: "Renommer le fil" }).waitFor();
+    const name = page.getByRole("textbox", { name: "Nom du fil" });
+    await name.fill("Question du projet");
+    await shot(page, "c25-renommer-fil");
+    await name.press("Enter");
+    await side
+      .getByRole("button", { name: /^Question du projet/ })
+      .first()
+      .waitFor();
+    await page.locator(".ttl b", { hasText: "Question du projet" }).waitFor();
     await page.close();
   });
 });

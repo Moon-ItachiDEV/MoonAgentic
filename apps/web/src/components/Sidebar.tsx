@@ -71,6 +71,7 @@ export function Sidebar(props: {
   onSetArchived: (id: string, archived: boolean) => void;
   /** Asks before deleting the thread. */
   onDeleteThread: (thread: Thread) => void;
+  onRenameThread: (thread: Thread) => void;
   onOpenSettings: () => void;
 }) {
   const { state } = props;

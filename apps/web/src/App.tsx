@@ -125,7 +125,10 @@ export function App() {
     return () => clearTimeout(timer);
   }, [threadMenuOut]);
   /** The thread being renamed from its « … » menu, and the name typed so far. */
-  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
+  /** The conversation being renamed; `loose` for one outside any project (« Discussions »). */
+  const [renaming, setRenaming] = useState<{ id: string; title: string; loose: boolean } | null>(
+    null,
+  );
   // Escape closes the menu open above the page, as a click beside it does.
   useEffect(() => {
     if (!threadMenu && !tabPop) return;
@@ -383,6 +386,12 @@ export function App() {
   };
   const setArchived = (id: string, archived: boolean) =>
     connection.send({ type: "thread.setArchived", threadId: id, archived });
+  const renameThread = (t: Thread) =>
+    setRenaming({
+      id: t.id,
+      title: t.title,
+      loose: isDiscussionsProject(state.projects.find((p) => p.id === t.projectId)),
+    });
   const askDeleteThread = (t: Thread) => {
     // A team goes whole: its lead's thread takes the members' with it.
     const members = state.threads.filter((m) => m.parentId === t.id).length;
@@ -429,7 +438,7 @@ export function App() {
         {
           label: "Renommer",
           icon: "edit",
-          run: () => setRenaming({ id: thread.id, title: thread.title }),
+          run: () => renameThread(thread),
         },
         {
           label: thread.pinned ? "Désépingler" : "Épingler",
@@ -629,6 +638,7 @@ export function App() {
     onTogglePin: togglePin,
     onSetArchived: setArchived,
     onDeleteThread: askDeleteThread,
+    onRenameThread: renameThread,
   });
 
   /** Under the coordinator's conversation: what its project's threads wait for, then its composer. */
@@ -900,6 +910,10 @@ export function App() {
           onDeleteThread={(t) => {
             setDrawer(false);
             askDeleteThread(t);
+          }}
+          onRenameThread={(t) => {
+            setDrawer(false);
+            renameThread(t);
           }}
           onOpenSettings={openSettings}
         />
@@ -1370,7 +1384,11 @@ export function App() {
       />
       <LockSheet />
       <AppUpdateHostOnDemand />
-      <Sheet open={!!renaming} onClose={() => setRenaming(null)} title="Renommer la discussion">
+      <Sheet
+        open={!!renaming}
+        onClose={() => setRenaming(null)}
+        title={renaming?.loose ? "Renommer la discussion" : "Renommer le fil"}
+      >
         {renaming && (
           <form
             className="sbody"
@@ -1384,7 +1402,7 @@ export function App() {
             <div className="rnb">
               <input
                 className="rni"
-                aria-label="Nom de la discussion"
+                aria-label={renaming.loose ? "Nom de la discussion" : "Nom du fil"}
                 value={renaming.title}
                 maxLength={200}
                 autoComplete="off"
