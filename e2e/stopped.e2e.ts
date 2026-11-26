@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
-import { addProject, pickAgent } from "./ui.ts";
+import { addProject, allModelsButton, pickAgent } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -103,8 +103,11 @@ describe("agent stopped mid-turn", () => {
       await page.waitForTimeout(400);
       await page.screenshot({ path: path.join(shots, "s2-modele.png") });
     }
-    await page.getByRole("button", { name: "Plus", exact: true }).click();
-    await page.getByRole("menuitemradio", { name: /Démo rapide/ }).click();
+    await allModelsButton(page).click();
+    await page
+      .getByRole("menuitemradio", { name: /Démo rapide/ })
+      .first()
+      .click();
     await page.keyboard.press("Escape");
     // The composer folds once the focus is out of it, its model with it: it is opened to read it.
     await composer.click();

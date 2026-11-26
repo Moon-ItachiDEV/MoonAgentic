@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium, type Page } from "playwright";
-import { addProject, pickAgent, setAccess } from "./ui.ts";
+import { addProject, allModelsButton, pickAgent, setAccess, showAgents } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -323,6 +323,92 @@ describe("composer", () => {
     await shot(page, "c11-modele-mobile-favori");
     // Taken off again, so the other tests keep the wheel they expect.
     await wheel.getByRole("button", { name: "Plus", exact: true }).click();
+    await all.getByRole("button", { name: "Retirer des favoris" }).first().click();
+    await expect
+      .poll(() => all.getByRole("button", { name: "Retirer des favoris" }).count())
+      .toBe(0);
+    await page.close();
+  });
+  it("opens the model menu above its button on a computer, a list to click", async () => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await page.goto(url);
+    await composer(page).click();
+    await pill(page).click();
+    // A menu above the model's button, not a window in the middle of the screen.
+    const menu = page.getByRole("dialog", { name: "Modèle", exact: true });
+    const list = menu.getByRole("listbox", { name: "Modèles favoris" });
+    await list.waitFor();
+    await page.waitForTimeout(500);
+    const box = await menu.boundingBox();
+    const chip = await pill(page).boundingBox();
+    expect(box && chip).toBeTruthy();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(chip!.y);
+    expect(Math.abs(box!.x + box!.width - (chip!.x + chip!.width))).toBeLessThan(80);
+    expect(box!.width).toBeLessThanOrEqual(400);
+    expect(await page.locator(".sscrim.on").count()).toBe(0);
+    await shot(page, "c12-modele-bureau");
+
+    // Every model: a search, and a star to make one a favorite.
+    await menu.getByRole("button", { name: "Tous les modèles", exact: true }).click();
+    const all = page.getByRole("dialog", { name: "Tous les modèles" });
+    await showAgents(all);
+    await all.getByRole("menuitemradio", { name: /^Agent de démo/ }).click();
+    const search = all.getByRole("searchbox", { name: "Rechercher un modèle" });
+    await search.fill("précis");
+    const precise = all.getByRole("menuitemradio", { name: /^Démo précis/ }).first();
+    await precise.waitFor({ timeout: 30_000 });
+    expect(await all.getByRole("menuitemradio", { name: /^Démo rapide/ }).count()).toBe(0);
+    await precise.getByRole("button", { name: "Ajouter aux favoris" }).click();
+    await precise.getByRole("button", { name: "Retirer des favoris" }).waitFor();
+    await shot(page, "c13-tous-bureau");
+
+    // Back to the favorites: one click picks it and closes the menu.
+    await all.getByRole("button", { name: "Favoris", exact: true }).click();
+    await list
+      .getByRole("option", { name: /^Démo précis/ })
+      .first()
+      .click();
+    await menu.waitFor({ state: "hidden" });
+    await composer(page).click();
+    await expect.poll(() => pill(page).getAttribute("aria-label")).toContain("Démo précis");
+
+    // With the keyboard: a search, down into the list, Enter.
+    await pill(page).click();
+    await menu.getByRole("button", { name: "Tous les modèles", exact: true }).click();
+    await search.fill("rapide");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await all.waitFor({ state: "hidden" });
+    await composer(page).click();
+    await expect.poll(() => pill(page).getAttribute("aria-label")).toContain("Démo rapide");
+
+    // The effort's slider takes the keys while it is over the list: the model stays.
+    await pill(page).click();
+    await menu.getByRole("button", { name: /^Effort : / }).click();
+    const slider = menu.getByRole("slider", { name: /^Effort de / });
+    await expect.poll(() => slider.evaluate((el) => el === document.activeElement)).toBe(true);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "hidden" });
+    await composer(page).click();
+    await expect.poll(() => pill(page).getAttribute("aria-label")).toContain("Démo rapide");
+
+    // Escape and a click elsewhere close it too.
+    await pill(page).click();
+    await list.waitFor();
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "hidden" });
+    await composer(page).click();
+    await pill(page).click();
+    await list.waitFor();
+    await page.mouse.click(700, 120);
+    await menu.waitFor({ state: "hidden" });
+
+    // Taken off again, so the other tests keep the favorites they expect.
+    await composer(page).click();
+    await pill(page).click();
+    await menu.getByRole("button", { name: "Tous les modèles", exact: true }).click();
     await all.getByRole("button", { name: "Retirer des favoris" }).first().click();
     await expect
       .poll(() => all.getByRole("button", { name: "Retirer des favoris" }).count())
@@ -1173,8 +1259,9 @@ describe("composer", () => {
     await composer(page).click();
     await pill(page).click();
     const sheet = page.getByRole("dialog", { name: "Modèle", exact: true });
-    await sheet.getByRole("button", { name: "Plus", exact: true }).click();
+    await allModelsButton(sheet).click();
     const all = page.getByRole("dialog", { name: "Tous les modèles" });
+    await showAgents(all);
     for (const name of ["Claude Code", "Codex", "Antigravity", "Cursor", "Hermes", "Agent de démo"])
       await all.getByRole("menuitemradio", { name: new RegExp(`^${name}`) }).waitFor();
     expect(await all.locator("img, svg image").count()).toBe(0);
@@ -1183,6 +1270,7 @@ describe("composer", () => {
     // Each model has its own effort stops: three for « Démo rapide », four for « Démo précis ».
     // The highest one is « UltraMoon », whatever the agent calls it.
     const stops = async (model: string) => {
+      await showAgents(all);
       await all.getByRole("menuitemradio", { name: /^Agent de démo/ }).click();
       // The first demo agent's: the second one has models of the same names.
       await all
@@ -1204,7 +1292,7 @@ describe("composer", () => {
     };
     expect(await stops("Démo rapide")).toBe("2");
     await shot(page, "c22b-effort");
-    await sheet.getByRole("button", { name: "Plus", exact: true }).click();
+    await allModelsButton(sheet).click();
     expect(await stops("Démo précis")).toBe("3");
     await page.close();
   });

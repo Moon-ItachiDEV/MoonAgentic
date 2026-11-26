@@ -1652,3 +1652,309 @@ a.it {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* From the iPad's width up, the model's menu opens above its button, like the « + » menu. */
+.cw > .mpop {
+  position: absolute;
+  z-index: 24;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: 340px;
+  max-width: calc(100% - 8px);
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow:
+    var(--float),
+    0 0 0 0.5px var(--glass-ring);
+  overflow: hidden;
+  transform-origin: calc(100% - 96px) calc(100% + 30px);
+  animation: pmin 460ms var(--spring) both;
+}
+html[data-dev="desk"] .cw > .mpop {
+  width: 320px;
+}
+.cw > .mpop.all {
+  width: 380px;
+  height: 560px;
+}
+.cw > .mpop.out {
+  animation: pmout 200ms cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+.scr.roomy .cmp .mdl[aria-expanded="true"] {
+  background: var(--hover);
+}
+.cmp .mdl .cv svg {
+  transition: transform 320ms var(--spring);
+}
+.scr.roomy .cmp .mdl[aria-expanded="true"] .cv svg {
+  transform: rotate(180deg);
+}
+.mph {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+}
+.mph b {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.mph .mpt {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 15px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg2);
+  background: var(--sunken);
+  transition: background-color 160ms var(--out);
+}
+.mph .mpt:hover {
+  background: var(--hover);
+}
+.mpb {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  animation: mpv 300ms var(--spring) both;
+}
+@keyframes mpv {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+    filter: blur(4px);
+  }
+}
+.mpop .mpl {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  outline: 0;
+}
+.mpb > .mpl {
+  flex: 1;
+  min-height: 0;
+}
+.mpop .mv {
+  padding: 0 0 4px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.mpop .mv .wdesc {
+  margin-top: 6px;
+  min-height: 20px;
+  font-size: 13px;
+}
+.mpop .mv > .mpl {
+  max-height: 100%;
+  transition:
+    opacity 300ms var(--out),
+    filter 300ms var(--out),
+    transform 400ms var(--spring);
+}
+.mpop .mv.eff > .mpl {
+  min-height: 150px;
+  opacity: 0;
+  filter: blur(8px);
+  transform: scale(0.94);
+  pointer-events: none;
+}
+.mpop .eslide {
+  inset: 0 8px;
+}
+.mpr {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  outline: 0;
+  width: 100%;
+  min-height: 40px;
+  padding: 4px 8px 4px 12px;
+  border-radius: 14px;
+  font-size: 15px;
+  color: var(--fg);
+  text-align: left;
+  cursor: default;
+  transition: background-color 120ms var(--out);
+}
+html[data-dev="desk"] .mpr {
+  min-height: 36px;
+  font-size: 14px;
+}
+.mpr:hover,
+.mpr.kf,
+.mpr:focus-visible {
+  background: var(--hover);
+}
+.mpr:disabled {
+  color: var(--faint);
+  background: none;
+}
+.mpr.ro:hover {
+  background: none;
+}
+.mpr .nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mpr.c .nm {
+  font-weight: 500;
+}
+.mpr .nm small {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--faint);
+}
+.mpr .ck {
+  flex: none;
+  display: grid;
+  width: 18px;
+  color: var(--fg);
+}
+.mpr .eg {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  margin: -2px 0;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.mpr .eg:hover {
+  background: var(--sunken);
+}
+.mpr .st {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-right: -4px;
+  border-radius: 9px;
+  color: var(--faint);
+  opacity: 0;
+  transition:
+    opacity 120ms var(--out),
+    color 120ms var(--out);
+}
+.mpr:hover .st,
+.mpr .st:focus-visible,
+.mpr .st.on,
+html[data-dev="touch"] .mpr .st {
+  opacity: 1;
+}
+.mpr .st.on {
+  color: var(--fg);
+}
+.mpr .st:hover {
+  background: var(--sunken);
+}
+.mpr .rt {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.mpg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.mpgw:first-child .mpg {
+  padding-top: 4px;
+}
+.mpg .an {
+  flex: 1;
+  min-width: 0;
+}
+.mpg .rt.mq {
+  font-weight: 400;
+  font-size: 12px;
+}
+.mpn {
+  padding: 2px 12px 6px;
+  font-size: 12px;
+  color: var(--faint);
+}
+.mpm {
+  width: 100%;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 12px;
+  text-align: left;
+  font-size: 13px;
+  color: var(--muted);
+}
+.mpm.in {
+  width: auto;
+}
+.mpm:hover {
+  background: var(--hover);
+}
+.mps {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 2px 4px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: var(--sunken);
+  color: var(--faint);
+}
+.mps input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  font: inherit;
+  font-size: 14px;
+  color: var(--fg);
+}
+.mps input::placeholder {
+  color: var(--faint);
+}
+.mps input::-webkit-search-cancel-button {
+  display: none;
+}
+.mpe {
+  padding: 16px 12px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.mpf {
+  flex: none;
+  margin-top: 4px;
+  padding-top: 4px;
+  box-shadow: 0 -1px 0 var(--hover);
+  max-height: 45%;
+  overflow-y: auto;
+}
+.mpsub {
+  padding-left: 8px;
+}
+.mpf .mseg {
+  margin: 2px 4px 6px;
+}
