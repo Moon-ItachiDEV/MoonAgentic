@@ -11,7 +11,7 @@ import { WebSocket } from "ws";
 import { ArtifactLinks } from "../src/artifacts.ts";
 import { Attachments } from "../src/attachments.ts";
 import { Devices } from "../src/devices.ts";
-import { allowedHost, createHttpServer, MAX_WS_PER_DEVICE } from "../src/http.ts";
+import { allowedHost, createHttpServer, MAX_WS_PER_DEVICE, sendOrCut } from "../src/http.ts";
 import { CoordinatorRefused, type Hub } from "../src/hub.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -22,10 +22,7 @@ afterEach(async () => {
 
 const TOKEN = "jeton-du-proprietaire-quotas";
 
-async function serve(
-  onConnect: (client: { send: (m: unknown) => void }) => () => void,
-  options: { maxBufferedBytes?: number } = {},
-) {
+async function serve(onConnect: (client: { send: (m: unknown) => void }) => () => void) {
   const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-quotas-"));
   const webDir = path.join(root, "web");
   const folder = path.join(root, "fil");
@@ -55,7 +52,6 @@ async function serve(
     webDir,
     devices: new Devices(),
     rateLimit: { maxApiRequests: 50 },
-    ...options,
     remoteAccess: async (_h, port): Promise<RemoteAccess> => ({
       port,
       exposed: false,
@@ -251,23 +247,25 @@ describe("the WebSocket places (N17)", () => {
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(cut).toBe(true);
   });
-  it("cuts at once a connection a single message leaves over its limit", async () => {
-    let client: { send: (m: unknown) => void } | undefined;
-    let cut = false;
-    const { origin, ticket } = await serve(
-      (c) => {
-        client = c;
-        return () => void (cut = true);
+  it("cuts at once a connection a single message leaves over its limit", () => {
+    // How much the system takes before Node holds anything differs (Windows took 8 MB at once):
+    // a connection whose buffer grows by what is sent stands for one that no longer reads.
+    const ws = {
+      readyState: 1,
+      OPEN: 1,
+      bufferedAmount: 0,
+      cut: false,
+      send(data: string) {
+        this.bufferedAmount += data.length;
       },
-      { maxBufferedBytes: 64 * 1024 },
-    );
-    const ws = new WebSocket(`ws://${origin}/ws?ticket=${await ticket()}`);
-    await new Promise((resolve) => ws.once("open", resolve));
-    cleanups.push(() => ws.terminate());
-    (ws as unknown as { _socket: { pause(): void } })._socket.pause();
+      terminate() {
+        this.cut = true;
+      },
+    };
+    sendOrCut(ws, "x".repeat(1024), 64 * 1024);
+    expect(ws.cut).toBe(false);
     // One message far over the limit, and none after it.
-    client!.send({ type: "item", threadId: "t", item: { text: "x".repeat(8 * 1024 * 1024) } });
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    expect(cut).toBe(true);
+    sendOrCut(ws, "x".repeat(8 * 1024 * 1024), 64 * 1024);
+    expect(ws.cut).toBe(true);
   });
 });

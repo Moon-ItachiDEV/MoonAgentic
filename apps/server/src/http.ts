@@ -215,6 +215,30 @@ export interface RateLimitOptions {
 /** What a local network adds to a machine's name: never a public domain. */
 const LOCAL_SUFFIXES = [".local", ".lan", ".home", ".home.arpa", ".internal"];
 
+/** What `sendOrCut` needs of a WebSocket. */
+export interface HeldSocket {
+  readonly readyState: number;
+  readonly OPEN: number;
+  readonly bufferedAmount: number;
+  send(data: string): void;
+  terminate(): void;
+}
+
+/**
+ * Sends to a connection, or cuts it when it holds more than `limit` bytes it did not read: it
+ * reads no more, and it comes back. Checked after the message too, since that message alone can
+ * be what leaves it over the limit.
+ */
+export function sendOrCut(ws: HeldSocket, data: string, limit: number): void {
+  if (ws.readyState !== ws.OPEN) return;
+  if (ws.bufferedAmount > limit) {
+    ws.terminate();
+    return;
+  }
+  ws.send(data);
+  if (ws.bufferedAmount > limit) ws.terminate();
+}
+
 export function allowedHost(
   hostHeader: string | undefined,
   machine = os.hostname(),
@@ -1213,17 +1237,7 @@ export function createHttpServer(options: {
         count(open, 1);
         ws.once("close", () => count(open, -1));
         const client: Client = {
-          send: (message: ServerMessage) => {
-            if (ws.readyState !== ws.OPEN) return;
-            // Still holding that much it did not read: it reads no more. Cut, it comes back.
-            if (ws.bufferedAmount > maxBuffered) {
-              ws.terminate();
-              return;
-            }
-            ws.send(JSON.stringify(message));
-            // Left over the limit by this one message: it would read no more of it either.
-            if (ws.bufferedAmount > maxBuffered) ws.terminate();
-          },
+          send: (message: ServerMessage) => sendOrCut(ws, JSON.stringify(message), maxBuffered),
           ...(who.owner ? {} : { deviceId: who.deviceId }),
         };
         const disconnect = hub.connect(client);
