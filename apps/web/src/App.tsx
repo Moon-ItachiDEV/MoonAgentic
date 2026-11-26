@@ -251,6 +251,11 @@ export function App() {
     [],
   );
   // Every hook is above: an early return before one of them breaks the page when the state changes.
+  // Before any early return, as every hook. Leaving the thread drops a rename left open there, unsaved.
+  const routeThreadId = route.name === "thread" ? route.threadId : undefined;
+  useEffect(() => {
+    setRenaming((was) => (was && was.id !== routeThreadId ? null : was));
+  }, [routeThreadId]);
   if (state.status === "unauthorized") return <PairGate />;
 
   const thread: Thread | undefined =
@@ -394,11 +399,6 @@ export function App() {
   };
   const setArchived = (id: string, archived: boolean) =>
     connection.send({ type: "thread.setArchived", threadId: id, archived });
-  // Leaving the thread drops a rename left open there, unsaved.
-  const routeThreadId = route.name === "thread" ? route.threadId : undefined;
-  useEffect(() => {
-    setRenaming((was) => (was && was.id !== routeThreadId ? null : was));
-  }, [routeThreadId]);
   // The title in the thread's header becomes the field: from elsewhere, the thread opens first.
   const renameThread = (t: Thread) => {
     if (route.name !== "thread" || route.threadId !== t.id) go({ name: "thread", threadId: t.id });
