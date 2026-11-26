@@ -1,6 +1,6 @@
 // Long threads in the built app, against a real server: what is heavy comes when asked for.
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -247,6 +247,41 @@ describe("longs fils", () => {
     await page.keyboard.press("Enter");
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor();
     expect(got("items")).toHaveLength(1);
+    await page.close();
+  });
+
+  // Audit of 2026-11-25, N16: the whole thread in one answer held the server for 0.7 s.
+  it("exports a long thread whole, asking for it by pages the screen does not show", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    const sent: { type: string; apart?: boolean; size?: number }[] = [];
+    await page.routeWebSocket(/\/ws\b/, (socket) => {
+      const server = socket.connectToServer();
+      socket.onMessage((data) => {
+        sent.push(JSON.parse(String(data)) as (typeof sent)[number]);
+        server.send(data);
+      });
+    });
+    await page.goto(url);
+    await page.getByText("Long fil").first().click();
+    await page.getByText(`Question ${TURNS} ?`, { exact: true }).waitFor();
+    const messages = () => page.locator(".feed > .item").count();
+    const shown = await messages();
+
+    const composer = page.getByRole("combobox", { name: "Message" });
+    await expect.poll(() => composer.isEnabled()).toBe(true);
+    const download = page.waitForEvent("download");
+    await composer.fill("/exporter");
+    await composer.press("Enter");
+    const file = await (await download).path();
+    const markdown = readFileSync(file, "utf8");
+    for (const n of [1, 7, 240, 241, TURNS]) expect(markdown).toContain(`Question ${n}`);
+    expect(markdown.match(/Réponse \d+\./g)?.length).toBeGreaterThanOrEqual(TURNS);
+    // Asked for by pages, kept apart: the screen still shows what it did.
+    const pages = sent.filter((m) => m.type === "thread.page");
+    expect(pages.length).toBeGreaterThan(0);
+    expect(pages.every((m) => m.apart === true && m.size === 1000)).toBe(true);
+    expect(sent.some((m) => m.type === "thread.read")).toBe(false);
+    expect(await messages()).toBe(shown);
     await page.close();
   });
 });

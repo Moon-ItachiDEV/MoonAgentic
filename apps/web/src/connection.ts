@@ -238,49 +238,47 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
           ? Extract<ServerMessage, { type: "fullItem" }>
           : T extends "thread.page"
             ? Extract<ServerMessage, { type: "page" }>
-            : T extends "thread.read"
-              ? Extract<ServerMessage, { type: "timeline" }>
-              : T extends "github.status"
-                ? Extract<ServerMessage, { type: "github" }>
-                : T extends "github.repos"
-                  ? Extract<ServerMessage, { type: "githubRepos" }>
-                  : T extends "github.login"
-                    ? Extract<ServerMessage, { type: "githubDevice" }>
-                    : T extends "local.clones"
-                      ? Extract<ServerMessage, { type: "localClones" }>
-                      : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
-                        ? Extract<ServerMessage, { type: "pullRequest" }>
-                        : T extends "workspace.prRemarks"
-                          ? Extract<ServerMessage, { type: "prRemarks" }>
-                          : T extends "workspace.forecast"
-                            ? Extract<ServerMessage, { type: "forecast" }>
-                            : T extends "workspace.files"
-                              ? Extract<ServerMessage, { type: "worktreeFiles" }>
-                              : T extends "workspace.readFile"
-                                ? Extract<ServerMessage, { type: "worktreeFile" }>
-                                : T extends "project.branches"
-                                  ? Extract<ServerMessage, { type: "projectBranches" }>
-                                  : T extends
-                                        | "project.setup"
-                                        | "project.saveRules"
-                                        | "project.saveMemory"
-                                        | "project.linkClaude"
-                                        | "project.saveCommand"
-                                        | "project.removeCommand"
-                                        | "project.saveSkill"
-                                        | "project.removeSkill"
-                                    ? Extract<ServerMessage, { type: "projectSetup" }>
-                                    : T extends "project.deleteBranches"
-                                      ? Extract<ServerMessage, { type: "branchesDeleted" }>
-                                      : T extends "artifacts.list"
-                                        ? Extract<ServerMessage, { type: "artifacts" }>
-                                        : T extends "artifacts.open"
-                                          ? Extract<ServerMessage, { type: "artifactLink" }>
-                                          : T extends "file.open"
-                                            ? Extract<ServerMessage, { type: "fileLink" }>
-                                            : T extends "push.state"
-                                              ? Extract<ServerMessage, { type: "pushState" }>
-                                              : ServerMessage;
+            : T extends "github.status"
+              ? Extract<ServerMessage, { type: "github" }>
+              : T extends "github.repos"
+                ? Extract<ServerMessage, { type: "githubRepos" }>
+                : T extends "github.login"
+                  ? Extract<ServerMessage, { type: "githubDevice" }>
+                  : T extends "local.clones"
+                    ? Extract<ServerMessage, { type: "localClones" }>
+                    : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
+                      ? Extract<ServerMessage, { type: "pullRequest" }>
+                      : T extends "workspace.prRemarks"
+                        ? Extract<ServerMessage, { type: "prRemarks" }>
+                        : T extends "workspace.forecast"
+                          ? Extract<ServerMessage, { type: "forecast" }>
+                          : T extends "workspace.files"
+                            ? Extract<ServerMessage, { type: "worktreeFiles" }>
+                            : T extends "workspace.readFile"
+                              ? Extract<ServerMessage, { type: "worktreeFile" }>
+                              : T extends "project.branches"
+                                ? Extract<ServerMessage, { type: "projectBranches" }>
+                                : T extends
+                                      | "project.setup"
+                                      | "project.saveRules"
+                                      | "project.saveMemory"
+                                      | "project.linkClaude"
+                                      | "project.saveCommand"
+                                      | "project.removeCommand"
+                                      | "project.saveSkill"
+                                      | "project.removeSkill"
+                                  ? Extract<ServerMessage, { type: "projectSetup" }>
+                                  : T extends "project.deleteBranches"
+                                    ? Extract<ServerMessage, { type: "branchesDeleted" }>
+                                    : T extends "artifacts.list"
+                                      ? Extract<ServerMessage, { type: "artifacts" }>
+                                      : T extends "artifacts.open"
+                                        ? Extract<ServerMessage, { type: "artifactLink" }>
+                                        : T extends "file.open"
+                                          ? Extract<ServerMessage, { type: "fileLink" }>
+                                          : T extends "push.state"
+                                            ? Extract<ServerMessage, { type: "pushState" }>
+                                            : ServerMessage;
 
 export class Connection {
   private state: State = initialState;

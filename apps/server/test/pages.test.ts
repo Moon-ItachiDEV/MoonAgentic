@@ -207,8 +207,17 @@ describe("a long thread on a screen", () => {
     });
     expect(client.last("page")).toMatchObject({ requestId: "r2", first: 31, earlier: 30 });
 
-    await hub.handle(client, { type: "thread.read", requestId: "r3", threadId: "t" });
-    const whole = client.last("timeline");
+    // An export reads it by bigger pages, which the screen does not show.
+    await hub.handle(client, {
+      type: "thread.page",
+      requestId: "r3",
+      threadId: "t",
+      before: 501,
+      size: 1000,
+      apart: true,
+    });
+    const whole = client.last("page");
+    expect(whole).toMatchObject({ requestId: "r3", first: 1, earlier: 0, apart: true });
     expect(ids(whole.items)).toEqual(range(1, 500));
     expect(whole.items[299]).toMatchObject({ omitted: 2001 });
     await expect(
@@ -295,5 +304,22 @@ describe("a long thread on a screen", () => {
       since: { epoch, rev: cut.rev, first: cut.first },
     });
     expect(client.last("changes")).toMatchObject({ items: [], rev: cut.rev });
+  });
+
+  it("rejects thread.page while the thread is being deleted in batches", async () => {
+    const { hub, client } = setup(2500);
+    const deleting = hub.deleteThread("t");
+    // Delete runs synchronously up to the first `await nextTurn()` after batch 1.
+    await expect(
+      hub.handle(client, {
+        type: "thread.page",
+        requestId: "r-del",
+        threadId: "t",
+        before: 2501,
+        size: 1000,
+        apart: true,
+      }),
+    ).rejects.toThrow("en cours de suppression");
+    await deleting;
   });
 });

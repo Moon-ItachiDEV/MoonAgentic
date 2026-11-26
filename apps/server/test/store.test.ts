@@ -197,9 +197,10 @@ describe("searching messages", () => {
       kind: "user",
       snippet: "Où est l'État du système ?",
     });
-    // Two letters are found too, without the index.
-    expect(found(store, "où")).toEqual(["u1"]);
-    expect(found(store, "ts")).toEqual(["a1"]);
+    // Two letters are not looked for: the index names nothing, and every message would be
+    // read (audit of 2026-11-25, N23).
+    expect(found(store, "où")).toEqual([]);
+    expect(found(store, "ts")).toEqual([]);
     expect(found(store, "introuvable")).toEqual([]);
     // No more than asked for, the latest written first.
     expect(found(store, "syst", 1)).toEqual(["a1"]);
@@ -298,5 +299,15 @@ describe("searching messages", () => {
       "m170",
       "m17",
     ]);
+  });
+
+  it("skips indexing on short searchProjectItems queries and ignores NUL bytes safely", () => {
+    const store = withThreads();
+    store.putItem("t1", user("u1", "Un message tout frais sur le projet"));
+    expect(stale(store)).toBe(1);
+    expect(store.searchProjectItems("p", "le")).toEqual([]);
+    expect(stale(store)).toBe(1);
+    expect(store.searchItems("a\0b")).toEqual([]);
+    expect(store.searchProjectItems("p", "a\0b")).toEqual([]);
   });
 });

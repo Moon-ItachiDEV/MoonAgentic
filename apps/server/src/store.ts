@@ -1,4 +1,5 @@
 import { chmodSync } from "node:fs";
+import { Checkpoints } from "./checkpoints.ts";
 import { backup, DatabaseSync, type StatementSync } from "node:sqlite";
 import {
   MAX_PROJECT_MEMORY,
@@ -77,6 +78,12 @@ type ThreadExtra = Pick<
   | "worksIn"
   | "team"
   | "prReview"
+>;
+
+/** What says where a thread works. */
+export type ThreadPlace = Pick<
+  Thread,
+  "id" | "projectId" | "title" | "workspace" | "worksIn" | "createdAt"
 >;
 
 const extraOf = (thread: ThreadExtra): string | null => {
@@ -396,6 +403,25 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
 
 /** How many messages the search's index takes in one write. */
 const INDEX_BATCH = 100;
+/** A search fills the index this long at most before it looks; the rest is filled after. */
+const SEARCH_INDEX_MS = 30;
+/** The fewest letters searched for: the index cuts text in groups of three. */
+export const MIN_SEARCH_CHARS = 3;
+/** FTS5 `MATCH` query intersecting unique 3-char trigrams so `*`, `?`, `[` still use the index. */
+function trigramMatch(text: string): string | undefined {
+  if (text.includes("\0")) return undefined;
+  const chars = [...text];
+  if (chars.length < MIN_SEARCH_CHARS) return undefined;
+  const grams: string[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i <= chars.length - MIN_SEARCH_CHARS && grams.length < 32; i++) {
+    const g = chars.slice(i, i + MIN_SEARCH_CHARS).join("");
+    if (seen.has(g)) continue;
+    seen.add(g);
+    grams.push(`"${g.replace(/"/g, '""')}"`);
+  }
+  return grams.join(" AND ");
+}
 
 /**
  * Brings the database up to the schema this version knows, one step at a time, each in a
@@ -497,6 +523,7 @@ export class Store {
   readonly db: DatabaseSync;
   /** The path opened for this database, or `:memory:`. */
   readonly file: string;
+  private readonly checkpoints?: Checkpoints;
 
   constructor(file: string) {
     this.file = file;
@@ -522,6 +549,7 @@ export class Store {
     // the database.
     this.db.exec(`PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;`);
     migrate(this.db, file);
+    if (file !== ":memory:") this.checkpoints = new Checkpoints(file, this.db);
   }
 
   /**
@@ -856,6 +884,36 @@ export class Store {
     return rows.flatMap((row) => this.readable(`le fil ${row.id}`, () => toThread(row)) ?? []);
   }
 
+  /**
+   * Where each thread works, without the rest: what a removal looks at, thread by thread.
+   * Reading every thread whole held the server 40 ms with 2 000 of them.
+   */
+  listThreadPlaces(): ThreadPlace[] {
+    const rows = this.sql(
+      `SELECT id, project_id, title, workspace, created_at,
+              CASE WHEN json_valid(extra) THEN json_extract(extra, '$.worksIn') END AS works_in
+         FROM threads ORDER BY updated_at DESC`,
+    ).all() as unknown as {
+      id: string;
+      project_id: string;
+      title: string;
+      workspace: string | null;
+      created_at: number;
+      works_in: unknown;
+    }[];
+    return rows.flatMap(
+      (row) =>
+        this.readable(`le fil ${row.id}`, (): ThreadPlace => ({
+          id: row.id,
+          projectId: row.project_id,
+          title: row.title,
+          ...(row.workspace ? { workspace: recordOf<Workspace>(row.workspace) } : {}),
+          ...(typeof row.works_in === "string" ? { worksIn: row.works_in } : {}),
+          createdAt: row.created_at,
+        })) ?? [],
+    );
+  }
+
   getThread(id: string): Thread | undefined {
     const row = this.sql(`SELECT * FROM threads WHERE id = ?`).get(id) as ThreadRow | undefined;
     return row && this.readable(`le fil ${row.id}`, () => toThread(row));
@@ -992,6 +1050,17 @@ export class Store {
     });
   }
 
+  /** The thread's last message from the user and what came after it; all of it without one. */
+  lastTurnItems(threadId: string): Item[] {
+    const { seq } = this.sql(
+      `SELECT MAX(seq) AS seq FROM items WHERE thread_id = ? AND json_extract(data, '$.kind') = 'user'`,
+    ).get(threadId) as { seq: number | null };
+    const rows = this.sql(
+      `SELECT data FROM items WHERE thread_id = ? AND seq >= ? ORDER BY seq`,
+    ).all(threadId, seq ?? 0) as { data: string }[];
+    return rows.flatMap((r) => this.readItem(r.data) ?? []);
+  }
+
   listItems(threadId: string): Item[] {
     const rows = this.sql(`SELECT data FROM items WHERE thread_id = ? ORDER BY seq`).all(
       threadId,
@@ -1009,6 +1078,7 @@ export class Store {
     threadId: string,
     before: number = Number.MAX_SAFE_INTEGER,
     reach?: string,
+    size = PAGE_ITEMS,
   ): { items: Item[]; first: number; earlier: number } {
     const seqOf = (sql: string, ...params: (string | number)[]) =>
       (this.sql(sql).get(...params) as { seq: number | null } | undefined)?.seq ?? undefined;
@@ -1018,7 +1088,7 @@ export class Store {
         `SELECT seq FROM items WHERE thread_id = ? AND seq < ? ORDER BY seq DESC LIMIT 1 OFFSET ?`,
         threadId,
         before,
-        PAGE_ITEMS - 1,
+        size - 1,
       ) ?? 0;
     if (reach !== undefined) {
       const reached = seqOf(
@@ -1090,7 +1160,9 @@ export class Store {
    */
   private indexSearchIfWritable(): void {
     try {
-      this.indexSearch();
+      // The latest first, for a while only: the first time after an update, all of them
+      // took 23 s. The rest is done in the background.
+      this.indexSearch(SEARCH_INDEX_MS);
     } catch (error) {
       if (!storageTrouble(error)) throw error;
     }
@@ -1106,7 +1178,7 @@ export class Store {
       const stale = this.sql(
         `SELECT d.n, i.data FROM search_docs d
            JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
-           WHERE d.stale = 1 ORDER BY d.n LIMIT ?`,
+           WHERE d.stale = 1 ORDER BY d.n DESC LIMIT ?`,
       ).all(INDEX_BATCH) as { n: number; data: string }[];
       if (!stale.length) return false;
       this.transaction(() => {
@@ -1130,33 +1202,38 @@ export class Store {
    * push visible hits out of the result set.
    */
   searchItems(query: string, limit = 30, hidden: string[] = []): SearchHit[] {
+    const folded = fold(query);
+    // Shorter than 3 chars, the index names nothing and every message would be read.
+    const match = trigramMatch(folded);
+    if (!match) return [];
     // What was written since the index was last filled is found too.
     this.indexSearchIfWritable();
-    // The folded text is looked for as it is, `*`, `?` and `[` included. From three letters
-    // the index names the few messages to look in; shorter, the folded texts are read, the
-    // latest first, until enough are found. No message is opened either way but those shown.
-    const pattern = `*${fold(query).replace(/[*?[]/g, (c) => `[${c}]`)}*`;
+    // Every character is taken literally, `*`, `?` and `[` included: the trigram index
+    // narrows candidates in descending order, and `instr` verifies the exact substring.
     const rows = (
       hidden.length
         ? this.sql(
             `SELECT i.thread_id, i.id, i.data
-               FROM search_fts f
-               JOIN search_docs d ON d.n = f.rowid
+               FROM search_fts
+               JOIN search_docs d ON d.n = search_fts.rowid
                JOIN threads t ON t.id = d.thread_id
                JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
-              WHERE f.text GLOB ?
+              WHERE search_fts MATCH ?
+                AND instr(search_fts.text, ?) > 0
                 AND t.project_id NOT IN (${hidden.map(() => "?").join(", ")})
-              ORDER BY f.rowid DESC
+              ORDER BY search_fts.rowid DESC
               LIMIT ?`,
-          ).all(pattern, ...hidden, limit)
+          ).all(match, folded, ...hidden, limit)
         : this.sql(
             `SELECT i.thread_id, i.id, i.data FROM (
-               SELECT rowid AS n FROM search_fts WHERE text GLOB ? ORDER BY rowid DESC LIMIT ?
+               SELECT rowid AS n FROM search_fts
+                WHERE search_fts MATCH ? AND instr(text, ?) > 0
+                ORDER BY rowid DESC LIMIT ?
              ) hit
              JOIN search_docs d ON d.n = hit.n
              JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
              ORDER BY hit.n DESC`,
-          ).all(pattern, limit)
+          ).all(match, folded, limit)
     ) as { thread_id: string; id: string; data: string }[];
     return rows.flatMap((row): SearchHit[] => {
       const item = this.readItem(row.data);
@@ -1187,16 +1264,18 @@ export class Store {
   ): SearchHit[] {
     const terms = [...new Set(fold(query).trim().split(/\s+/).filter(Boolean))].slice(0, 6);
     if (!terms.length) return [];
-    this.indexSearchIfWritable();
     // Drive the trigram index with the longest term (most selective), then require every other term.
-    const ordered = [...terms].sort((a, b) => b.length - a.length);
+    const ordered = [...terms].sort((a, b) => [...b].length - [...a].length);
     const primary = ordered[0]!;
+    const match = trigramMatch(primary);
+    if (!match) return [];
     const rest = ordered.slice(1);
-    const pattern = `*${primary.replace(/[*?[]/g, (c) => `[${c}]`)}*`;
-    const extraClauses = rest.map(() => `AND instr(f.text, ?) > 0`).join("\n            ");
+    this.indexSearchIfWritable();
+    const extraClauses = rest.map(() => `AND instr(search_fts.text, ?) > 0`).join("\n            ");
     const excludeClause = excludeThreadId ? `AND t.id != ?` : "";
     const params: (string | number)[] = [
-      pattern,
+      match,
+      primary,
       ...rest,
       projectId,
       ...(excludeThreadId ? [excludeThreadId] : []),
@@ -1208,13 +1287,14 @@ export class Store {
     const rows = this.sql(
       `SELECT i.thread_id, i.id, i.data
          FROM (
-           SELECT d.thread_id AS thread_id, d.item_id AS item_id, f.rowid AS n,
-                  ROW_NUMBER() OVER (PARTITION BY d.thread_id ORDER BY f.rowid DESC) AS nth,
-                  MAX(f.rowid) OVER (PARTITION BY d.thread_id) AS latest
-             FROM search_fts f
-             JOIN search_docs d ON d.n = f.rowid
+           SELECT d.thread_id AS thread_id, d.item_id AS item_id, search_fts.rowid AS n,
+                  ROW_NUMBER() OVER (PARTITION BY d.thread_id ORDER BY search_fts.rowid DESC) AS nth,
+                  MAX(search_fts.rowid) OVER (PARTITION BY d.thread_id) AS latest
+             FROM search_fts
+             JOIN search_docs d ON d.n = search_fts.rowid
              JOIN threads t ON t.id = d.thread_id
-            WHERE f.text GLOB ?
+            WHERE search_fts MATCH ?
+              AND instr(search_fts.text, ?) > 0
             ${extraClauses}
               AND t.project_id = ?
               ${excludeClause}
@@ -1354,6 +1434,16 @@ export class Store {
     this.sql(`DELETE FROM threads WHERE id = ?`).run(id);
   }
 
+  /** Deletes up to `limit` of the thread's messages, the latest first; true while some remain. */
+  deleteSomeItems(threadId: string, limit: number): boolean {
+    const { changes } = this.sql(
+      `DELETE FROM items WHERE thread_id = ? AND seq IN (
+         SELECT seq FROM items WHERE thread_id = ? ORDER BY seq DESC LIMIT ?
+       )`,
+    ).run(threadId, threadId, limit);
+    return Number(changes) >= limit;
+  }
+
   /** Deletes the project, its threads, their timelines, and its shared memory. */
   deleteProject(id: string): void {
     this.deleteSetting(`${PROJECT_MEMORY_PREFIX}${id}`);
@@ -1375,6 +1465,7 @@ export class Store {
   }
 
   close(): void {
+    this.checkpoints?.close();
     this.db.close();
   }
 }
