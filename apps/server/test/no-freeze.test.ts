@@ -49,17 +49,18 @@ async function longestStall<T>(work: () => Promise<T>): Promise<{ result: T; sta
 /**
  * The stall of `work` on a fresh `setup`, tried again up to twice when over the limit. A
  * server that holds itself does so on every try; one only kept waiting by the other test
- * files running on the same machine (216 ms once on a CI runner) does not.
+ * files running on the same machine (216 ms once on a CI runner, 324 ms once for a review
+ * on Windows, where both stay under 20 ms) does not.
  */
-async function leastStall<S>(
+async function leastStall<S, R>(
   setup: () => S | Promise<S>,
-  work: (state: S) => Promise<unknown>,
-): Promise<S & { stall: number }> {
-  let best: (S & { stall: number }) | undefined;
+  work: (state: S) => Promise<R>,
+): Promise<S & { stall: number; result: R }> {
+  let best: (S & { stall: number; result: R }) | undefined;
   for (let tries = 0; tries < 3 && !(best && best.stall < STALL_MS); tries++) {
     const state = await setup();
-    const { stall } = await longestStall(() => work(state));
-    if (!best || stall < best.stall) best = { ...state, stall };
+    const { result, stall } = await longestStall(() => work(state));
+    if (!best || stall < best.stall) best = { ...state, stall, result };
   }
   return best!;
 }
@@ -207,7 +208,9 @@ const git = (cwd: string, ...args: string[]) =>
 /** A worktree whose tracked `data.csv` became `mb` megabytes of 80-character lines. */
 function worktreeWithBigFile(mb: number) {
   const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-bigfile-"));
-  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  cleanups.push(() =>
+    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+  );
   const repo = path.join(root, "repo");
   mkdirSync(repo);
   git(repo, "init", "-q", "-b", "main");
@@ -228,8 +231,10 @@ function worktreeWithBigFile(mb: number) {
 
 describe("reviewing a very big text file (N6)", { timeout: 120_000 }, () => {
   it("shows the start of a 50 MB file, marked cut, without holding the server", async () => {
-    const { dir, base } = worktreeWithBigFile(50);
-    const { result, stall } = await longestStall(() => reviewChanges(dir, base));
+    const { result, stall } = await leastStall(
+      () => worktreeWithBigFile(50),
+      ({ dir, base }) => reviewChanges(dir, base),
+    );
     expect(stall).toBeLessThan(STALL_MS);
     const [big, small] = result.files;
     expect(big).toMatchObject({ path: "data.csv", truncated: true, added: 655_350, removed: 1 });
