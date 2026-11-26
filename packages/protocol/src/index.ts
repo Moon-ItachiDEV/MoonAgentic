@@ -1130,6 +1130,24 @@ export interface HermesStatus {
   /** The lines to put in Hermes's `config.yaml`, under `mcp_servers:`; no secret in them. */
   config: string;
   log: HermesAction[];
+  /** MoonAgentic writing its `mcp_servers` entry in Hermes's setup and restarting its gateway. */
+  setup?: HermesSetupState;
+  /** MoonAgentic changing Hermes's default model, apart from the connection. */
+  modelSetup?: HermesSetupState;
+  /** Hermes's default model, as its `config.yaml` says; absent until read. */
+  model?: { provider?: string; model: string };
+  /** Why the model could not be read, when it could not. */
+  modelError?: string;
+  /** Hermes's Discord gateway as last looked at; started again by MoonAgentic when it stops. */
+  gateway?: { running: boolean; at: number; reason?: string };
+}
+
+export interface HermesSetupState {
+  what: "connect" | "model";
+  state: "running" | "done" | "failed";
+  /** What failed, in a sentence. */
+  error?: string;
+  at: number;
 }
 
 export type { PullRequestCheck, PullRequestInfo, PullRequestRemark } from "./pull-request.ts";
@@ -2332,6 +2350,16 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   /** Sends a test message to the Discord webhook. */
   z.object({ type: z.literal("hermes.test"), requestId: id }),
+  /** Looks at Hermes's gateway now, and starts it if it stopped. */
+  z.object({ type: z.literal("hermes.gateway"), requestId: id }),
+  /** Writes Hermes's `mcp_servers` entry again and restarts its gateway. */
+  z.object({ type: z.literal("hermes.install"), requestId: id }),
+  /** Sets Hermes's default model, a model as Hermes lists it (`provider:model`). */
+  z.object({
+    type: z.literal("hermes.setModel"),
+    requestId: id,
+    model: z.string().trim().min(1).max(300),
+  }),
   /** Looks for a newer version of MoonAgentic now. */
   z.object({ type: z.literal("app.check") }),
   /** Installs the version downloaded: once no thread is at work, or at once. */

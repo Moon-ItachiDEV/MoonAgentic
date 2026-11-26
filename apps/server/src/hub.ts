@@ -16,6 +16,7 @@ import {
 } from "./project-setup.ts";
 import { Push, type PushSend } from "./push.ts";
 import { Hermes, type WebhookSend } from "./hermes.ts";
+import { HermesCli, type HermesRunner, hermesRunner } from "./hermes-cli.ts";
 import { ThreadClock, type WidgetData, widgetData } from "./widget.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
@@ -243,6 +244,10 @@ export interface HubOptions {
   pushSend?: PushSend;
   /** How Discord webhook messages are sent; to Discord over the network when not given. */
   webhookSend?: WebhookSend;
+  /** How Hermes's own commands run; the `hermes` installed on this computer when not given. */
+  hermesRunner?: HermesRunner;
+  /** How often Hermes's gateway is looked at and started again; 0 for only when asked. */
+  hermesGatewayMs?: number;
   homeDir?: string;
   idleMs?: number;
   maxLiveAgents?: number;
@@ -633,9 +638,18 @@ export class Hub {
         quiet: (id) => this.locks.isLocked(id),
         broadcast: (m) => this.broadcast(m),
         url: () => this.coordinators.url,
+        cli: () => {
+          if (options.hermesRunner) return new HermesCli(options.hermesRunner);
+          try {
+            return new HermesCli(hermesRunner(this.agents.launch("hermes").command));
+          } catch {
+            return undefined;
+          }
+        },
       },
       options.dataDir,
       options.webhookSend,
+      options.hermesGatewayMs,
     );
     this.hermes.know(store.listThreads());
     this.threadClock.know(store.listThreads());
@@ -1643,6 +1657,21 @@ export class Hub {
         return;
       case "hermes.get":
         client.send({ type: "hermes", hermes: this.hermes.status() });
+        // Its model and its gateway are read from Hermes itself, and sent once known.
+        void this.hermes.readModel();
+        void this.hermes.watchGateway(true);
+        return;
+      case "hermes.gateway":
+        await this.hermes.watchGateway();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "hermes.install":
+        this.hermes.install();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "hermes.setModel":
+        this.hermes.setModel(message.model);
+        client.send({ type: "done", requestId: message.requestId });
         return;
       case "hermes.connect":
         this.hermes.connect();
@@ -4645,6 +4674,7 @@ export class Hub {
     const upTo = (work: Promise<unknown>) => within(work, deadline - Date.now());
     clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
+    this.hermes.close();
     clearInterval(this.sweepTimer);
     clearInterval(this.quotaTimer);
     clearInterval(this.storageTimer);
@@ -4673,6 +4703,8 @@ export class Hub {
     }
     // A review starting reads the changes first; it must not reach the store once closed.
     await upTo(this.teams.settled());
+    // Hermes's setup half done would leave its gateway stopped: its end is waited for.
+    await upTo(this.hermes.settled());
     await upTo(this.recovered);
     await upTo(this.catalog.close());
     // Those just started too, which find no agent to start.
