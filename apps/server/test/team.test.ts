@@ -403,3 +403,138 @@ describe("teamStatus", () => {
     expect(status).toContain("depuis moins d'une minute");
   });
 });
+
+describe("Teams with a second review and a judge", () => {
+  function setup(roles: { reviewer2?: boolean; judge?: boolean }) {
+    const threads = new Map<string, Thread>();
+    const replies = new Map<string, string>();
+    const sent: { threadId: string; text: string }[] = [];
+    let seq = 0;
+    const host = {
+      thread: (id: string) => threads.get(id),
+      threads: () => [...threads.values()],
+      createThread: (input: Parameters<TeamHost["createThread"]>[0]) => {
+        const id = `t${++seq}`;
+        threads.set(id, {
+          id,
+          projectId: input.projectId,
+          title: input.title,
+          agentId: input.agentId,
+          status: "running",
+          permissionMode: input.permissionMode,
+          ...(input.parentId ? { parentId: input.parentId } : {}),
+          role: input.role,
+          ...(input.team ? { team: input.team } : {}),
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        sent.push({ threadId: id, text: input.text });
+        return id;
+      },
+      send: (threadId: string, text: string) => void sent.push({ threadId, text }),
+      cancel: async () => undefined,
+      setTeam: (threadId: string, team: Team) => {
+        const existing = threads.get(threadId);
+        if (existing) threads.set(threadId, { ...existing, team });
+      },
+      lastReply: (threadId: string) => replies.get(threadId) ?? "",
+      changes: async () => ({ files: [] }),
+      mergeInto: async () => [],
+      ship: async () => ({ prOpened: false }),
+      unfinishedMerge: async () => undefined,
+      contains: async () => false,
+    } satisfies TeamHost;
+    const teams = new Teams(host);
+    const leadId = teams.start({
+      projectId: "p1",
+      task: "Export CSV",
+      lead: { agentId: "lead" },
+      coder: { agentId: "coder" },
+      reviewer: { agentId: "neon" },
+      ...(roles.reviewer2 ? { reviewer2: { agentId: "astra" } } : {}),
+      ...(roles.judge ? { judge: { agentId: "fable" } } : {}),
+      coders: 1,
+      permissionMode: "full",
+    });
+    const team = () => threads.get(leadId)!.team!;
+    const task = () => team().tasks[0]!;
+    replies.set(leadId, '```json\n{"tasks": [{"title": "Export", "brief": "Fais-le"}]}\n```');
+    teams.turnEnded(leadId, false);
+    const byRole = (role: string) => [...threads.values()].find((t) => t.role === role)!;
+    return { threads, replies, sent, teams, team, task, byRole };
+  }
+
+  it("asks both reviewers at once, and goes on once both say it is good", async () => {
+    const { replies, teams, task, byRole } = setup({ reviewer2: true, judge: true });
+    teams.turnEnded(task().threadId!, false);
+    await teams.settled();
+    expect(task().status).toBe("reviewing");
+    const [one, two] = [byRole("reviewer"), byRole("reviewer2")];
+    expect(task().reviewThreadId).toBe(one.id);
+    expect(task().review2ThreadId).toBe(two.id);
+    expect(two.agentId).toBe("astra");
+
+    replies.set(one.id, "Bien.\n\nVERDICT : OK");
+    teams.turnEnded(one.id, false);
+    expect(task()).toMatchObject({ status: "reviewing", verdicts: { reviewer: "ok" } });
+    replies.set(two.id, "Bien aussi.\n\nVERDICT : OK");
+    teams.turnEnded(two.id, false);
+    // Nothing to weigh: the judge is not asked.
+    expect(task().status).toBe("done");
+    expect(task().verdicts).toBeUndefined();
+    expect(task().judgeThreadId).toBeUndefined();
+  });
+
+  it("has the judge weigh a remark: dropped, the piece is done; kept, it goes back to its coder", async () => {
+    const { replies, sent, teams, task, byRole } = setup({ reviewer2: true, judge: true });
+    teams.turnEnded(task().threadId!, false);
+    await teams.settled();
+    const [one, two] = [byRole("reviewer"), byRole("reviewer2")];
+    replies.set(one.id, "Il manque un test.\n\nVERDICT : À CORRIGER");
+    teams.turnEnded(one.id, false);
+    replies.set(two.id, "Rien à redire.\n\nVERDICT : OK");
+    teams.turnEnded(two.id, false);
+    await teams.settled();
+    expect(task().status).toBe("judging");
+    const judge = byRole("judge");
+    expect(judge.agentId).toBe("fable");
+    const asked = sent.find((s) => s.threadId === judge.id)!.text;
+    expect(asked).toContain("Il manque un test.");
+    expect(asked).toContain("Rien à redire.");
+
+    replies.set(judge.id, "Le test existe déjà.\n\nVERDICT : À CORRIGER\n\nAjoute le cas vide.");
+    teams.turnEnded(judge.id, false);
+    expect(task()).toMatchObject({ status: "running", tries: 1 });
+    expect(sent.at(-1)!.text).toContain("L'arbitre demande des corrections");
+
+    // Back to review: the same reviewers and judge, from a fresh round.
+    teams.turnEnded(task().threadId!, false);
+    await teams.settled();
+    expect(task()).toMatchObject({ status: "reviewing" });
+    expect(task().verdicts).toBeUndefined();
+    replies.set(one.id, "Corrigé.\n\nVERDICT : À CORRIGER");
+    teams.turnEnded(one.id, false);
+    replies.set(two.id, "VERDICT : OK");
+    teams.turnEnded(two.id, false);
+    await teams.settled();
+    expect(task().status).toBe("judging");
+    replies.set(judge.id, "Ça tient.\n\nVERDICT : OK");
+    teams.turnEnded(judge.id, false);
+    expect(task().status).toBe("done");
+  });
+
+  it("without a judge, sends both reviewers' remarks back to the coder", async () => {
+    const { replies, sent, teams, task, byRole } = setup({ reviewer2: true });
+    teams.turnEnded(task().threadId!, false);
+    await teams.settled();
+    const [one, two] = [byRole("reviewer"), byRole("reviewer2")];
+    replies.set(two.id, "Nom mal choisi.\n\nVERDICT : À CORRIGER");
+    teams.turnEnded(two.id, false);
+    replies.set(one.id, "Il manque un test.\n\nVERDICT : À CORRIGER");
+    teams.turnEnded(one.id, false);
+    expect(task().status).toBe("running");
+    const fix = sent.at(-1)!.text;
+    expect(fix).toContain("Le premier relecteur demande des corrections :\n\nIl manque un test.");
+    expect(fix).toContain("Le second relecteur demande des corrections :\n\nNom mal choisi.");
+  });
+});

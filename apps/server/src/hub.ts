@@ -1711,6 +1711,8 @@ export class Hub {
             lead: message.lead,
             coder: message.coder,
             ...(message.reviewer ? { reviewer: message.reviewer } : {}),
+            ...(message.reviewer2 ? { reviewer2: message.reviewer2 } : {}),
+            ...(message.judge ? { judge: message.judge } : {}),
             ...(message.tester ? { tester: message.tester } : {}),
             ...(message.merger ? { merger: message.merger } : {}),
             coders: message.coders,
@@ -2185,6 +2187,8 @@ export class Hub {
     lead: { agentId: string; model?: string | undefined };
     coder: { agentId: string; model?: string | undefined };
     reviewer?: { agentId: string; model?: string | undefined } | undefined;
+    reviewer2?: { agentId: string; model?: string | undefined } | undefined;
+    judge?: { agentId: string; model?: string | undefined } | undefined;
     tester?: { agentId: string; model?: string | undefined } | undefined;
     merger?: { agentId: string; model?: string | undefined } | undefined;
     coders: number;
@@ -2211,6 +2215,9 @@ export class Hub {
       lead: member(input.lead),
       coder: member(input.coder),
       reviewer: input.reviewer && member(input.reviewer),
+      // A second review and a judge only come with a first review.
+      reviewer2: input.reviewer && input.reviewer2 && member(input.reviewer2),
+      judge: input.reviewer && input.judge && member(input.judge),
       tester: input.tester && member(input.tester),
       merger: input.merger && member(input.merger),
     });
@@ -5195,7 +5202,7 @@ export class Hub {
     const allowed =
       thread.kind === "coordinator"
         ? COORDINATOR_ALLOWED
-        : thread.role === "reviewer"
+        : thread.role === "reviewer" || thread.role === "reviewer2" || thread.role === "judge"
           ? REVIEWER_ALLOWED
           : undefined;
     const readOnlyDenied = !!allowed && !allowed.has(request.toolCall.kind ?? "");

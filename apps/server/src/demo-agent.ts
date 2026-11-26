@@ -828,13 +828,17 @@ const app = acp
       return { stopReason: "end_turn" as const };
     };
     if (ask.startsWith("Tu relis le travail d'un codeur")) {
-      if (ask.includes("toujours refuser")) {
+      if (ask.includes("toujours refuser") || ask.includes("à arbitrer")) {
         return answer("Il manque une vérification de answer.\n\nVERDICT : À CORRIGER");
       }
       if (ask.includes("sans verdict")) return answer("Ça me paraît correct.");
       return answer("Le travail est fait, sans oubli.\n\nVERDICT : OK");
     }
     if (ask.startsWith("Je n'ai pas trouvé ton verdict")) return answer("**VERDICT : OK**");
+    // A team's judge weighs the reviews: the remark does not hold.
+    if (ask.startsWith("Tu arbitres les relectures")) {
+      return answer("La vérification demandée existe déjà : rien à corriger.\n\nVERDICT : OK");
+    }
     // A reviewer of « /revue »: findings on the first file changed, a little different from
     // one model to the other, so they are put together as common and single points.
     if (ask.startsWith("Tu relis la pull request #")) {

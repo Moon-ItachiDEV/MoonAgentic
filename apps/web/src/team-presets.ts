@@ -20,12 +20,20 @@ export const ROLE_LABEL: Record<TeamRole, string> = {
   lead: "Chef",
   coder: "Codeurs",
   reviewer: "Relecteur",
+  reviewer2: "Second relecteur",
+  judge: "Arbitre",
   tester: "Testeur",
   merger: "Fusionneur",
 };
 
 /** The roles a team can do without. */
-export const OPTIONAL_ROLES = new Set<TeamRole>(["reviewer", "tester", "merger"]);
+export const OPTIONAL_ROLES = new Set<TeamRole>([
+  "reviewer",
+  "reviewer2",
+  "judge",
+  "tester",
+  "merger",
+]);
 
 /**
  * The teams with this one's roles as chosen: the user's list, or the suggested one taken as

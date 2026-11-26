@@ -364,7 +364,8 @@ export type ThreadStatus = "idle" | "running" | "waiting" | "error";
 
 export type PermissionMode = "supervised" | "full";
 
-export type TeamRole = "lead" | "coder" | "reviewer" | "tester" | "merger";
+/** `reviewer2`: a second review of each piece, beside the first; `judge`: weighs the reviews. */
+export type TeamRole = "lead" | "coder" | "reviewer" | "reviewer2" | "judge" | "tester" | "merger";
 
 /** What one lane of a team's timeline is doing: the lead's, a piece's, or the merge's. */
 export type TeamLanePhase =
@@ -405,6 +406,7 @@ export interface TeamTask {
     | "running"
     | "reviewing"
     | "testing"
+    | "judging"
     | "lead"
     | "blocked"
     | "done"
@@ -413,7 +415,14 @@ export interface TeamTask {
   /** The coder's own thread, once it has started. */
   threadId?: string;
   reviewThreadId?: string;
+  /** The second reviewer's and the judge's threads, for a team that has them. */
+  review2ThreadId?: string;
+  judgeThreadId?: string;
   testThreadId?: string;
+  /** The verdicts of this round of reviews, kept until every reviewer has given its own. */
+  verdicts?: { reviewer?: "ok" | "fix"; reviewer2?: "ok" | "fix" };
+  /** True once the second reviewer was asked again for the verdict it left out. */
+  reasked2?: boolean;
   /** Corrections sent back to the coder so far. */
   tries?: number;
   /** True once the lead has rewritten the brief, which it does once. */
@@ -447,6 +456,10 @@ export interface Team {
   coder: TeamMember;
   /** Reads each piece's changes before it counts as done. */
   reviewer?: TeamMember;
+  /** Reads them too, at the same time, for a second view. */
+  reviewer2?: TeamMember;
+  /** Weighs the reviews and says what is really to be corrected. */
+  judge?: TeamMember;
   /** Runs the tests, and writes the missing ones, on each piece's branch. */
   tester?: TeamMember;
   /** Settles merge conflicts, then checks the pieces work together. */
@@ -1126,6 +1139,8 @@ export interface TeamSetup {
   lead: TeamMember;
   coder: TeamMember;
   reviewer?: TeamMember;
+  reviewer2?: TeamMember;
+  judge?: TeamMember;
   tester?: TeamMember;
   merger?: TeamMember;
   coders: number;
@@ -1294,6 +1309,8 @@ export interface TeamPreset {
     lead?: TeamMember;
     coder?: TeamMember;
     reviewer?: TeamMember | null;
+    reviewer2?: TeamMember | null;
+    judge?: TeamMember | null;
     tester?: TeamMember | null;
     merger?: TeamMember | null;
   };
@@ -1866,6 +1883,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
     lead: z.object({ agentId: id, model: id.optional() }),
     coder: z.object({ agentId: id, model: id.optional() }),
     reviewer: z.object({ agentId: id, model: id.optional() }).optional(),
+    reviewer2: z.object({ agentId: id, model: id.optional() }).optional(),
+    judge: z.object({ agentId: id, model: id.optional() }).optional(),
     tester: z.object({ agentId: id, model: id.optional() }).optional(),
     merger: z.object({ agentId: id, model: id.optional() }).optional(),
     coders: z.number().int().min(1).max(4),
@@ -2040,6 +2059,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
               lead: teamMember.optional(),
               coder: teamMember.optional(),
               reviewer: teamMember.nullable().optional(),
+              reviewer2: teamMember.nullable().optional(),
+              judge: teamMember.nullable().optional(),
               tester: teamMember.nullable().optional(),
               merger: teamMember.nullable().optional(),
             })

@@ -36,7 +36,7 @@ export function mcpServersFor(
   servers: McpServerRecord[],
   thread: Pick<Thread, "projectId" | "role">,
 ): McpServerRecord[] {
-  const checks = thread.role === "reviewer" || thread.role === "tester" || thread.role === "merger";
+  const checks = !!thread.role && thread.role !== "lead" && thread.role !== "coder";
   return servers.filter(
     (s) => (!s.projectIds || s.projectIds.includes(thread.projectId)) && (!checks || !!s.allRoles),
   );

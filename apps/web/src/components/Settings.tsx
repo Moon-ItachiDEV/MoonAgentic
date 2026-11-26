@@ -755,6 +755,12 @@ function SectionBody(props: PageProps & GithubProps & { section: SettingsSection
             ["Chef", named(team.lead)],
             [team.coders > 1 ? `${team.coders} codeurs` : "Codeur", named(team.coder)],
             ...(team.reviewer ? [["Relecture", named(team.reviewer)] as [string, string]] : []),
+            ...(team.reviewer && team.reviewer2
+              ? [["Relecture 2", named(team.reviewer2)] as [string, string]]
+              : []),
+            ...(team.reviewer && team.judge
+              ? [["Arbitre", named(team.judge)] as [string, string]]
+              : []),
             ...(team.tester ? [["Tests", named(team.tester)] as [string, string]] : []),
             ...(team.merger ? [["Fusion", named(team.merger)] as [string, string]] : []),
           ]

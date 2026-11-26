@@ -593,6 +593,21 @@ describe("composer", () => {
       .first()
       .waitFor();
 
+    // Two reviews at once, and a judge who weighs their remarks: one that does not hold is
+    // dropped, and the piece is done without going back to its coder.
+    await composer(page).fill("/equipe Corrige answer, à arbitrer");
+    await composer(page).press("Enter");
+    await dialog.waitFor();
+    for (const role of ["Chef", "Codeurs", "Relecture", "Relecture 2", "Arbitre"])
+      await give(role, "demo");
+    for (const role of ["Tests", "Fusion"]) await give(role, "none");
+    await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
+    await card.getByRole("button", { name: /^Arbitre, / }).waitFor();
+    await card.getByRole("button", { name: /^Relecture 2, / }).waitFor();
+    await card.getByText(/^Terminée · /).waitFor({ timeout: 60_000 });
+    await card.getByRole("button", { name: /^Arbitre, .* : Rien à corriger$/ }).waitFor();
+    await shot(page, "c12b-equipe-arbitre");
+
     // Live: supervised coders wait on the user, and their lines say so as it happens.
     await composer(page).fill("/equipe Corrige answer");
     await composer(page).press("Enter");

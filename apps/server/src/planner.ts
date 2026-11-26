@@ -16,6 +16,7 @@ export function pieceStatus(task: TeamTask, teamDone: boolean): PlanStatus {
     case "lead":
       return "doing";
     case "reviewing":
+    case "judging":
     case "testing":
       return "test";
     case "blocked":

@@ -74,6 +74,8 @@ export interface TeamInput {
   lead: TeamMember;
   coder: TeamMember;
   reviewer?: TeamMember | undefined;
+  reviewer2?: TeamMember | undefined;
+  judge?: TeamMember | undefined;
   tester?: TeamMember | undefined;
   merger?: TeamMember | undefined;
   coders: number;
@@ -127,6 +129,13 @@ ${diff || "(aucun changement)"}
 \`\`\`\`
 
 Tu es dans le dossier du codeur : ouvre les fichiers si besoin, mais ne modifie rien. Vérifie que la sous-tâche est faite, sans bug ni oubli. ${VERDICT_RULE}`;
+
+const judgePrompt = (team: Team, task: TeamTask, reviews: string[]) =>
+  `Tu arbitres les relectures du travail d'un codeur de l'équipe. ${pieceText(team, task)}
+
+${reviews.map((r, i) => `Relecture ${i + 1} :\n\n${r || "(vide)"}`).join("\n\n---\n\n")}
+
+Tu es dans le dossier du codeur : ouvre les fichiers si besoin, mais ne modifie rien. Vérifie chaque remarque dans le code, écarte celles qui sont fausses ou sans importance, et garde seulement ce qui est vraiment à corriger. ${VERDICT_RULE}`;
 
 const testPrompt = (team: Team, task: TeamTask) =>
   `Tu testes le travail d'un codeur de l'équipe. ${pieceText(team, task)}
@@ -306,6 +315,7 @@ const mergeable = (team: Team) =>
 const working = (t: TeamTask) =>
   t.status === "running" ||
   t.status === "reviewing" ||
+  t.status === "judging" ||
   t.status === "testing" ||
   t.status === "lead";
 const open = (t: TeamTask) => t.status === "waiting" || working(t);
@@ -338,14 +348,17 @@ const firstLine = (text: string) => {
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** The thread a piece's agent works in at this point, if any. */
-const runningThread = (t: TeamTask) =>
-  t.status === "running"
-    ? t.threadId
+const runningThread = (t: TeamTask): string[] =>
+  (t.status === "running"
+    ? [t.threadId]
     : t.status === "reviewing"
-      ? t.reviewThreadId
-      : t.status === "testing"
-        ? t.testThreadId
-        : undefined;
+      ? [t.reviewThreadId, t.review2ThreadId]
+      : t.status === "judging"
+        ? [t.judgeThreadId]
+        : t.status === "testing"
+          ? [t.testThreadId]
+          : []
+  ).filter((id): id is string => !!id);
 
 /** The team with every piece at work cut short, what was done kept: a stop or a restart. */
 const cutShort = (team: Team): Team => {
@@ -369,6 +382,38 @@ const cutShort = (team: Team): Team => {
   };
 };
 
+/** The reviewers of each piece: the first, and a second when the team has one. */
+const reviewRoles = (team: Team): ("reviewer" | "reviewer2")[] =>
+  team.reviewer ? (team.reviewer2 ? ["reviewer", "reviewer2"] : ["reviewer"]) : [];
+const REVIEWER_NAME = { reviewer: "Le premier relecteur", reviewer2: "Le second relecteur" };
+
+type CheckRole = "reviewer" | "reviewer2" | "judge" | "tester";
+/** How each check of a piece is run: the piece's status meanwhile, and its thread. */
+const CHECKS: Record<
+  CheckRole,
+  {
+    status: TeamTask["status"];
+    field: "reviewThreadId" | "review2ThreadId" | "judgeThreadId" | "testThreadId";
+    title: string;
+    what: string;
+  }
+> = {
+  reviewer: {
+    status: "reviewing",
+    field: "reviewThreadId",
+    title: "Relecture",
+    what: "La relecture",
+  },
+  reviewer2: {
+    status: "reviewing",
+    field: "review2ThreadId",
+    title: "Relecture 2",
+    what: "La seconde relecture",
+  },
+  judge: { status: "judging", field: "judgeThreadId", title: "Arbitrage", what: "L'arbitrage" },
+  tester: { status: "testing", field: "testThreadId", title: "Tests", what: "Le test" },
+};
+
 /** Events kept per team, the oldest dropped first. */
 const TIMELINE_LIMIT = 600;
 const PHASE_TEXT: Record<Team["phase"], string> = {
@@ -384,6 +429,7 @@ const TASK_TEXT: Record<TeamTask["status"], string> = {
   waiting: "en attente d'un codeur libre",
   running: "le codeur travaille",
   reviewing: "en relecture",
+  judging: "l'arbitre pèse les relectures",
   testing: "en tests",
   lead: "le chef réécrit sa consigne",
   blocked: "bloquée, attend l'utilisateur",
@@ -446,7 +492,7 @@ function lanes(team: Team): Map<number, TeamLanePhase> {
     LEAD_LANE,
     team.phase === "planning"
       ? "planning"
-      : team.leadTask !== undefined
+      : team.leadTask !== undefined || team.leadMission !== undefined
         ? "lead"
         : team.tasks.length === 0 && (team.phase === "failed" || team.phase === "stopped")
           ? team.phase
@@ -597,6 +643,8 @@ export class Teams {
       task: input.task,
       coder: input.coder,
       ...(input.reviewer ? { reviewer: input.reviewer } : {}),
+      ...(input.reviewer && input.reviewer2 ? { reviewer2: input.reviewer2 } : {}),
+      ...(input.reviewer && input.judge ? { judge: input.judge } : {}),
       ...(input.tester ? { tester: input.tester } : {}),
       ...(input.merger ? { merger: input.merger } : {}),
       coders: input.coders,
@@ -689,12 +737,19 @@ export class Teams {
       throw new Error("Cette sous-tâche est déjà en cours ou terminée.");
     }
     if (team.phase === "planning") throw new Error("Le chef prépare encore le plan.");
-    const { note: _note, reasked: _reasked, ...rest } = task;
+    const { note: _note, reasked: _reasked, reasked2: _r2, verdicts: _v, ...rest } = task;
     let fresh: TeamTask = { ...rest, tries: 0, leadHelped: false, status: "waiting" };
     if (task.threadId && !this.host.thread(task.threadId)) {
       // Its coder's thread was deleted: the piece starts over with a new coder, and new
       // reviewer and tester, whose folder would have been the old coder's.
-      const { threadId: _c, reviewThreadId: _r, testThreadId: _t, ...gone } = fresh;
+      const {
+        threadId: _c,
+        reviewThreadId: _r,
+        review2ThreadId: _r2b,
+        judgeThreadId: _j,
+        testThreadId: _t,
+        ...gone
+      } = fresh;
       fresh = gone;
     }
     if (fresh.threadId) {
@@ -728,6 +783,8 @@ export class Teams {
       (t) =>
         (role === "coder" && t.threadId === threadId && t.status === "running") ||
         (role === "reviewer" && t.reviewThreadId === threadId && t.status === "reviewing") ||
+        (role === "reviewer2" && t.review2ThreadId === threadId && t.status === "reviewing") ||
+        (role === "judge" && t.judgeThreadId === threadId && t.status === "judging") ||
         (role === "tester" && t.testThreadId === threadId && t.status === "testing"),
     );
     const task = team.tasks[index];
@@ -744,7 +801,16 @@ export class Teams {
           : this.next(lead.id, team, index, "coder"),
       );
     } else {
-      const who = role === "reviewer" ? "Le relecteur" : "Le testeur";
+      const who =
+        role === "reviewer"
+          ? team.reviewer2
+            ? "Le premier relecteur"
+            : "Le relecteur"
+          : role === "reviewer2"
+            ? "Le second relecteur"
+            : role === "judge"
+              ? "L'arbitre"
+              : "Le testeur";
       this.settle(lead, this.verdict(lead.id, team, index, thread, who, failure));
     }
   }
@@ -760,26 +826,53 @@ export class Teams {
   ): Team {
     const task = team.tasks[index]!;
     const put = (next: TeamTask) => withTask(team, index, next);
-    if (thread.status === "error")
-      return put({ ...task, status: "blocked", note: `${who} ${failure}` });
-    const reply = this.host.lastReply(thread.id);
-    const { reasked: _reasked, ...checked } = task;
-    switch (readVerdict(reply)) {
-      case "ok":
-        return this.next(leadId, put(checked), index, thread.role!);
-      case "fix":
-        return this.problem(put(checked), index, `${who} demande des corrections :\n\n${reply}`);
-      default:
-        if (task.reasked) {
-          return put({ ...task, status: "blocked", note: `${who} n'a pas donné de verdict.` });
-        }
-        try {
-          this.host.send(thread.id, VERDICT_AGAIN);
-          return put({ ...task, reasked: true });
-        } catch (error) {
-          return put({ ...task, status: "blocked", note: message(error) });
-        }
+    const role = thread.role!;
+    if (thread.status === "error") {
+      const { verdicts: _v, ...rest } = task;
+      return put({ ...rest, status: "blocked", note: `${who} ${failure}` });
     }
+    const reply = this.host.lastReply(thread.id);
+    const second = role === "reviewer2";
+    const { reasked: _reasked, reasked2: _reasked2, ...unasked } = task;
+    // Only its own question asked again is forgotten: the other reviewer may still owe one.
+    const checked: TeamTask = second
+      ? { ...unasked, ...(task.reasked ? { reasked: true } : {}) }
+      : { ...unasked, ...(task.reasked2 ? { reasked2: true } : {}) };
+    const verdict = readVerdict(reply);
+    if (!verdict) {
+      if (second ? task.reasked2 : task.reasked) {
+        const { verdicts: _v, ...rest } = task;
+        return put({ ...rest, status: "blocked", note: `${who} n'a pas donné de verdict.` });
+      }
+      try {
+        this.host.send(thread.id, VERDICT_AGAIN);
+        return put(second ? { ...task, reasked2: true } : { ...task, reasked: true });
+      } catch (error) {
+        return put({ ...task, status: "blocked", note: message(error) });
+      }
+    }
+    if (role !== "reviewer" && role !== "reviewer2") {
+      return verdict === "ok"
+        ? this.next(leadId, put(checked), index, role)
+        : this.problem(put(checked), index, `${who} demande des corrections :\n\n${reply}`);
+    }
+    // A review: once every reviewer has given its verdict, the judge weighs any remark.
+    const reviewers = reviewRoles(team);
+    const verdicts = { ...checked.verdicts, [role]: verdict };
+    if (reviewers.some((r) => !verdicts[r])) return put({ ...checked, verdicts });
+    const { verdicts: _done, ...reviewed } = checked;
+    const fixes = reviewers.filter((r) => verdicts[r] === "fix");
+    if (!fixes.length) return this.next(leadId, put(reviewed), index, "reviewer");
+    if (team.judge) {
+      this.check(leadId, index, "judge");
+      return put({ ...reviewed, status: "judging" });
+    }
+    const notes = fixes.map((r) => {
+      const id = r === "reviewer" ? task.reviewThreadId : task.review2ThreadId;
+      const name = r === role ? who : reviewers.length > 1 ? REVIEWER_NAME[r] : who;
+      return `${name} demande des corrections :\n\n${r === role ? reply : id ? this.host.lastReply(id) : ""}`;
+    });
+    return this.problem(put(reviewed), index, notes.join("\n\n"));
   }
 
   private planned(lead: Thread, team: Team, cancelled: boolean): void {
@@ -905,8 +998,9 @@ export class Teams {
   private next(leadId: string, team: Team, index: number, after: TeamRole): Team {
     const task = team.tasks[index]!;
     if (after === "coder" && team.reviewer) {
-      this.check(leadId, index, "reviewer");
-      return withTask(team, index, { ...task, status: "reviewing" });
+      for (const role of reviewRoles(team)) this.check(leadId, index, role);
+      const { verdicts: _v, ...fresh } = task;
+      return withTask(team, index, { ...fresh, status: "reviewing" });
     }
     if (after !== "tester" && team.tester) {
       this.check(leadId, index, "tester");
@@ -937,13 +1031,13 @@ export class Teams {
    * Has the reviewer or the tester look at the piece, in its coder's folder. Their thread
    * is made on the first check and reused for the next ones, so they remember the last.
    */
-  private check(leadId: string, index: number, role: "reviewer" | "tester"): void {
-    const status = role === "reviewer" ? "reviewing" : "testing";
+  private check(leadId: string, index: number, role: CheckRole): void {
+    const how = CHECKS[role];
     const now = () => {
       const lead = this.host.thread(leadId);
       const task = lead?.team?.tasks[index];
       // The team may have moved on meanwhile: a stop, or the server stopping.
-      return !this.closed && lead?.team?.phase === "coding" && task?.status === status
+      return !this.closed && lead?.team?.phase === "coding" && task?.status === how.status
         ? { lead, team: lead.team, task }
         : undefined;
     };
@@ -952,15 +1046,25 @@ export class Teams {
       await Promise.resolve();
       const before = now();
       if (!before?.task.threadId) return;
-      const diff =
-        role === "reviewer" ? diffText(await this.host.changes(before.task.threadId)) : "";
+      const reviews = role === "reviewer" || role === "reviewer2";
+      const diff = reviews ? diffText(await this.host.changes(before.task.threadId)) : "";
       const current = now();
       if (!current) return;
       const { lead, team, task } = current;
-      const member = role === "reviewer" ? team.reviewer : team.tester;
+      const member = team[role];
       if (!member) throw new Error("ce rôle n'a pas d'agent.");
-      const text = role === "reviewer" ? reviewPrompt(team, task, diff) : testPrompt(team, task);
-      const existing = role === "reviewer" ? task.reviewThreadId : task.testThreadId;
+      const text = reviews
+        ? reviewPrompt(team, task, diff)
+        : role === "judge"
+          ? judgePrompt(
+              team,
+              task,
+              [task.reviewThreadId, task.review2ThreadId].flatMap((id) =>
+                id ? [this.host.lastReply(id)] : [],
+              ),
+            )
+          : testPrompt(team, task);
+      const existing = task[how.field];
       // A thread the user deleted is made again.
       if (existing && this.host.thread(existing)) {
         this.host.send(existing, text);
@@ -974,7 +1078,7 @@ export class Teams {
         permissionMode: team.permissionMode,
         isolated: false,
         text,
-        title: `${role === "reviewer" ? "Relecture" : "Tests"} : ${task.title}`,
+        title: `${how.title} : ${task.title}`,
         parentId: lead.id,
         role,
         worksIn: task.threadId!,
@@ -982,27 +1086,18 @@ export class Teams {
       const after = this.host.thread(leadId)?.team;
       const latest = after?.tasks[index];
       if (after && latest) {
-        this.save(
-          leadId,
-          withTask(
-            after,
-            index,
-            role === "reviewer"
-              ? { ...latest, reviewThreadId: threadId }
-              : { ...latest, testThreadId: threadId },
-          ),
-        );
+        this.save(leadId, withTask(after, index, { ...latest, [how.field]: threadId }));
       }
     })().catch((error: unknown) => {
       const current = now();
       if (!current) return;
-      const what = role === "reviewer" ? "La relecture" : "Les tests";
+      const { verdicts: _v, ...task } = current.task;
       this.settle(
         current.lead,
         withTask(current.team, index, {
-          ...current.task,
+          ...task,
           status: "blocked",
-          note: `${what} n'ont pas pu commencer : ${message(error)}`,
+          note: `${how.what} n'a pas pu commencer : ${message(error)}`,
         }),
       );
     });

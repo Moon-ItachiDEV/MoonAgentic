@@ -16,6 +16,7 @@ const PIECE: Record<TeamTask["status"], string> = {
   waiting: "attend un codeur",
   running: "code",
   reviewing: "relecture",
+  judging: "arbitrage",
   testing: "tests",
   lead: "le chef revoit la consigne",
   blocked: "à toi de voir",
