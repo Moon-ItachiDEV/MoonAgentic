@@ -23,6 +23,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import {
   AGENT_STOPPED,
   DEFAULT_MAX_TURNS,
+  packSnapshot,
   GOAL_MORE_TURNS,
   GOAL_TURNS,
   MAX_QUEUED_MESSAGES,
@@ -831,7 +832,9 @@ export class Hub {
     };
     this.clients.add(client);
     this.quotas.onClientConnect();
-    client.send({ type: "snapshot", snapshot: this.snapshot(!!client.deviceId) });
+    // Sent at each connection, a phone's return to the screen included: each list of `/`
+    // commands goes once, not once per thread.
+    client.send({ type: "snapshot", snapshot: packSnapshot(this.snapshot(!!client.deviceId)) });
     return () => this.clients.delete(client);
   }
 
@@ -981,7 +984,7 @@ export class Hub {
 
   /** Every window gets the whole state again, as /lock now lets it out. */
   private sendSnapshots(): void {
-    const owner = this.snapshot(false);
+    const owner = packSnapshot(this.snapshot(false));
     let paired: Snapshot | undefined;
     for (const client of this.clients) {
       const snapshot = client.deviceId ? (paired ??= { ...owner, pairedDevice: true }) : owner;
