@@ -718,6 +718,20 @@ describe("composer", () => {
     const missions = card.getByLabel("Missions ajoutées");
     await missions.getByText("Ajoute aussi une ligne dans MISSION.md").waitFor();
     await missions.getByText("Au plan · 1 partie").waitFor({ timeout: 30_000 });
+    // While the lead works (a mission it takes its time over), the send button adds a
+    // mission too, rather than putting the text in line for the lead.
+    await composer(page).fill("Relis tout en 5 étapes");
+    await composer(page).press("Enter");
+    await missions.getByText("Le chef la lit").waitFor();
+    await composer(page).fill("Et une autre dans MISSION.md");
+    await page
+      .getByRole("button", { name: /^(Mettre en file|Ajouter la mission)$/ })
+      .first()
+      .click({ timeout: 8_000 });
+    await missions.getByText("Et une autre dans MISSION.md").waitFor({ timeout: 5_000 });
+    await expect
+      .poll(() => missions.getByText(/^Au plan · 1 partie$/).count(), { timeout: 30_000 })
+      .toBe(2);
     expect(await composer(page).inputValue()).toBe("");
     await shot(page, "c13b-equipe-mission");
     // A team at work is stopped from the thread's menu, not by a button under its list.

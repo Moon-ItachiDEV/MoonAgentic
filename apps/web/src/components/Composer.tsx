@@ -1038,9 +1038,15 @@ export function Composer(props: {
         {hasText && (
           <button
             className="cb go"
-            aria-label="Mettre en file"
-            title="Mettre en file : part dès que l'agent a fini (Entrée)"
-            onClick={() => enqueue()}
+            // On a team's lead, what is written is a mission, as with Entrée.
+            aria-label={missions ? "Ajouter la mission" : "Mettre en file"}
+            title={
+              missions
+                ? "Ajouter la mission (Entrée)"
+                : "Mettre en file : part dès que l'agent a fini (Entrée)"
+            }
+            disabled={busy}
+            onClick={() => (missions ? void submit() : enqueue())}
           >
             <I n="up" s={19} />
           </button>
