@@ -953,20 +953,38 @@ export class Hub {
   }
 
   /**
-   * The user's actions a screen sent, by the id it gave them: one it sends again, its
+   * The user's actions each device sent, by the id it gave them: one it sends again, its
    * connection having died before it could tell whether this one got there, is done once.
+   * Kept per device so one device cannot flush another's ids, and recorded only once done
+   * so an action that failed can still be retried.
    */
-  private readonly sends = new Set<string>();
+  private readonly sends = new Map<string, Set<string>>();
 
-  /** True when the action is one already done; else it is remembered, the oldest forgotten. */
-  private sentAgain(sendId: string): boolean {
-    if (this.sends.has(sendId)) return true;
-    this.sends.add(sendId);
-    if (this.sends.size > MAX_SENDS_KEPT) {
-      const oldest = this.sends.values().next().value;
-      if (oldest !== undefined) this.sends.delete(oldest);
+  private sendKey(
+    client: Client,
+    message: ClientMessage,
+  ): { actor: string; key: string } | undefined {
+    if (!("sendId" in message) || message.sendId === undefined) return undefined;
+    const actor = client.deviceId ?? "owner";
+    const thread = "threadId" in message ? message.threadId : "";
+    return { actor, key: `${message.type}:${thread}:${message.sendId}` };
+  }
+
+  private alreadySent(actor: string, key: string): boolean {
+    return this.sends.get(actor)?.has(key) ?? false;
+  }
+
+  private rememberSend(actor: string, key: string): void {
+    let seen = this.sends.get(actor);
+    if (!seen) {
+      seen = new Set();
+      this.sends.set(actor, seen);
     }
-    return false;
+    seen.add(key);
+    if (seen.size > MAX_SENDS_KEPT) {
+      const oldest = seen.values().next().value;
+      if (oldest !== undefined) seen.delete(oldest);
+    }
   }
 
   /** Does what a screen asks. A write the database refuses is said in the user's words. */
@@ -985,9 +1003,18 @@ export class Hub {
       throw new Error(ONLY_ON_COMPUTER);
     }
     if (this.refuseLocked(message)) return;
-    if ("sendId" in message && message.sendId !== undefined && this.sentAgain(message.sendId)) {
-      return;
+    const sent = this.sendKey(client, message);
+    if (sent && this.alreadySent(sent.actor, sent.key)) return;
+    if (sent) this.rememberSend(sent.actor, sent.key);
+    try {
+      await this.runMessage(client, message);
+    } catch (error) {
+      if (sent) this.sends.get(sent.actor)?.delete(sent.key);
+      throw error;
     }
+  }
+
+  private async runMessage(client: Client, message: ClientMessage): Promise<void> {
     switch (message.type) {
       case "ping":
         client.send({ type: "pong" });
