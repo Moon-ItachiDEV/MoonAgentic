@@ -1,0 +1,619 @@
+/* Fenêtres et menus de l'iPad et du bureau : une vraie fenêtre, pas la feuille du téléphone
+   posée au milieu ; un choix dans une liste devient un menu accroché à son bouton. */
+:root {
+  --win: #fff;
+  --win-ring: rgba(20, 20, 30, 0.08);
+  --win-scrim: rgba(14, 14, 18, 0.14);
+  --win-sh:
+    0 0 0 0.5px var(--win-ring), 0 2px 6px rgba(20, 20, 30, 0.04),
+    0 28px 64px -20px rgba(20, 20, 30, 0.26);
+  --win-hover: rgba(20, 20, 30, 0.045);
+  --win-seg: #f1f1f3;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --win: #1e1e1e;
+    --win-ring: rgba(255, 255, 255, 0.09);
+    --win-scrim: rgba(0, 0, 0, 0.42);
+    --win-sh: 0 0 0 0.5px var(--win-ring), 0 28px 64px -20px rgba(0, 0, 0, 0.7);
+    --win-hover: rgba(255, 255, 255, 0.055);
+    --win-seg: #2a2a2a;
+  }
+}
+:root[data-theme="dark"] {
+  --win: #1e1e1e;
+  --win-ring: rgba(255, 255, 255, 0.09);
+  --win-scrim: rgba(0, 0, 0, 0.42);
+  --win-sh: 0 0 0 0.5px var(--win-ring), 0 28px 64px -20px rgba(0, 0, 0, 0.7);
+  --win-hover: rgba(255, 255, 255, 0.055);
+  --win-seg: #2a2a2a;
+}
+/* Fenêtres iPad et bureau : une vraie fenêtre, pas une feuille de téléphone posée au milieu */
+.scr.roomy .sscrim {
+  background: var(--win-scrim);
+}
+.scr.roomy .sheet {
+  background: var(--win);
+  border-radius: 20px;
+  box-shadow: var(--win-sh);
+  width: min(460px, calc(100% - 48px));
+  transform: translate(-50%, -48.5%) scale(0.985);
+  transition:
+    transform 260ms var(--out),
+    opacity 160ms var(--out);
+}
+.scr.roomy .sheet.tall {
+  width: min(700px, calc(100% - 48px));
+}
+.scr.roomy .sheet .grab {
+  display: none;
+}
+.scr.roomy .shd {
+  padding: 16px 14px 2px 24px;
+}
+.scr.roomy .shd h3 {
+  justify-content: flex-start;
+  height: 34px;
+  font-size: 16px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.scr.roomy .shd h3.two {
+  align-items: flex-start;
+}
+.scr.roomy .shd .gb {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: none;
+  box-shadow: none;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  color: var(--muted);
+  transition:
+    background-color 150ms var(--out),
+    color 150ms var(--out);
+}
+.scr.roomy .shd .gb:hover {
+  background: var(--win-hover);
+  color: var(--fg);
+}
+.scr.roomy .shd .gb svg {
+  width: 16px;
+  height: 16px;
+}
+.scr.roomy .shd .x {
+  left: auto;
+  right: 14px;
+  top: 17px;
+}
+.scr.roomy .shd:has(.xr) .x {
+  left: 14px;
+  right: auto;
+}
+.scr.roomy .shd:has(.xr) h3 {
+  padding-left: 28px;
+}
+.scr.roomy .shd .xr {
+  right: 14px;
+  top: 17px;
+}
+.scr.roomy .sheet .sbody {
+  padding: 10px 24px 22px;
+}
+.scr.roomy .sheet .ins {
+  background: none;
+  border-radius: 0;
+  padding: 0;
+  margin: 0 -10px 18px;
+  box-shadow: none;
+}
+.scr.roomy .sheet .it {
+  border-radius: 10px;
+  min-height: 46px;
+  padding: 0 10px;
+}
+.scr.roomy .sheet .it:not(.ro):hover {
+  background: var(--win-hover);
+}
+.scr.roomy .sheet .it .tx {
+  padding: 7px 0;
+}
+.scr.roomy .sheet .gl2 {
+  padding: 0 0 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.scr.roomy .sheet .seg {
+  background: var(--win-seg);
+  border-radius: 12px;
+  padding: 3px;
+  margin-bottom: 16px;
+}
+.scr.roomy .sheet .seg button {
+  height: 36px;
+  border-radius: 9px;
+  font-size: 14.5px;
+}
+.scr.roomy .sheet .mga,
+.scr.roomy .sheet .rva {
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 0 0;
+}
+.scr.roomy .sheet .mga .b2,
+.scr.roomy .sheet .rva .b2 {
+  flex: none;
+  height: 38px;
+  padding: 0 20px;
+  border-radius: 19px;
+  font-size: 14.5px;
+}
+.scr.roomy .sheet .b2.ink[disabled] {
+  opacity: 0.28;
+}
+.scr.roomy .sheet .fvs {
+  border-radius: 12px;
+}
+html[data-dev="desk"] .scr.roomy .sheet .it {
+  min-height: 40px;
+  font-size: 14.5px;
+  font-weight: 400;
+}
+html[data-dev="desk"] .scr.roomy .sheet .it small {
+  font-size: 12.5px;
+}
+html[data-dev="desk"] .scr.roomy .sheet .seg button {
+  height: 32px;
+  font-size: 14px;
+}
+html[data-dev="desk"] .scr.roomy .sheet .mga .b2,
+html[data-dev="desk"] .scr.roomy .sheet .rva .b2 {
+  height: 34px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+html[data-dev="desk"] .scr.roomy .sheet .fvc {
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  box-shadow: inset 0 0 0 1.2px var(--faint);
+}
+html[data-dev="desk"] .scr.roomy .sheet .fvc svg {
+  width: 11px;
+  height: 11px;
+}
+.scr.roomy .sheet .cfw {
+  align-items: flex-start;
+  padding: 22px 24px 20px;
+  gap: 8px;
+}
+.scr.roomy .sheet .cfw h3 {
+  font-size: 16px;
+  font-weight: 500;
+  text-align: left;
+}
+.scr.roomy .sheet .cfw .cft {
+  text-align: left;
+}
+.scr.roomy .sheet .cfa {
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-top: 14px;
+}
+.scr.roomy .sheet .cfa .b2 {
+  flex: none;
+  height: 38px;
+  border-radius: 19px;
+  padding: 0 20px;
+  font-size: 14.5px;
+}
+html[data-dev="desk"] .scr.roomy .sheet .cfa .b2 {
+  height: 34px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+.scr.roomy .sheet:has(.cfw) {
+  width: min(400px, calc(100% - 48px));
+}
+
+/* Menus déroulants (iPad et bureau) : un choix dans une liste s'accroche à son bouton */
+.ddm {
+  position: fixed;
+  z-index: 400;
+  min-width: 220px;
+  max-width: 300px;
+  max-height: min(420px, calc(100vh - 24px));
+  overflow: auto;
+  padding: 5px;
+  border-radius: 14px;
+  background: var(--win);
+  box-shadow: var(--win-sh);
+  font-family: var(--sans);
+  scrollbar-width: none;
+  transform-origin: var(--ox, 100%) 0;
+  animation: ddin 160ms var(--out) both;
+}
+.ddm.up {
+  transform-origin: var(--ox, 100%) 100%;
+}
+@keyframes ddin {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-3px);
+  }
+}
+.ddm .ddh {
+  padding: 7px 10px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.ddm button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--fg);
+  text-align: left;
+}
+.ddm button:hover,
+.ddm button.kb {
+  background: var(--win-hover);
+}
+.ddm button .ddi {
+  display: grid;
+  color: var(--muted);
+}
+.ddm button .ddt {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ddm button small {
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-left: 6px;
+}
+.ddm button .ddk {
+  display: grid;
+  color: var(--fg);
+}
+.ddm hr {
+  border: 0;
+  height: 0.5px;
+  background: var(--win-ring);
+  margin: 5px 8px;
+}
+html[data-dev="touch"] .ddm button {
+  height: 42px;
+  font-size: 15.5px;
+}
+.it[aria-expanded="true"] {
+  background: var(--win-hover);
+}
+
+.ddm .ddmore {
+  width: auto;
+  height: 26px;
+  margin: 2px 4px 4px auto;
+  padding: 0 10px;
+  border-radius: 13px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--fg2);
+  background: var(--win-seg);
+}
+.ddm .ddmore[aria-pressed="true"] {
+  background: var(--ink);
+  color: var(--on-ink);
+}
+.ddm button:focus-visible {
+  outline: none;
+  background: var(--win-hover);
+}
+.ddm .pj-fold,
+.ddm .pj-ico {
+  display: grid;
+}
+
+/* Nouveau projet, iPad et bureau : le nom d'abord, la source dans un cadre, Annuler / Créer */
+.npri {
+  display: none;
+}
+.npd.sbody {
+  padding-top: 12px;
+}
+.npd .npfl {
+  font-size: 13.5px;
+  font-weight: 500;
+  margin: 0 0 8px;
+}
+.npd .npnm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 8px 0 7px;
+  border-radius: 12px;
+  background: var(--win-seg);
+  margin-bottom: 18px;
+}
+.npd .npic {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--win);
+  color: var(--muted);
+  transition: box-shadow 150ms var(--out);
+}
+.npd .npic:hover,
+.npd .npic[aria-expanded="true"] {
+  box-shadow:
+    0 0 0 0.5px var(--win-ring),
+    0 1px 3px rgba(20, 20, 30, 0.08);
+}
+.npd .npnm input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: 0;
+  font: 400 14.5px var(--sans);
+  color: var(--fg);
+}
+.npd .npnm input::placeholder {
+  color: var(--faint);
+}
+.npd .npbox {
+  border-radius: 14px;
+  box-shadow: 0 0 0 0.5px var(--win-ring);
+  padding: 6px 6px 0;
+  margin-bottom: 16px;
+}
+.npd .npbh {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px 4px 10px;
+}
+.npd .npbh b {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.npd .npt {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--win-seg);
+}
+.npd .npt button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.npd .npt button[aria-pressed="true"] {
+  background: var(--win);
+  color: var(--fg);
+  box-shadow:
+    0 0 0 0.5px var(--win-ring),
+    0 1px 2px rgba(20, 20, 30, 0.06);
+}
+/* Même taille sur les deux onglets : la liste défile dedans, en fondu comme celle des modèles. */
+.npd .npl {
+  height: 232px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  padding-bottom: 18px;
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 26px), transparent);
+  mask-image: linear-gradient(#000 calc(100% - 26px), transparent);
+}
+.npd .npl::-webkit-scrollbar {
+  display: none;
+}
+html[data-dev="touch"] .npd .npl {
+  height: 262px;
+}
+.npd .nps {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 10px 10px 4px;
+}
+.scr.roomy .sheet .npd .npbox .ins {
+  margin: 0;
+}
+.npd .npbox .it {
+  position: relative;
+  gap: 10px;
+  min-height: 40px;
+  border-radius: 9px;
+  font-size: 14px;
+}
+.npd .npbox .it + .it::before {
+  content: "";
+  position: absolute;
+  left: 38px;
+  right: 10px;
+  top: 0;
+  height: 0.5px;
+  background: var(--win-ring);
+}
+.npd .npbox .it:hover::before,
+.npd .npbox .it:hover + .it::before,
+.npd .npbox .it[aria-pressed="true"]::before,
+.npd .npbox .it[aria-pressed="true"] + .it::before {
+  opacity: 0;
+}
+.npd .npbox .it[aria-pressed="true"] {
+  background: var(--win-hover);
+}
+.npd .npri {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  flex: none;
+  color: var(--muted);
+}
+.npd .it[aria-pressed="true"] .npri {
+  color: var(--accent);
+}
+.npd .fvc {
+  display: none;
+}
+.npd .npbox .it .tx small {
+  display: inline;
+  margin-left: 8px;
+  font-size: 12.5px;
+}
+.npd .npbox .fvs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  height: 34px;
+  margin: 4px 4px 0;
+  border-radius: 9px;
+  background: var(--win-seg);
+  box-shadow:
+    0 -4px 0 4px var(--win),
+    0 12px 10px -2px var(--win);
+}
+.npd .npbox .fvs input {
+  font-size: 14px;
+}
+.npd .npx .ins {
+  margin-bottom: 14px;
+}
+.npd .npft {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.npd .npft .b2 {
+  flex: none;
+  height: 34px;
+  padding: 0 16px;
+  border-radius: 17px;
+  font-size: 14px;
+}
+.npd .npft .b2.ink[disabled]:not(.busy) {
+  opacity: 0.28;
+}
+html[data-dev="touch"] .npd .npbox .it {
+  min-height: 46px;
+  font-size: 15px;
+}
+html[data-dev="touch"] .npd .npft .b2 {
+  height: 40px;
+  padding: 0 20px;
+  font-size: 15px;
+}
+
+/* L'icône et la couleur du projet, dans un menu sous l'icône du nom */
+.ddm.icp {
+  width: 304px;
+  max-width: 304px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+.icp .icsw {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 4px;
+}
+.icp .icsw button {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 9px;
+  background: var(--c);
+  transition: box-shadow 150ms var(--out);
+}
+.icp .icsw button:hover {
+  background: var(--c);
+}
+.icp .icsw button[aria-checked="true"] {
+  box-shadow:
+    0 0 0 2px var(--win),
+    0 0 0 3.5px var(--c);
+}
+.icp .icq {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: var(--win-seg);
+  color: var(--muted);
+}
+.icp .icq input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: 0;
+  font: 400 13.5px var(--sans);
+  color: var(--fg);
+}
+.icp .ipk {
+  grid-template-columns: repeat(8, 1fr);
+  padding: 0;
+  max-height: 216px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.icp .ipk button {
+  height: 32px;
+  width: 100%;
+  padding: 0;
+  justify-content: center;
+  border-radius: 8px;
+}
+.icp .snone {
+  font-size: 13px;
+  color: var(--muted);
+  text-align: center;
+  margin: 8px 0;
+}
+
+/* Ce qui se tient à droite de l'en-tête (Retour, Tous, la coche) se range avant la croix */
+.scr.roomy .shd .hmore {
+  right: 52px;
+  top: 18px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 15px;
+  font-size: 13.5px;
+  background: var(--win-seg);
+}
+.scr.roomy .shd .ok2 {
+  right: 52px;
+  top: 17px;
+  width: 32px;
+  height: 32px;
+  border-radius: 16px;
+}
+.scr.roomy .shd .ok2 svg {
+  width: 16px;
+  height: 16px;
+}

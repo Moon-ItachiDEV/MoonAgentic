@@ -3,8 +3,11 @@
 import type { McpServerInfo, PermissionMode, Project } from "@moonagentic/protocol";
 import { isDiscussionsProject } from "../default-models.ts";
 import { mcpInProject } from "../mcp-scope.ts";
+import { useRef, useState } from "react";
+import { Dropdown } from "../v2/Dropdown.tsx";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
+import { useScreen } from "../v2/use-screen.ts";
 import { arrowKeys } from "../composer-tray.ts";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 
@@ -35,11 +38,17 @@ export function PlusPop(
     /** Starts the word the composer completes: @ files, $ skills, / commands. */
     onInsert: (word: "@" | "$" | "/") => void;
     onWhere: () => void;
+    /** On an iPad or a computer, where to work opens beside the menu, as a menu of its own. */
+    where?: WhereChoices;
     onMcp: () => void;
     onMore: () => void;
   },
 ) {
   const code = codeProjectOf(props.project);
+  const { roomy } = useScreen();
+  const whereRow = useRef<HTMLButtonElement>(null);
+  const [whereOpen, setWhereOpen] = useState(false);
+  const beside = roomy && !!props.where;
   const servers = serversOf(props).length;
   let i = 0;
   const at = () => ({ "--i": i++ }) as React.CSSProperties;
@@ -71,7 +80,14 @@ export function PlusPop(
         <span className="nm">Fichiers</span>
       </button>
       {props.projects ? (
-        <button className="pi2" role="menuitem" style={at()} onClick={props.onWhere}>
+        <button
+          ref={whereRow}
+          className="pi2"
+          role="menuitem"
+          aria-haspopup={beside ? "menu" : "dialog"}
+          style={at()}
+          onClick={beside ? () => setWhereOpen((on) => !on) : props.onWhere}
+        >
           <I n="folder" s={20} />
           <span className="nm">Projet</span>
           <span className="rt">{code ? code.name : "Aucun"}</span>
@@ -103,7 +119,78 @@ export function PlusPop(
         <I n="dots" s={20} />
         <span className="nm">Plus</span>
       </button>
+      {beside && whereOpen && props.where && (
+        <Dropdown anchor={whereRow} side onClose={() => setWhereOpen(false)} label="Où travailler">
+          <WhereItems {...props.where} project={props.project} />
+        </Dropdown>
+      )}
     </div>
+  );
+}
+
+/** Where a new conversation can be held: outside any project, or in one of them. */
+export interface WhereChoices {
+  projects: Project[];
+  onPickProject: (id: string) => void;
+  onPickLoose?: () => void;
+  onNewProject: () => void;
+}
+
+/** The same choices as the « Où travailler » sheet, as the lines of a menu. */
+function WhereItems(props: WhereChoices & { project: Project | undefined }) {
+  const code = codeProjectOf(props.project);
+  const projects = props.projects.filter((p) => !isDiscussionsProject(p));
+  return (
+    <>
+      {props.onPickLoose && (
+        <>
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={!code}
+            onClick={props.onPickLoose}
+          >
+            <span className="ddi">
+              <I n="bubble" s={16} />
+            </span>
+            <span className="ddt">Hors projet</span>
+            {!code && (
+              <span className="ddk">
+                <I n="check" s={15} />
+              </span>
+            )}
+          </button>
+          <hr />
+        </>
+      )}
+      {projects.length > 0 && <div className="ddh">Projets</div>}
+      {projects.map((p) => (
+        <button
+          key={p.id}
+          type="button"
+          role="menuitemradio"
+          aria-checked={p.id === code?.id}
+          onClick={() => props.onPickProject(p.id)}
+        >
+          <span className="ddi">
+            <ProjectIcon project={p} size={16} />
+          </span>
+          <span className="ddt">{p.name}</span>
+          {p.id === code?.id && (
+            <span className="ddk">
+              <I n="check" s={15} />
+            </span>
+          )}
+        </button>
+      ))}
+      <hr />
+      <button type="button" role="menuitem" onClick={props.onNewProject}>
+        <span className="ddi">
+          <I n="plus" s={16} />
+        </span>
+        <span className="ddt">Nouveau projet</span>
+      </button>
+    </>
   );
 }
 
