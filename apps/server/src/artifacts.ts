@@ -213,6 +213,12 @@ export class ArtifactLinks {
     for (const [key, link] of this.links) if (whose(link.deviceId)) this.links.delete(key);
   }
 
+  /** Whether the address is one given and not expired yet: what its own quota counts by. */
+  known(ticket: string): boolean {
+    const link = this.links.get(ticket);
+    return !!link && link.expiresAt > this.now();
+  }
+
   /**
    * The file an address names, with its type, while the address works and the thread is
    * there: a file of a type that is served, listed in the thread's folder, inside it.

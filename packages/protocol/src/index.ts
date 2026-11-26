@@ -594,6 +594,12 @@ export interface Thread {
   canCompact?: boolean;
   /** The `/` commands this thread's agent offers, as it last listed them. */
   commands?: AgentCommand[];
+  /**
+   * In a snapshot only, in place of `commands`: its place in the snapshot's `commandLists`.
+   * Each thread of an agent holds the same list: sent once, the state of 3 000 threads went
+   * from 10 MB to 1 MB (N7). `unpackSnapshot` puts it back.
+   */
+  commandList?: number;
   /** Kept at the top of the sidebar. */
   pinned?: boolean;
   /**
@@ -1200,6 +1206,39 @@ export interface Snapshot {
    * program holding the file): what to tell the user, as nothing is saved meanwhile.
    */
   storageError?: string;
+  /** The threads' `/` commands, each list once, as `packSnapshot` leaves them. */
+  commandLists?: AgentCommand[][];
+}
+
+/** The snapshot as it is sent: each list of `/` commands once, the threads naming theirs. */
+export function packSnapshot(snapshot: Snapshot): Snapshot {
+  const lists: AgentCommand[][] = [];
+  const places = new Map<string, number>();
+  const threads = snapshot.threads.map((thread) => {
+    const { commands, ...rest } = thread;
+    if (!commands?.length) return rest;
+    const key = JSON.stringify(commands);
+    let place = places.get(key);
+    if (place === undefined) {
+      place = lists.push(commands) - 1;
+      places.set(key, place);
+    }
+    return { ...rest, commandList: place };
+  });
+  return { ...snapshot, threads, ...(lists.length ? { commandLists: lists } : {}) };
+}
+
+/** The snapshot as `packSnapshot` found it: each thread with its own `commands` again. */
+export function unpackSnapshot(snapshot: Snapshot): Snapshot {
+  const { commandLists, ...rest } = snapshot;
+  return {
+    ...rest,
+    threads: snapshot.threads.map((thread) => {
+      const { commandList, ...kept } = thread;
+      const commands = commandList === undefined ? undefined : commandLists?.[commandList];
+      return commands ? { ...kept, commands } : kept;
+    }),
+  };
 }
 
 /** What a new thread starts with unless chosen otherwise, kept by the server for every device. */
