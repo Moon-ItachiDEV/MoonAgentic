@@ -9,6 +9,7 @@ import type { ServerMessage } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { dayOf, discordNotices, discordWebhook, timeOf } from "../src/hermes.ts";
+import { BACKUP_SUFFIX, type HermesRun, modelOf, splitModel } from "../src/hermes-cli.ts";
 import { HERMES_PATH, HERMES_TOOLS } from "../src/hermes-tools.ts";
 import { createHttpServer } from "../src/http.ts";
 import { type Client, Hub } from "../src/hub.ts";
@@ -36,6 +37,45 @@ function repoAt(dir: string) {
   git("commit", "-q", "-m", "init");
 }
 
+/**
+ * Hermes's command line as the tests play it: its `config.yaml` is a file of the test, `config
+ * set` writes what it is given into a map, and each command is noted. `fail` makes one fail.
+ */
+function fakeHermes(root: string) {
+  const configFile = path.join(root, "hermes-config.yaml");
+  writeFileSync(configFile, "model:\n  default: gpt-6.2-sol\n  provider: openai-codex\n");
+  const calls: string[][] = [];
+  const config: Record<string, string> = {
+    "model.default": "gpt-6.2-sol",
+    "model.provider": "openai-codex",
+  };
+  const fail: { on?: string } = {};
+  const run = async (args: string[]): Promise<HermesRun> => {
+    calls.push(args);
+    const said = args.join(" ");
+    if (fail.on && said.startsWith(fail.on)) return { code: 1, out: "", err: "✗ Ça a raté.\n" };
+    if (said === "config path") return { code: 0, out: `${configFile}\n`, err: "" };
+    if (args[0] === "config" && args[1] === "set") {
+      config[args[2]!] = args[3]!;
+      return { code: 0, out: "✓ Set\n", err: "" };
+    }
+    if (said === "config get model --json") {
+      return {
+        code: 0,
+        out: JSON.stringify({
+          default: config["model.default"],
+          provider: config["model.provider"],
+        }),
+        err: "",
+      };
+    }
+    if (said === "gateway restart --yes --detach")
+      return { code: 0, out: "✓ Restarted\n", err: "" };
+    return { code: 2, out: "", err: `inconnu : ${said}` };
+  };
+  return { configFile, calls, config, fail, run };
+}
+
 /** The real server with a project and its coordinator on the demo agent, Hermes not connected. */
 async function withHermes() {
   const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-hermes-"));
@@ -44,10 +84,13 @@ async function withHermes() {
   repoAt(path.join(root, "site"));
   const store = new Store(path.join(root, "state.sqlite"));
   const posted: { url: string; body: Record<string, unknown> }[] = [];
+  // Never the real Hermes of the machine running the tests.
+  const cli = fakeHermes(root);
   const hub = new Hub(store, new Agents({ demo: true }), {
     worktreesDir: path.join(root, "worktrees"),
     prWatchMs: 0,
     dataDir,
+    hermesRunner: cli.run,
     webhookSend: async (url, init) => {
       posted.push({ url, body: JSON.parse(String(init.body)) as Record<string, unknown> });
       return { status: 204 };
@@ -100,6 +143,7 @@ async function withHermes() {
     status,
     call,
     result,
+    cli,
   };
 }
 
@@ -287,6 +331,106 @@ describe("Hermes · outils", () => {
     const unknown = await h.result("project_status", { project: "Inexistant" });
     expect(unknown.status).toBe(400);
     expect(unknown.error).toContain("Site vitrine");
+  });
+});
+
+describe("Hermes · réglage de Hermes depuis MoonAgentic", () => {
+  it("Connecter écrit l'entrée de MoonAgentic dans config.yaml, garde une copie et relance Hermes", async () => {
+    const h = await withHermes();
+    const original = readFileSync(h.cli.configFile, "utf8");
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    expect(h.status().setup).toMatchObject({ what: "connect", state: "running" });
+    await h.hub.hermes.settled();
+    expect(h.status().setup).toMatchObject({ what: "connect", state: "done" });
+    const entry = JSON.parse(h.cli.config["mcp_servers.moonagentic"]!) as {
+      command: string;
+      args: string[];
+      timeout: number;
+    };
+    expect(entry.command).toBe(process.execPath);
+    expect(entry.args).toEqual([
+      expect.stringContaining("hermes-bridge.ts"),
+      h.origin,
+      h.tokenFile,
+    ]);
+    expect(entry.timeout).toBeGreaterThan(13 * 60);
+    // The token itself never goes into Hermes's config: only the file that holds it.
+    expect(h.cli.config["mcp_servers.moonagentic"]).not.toContain(h.token());
+    expect(readFileSync(`${h.cli.configFile}${BACKUP_SUFFIX}`, "utf8")).toBe(original);
+    // Then its model is read again, for the page.
+    expect(h.cli.calls.map((c) => c.slice(0, 2).join(" "))).toEqual([
+      "config path",
+      "config set",
+      "gateway restart",
+      "config get",
+    ]);
+    expect(h.cli.calls[2]).toEqual(["gateway", "restart", "--yes", "--detach"]);
+  });
+
+  it("dit pourquoi le réglage a échoué, et Réessayer le refait", async () => {
+    const h = await withHermes();
+    h.cli.fail.on = "gateway restart";
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    expect(h.status().setup).toMatchObject({ state: "failed" });
+    expect(h.status().setup?.error).toContain("Ça a raté");
+    delete h.cli.fail.on;
+    await h.hub.handle(h.client, { type: "hermes.install", requestId: "r2" });
+    await h.hub.hermes.settled();
+    expect(h.status().setup).toMatchObject({ state: "done" });
+  });
+
+  it("refuse un second réglage pendant le premier", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await expect(
+      h.hub.handle(h.client, { type: "hermes.install", requestId: "r2" }),
+    ).rejects.toThrow("déjà");
+    await h.hub.hermes.settled();
+  });
+
+  it("lit le modèle de Hermes et le change, fournisseur d'abord, puis relance Hermes", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.get" });
+    await soon(() => h.status().model).toEqual({ provider: "openai-codex", model: "gpt-6.2-sol" });
+    h.cli.calls.length = 0;
+    await h.hub.handle(h.client, {
+      type: "hermes.setModel",
+      requestId: "m1",
+      model: "openrouter:anthropic/claude-sonnet-4",
+    });
+    await h.hub.hermes.settled();
+    expect(h.status().setup).toMatchObject({ what: "model", state: "done" });
+    const sets = h.cli.calls.filter((c) => c[1] === "set");
+    expect(sets).toEqual([
+      ["config", "set", "model.provider", "openrouter"],
+      ["config", "set", "model.default", "anthropic/claude-sonnet-4"],
+    ]);
+    expect(h.cli.calls.at(-2)).toEqual(["gateway", "restart", "--yes", "--detach"]);
+    await soon(() => h.status().model).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-sonnet-4",
+    });
+  });
+
+  it("lit les identifiants de modèles comme Hermes", () => {
+    expect(splitModel("openai-codex:gpt-6.2-sol")).toEqual({
+      provider: "openai-codex",
+      model: "gpt-6.2-sol",
+    });
+    expect(splitModel("custom:local:qwen-2.5")).toEqual({
+      provider: "custom:local",
+      model: "qwen-2.5",
+    });
+    expect(splitModel("openrouter:anthropic/claude:beta")).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude:beta",
+    });
+    expect(splitModel("gpt-6.2-sol")).toEqual({ model: "gpt-6.2-sol" });
+    expect(modelOf('{"default":"x","provider":"auto"}')).toEqual({ model: "x" });
+    expect(modelOf('{"model":"y","provider":"nous"}')).toEqual({ provider: "nous", model: "y" });
+    expect(modelOf('"z"')).toEqual({ model: "z" });
+    expect(modelOf("pas du json")).toBeUndefined();
   });
 });
 

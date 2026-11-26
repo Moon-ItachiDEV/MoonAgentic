@@ -1,7 +1,8 @@
-import type { HermesAllow, HermesNotify, HermesStatus } from "@moonagentic/protocol";
-import { useEffect, useState } from "react";
+import type { HermesAllow, HermesNotify, HermesStatus, ModelChoice } from "@moonagentic/protocol";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
 import { HERMES_AVATAR, useHermesState } from "../hermes.ts";
+import { modelLabel } from "../model-label.ts";
 import { seenAgo } from "../remote.ts";
 import { I } from "../v2/I.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
@@ -64,6 +65,10 @@ export function HermesSettings({ hermes }: { hermes: HermesStatus | null }) {
   const [now, setNow] = useState(() => Date.now());
 
   useHermesState();
+  const agent = useSyncExternalStore(connection.subscribe, () =>
+    connection.getState().agents.find((a) => a.id === "hermes"),
+  );
+  const [picking, setPicking] = useState(false);
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
@@ -128,8 +133,21 @@ export function HermesSettings({ hermes }: { hermes: HermesStatus | null }) {
             </button>
           )}
         </div>
-        {hermes.connected && (
-          <Row title="Réglage pour Hermes" text="config.yaml › mcp_servers">
+        {hermes.connected && hermes.setup && (
+          <Row title="Réglage de Hermes" text={setupText(hermes)}>
+            <button
+              className="b2 soft press"
+              disabled={busy || hermes.setup?.state === "running"}
+              onClick={() =>
+                void run(() => connection.request({ type: "hermes.install", requestId: newId() }))
+              }
+            >
+              {hermes.setup?.state === "failed" ? "Réessayer" : "Réappliquer"}
+            </button>
+          </Row>
+        )}
+        {hermes.connected && (!hermes.setup || hermes.setup.state === "failed") && (
+          <Row title="Réglage à la main" text="config.yaml › mcp_servers">
             <button className="b2 soft press" onClick={() => void copy()}>
               {copied === "ok" ? "Copié" : copied === "failed" ? "Échec" : "Copier"}
             </button>
@@ -137,6 +155,57 @@ export function HermesSettings({ hermes }: { hermes: HermesStatus | null }) {
         )}
       </div>
       {error && <p className="erx">{error}</p>}
+
+      <div className="gl2">Modèle</div>
+      <div className="ins">
+        <Row
+          title={currentName(hermes, agent?.models)}
+          text={hermes.model ? hermes.model.provider : hermes.modelError}
+        >
+          {agent?.models?.length ? (
+            <button
+              className="b2 soft press"
+              aria-expanded={picking}
+              disabled={busy || hermes.setup?.state === "running"}
+              onClick={() => setPicking((p) => !p)}
+            >
+              {picking ? "Fermer" : "Changer"}
+            </button>
+          ) : (
+            <button
+              className="b2 soft press"
+              disabled={!agent?.available}
+              onClick={() => void connection.send({ type: "agent.discover", agentId: "hermes" })}
+            >
+              Lire ses modèles
+            </button>
+          )}
+        </Row>
+        {picking &&
+          agent?.models?.map((m) => {
+            const on = isCurrent(hermes, m.id);
+            return (
+              <button
+                key={m.id}
+                className="it ro"
+                aria-pressed={on}
+                disabled={busy || on}
+                onClick={() =>
+                  void run(() =>
+                    connection.request({
+                      type: "hermes.setModel",
+                      requestId: newId(),
+                      model: m.id,
+                    }),
+                  ).then((ok) => ok && setPicking(false))
+                }
+              >
+                <span className="tx">{modelLabel(m)}</span>
+                {on && <I n="check" s={20} className="ck" />}
+              </button>
+            );
+          })}
+      </div>
 
       <div className="gl2">Hermes peut</div>
       <div className="ins">
@@ -255,4 +324,35 @@ export function HermesSettings({ hermes }: { hermes: HermesStatus | null }) {
       {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
     </>
   );
+}
+
+/** Where MoonAgentic is with Hermes's own setup, as the server says. */
+function setupText(hermes: HermesStatus): string | undefined {
+  const setup = hermes.setup;
+  if (!setup) return undefined;
+  if (setup.state === "running") return "Réglage et relance de Hermes en cours";
+  if (setup.state === "failed") return setup.error ?? "Échec";
+  return setup.what === "model"
+    ? "Modèle changé · Hermes relancé"
+    : "config.yaml écrit · Hermes relancé";
+}
+
+const choiceOf = (hermes: HermesStatus) =>
+  hermes.model
+    ? hermes.model.provider
+      ? `${hermes.model.provider.toLowerCase()}:${hermes.model.model}`
+      : hermes.model.model
+    : undefined;
+
+function isCurrent(hermes: HermesStatus, id: string): boolean {
+  const current = choiceOf(hermes);
+  if (!current || !hermes.model) return false;
+  return id === current || (!hermes.model.provider && id.endsWith(`:${hermes.model.model}`));
+}
+
+/** The default model's name as Hermes lists it, else as its config says. */
+function currentName(hermes: HermesStatus, models: ModelChoice[] | undefined): string {
+  if (!hermes.model) return "Modèle par défaut";
+  const listed = models?.find((m) => isCurrent(hermes, m.id));
+  return listed ? modelLabel(listed) : hermes.model.model;
 }

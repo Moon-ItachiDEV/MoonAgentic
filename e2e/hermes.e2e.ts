@@ -20,6 +20,15 @@ function routeUrl(routePath: string) {
   return parsed.href;
 }
 
+/** The PATH without the folders holding a `hermes` command. */
+function withoutHermes(): string {
+  const names = ["hermes", "hermes.exe", "hermes.cmd", "hermes.bat"];
+  return (process.env.PATH ?? "")
+    .split(path.delimiter)
+    .filter((dir) => !names.some((name) => existsSync(path.join(dir, name))))
+    .join(path.delimiter);
+}
+
 beforeAll(async () => {
   if (!existsSync(path.join(root, "apps/web/dist/index.html"))) {
     throw new Error("Lance d'abord « pnpm build » : ce test utilise l'app construite.");
@@ -30,7 +39,18 @@ beforeAll(async () => {
   server = spawn(
     process.execPath,
     ["apps/server/src/bin.ts", "--demo", "--port", "0", "--data-dir", path.join(dir, "data")],
-    { cwd: root, env: { ...process.env, HOME: home, USERPROFILE: home }, stdio: "pipe" },
+    {
+      cwd: root,
+      // Never the Hermes of the machine running the test: Connecter would set it up.
+      env: {
+        ...process.env,
+        HOME: home,
+        USERPROFILE: home,
+        HERMES_HOME: home,
+        PATH: withoutHermes(),
+      },
+      stdio: "pipe",
+    },
   );
   url = await new Promise<string>((resolve, reject) => {
     let out = "";

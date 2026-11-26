@@ -17,6 +17,7 @@ import {
   type HermesAction,
   type HermesAllow,
   type HermesNotify,
+  type HermesSetupState,
   type HermesStatus,
   type Item,
   type PendingQuestion,
@@ -31,6 +32,7 @@ import {
   type ServerMessage,
   type Thread,
 } from "@moonagentic/protocol";
+import type { HermesCli } from "./hermes-cli.ts";
 import { ASK_WAIT_MS } from "./hermes-tools.ts";
 
 const SETTING = "hermes";
@@ -48,6 +50,8 @@ const ANSWER_CLIP = 6_000;
 const WEBHOOK_TIMEOUT_MS = 10_000;
 /** Discord's own limit on a message. */
 const DISCORD_MAX = 2000;
+/** Hermes's model is read again at most this often, when the page asks. */
+const MODEL_READ_MS = 15_000;
 
 interface Saved {
   tokenHash?: string;
@@ -56,6 +60,7 @@ interface Saved {
   notify?: Partial<HermesNotify>;
   webhook?: string;
   log?: HermesAction[];
+  setup?: HermesSetupState;
 }
 
 /** Hermes's refusal for a call without a valid access: answered 401. */
@@ -104,6 +109,8 @@ export interface HermesHost {
   broadcast(message: ServerMessage): void;
   /** Where the bridge reaches this server, once it listens. */
   url(): string | undefined;
+  /** Hermes's own commands, when Hermes is installed on this computer. */
+  cli(): HermesCli | undefined;
 }
 
 export type WebhookSend = (url: string, init: RequestInit) => Promise<{ status: number }>;
@@ -219,6 +226,10 @@ export class Hermes {
   private lastSeenSaved = 0;
   /** Each thread as last seen, to tell what changed. */
   private readonly seenThreads = new Map<string, Thread>();
+  /** Hermes's model as last read, or why it could not be. */
+  private modelRead: { at: number; model?: { provider?: string; model: string }; error?: string } =
+    { at: 0 };
+  private applying: Promise<void> | undefined;
 
   constructor(host: HermesHost, dataDir: string | undefined, send?: WebhookSend) {
     this.host = host;
@@ -257,18 +268,35 @@ export class Hermes {
     return { ...DEFAULT_HERMES_NOTIFY, ...this.saved().notify };
   }
 
-  /** The lines for Hermes's `config.yaml`, under `mcp_servers:`. */
+  /** MoonAgentic's entry under `mcp_servers` in Hermes's `config.yaml`. */
+  entry(): {
+    command: string;
+    args: string[];
+    env?: Record<string, string>;
+    timeout: number;
+    connect_timeout: number;
+  } {
+    return {
+      command: process.execPath,
+      args: [BRIDGE, this.host.url() ?? "http://127.0.0.1:4747", this.tokenFile ?? TOKEN_FILE],
+      // In the desktop app, this program is Electron, which acts as Node only when told.
+      ...(process.env.ELECTRON_RUN_AS_NODE ? { env: { ELECTRON_RUN_AS_NODE: "1" } } : {}),
+      timeout: Math.ceil(ASK_WAIT_MS / 1000) + 120,
+      connect_timeout: 60,
+    };
+  }
+
+  /** The same entry as lines to paste, for when Hermes cannot be set up from here. */
   config(): string {
     const quote = (s: string) => `'${s.replace(/'/g, "''")}'`;
-    const url = this.host.url() ?? "http://127.0.0.1:4747";
+    const entry = this.entry();
     const lines = [
       "  moonagentic:",
-      `    command: ${quote(process.execPath)}`,
-      `    args: [${[BRIDGE, url, this.tokenFile ?? TOKEN_FILE].map(quote).join(", ")}]`,
+      `    command: ${quote(entry.command)}`,
+      `    args: [${entry.args.map(quote).join(", ")}]`,
     ];
-    // In the desktop app, this program is Electron, which acts as Node only when told.
-    if (process.env.ELECTRON_RUN_AS_NODE) lines.push("    env:", "      ELECTRON_RUN_AS_NODE: '1'");
-    lines.push(`    timeout: ${Math.ceil(ASK_WAIT_MS / 1000) + 120}`, "    connect_timeout: 60");
+    if (entry.env) lines.push("    env:", "      ELECTRON_RUN_AS_NODE: '1'");
+    lines.push(`    timeout: ${entry.timeout}`, `    connect_timeout: ${entry.connect_timeout}`);
     return lines.join("\n");
   }
 
@@ -282,7 +310,85 @@ export class Hermes {
       webhook: !!saved.webhook,
       config: this.config(),
       log: saved.log ?? [],
+      ...(saved.setup ? { setup: saved.setup } : {}),
+      ...(this.modelRead.model ? { model: this.modelRead.model } : {}),
+      ...(this.modelRead.error ? { modelError: this.modelRead.error } : {}),
     };
+  }
+
+  /**
+   * Does `work` on Hermes's own setup, one at a time, and says how it went in the status:
+   * the screen shows it under way, then done or why it failed.
+   */
+  private apply(what: HermesSetupState["what"], work: (cli: HermesCli) => Promise<void>): void {
+    if (this.applying) throw new Error("MoonAgentic règle déjà Hermes : attends la fin.");
+    const cli = this.host.cli();
+    if (!cli) {
+      throw new Error(
+        "Hermes n'est pas installé sur cet ordinateur, ou MoonAgentic ne le trouve pas : relance MoonAgentic après l'avoir installé.",
+      );
+    }
+    this.save({ setup: { what, state: "running", at: Date.now() } });
+    this.announce();
+    this.applying = (async () => {
+      try {
+        await work(cli);
+        this.save({ setup: { what, state: "done", at: Date.now() } });
+      } catch (error) {
+        const said = error instanceof Error ? error.message : String(error);
+        this.save({ setup: { what, state: "failed", error: said, at: Date.now() } });
+      } finally {
+        this.applying = undefined;
+        this.modelRead = { at: 0 };
+        this.announce();
+        void this.readModel();
+      }
+    })();
+  }
+
+  /** The work under way on Hermes's setup, for tests and for closing. */
+  settled(): Promise<void> {
+    return this.applying ?? Promise.resolve();
+  }
+
+  /** Writes MoonAgentic's entry in Hermes's `config.yaml`, then restarts its gateway. */
+  install(): void {
+    if (!this.saved().tokenHash) throw new Error("Connecte d'abord Hermes.");
+    const entry = this.entry();
+    this.apply("connect", async (cli) => {
+      await cli.install(entry);
+      await cli.restart();
+    });
+  }
+
+  /** Sets Hermes's default model, a model as it lists them, then restarts its gateway. */
+  setModel(id: string): void {
+    this.apply("model", async (cli) => {
+      await cli.setModel(id);
+      await cli.restart();
+    });
+  }
+
+  /** Reads Hermes's model again, when the last read is old, and tells the screens if it changed. */
+  async readModel(): Promise<void> {
+    if (this.applying || Date.now() - this.modelRead.at < MODEL_READ_MS) return;
+    const cli = this.host.cli();
+    const before = JSON.stringify(this.modelRead);
+    this.modelRead = { at: Date.now() };
+    if (!cli) {
+      this.modelRead.error = "Hermes n'est pas installé sur cet ordinateur.";
+    } else {
+      try {
+        const model = await cli.model();
+        if (model) this.modelRead.model = model;
+        else this.modelRead.error = "Aucun modèle par défaut dans la configuration de Hermes.";
+      } catch (error) {
+        this.modelRead.error = error instanceof Error ? error.message : String(error);
+      }
+    }
+    const { at: _now, ...now } = this.modelRead;
+    const { at: _was, ...was } = JSON.parse(before) as typeof this.modelRead;
+    if (JSON.stringify(now) !== JSON.stringify(was)) this.announce();
   }
 
   /** Gives Hermes a new access, in place of the old one. */
@@ -293,6 +399,8 @@ export class Hermes {
     writeFileSync(this.tokenFile, `${token}\n`, { mode: 0o600 });
     this.save({ tokenHash: hash(token).toString("hex") });
     this.announce();
+    // Hermes set up from here when it is on this computer; else its lines are to be copied.
+    if (this.host.cli() && !this.applying) this.install();
   }
 
   /** Takes Hermes's access away. */

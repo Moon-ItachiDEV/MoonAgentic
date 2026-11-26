@@ -16,6 +16,7 @@ import {
 } from "./project-setup.ts";
 import { Push, type PushSend } from "./push.ts";
 import { Hermes, type WebhookSend } from "./hermes.ts";
+import { HermesCli, type HermesRunner, hermesRunner } from "./hermes-cli.ts";
 import { ThreadClock, type WidgetData, widgetData } from "./widget.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
@@ -243,6 +244,8 @@ export interface HubOptions {
   pushSend?: PushSend;
   /** How Discord webhook messages are sent; to Discord over the network when not given. */
   webhookSend?: WebhookSend;
+  /** How Hermes's own commands run; the `hermes` installed on this computer when not given. */
+  hermesRunner?: HermesRunner;
   homeDir?: string;
   idleMs?: number;
   maxLiveAgents?: number;
@@ -633,6 +636,14 @@ export class Hub {
         quiet: (id) => this.locks.isLocked(id),
         broadcast: (m) => this.broadcast(m),
         url: () => this.coordinators.url,
+        cli: () => {
+          if (options.hermesRunner) return new HermesCli(options.hermesRunner);
+          try {
+            return new HermesCli(hermesRunner(this.agents.launch("hermes").command));
+          } catch {
+            return undefined;
+          }
+        },
       },
       options.dataDir,
       options.webhookSend,
@@ -1643,6 +1654,16 @@ export class Hub {
         return;
       case "hermes.get":
         client.send({ type: "hermes", hermes: this.hermes.status() });
+        // Its model is read from Hermes itself, and sent once known.
+        void this.hermes.readModel();
+        return;
+      case "hermes.install":
+        this.hermes.install();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "hermes.setModel":
+        this.hermes.setModel(message.model);
+        client.send({ type: "done", requestId: message.requestId });
         return;
       case "hermes.connect":
         this.hermes.connect();
