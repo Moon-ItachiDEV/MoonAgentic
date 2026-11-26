@@ -85,6 +85,8 @@ export function Composer(props: {
   project: Project | undefined;
   /** What the empty field says, when it is not the usual invitation. */
   placeholder?: string;
+  /** Its name for a screen reader, when another composer is on screen beside it. */
+  label?: string;
   onNewProject: () => void;
   /**
    * With no project yet: makes the project « Discussions » and picks it, so what is written
@@ -1155,7 +1157,7 @@ export function Composer(props: {
             rows={1}
             value={text}
             placeholder={placeholder}
-            aria-label="Message"
+            aria-label={props.label ?? "Message"}
             role="combobox"
             aria-autocomplete="list"
             aria-expanded={suggesting}

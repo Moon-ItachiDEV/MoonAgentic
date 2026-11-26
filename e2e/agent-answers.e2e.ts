@@ -198,7 +198,7 @@ const CLEAN = {
   placed: [],
   out: 0,
   corners: ["app", "app", "app", "app"],
-  rows: [true, true, true],
+  rows: [true, true, true, true],
   links: ["https://exemple.invalid/doc", "mailto:equipe@exemple.invalid"],
   toApp: 0,
   carried: [],
@@ -327,21 +327,16 @@ describe("agent answers", () => {
       .waitFor();
     await expect
       .poll(() => card(page).locator(".opt .on").allTextContents())
-      .toEqual(["Autoriser", "resufeR"]);
+      // Each choice is named by MoonAgentic from what it does, never by the agent's words.
+      .toEqual(["Autoriser pour ce filRecommandé", "Autoriser cette fois", "Refuser"]);
     await card(page).getByRole("button", { name: "Autre chose…" }).waitFor();
-    expect(await card(page).locator(".opt .ot small").allTextContents()).toEqual([
-      "Autorisé cette fois seulement",
-      "L'agent ne le fait pas et continue autrement",
-    ]);
     // Nothing on the page turns a text around or hides in it, the thread's rows included.
     const unseen = await page.evaluate(() =>
       [...document.body.innerText].filter((c) => /[\u200B\u202A-\u202E\u2066-\u2069]/.test(c)),
     );
     expect(unseen).toEqual([]);
     await shot(page, "a3-demande-lisible");
-    await card(page)
-      .getByRole("button", { name: /Autoriser/ })
-      .click();
+    await card(page).getByRole("button", { name: "Autoriser cette fois" }).click();
     await page.getByText("Réponse reçue : allow.").waitFor();
     await page.close();
   });

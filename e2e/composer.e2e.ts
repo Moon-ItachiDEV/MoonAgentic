@@ -258,7 +258,7 @@ describe("composer", () => {
     const requests = page.getByRole("region", { name: "À traiter" });
     await requests.getByText("Modifier src/app.ts").waitFor();
     await shot(page, "c8-a-traiter");
-    await requests.getByRole("button", { name: "Autoriser" }).click();
+    await requests.getByRole("button", { name: "Autoriser cette fois" }).click();
     await requests.getByText("Rien ne t'attend").waitFor();
     await menu(page)
       .getByRole("button", { name: /^Corrige la réponse/ })
@@ -648,8 +648,9 @@ describe("composer", () => {
     await page.waitForTimeout(300);
     expect(new URL(page.url()).pathname).toMatch(/^\/p\//);
 
-    // « Vue d'ensemble » groups them by what is really going on.
-    await page.getByRole("button", { name: "Vue d'ensemble" }).click();
+    // « Vue d'ensemble », beside the coordinator on a wide screen, groups them by what is
+    // really going on.
+    await page.getByRole("tablist", { name: "Vue d'ensemble" }).waitFor();
     const rows = (group: string) => page.locator(`.trow[data-group="${group}"]`);
     // Its agent asks before changing a file: the thread waits on the user, and says so.
     const row = rows("waiting").filter({ hasText: "Dis bonjour" });
@@ -670,7 +671,7 @@ describe("composer", () => {
       .click();
     const requests = page.getByRole("region", { name: "À traiter" });
     // Both threads opened here ask the same thing.
-    const allow = requests.getByRole("button", { name: "Autoriser" });
+    const allow = requests.getByRole("button", { name: "Autoriser cette fois" });
     await expect.poll(() => allow.count()).toBe(2);
     await allow.first().click();
     await expect.poll(() => allow.count()).toBe(1);
@@ -694,7 +695,6 @@ describe("composer", () => {
     await resolved.click({ button: "right" });
     await rowMenu.getByRole("menuitem", { name: "Rouvrir" }).click();
     await idle.waitFor();
-    await page.getByRole("button", { name: "Retour", exact: true }).click();
 
     // The project takes another name from its settings, for every window.
     const settings = page.getByRole("dialog", { name: "Réglages du projet" });
@@ -741,8 +741,7 @@ describe("composer", () => {
     // Before anything is asked: ways to start, the threads still beside.
     await page.getByRole("button", { name: "Établir un plan" }).waitFor();
     await beside.getByRole("button", { name: /Dis bonjour/ }).waitFor();
-    // What the coordinator works with, as the server has it.
-    await page.getByRole("button", { name: "Vue d'ensemble" }).click();
+    // What the coordinator works with, as the server has it, in the pane beside it.
     await page.getByRole("tab", { name: "Contexte" }).click();
     await page
       .getByRole("button", { name: /^Coordinateur/ })
@@ -752,7 +751,7 @@ describe("composer", () => {
     await page.getByText("Fils en même temps").waitFor();
     if (shots) await page.waitForTimeout(300);
     await shot(page, "p13-contexte");
-    await page.getByRole("button", { name: "Retour", exact: true }).click();
+    await page.getByRole("tab", { name: "Fils" }).click();
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
     await composer(page).fill("/ouvre Export Safari");
     await composer(page).press("Enter");
@@ -774,8 +773,14 @@ describe("composer", () => {
     expect(await beside.getByRole("button", { name: /Coordinateur/ }).count()).toBe(0);
     if (shots) await page.waitForTimeout(300);
     await shot(page, "p5-coordinateur");
-    // The thread opens from its line, and the arrow comes back to its project.
+    // The thread opens from its line in the pane beside, then on its own page.
     await card.click();
+    await page
+      .getByRole("complementary", { name: "Fils du projet" })
+      .getByText("Corrige : Export Safari")
+      .first()
+      .waitFor();
+    await page.getByRole("button", { name: "Ouvrir le fil en pleine page" }).click();
     await page.waitForURL(/\/t\//);
     await page.getByText("Corrige : Export Safari").first().waitFor();
     // On a phone it takes the screen, nothing wider than it.
@@ -794,7 +799,7 @@ describe("composer", () => {
     // The composer has the focus: the press on « Autoriser » above it must land all the same.
     expect(await page.locator(".rsl").count()).toBe(0);
     await composer(page).click();
-    await ask.getByRole("button", { name: "Autoriser" }).click();
+    await ask.getByRole("button", { name: "Autoriser cette fois" }).click();
     const result = page.locator(".rsl");
     await result.waitFor();
     await page.getByRole("separator").filter({ hasText: "Nouveau" }).waitFor();

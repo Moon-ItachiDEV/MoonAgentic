@@ -461,7 +461,7 @@ export function App() {
   ];
 
   /** What a conversation is written from: its composer, or the way to reopen it once resolved. */
-  const composerFor = (t: Thread | undefined, placeholder?: string) => (
+  const composerFor = (t: Thread | undefined, placeholder?: string, label?: string) => (
     <>
       {t?.archived && (
         <div className="res" role="status">
@@ -503,6 +503,7 @@ export function App() {
         thread={t}
         project={project}
         {...(placeholder ? { placeholder } : {})}
+        {...(label ? { label } : {})}
         onNewProject={() => setCreatingProject(true)}
         {...(state.ready && !t && looseHome && !discussions
           ? { onNeedProject: needLoose }
@@ -1098,7 +1099,7 @@ export function App() {
                   threads={state.threads}
                   onOpenThread={openThread}
                 />
-                <div className="pbt">{composerFor(paneThread, "Orienter ce fil")}</div>
+                <div className="pbt">{composerFor(paneThread, "Orienter ce fil", "Orienter ce fil")}</div>
               </div>
             ) : (
               <ProjectOverview
