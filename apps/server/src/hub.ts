@@ -3372,12 +3372,14 @@ export class Hub {
     if (!thread?.archived || !branch || thread.pr?.state !== "merged") return;
     if (this.store.getSetting<string[]>(KEEP_MERGED_BRANCHES, []).includes(thread.projectId))
       return;
+    // Kept on the thread when it was merged, for a thread the user resolves later.
+    const head = mergedHead ?? thread.pr.mergedHead;
     try {
       const { kept } = await deleteMergedBranches(
         this.gitProjectPath(thread.projectId),
         this.branchOwners(),
         [branch],
-        mergedHead ? { [branch]: mergedHead } : {},
+        head ? { [branch]: head } : {},
       );
       if (kept.length) console.warn(`Branche ${branch} gardée : ${kept[0]!.reason}`);
     } catch (error) {

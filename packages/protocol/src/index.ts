@@ -736,6 +736,8 @@ export interface ThreadPullRequest {
   conflicts?: true;
   /** The repository's rules hold the merge back. */
   blocked?: true;
+  /** Once merged, the commit GitHub merged: its branch still on it is merged. */
+  mergedHead?: string;
 }
 
 /** What a list of threads keeps of a pull request. */
@@ -754,6 +756,7 @@ export function threadPullRequest(pr: PullRequestInfo): ThreadPullRequest {
           : "none",
     ...(pr.conflicts ? { conflicts: true as const } : {}),
     ...(pr.blocked ? { blocked: true as const } : {}),
+    ...(pr.state === "merged" && pr.head ? { mergedHead: pr.head } : {}),
   };
 }
 

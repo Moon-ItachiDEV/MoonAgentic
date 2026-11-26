@@ -441,6 +441,27 @@ describe("what lists of threads keep of a pull request", () => {
     }
   });
 
+  it("deletes the branch of a merged thread the user resolves by hand, merged on GitHub only", async () => {
+    const { hub, store, github, client, threadId } = await threadOnGithub();
+    const thread = store.getThread(threadId)!;
+    const repo = store.getProject(thread.projectId)!.path;
+    const branch = thread.workspace!.branch;
+    writeFileSync(path.join(thread.workspace!.path, "fait.md"), "fait\n");
+    const head = settle(thread.workspace!.path);
+    github.pr = { ...OPEN, head };
+    await hub.pullRequest(threadId);
+    // Merged while the agent was at work: the thread is not resolved by itself.
+    const busy = (hub as unknown as { busy: Map<string, string> }).busy;
+    busy.set(threadId, "travail");
+    github.pr = { ...OPEN, head, state: "merged" };
+    await hub.watchPullRequests();
+    busy.delete(threadId);
+    expect(store.getThread(threadId)!.archived).toBeUndefined();
+    await hub.handle(client, { type: "thread.setArchived", threadId, archived: true });
+    expect(store.getThread(threadId)!.archived).toBe(true);
+    expect(git(repo, "branch", "--list", branch).includes(branch)).toBe(false);
+  });
+
   it("leaves a merged thread as it is when work was added past the merge", async () => {
     const { hub, store, github, threadId } = await threadOnGithub();
     const dir = store.getThread(threadId)!.workspace!.path;
