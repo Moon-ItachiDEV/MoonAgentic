@@ -3,7 +3,9 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { McpTool } from "@moonagentic/protocol";
+import { findCommand } from "./agents.ts";
 import type { McpServerRecord } from "./mcp.ts";
+import { killTree, spawnPlan } from "./spawn.ts";
 
 /** A server that has not listed its tools by then is said not to answer. */
 export const PROBE_TIMEOUT_MS = 30_000;
@@ -12,6 +14,11 @@ const MAX_PAGES = 20;
 const MAX_TOOLS = 500;
 const DESCRIPTION_LIMIT = 300;
 const PROTOCOL = "2025-06-18";
+/** A server's answer read at most, in characters. */
+const MAX_BODY = 4 * 1024 * 1024;
+/** Time a stopped command has to end on its own, and the server to let its session go. */
+const STOP_GRACE_MS = 2_000;
+const DELETE_TIMEOUT_MS = 3_000;
 
 type Ask = (method: string, params?: unknown) => Promise<unknown>;
 type Tell = (method: string) => Promise<void>;
@@ -58,19 +65,20 @@ async function overStdio(
   signal: AbortSignal,
   run: (ask: Ask, tell: Tell) => Promise<McpTool[]>,
 ): Promise<McpTool[]> {
-  // On Windows, `npx` and its kind are scripts that only a shell starts.
+  // On Windows, `npx` and its kind are `.cmd` files: found on the PATH, then started by
+  // cmd.exe with plain words only (see spawnPlan), never through a shell.
   const windows = process.platform === "win32";
-  const quote = (a: string) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a);
-  const child = spawn(
-    windows ? [t.command, ...t.args].map(quote).join(" ") : t.command,
-    windows ? [] : t.args,
-    {
-      env: { ...process.env, ...Object.fromEntries(t.env.map((e) => [e.name, e.value ?? ""])) },
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: windows,
-      windowsHide: true,
-    },
-  );
+  const plan = spawnPlan(windows ? (findCommand(t.command) ?? t.command) : t.command, t.args);
+  const child = spawn(plan.command, plan.args, {
+    env: { ...process.env, ...Object.fromEntries(t.env.map((e) => [e.name, e.value ?? ""])) },
+    stdio: ["pipe", "pipe", "pipe"],
+    // Its own process group on Unix, so stopping it also stops what it started.
+    detached: !windows,
+    windowsHide: true,
+    ...(plan.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+  });
+  // Writes racing the server's end fail with EPIPE; its exit says why it ended.
+  child.stdin.on("error", () => undefined);
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => {
     if (stderr.length < 4000) stderr += chunk.toString();
@@ -118,7 +126,14 @@ async function overStdio(
       write({ jsonrpc: "2.0", id: next, method, ...(params === undefined ? {} : { params }) });
     });
   const tell: Tell = async (method) => void write({ jsonrpc: "2.0", method });
-  const stop = () => child.kill();
+  let stopped = false;
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    void killTree(child, "SIGTERM");
+    // What will not end on its own, or was started by it, is ended for good a moment later.
+    setTimeout(() => void killTree(child, "SIGKILL"), STOP_GRACE_MS).unref();
+  };
   signal.addEventListener("abort", stop, { once: true });
   try {
     return await Promise.race([run(ask, tell), ended]);
@@ -150,6 +165,40 @@ export function rpcFromBody(body: string, type: string, id: number): RpcAnswer |
     }
   } else take(body);
   return all.find((m) => m.id === id);
+}
+
+/**
+ * The answer to `id` in a response, read as it comes: a stream of events the server keeps
+ * open is let go as soon as the answer is in it, and no body is read past MAX_BODY.
+ */
+async function answerIn(response: Response, id: number): Promise<RpcAnswer | undefined> {
+  const type = response.headers.get("content-type") ?? "";
+  const events = type.includes("text/event-stream");
+  const reader = response.body?.getReader();
+  if (!reader) return undefined;
+  const decoder = new TextDecoder();
+  let text = "";
+  let read = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      text += decoder.decode(value, { stream: true });
+      if (text.length > MAX_BODY) throw new Error("La réponse du serveur est trop longue.");
+      if (!events) continue;
+      // Only whole events are looked at, each once.
+      const ends = [...text.slice(read).matchAll(/\r?\n\r?\n/g)].at(-1);
+      if (!ends) continue;
+      const cut = read + ends.index + ends[0].length;
+      const found = rpcFromBody(text.slice(read, cut), type, id);
+      read = cut;
+      if (found) return found;
+    }
+    text += decoder.decode();
+    return rpcFromBody(text.slice(read), type, id);
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
 }
 
 /** Talks to a server at an address, each message a POST, as « Streamable HTTP » says. */
@@ -192,11 +241,7 @@ async function overHttp(
       method,
       ...(params === undefined ? {} : { params }),
     });
-    const message = rpcFromBody(
-      await response.text(),
-      response.headers.get("content-type") ?? "",
-      id,
-    );
+    const message = await answerIn(response, id);
     if (!message) throw new Error("Le serveur n'a pas répondu à la question posée.");
     return answerOf(message);
   };
@@ -215,7 +260,10 @@ async function overHttp(
           "mcp-session-id": session,
           ...Object.fromEntries(t.headers.map((h) => [h.name, h.value ?? ""])),
         },
-      }).catch(() => undefined);
+        signal: AbortSignal.timeout(DELETE_TIMEOUT_MS),
+      })
+        .then((response) => response.body?.cancel())
+        .catch(() => undefined);
     }
   }
 }
