@@ -457,26 +457,112 @@ describe("review of PR 177", () => {
 
 // The first try on a real iPhone, 26 November 2026.
 describe("first try on a real iPhone", () => {
-  it("links on an iPhone whose alert gives back no field value", async () => {
+  const paired = () => ({ status: 200, body: JSON.stringify({ token: "jeton" }) });
+
+  it("asks on a page when the alert gives back nothing of what was typed", async () => {
     const run = await runScript(SCRIPT, {
       fieldValuesLost: true,
-      alerts: [{ pick: 0 }, { pick: 0, fields: [`${URL}/`, " 123-456 ", ""] }],
-      answer: () => ({ status: 200, body: JSON.stringify({ token: "jeton" }) }),
+      alerts: [{ pick: 0 }, { pick: 0, fields: [URL, "123-456", ""] }],
+      form: [` ${URL}/ `, " 123-456 ", ""],
+      answer: paired,
     });
+    expect(run.pages).toHaveLength(1);
+    expect(run.pages[0]).toContain("Code d'appairage");
+    expect(run.asked).toEqual([`POST ${URL}/api/pair`]);
     expect(run.alerts.at(-1)).toMatchObject({ title: "Relié" });
     expect(JSON.parse(run.keychain.get(KEY)!)).toMatchObject({ url: URL, token: "jeton" });
   });
 
-  it("says what is missing when nothing was typed, on such an iPhone too", async () => {
-    for (const fieldValuesLost of [false, true]) {
-      const run = await runScript(SCRIPT, {
-        fieldValuesLost,
-        alerts: [{ pick: 0 }, { pick: 0 }],
-        answer: () => ({ status: 500 }),
-      });
-      expect(run.alerts.at(-1)).toMatchObject({ title: "Pas relié" });
-      expect(run.alerts.at(-1)!.message).toMatch(/adresse/);
-      expect(run.asked).toEqual([]);
-    }
+  it("links nothing when that page is closed without being sent", async () => {
+    const run = await runScript(SCRIPT, {
+      fieldValuesLost: true,
+      alerts: [{ pick: 0 }, { pick: 0, fields: [URL, "123-456", ""] }],
+      answer: paired,
+    });
+    expect(run.pages).toHaveLength(1);
+    expect(run.asked).toEqual([]);
+    expect(run.keychain.has(KEY)).toBe(false);
+  });
+
+  it("shows no page on an iPhone whose alert works, and says what is missing", async () => {
+    const run = await runScript(SCRIPT, {
+      alerts: [{ pick: 0 }, { pick: 0 }],
+      answer: () => ({ status: 500 }),
+    });
+    expect(run.pages).toEqual([]);
+    expect(run.alerts.at(-1)).toMatchObject({ title: "Pas relié" });
+    expect(run.alerts.at(-1)!.message).toMatch(/adresse/);
+    expect(run.asked).toEqual([]);
+  });
+
+  it("puts back the address already known into that page, safely", async () => {
+    const keychain = new Map([
+      [KEY, JSON.stringify({ url: 'https://a"><b>.ts.net', token: "t", discordText: "" })],
+    ]);
+    const run = await runScript(SCRIPT, {
+      fieldValuesLost: true,
+      keychain,
+      alerts: [{ pick: 8 }, { pick: 0 }],
+      answer: paired,
+    });
+    expect(run.pages[0]).toContain('value="https://a&quot;&gt;&lt;b&gt;.ts.net"');
+  });
+
+  it("adds https:// to an address typed without it, on a keyboard made for addresses", async () => {
+    const run = await runScript(SCRIPT, {
+      alerts: [{ pick: 0 }, { pick: 0, fields: ["mini.example.ts.net/", "123-456", ""] }],
+      answer: paired,
+    });
+    expect(run.keyboards.map((k) => k.keyboard)).toEqual(["url", "default", "default"]);
+    expect(run.asked).toEqual([`POST ${URL}/api/pair`]);
+    expect(JSON.parse(run.keychain.get(KEY)!).url).toBe(URL);
+  });
+
+  // Neon's review of PR 186.
+  it("lets the code's letters be typed, and an address without https:// be sent", async () => {
+    const run = await runScript(SCRIPT, {
+      fieldValuesLost: true,
+      alerts: [{ pick: 0 }, { pick: 0 }],
+      form: ["mini.example.ts.net", "ABCD2345", "discord.com/channels/1/2"],
+      answer: paired,
+    });
+    // A page that checked its fields itself would hold back what the script accepts.
+    expect(run.pages[0]).toContain('<form id="f" novalidate>');
+    expect(run.pages[0]).not.toMatch(/inputmode="numeric"|type="number"/);
+    expect(run.asked).toEqual([`POST ${URL}/api/pair`]);
+    expect(JSON.parse(run.keychain.get(KEY)!)).toMatchObject({
+      url: URL,
+      discord: "discord://-/channels/1/2",
+    });
+  });
+
+  it("keeps in the page what the alert did give back", async () => {
+    const keychain = new Map([[KEY, JSON.stringify({ url: URL, token: "t", discordText: "" })]]);
+    const run = await runScript(SCRIPT, {
+      emptyFieldsNull: true,
+      keychain,
+      alerts: [
+        { pick: 8 },
+        {
+          pick: 0,
+          fields: ["https://autre.example.ts.net", "", "https://discord.com/channels/1/2"],
+        },
+      ],
+      answer: paired,
+    });
+    expect(run.pages[0]).toContain('value="https://autre.example.ts.net"');
+    expect(run.pages[0]).toContain('value="https://discord.com/channels/1/2"');
+  });
+
+  it("takes a page closed unsent, whose wait ends on an error, as nothing sent", async () => {
+    const run = await runScript(SCRIPT, {
+      fieldValuesLost: true,
+      formRejectsOnClose: true,
+      alerts: [{ pick: 0 }, { pick: 0 }],
+      answer: paired,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(run.asked).toEqual([]);
+    expect(run.keychain.has(KEY)).toBe(false);
   });
 });
