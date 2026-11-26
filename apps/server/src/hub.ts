@@ -759,11 +759,14 @@ export class Hub {
 
   /** In each project's repository, the files of orphan folders kept for too long go. */
   private async dropOldOrphans(): Promise<void> {
-    // Only git repositories hold them: no git command for the others (Discussions).
+    // The database may be closed meanwhile: the server stopped during the sweep.
+    if (this.closed) return;
+    // Only git repositories hold them: no git command for a project known to be none
+    // (Discussions). Not asked here when unknown: asking waits for git, holding the server.
     const repos = new Set(
       this.store
         .listProjects()
-        .filter((p) => this.withGit(p).git)
+        .filter((p) => this.gitProjects.get(p.id) !== false)
         .map((p) => p.path),
     );
     for (const repo of repos) {
