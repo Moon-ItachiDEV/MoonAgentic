@@ -126,7 +126,11 @@ class WidgetText {
   lineLimit = 0;
   minimumScaleFactor = 1;
   textOpacity = 1;
+  centred = false;
   constructor(readonly text: string) {}
+  centerAlignText() {
+    this.centred = true;
+  }
   html(theme: Theme, mono: boolean): string {
     const clamp =
       this.lineLimit === 1
@@ -166,7 +170,8 @@ export class WidgetStack {
   backgroundColor: Color | undefined;
   backgroundImage: Picture | undefined;
   url: string | undefined;
-  protected padding = [0, 0, 0, 0];
+  /** Top, right, bottom, left. */
+  padding = [0, 0, 0, 0];
   layoutVertically() {
     this.vertical = true;
   }
@@ -192,6 +197,7 @@ export class WidgetStack {
     return node;
   }
   addImage(image: Picture) {
+    if (!image) throw new TypeError("addImage takes an image");
     const node = new WidgetImage(image);
     this.children.push(node);
     return node;
@@ -283,7 +289,7 @@ export interface Phone {
   /** The answers typed into each alert in turn: the button's place, and the fields. */
   alerts?: { pick: number; fields?: string[] }[];
   keychain?: Map<string, string>;
-  files?: Map<string, string | Picture>;
+  files?: Map<string, string | Picture | null>;
 }
 
 /** Runs the script as Scriptable would, in the app or as a widget; gives back what it showed. */
@@ -298,7 +304,7 @@ export async function runScript(
   asked: string[];
 }> {
   const keychain = phone.keychain ?? new Map<string, string>();
-  const files = phone.files ?? new Map<string, string | Picture>();
+  const files = phone.files ?? new Map<string, string | Picture | null>();
   const alerts = [...(phone.alerts ?? [])];
   const shown: { title: string; message: string; actions: string[] }[] = [];
   const asked: string[] = [];
@@ -328,9 +334,10 @@ export async function runScript(
     async loadJSON() {
       return JSON.parse(this.send()) as unknown;
     }
-    async loadImage(): Promise<Picture> {
+    /** What is not an image comes back as nothing, as on an iPhone. */
+    async loadImage(): Promise<Picture | null> {
       this.send();
-      return { url: this.url };
+      return this.response?.statusCode === 200 ? { url: this.url } : null;
     }
   }
   class Alert {
@@ -385,8 +392,8 @@ export async function runScript(
         fileExists: (path: string) => files.has(path),
         readString: (path: string) => files.get(path) as string,
         writeString: (path: string, text: string) => void files.set(path, text),
-        readImage: (path: string) => files.get(path) as Picture,
-        writeImage: (path: string, image: Picture) => void files.set(path, image),
+        readImage: (path: string) => (files.get(path) ?? null) as Picture | null,
+        writeImage: (path: string, image: Picture | null) => void files.set(path, image),
       }),
     },
     Script: {

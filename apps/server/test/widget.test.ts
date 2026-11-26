@@ -287,6 +287,55 @@ describe("widgetData: Hermes", () => {
   });
 });
 
+// Neon's review of PR 177.
+describe("widgetData: review of PR 177", () => {
+  it("says nothing of a project locked after Hermes acted on it or ended a turn in it", () => {
+    const clock = new ThreadClock(() => NOW - 3 * 60_000);
+    const secret = thread("s", { projectId: "p2", agentId: "hermes", status: "running" });
+    clock.know([secret]);
+    clock.threadChanged({ ...secret, status: "idle" });
+    const log = [
+      { what: "Message au fil · Fil caché", project: "Secret", at: NOW - 60_000 },
+      { what: "Message au coordinateur", project: "MoonAgentic", at: NOW - HOUR },
+    ];
+    const data = widgetData(
+      input({
+        clock,
+        locked: (id) => id === "p2",
+        threads: [{ ...secret, status: "idle" }],
+        hermes: hermes({ log, lastSeen: NOW - 2 * HOUR }),
+      }),
+    );
+    expect(JSON.stringify(data)).not.toMatch(/Secret|caché/);
+    expect(data.hermes!.log).toEqual([log[1]]);
+    // Neither what it did there, nor when its turn there ended.
+    expect(data.hermes).toMatchObject({ state: "rest", at: NOW - 2 * HOUR });
+  });
+
+  it("does not count as at work a thread whose turn waits for a place", () => {
+    const data = widgetData(
+      input({
+        threads: [
+          thread("q", { status: "running", inLine: true }),
+          thread("r", { status: "running" }),
+        ],
+      }),
+    );
+    expect(data.running).toBe(1);
+    expect(data.threads.map((t) => t.title)).toEqual(["Fil r"]);
+  });
+
+  it("sees a turn end on an error while it waited for an answer", () => {
+    const clock = new ThreadClock(() => NOW - 60_000);
+    const h = thread("h", { agentId: "hermes", status: "waiting" });
+    clock.know([h]);
+    clock.threadChanged({ ...h, status: "error" });
+    expect(clock.lastEnded("hermes")).toMatchObject({ threadId: "h", error: true });
+    const data = widgetData(input({ clock, threads: [{ ...h, status: "error" }] }));
+    expect(data.hermes).toMatchObject({ state: "error", title: "Fil h" });
+  });
+});
+
 describe("GET /api/widget", () => {
   const cleanups: (() => void | Promise<void>)[] = [];
   afterEach(async () => {
@@ -309,7 +358,7 @@ describe("GET /api/widget", () => {
       rmSync(root, { recursive: true, force: true });
     });
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}${WIDGET_PATH}`;
-    return { url, devices, data };
+    return { url, devices, data, webDir };
   }
 
   it("answers a paired device, and no one without a token", async () => {
@@ -321,6 +370,14 @@ describe("GET /api/widget", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("no-store");
     expect(await res.json()).toEqual(data);
+  });
+
+  it("serves Hermes's portrait as the image it is", async () => {
+    const { url, webDir } = await serve();
+    writeFileSync(path.join(webDir, "hermes-avatar.jpg"), Buffer.from([0xff, 0xd8, 0xff]));
+    const res = await fetch(url.replace(WIDGET_PATH, "/hermes-avatar.jpg"));
+    await res.body?.cancel();
+    expect(res.headers.get("content-type")).toBe("image/jpeg");
   });
 
   it("only reads, and never for a page of another site", async () => {

@@ -46,9 +46,12 @@ function settings() {
   }
 }
 
-/** « https://discord.com/channels/1/2 » opens the Discord app on that channel. */
+/**
+ * « https://discord.com/channels/1/2 » opens the Discord app on that channel, and
+ * « …/channels/@me/2 » on that private conversation.
+ */
 function discordLink(text) {
-  const found = /channels\/(\d+)\/(\d+)/.exec(text || "");
+  const found = /channels\/(@me|\d+)\/(\d+)/.exec(text || "");
   return found ? `discord://-/channels/${found[1]}/${found[2]}` : "";
 }
 
@@ -66,6 +69,13 @@ async function setUp(saved) {
   const url = ask.textFieldValue(0).trim().replace(/\/+$/, "");
   const code = ask.textFieldValue(1).trim();
   const discordText = ask.textFieldValue(2).trim();
+  const discord = discordLink(discordText);
+  // Said before the code is used: a pairing code only serves once.
+  if (discordText && !discord) {
+    throw new Error(
+      "Le lien Discord n'est pas reconnu. Dans Discord, appuie longtemps sur le salon puis « Copier le lien ».",
+    );
+  }
   let token = saved && saved.url === url ? saved.token : "";
   if (code) {
     const req = new Request(`${url}/api/pair`);
@@ -73,14 +83,24 @@ async function setUp(saved) {
     req.headers = { "content-type": "application/json" };
     req.body = JSON.stringify({ code, name: DEVICE_NAME });
     req.timeoutInterval = 15;
-    const answer = await req.loadJSON();
+    // Read as text: a refusal or a proxy's page is not always JSON.
+    const body = await req.loadString();
+    const status = req.response ? req.response.statusCode : 200;
+    let answer = null;
+    try {
+      answer = JSON.parse(body);
+    } catch {
+      // No JSON: the status says why.
+    }
     if (!answer || !answer.token) {
-      throw new Error((answer && answer.message) || "L'appairage a été refusé.");
+      throw new Error(
+        (answer && answer.message) || `L'appairage a été refusé (réponse ${status}).`,
+      );
     }
     token = answer.token;
   }
   if (!url || !token) throw new Error("Il faut l'adresse et un code d'appairage.");
-  const next = { url, token, discordText, discord: discordLink(discordText) };
+  const next = { url, token, discordText, discord };
   Keychain.set(KEY, JSON.stringify(next));
   return next;
 }
@@ -121,11 +141,15 @@ async function read(conf) {
 async function avatar(conf) {
   const fm = FileManager.local();
   const file = cacheFile("hermes.jpg");
-  if (fm.fileExists(file)) return fm.readImage(file);
+  // A file that holds no image is asked for again.
+  const cached = fm.fileExists(file) ? fm.readImage(file) : null;
+  if (cached) return cached;
   try {
     const req = new Request(`${conf.url}/hermes-avatar.jpg`);
     req.timeoutInterval = 10;
     const image = await req.loadImage();
+    const status = req.response ? req.response.statusCode : 200;
+    if (status !== 200 || !image) return null;
     fm.writeImage(file, image);
     return image;
   } catch {
@@ -542,7 +566,9 @@ function mediumHermes(conf, reading, face, kind) {
 
 function lockBase(conf) {
   const w = new ListWidget();
-  w.url = conf.url;
+  // The system already keeps its own margin around these.
+  w.setPadding(0, 0, 0, 0);
+  if (conf) w.url = conf.url;
   w.refreshAfterDate = new Date(Date.now() + REFRESH_MIN * 60_000);
   return w;
 }
@@ -573,7 +599,7 @@ function lockCircular(conf, data, wanted) {
     return w;
   };
   const key = (wanted || "").toLowerCase();
-  if (key === "fils") return pair(data.waiting, "t'attend");
+  if (key === "fils") return pair(data.waiting, data.waiting > 1 ? "t'attendent" : "t'attend");
   if (key === "hermes") {
     const h = data.hermes;
     const waits = h && (h.state === "waiting" || h.state === "asks") ? 1 : 0;
@@ -598,7 +624,8 @@ function lockRectangular(conf, data, wanted) {
     const h = data.hermes;
     w.url = hermesUrl(conf, h);
     text(w, "Hermes", Font.semiboldSystemFont(14), white);
-    text(w, HERMES_WORDS[h.state], Font.mediumSystemFont(13), white).textOpacity = 0.75;
+    const word = HERMES_WORDS[h.state];
+    if (word) text(w, word, Font.mediumSystemFont(13), white).textOpacity = 0.75;
     text(w, hermesSub(h, data.at) || " ", Font.mediumSystemFont(13), white).textOpacity = 0.75;
     return w;
   }
@@ -634,16 +661,38 @@ function lockInline(conf, data, wanted) {
   if ((wanted || "").toLowerCase() === "hermes" && h) {
     w.url = hermesUrl(conf, h);
     const at = h.at && h.state !== "rest" && h.state !== "off" ? ` · ${clock(h.at)}` : "";
-    w.addText(`Hermes ${HERMES_WORDS[h.state].toLowerCase()}${at}`);
+    const word = HERMES_WORDS[h.state];
+    w.addText(word ? `Hermes ${word.toLowerCase()}${at}` : "Hermes");
   } else w.addText(lockSummary(data));
   return w;
 }
 
 // ---------- which one ----------
 
-function notice(conf, words) {
+/** On the lock screen: a few words alone, the system draws the rest. */
+function lockNotice(conf, family, words) {
+  const w = lockBase(conf);
+  if (family === "accessoryInline") {
+    w.addText(words);
+    return w;
+  }
+  const white = Color.white();
+  if (family === "accessoryCircular") {
+    w.addAccessoryWidgetBackground = true;
+    const t = text(w, words, Font.mediumSystemFont(10), white, 2);
+    t.minimumScaleFactor = 0.7;
+    t.centerAlignText();
+    return w;
+  }
+  text(w, words, Font.mediumSystemFont(13), white, 2);
+  return w;
+}
+
+function notice(conf, family, short, words) {
+  if (String(family).startsWith("accessory")) return lockNotice(conf, family, short);
   const w = new ListWidget();
   w.backgroundColor = C.bg;
+  w.refreshAfterDate = new Date(Date.now() + REFRESH_MIN * 60_000);
   if (conf) w.url = conf.url;
   text(w, "MoonAgentic", Font.mediumSystemFont(13), C.muted);
   w.addSpacer(6);
@@ -652,10 +701,14 @@ function notice(conf, words) {
 }
 
 async function build(conf, family, wanted) {
-  if (!conf) return notice(null, "Ouvre Scriptable et lance ce script pour le relier.");
+  if (!conf) {
+    return notice(null, family, "À relier", "Ouvre Scriptable et lance ce script pour le relier.");
+  }
   const reading = await read(conf);
-  if (reading.refused) return notice(conf, "Accès retiré. Relance le script pour appairer.");
-  if (!reading.data) return notice(conf, "MoonAgentic ne répond pas.");
+  if (reading.refused) {
+    return notice(conf, family, "Accès retiré", "Accès retiré. Relance le script pour appairer.");
+  }
+  if (!reading.data) return notice(conf, family, "Injoignable", "MoonAgentic ne répond pas.");
   const { data } = reading;
   const key = (wanted || "").trim().toLowerCase();
   if (family === "accessoryCircular") return lockCircular(conf, data, key);

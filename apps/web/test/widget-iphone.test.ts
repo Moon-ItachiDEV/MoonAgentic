@@ -364,3 +364,93 @@ describe("the access", () => {
     expect(run.widget!.texts()[0]).toBe("Abonnements");
   });
 });
+
+// Neon's review of PR 177.
+describe("review of PR 177", () => {
+  const images = (widget: { html: (theme: "light") => string }) =>
+    (widget.html("light").match(/<img /g) ?? []).length;
+
+  it("asks for Hermes's portrait again after a failed first try", async () => {
+    const files = new Map<string, string | null>();
+    let portrait = 404;
+    const answer: Phone["answer"] = (url) =>
+      url.endsWith("/hermes-avatar.jpg")
+        ? { status: portrait }
+        : { status: 200, body: JSON.stringify(sample()) };
+    const first = await runScript(SCRIPT, phone(sample(), { files, answer }), {
+      family: "small",
+      parameter: "hermes",
+    });
+    expect(images(first.widget!)).toBe(0);
+    portrait = 200;
+    const second = await runScript(SCRIPT, phone(sample(), { files, answer }), {
+      family: "small",
+      parameter: "hermes",
+    });
+    expect(second.asked).toContain(`GET ${URL}/hermes-avatar.jpg`);
+    expect(images(second.widget!)).toBe(1);
+  });
+
+  it.each(["accessoryInline", "accessoryCircular", "accessoryRectangular"])(
+    "%s says what is wrong in its own few words, with no background",
+    async (family) => {
+      const cut = phone(sample(), { answer: () => ({ status: 401 }) });
+      const refused = (await runScript(SCRIPT, cut, { family })).widget!;
+      expect(refused.texts()).toEqual(["Accès retiré"]);
+      expect(refused.backgroundColor).toBeUndefined();
+      expect(refused.refreshAfterDate).toBeInstanceOf(Date);
+      const away = phone(sample(), { answer: () => ({ status: 0 }) });
+      expect((await runScript(SCRIPT, away, { family })).widget!.texts()).toEqual(["Injoignable"]);
+      const unlinked = await runScript(SCRIPT, { answer: () => ({ status: 500 }) }, { family });
+      expect(unlinked.widget!.texts()).toEqual(["À relier"]);
+    },
+  );
+
+  it("leaves a lock screen widget all its room", async () => {
+    for (const family of ["accessoryCircular", "accessoryRectangular", "accessoryInline"]) {
+      expect((await show(family)).padding).toEqual([0, 0, 0, 0]);
+    }
+  });
+
+  it("opens a private Discord conversation too, and refuses a link it cannot read", async () => {
+    const link = async (typed: string) => {
+      const run = await runScript(SCRIPT, {
+        alerts: [{ pick: 0 }, { pick: 0, fields: [URL, "123-456", typed] }],
+        answer: () => ({ status: 200, body: JSON.stringify({ token: "jeton" }) }),
+      });
+      return { run, saved: run.keychain.get(KEY) };
+    };
+    const dm = await link("https://discord.com/channels/@me/42");
+    expect(JSON.parse(dm.saved!).discord).toBe("discord://-/channels/@me/42");
+    const wrong = await link("discord salon moonagentic");
+    expect(wrong.saved).toBeUndefined();
+    expect(wrong.run.alerts.at(-1)).toMatchObject({ title: "Pas relié" });
+    expect(wrong.run.alerts.at(-1)!.message).toContain("Discord");
+  });
+
+  it("says why in words when the server answers the pairing with no JSON", async () => {
+    for (const status of [403, 502]) {
+      const run = await runScript(SCRIPT, {
+        alerts: [{ pick: 0 }, { pick: 0, fields: [URL, "123-456", ""] }],
+        answer: () => ({ status, body: status === 502 ? "<html>Bad Gateway</html>" : "" }),
+      });
+      const said = run.alerts.at(-1)!;
+      expect(said.title).toBe("Pas relié");
+      expect(said.message).toContain(String(status));
+      expect(said.message).not.toMatch(/JSON|Unexpected/);
+    }
+  });
+
+  it("counts several threads that wait in the plural on the lock screen", async () => {
+    const data = { ...sample(), waiting: 2 };
+    expect((await show("accessoryCircular", "fils", data)).texts()).toEqual(["2", "t'attendent"]);
+  });
+
+  it("shows a state of Hermes it does not know yet rather than nothing", async () => {
+    const data = sample({ state: "nouveau", title: "Un état futur" });
+    expect((await show("accessoryInline", "hermes", data)).texts()).toEqual(["Hermes"]);
+    expect((await show("accessoryRectangular", "hermes", data)).texts()[0]).toBe("Hermes");
+    expect((await show("small", "hermes", data)).texts()).toContain("Un état futur");
+    expect((await show("medium", "hermes journal", data)).texts()[0]).toBe("Hermes · Journal");
+  });
+});

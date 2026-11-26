@@ -1,4 +1,4 @@
-// What the iPhone widgets show (see `extras/scriptable/MoonAgentic.js`): the quotas, the threads
+// What the iPhone widgets show (see `apps/web/public/widget-iphone.js`): the quotas, the threads
 // that wait or work, and Hermes. Read-only, small, and nothing of a locked project.
 import type {
   AgentInfo,
@@ -104,7 +104,9 @@ export class ThreadClock {
     if (was?.status === thread.status) return;
     const at = this.now();
     this.seen.set(thread.id, { status: thread.status, since: at });
-    if (was?.status === "running" && (thread.status === "idle" || thread.status === "error")) {
+    // A turn that waited for an answer can end there too: refused, stopped, or failed.
+    const inTurn = was?.status === "running" || was?.status === "waiting";
+    if (inTurn && (thread.status === "idle" || thread.status === "error")) {
       this.ended.set(thread.agentId, {
         threadId: thread.id,
         error: thread.status === "error",
@@ -208,7 +210,9 @@ export function widgetData(input: WidgetInput): WidgetData {
     (sinceOf(a) ?? Infinity) - (sinceOf(b) ?? Infinity) || a.title.localeCompare(b.title);
   const waiting = shown.filter((t) => t.status === "waiting").sort(oldestFirst);
   // A thread held in line is not at work yet.
-  const running = shown.filter((t) => t.status === "running" && !t.held).sort(oldestFirst);
+  const running = shown
+    .filter((t) => t.status === "running" && !t.held && !t.inLine)
+    .sort(oldestFirst);
 
   const data: WidgetData = {
     at: now,
@@ -225,7 +229,10 @@ export function widgetData(input: WidgetInput): WidgetData {
   if (!installed && !input.hermes.connected) return data;
 
   const own = (t: Thread) => t.agentId === "hermes";
-  const log = input.hermes.log.slice(0, MAX_LINES);
+  // What it did in a project locked since says the project's name and a thread's title.
+  const lockedNames = new Set(input.projects.filter((p) => input.locked(p.id)).map((p) => p.name));
+  const actions = input.hermes.log.filter((a) => !a.project || !lockedNames.has(a.project));
+  const log = actions.slice(0, MAX_LINES);
   const next = input.schedules
     .filter((s) => s.by === "hermes" && s.enabled && !input.locked(s.projectId))
     .sort((a, b) => a.nextAt - b.nextAt)
@@ -251,8 +258,10 @@ export function widgetData(input: WidgetInput): WidgetData {
     if (waits) return { state: "waiting", ...about(waits) };
     const works = running.find(own);
     if (works) return { state: "working", ...about(works) };
-    const last = clock.lastEnded("hermes");
-    const lastThread = last && shown.find((t) => t.id === last.threadId);
+    // A turn ended in a thread that is no longer shown, locked or archived, says nothing.
+    const ended = clock.lastEnded("hermes");
+    const lastThread = ended && shown.find((t) => t.id === ended.threadId);
+    const last = lastThread ? ended : undefined;
     if (last?.error && lastThread?.status === "error") {
       return {
         state: "error",
@@ -261,7 +270,7 @@ export function widgetData(input: WidgetInput): WidgetData {
         at: last.at,
       };
     }
-    const acted = input.hermes.log[0];
+    const acted = actions[0];
     const fresh = (at: number) => now - at < RECENT_MS;
     if (acted && fresh(acted.at) && (!last || acted.at >= last.at)) {
       return {
