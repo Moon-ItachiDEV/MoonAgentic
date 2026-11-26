@@ -781,6 +781,11 @@ button.ico-pick {
 .ipk button:active {
   transform: scale(0.92);
 }
+@media (hover: hover) and (pointer: fine) {
+  .ipk button:hover {
+    background: var(--card);
+  }
+}
 .ipk button[aria-checked="true"] {
   background: color-mix(in srgb, var(--pc, var(--pc-moon)) 14%, transparent);
 }

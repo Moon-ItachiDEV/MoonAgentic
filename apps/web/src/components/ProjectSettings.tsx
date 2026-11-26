@@ -466,7 +466,7 @@ const iconName = (icon: string | undefined) => {
 };
 
 /** The tints a project can take; the one it has takes it back to the usual tint. */
-function Swatches({ project, icon }: { project: Project; icon?: string | undefined }) {
+function Swatches({ project }: { project: Project }) {
   return (
     <div className="sw" role="radiogroup" aria-label="Couleur">
       {PROJECT_COLORS.map((color) => (
@@ -480,7 +480,7 @@ function Swatches({ project, icon }: { project: Project; icon?: string | undefin
           title={COLOR_NAME[color]}
           style={{ "--c": `var(--pc-${color})` } as React.CSSProperties}
           onClick={() =>
-            sendLook(project.id, icon ?? project.icon, project.color === color ? undefined : color)
+            sendLook(project.id, project.icon, project.color === color ? undefined : color)
           }
         />
       ))}
@@ -515,6 +515,8 @@ function IconPane({ project }: { project: Project }) {
   const [query, setQuery] = useState("");
   const keep = (icon: string) => sendLook(project.id, icon, project.color);
   const found = findProjectIcons(query);
+  const q = query.trim().toLowerCase();
+  const showFolder = !q || "dossier".startsWith(q) || "folder".startsWith(q);
   const current = project.icon ?? "";
   const tint = project.color ? ` pc-${project.color}` : "";
 
@@ -547,7 +549,7 @@ function IconPane({ project }: { project: Project }) {
       </label>
       <div className={`ins${tint}`}>
         <div className="ipk" role="radiogroup" aria-label="Icône">
-          {!query.trim() && (
+          {showFolder && (
             <button
               type="button"
               role="radio"
@@ -575,7 +577,7 @@ function IconPane({ project }: { project: Project }) {
             </button>
           ))}
         </div>
-        {found.length === 0 && <p className="snone">Aucune icône</p>}
+        {found.length === 0 && !showFolder && <p className="snone">Aucune icône</p>}
       </div>
     </>
   );

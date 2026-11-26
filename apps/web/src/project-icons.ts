@@ -478,7 +478,12 @@ export function projectIconName(icon: string | undefined): ProjectIconName | und
 }
 
 /** Lower case and without accents, so « cle » finds « Clé ». */
-const plain = (text: string) => text.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+const plain = (text: string) =>
+  text
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
 
 /** The icons whose French name or own name holds what is searched, in their order. */
 export function findProjectIcons(query: string): ProjectIconName[] {
