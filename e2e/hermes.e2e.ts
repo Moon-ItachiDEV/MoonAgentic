@@ -93,7 +93,9 @@ describe("Réglages › Hermes · Discord", () => {
     expect(await page.getByText("Connexion coupée").count()).toBe(0);
 
     await connect.click();
-    await page.getByRole("button", { name: "Copier le réglage pour config.yaml", exact: true }).waitFor();
+    await page
+      .getByRole("button", { name: "Copier le réglage pour config.yaml", exact: true })
+      .waitFor();
 
     const field = page.getByLabel("Adresse du webhook Discord");
     await field.fill("https://exemple.fr/pas-discord");
