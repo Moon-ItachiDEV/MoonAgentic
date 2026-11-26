@@ -8,6 +8,8 @@ import "./v2/wide.css";
 import "./v2/real.css";
 import "./v2/thread.css";
 import "./v2/planner.css";
+import "./v2/projet.css";
+import { watchTabs } from "./v2/tab-slide.ts";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
@@ -22,6 +24,7 @@ import { watchDevice } from "./v2/use-screen.ts";
 installGlobalErrorHandlers();
 applyTheme();
 watchDevice();
+watchTabs();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

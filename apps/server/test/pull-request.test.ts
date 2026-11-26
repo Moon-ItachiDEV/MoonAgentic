@@ -10,7 +10,7 @@ import {
 } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
-import { type Client, Hub, summaryOf } from "../src/hub.ts";
+import { type Client, Hub, leadOf, summaryOf } from "../src/hub.ts";
 import {
   type GhRun,
   ghPullRequests,
@@ -68,6 +68,21 @@ describe("reading a pull request from gh", () => {
     expect(of({ mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" })?.conflicts).toBe(true);
     expect(of({ mergeable: "UNKNOWN" })?.conflicts).toBeNull();
     expect(of({ mergeStateStatus: "BLOCKED" })?.blocked).toBe(true);
+    expect(
+      of({
+        author: { login: "moon" },
+        createdAt: "2026-11-25T23:50:00Z",
+        additions: 2456,
+        deletions: 380,
+        changedFiles: 35,
+      }),
+    ).toMatchObject({
+      author: "moon",
+      createdAt: Date.parse("2026-11-25T23:50:00Z"),
+      additions: 2456,
+      deletions: 380,
+      files: 35,
+    });
     expect(parsePullRequest("pas du JSON", "moon/demo")).toBeUndefined();
     expect(parsePullRequest("{}", "moon/demo")).toBeUndefined();
   });
@@ -250,7 +265,18 @@ async function threadOnGithub(remoteUrl = "https://github.com/moon/demo.git") {
   const messages: ServerMessage[] = [];
   const client: Client = { send: (m) => messages.push(m) };
   const reply = () => messages.findLast((m) => m.type === "pullRequest");
-  return { hub, store, github, threadId, branch, client, reply };
+  /** The server started again on the same database: what it only remembered is gone. */
+  const restarted = async () => {
+    await hub.close();
+    const next = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+      pullRequests: () => pullRequests,
+    });
+    cleanups.unshift(() => next.close());
+    await next.recovered;
+    return next;
+  };
+  return { hub, store, github, threadId, branch, client, reply, restarted };
 }
 
 const OPEN = parsePullRequest(view(), "moon/demo")!;
@@ -508,5 +534,102 @@ describe("a thread's summary", () => {
       summaryOf("## Fait\n\nLe **bouton** marche, voir [la PR](https://x.y/1).\n```ts\ncode\n```"),
     ).toBe("Fait Le bouton marche, voir la PR.");
     expect(summaryOf("a".repeat(400))).toHaveLength(160);
+  });
+
+  it("tells a finished thread's result in its first two sentences", () => {
+    expect(
+      leadOf(
+        "## Résultat\n\nLa PR 155 n'est pas prête. Deux secrets passent encore. Le reste est bon.\n\n```moon-revue\n{}\n```",
+        2,
+        400,
+      ),
+    ).toBe("La PR 155 n'est pas prête. Deux secrets passent encore.");
+    expect(leadOf("Fait : v0.1.10 publiée. Rien d'autre.", 1)).toBe("Fait : v0.1.10 publiée.");
+  });
+});
+
+describe("pull requests turned green", () => {
+  const green = (n: number) => ({
+    ...OPEN,
+    number: n,
+    url: `https://github.com/moon/demo/pull/${n}`,
+    checks: [{ name: "ci", state: "passed" as const }],
+  });
+
+  it("are told to the coordinator once at least two wait only on a review", async () => {
+    const { hub, store, github, threadId: coordinator } = await threadOnGithub();
+    const projectId = store.getThread(coordinator)!.projectId;
+    const open = async (text: string) => {
+      const id = hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        isolated: true,
+        text,
+        openedBy: coordinator,
+      });
+      await hub.whenIdle(id);
+      return id;
+    };
+    const first = await open("Ajoute le suivi");
+    const second = await open("Corrige le menu");
+    const told = () =>
+      store.listItems(coordinator).filter((i) => i.kind === "agent" && i.id.startsWith("green:"));
+
+    github.pr = green(1);
+    await hub.pullRequest(first);
+    expect(told()).toEqual([]);
+
+    github.pr = green(2);
+    await hub.pullRequest(second);
+    expect(told()).toHaveLength(1);
+    const text = (told()[0] as { text: string }).text;
+    expect(text).toContain("Les 2 PR sont vertes");
+    expect(text).toContain(`](fil:${first})`);
+    expect(text).toContain("https://github.com/moon/demo/pull/2");
+
+    // Asked again, the same green pull requests are not told twice.
+    await hub.pullRequest(second);
+    github.pr = green(1);
+    await hub.pullRequest(first);
+    expect(told()).toHaveLength(1);
+  });
+
+  it("are still counted and not told again after the server starts again", async () => {
+    const { hub, store, github, threadId: coordinator, restarted } = await threadOnGithub();
+    const projectId = store.getThread(coordinator)!.projectId;
+    const open = async (on: Hub, text: string) => {
+      const id = on.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        isolated: true,
+        text,
+        openedBy: coordinator,
+      });
+      await on.whenIdle(id);
+      return id;
+    };
+    const first = await open(hub, "Ajoute le suivi");
+    const second = await open(hub, "Corrige le menu");
+    const told = () =>
+      store.listItems(coordinator).filter((i) => i.kind === "agent" && i.id.startsWith("green:"));
+    github.pr = green(1);
+    await hub.pullRequest(first);
+    expect(told()).toEqual([]);
+
+    // The first turned green before the restart, the second after: two wait on a review.
+    const next = await restarted();
+    github.pr = green(2);
+    await next.pullRequest(second);
+    expect(told()).toHaveLength(1);
+
+    // Started once more, a pull request that changes while green is not told a second time.
+    const last = await restarted();
+    github.pr = { ...green(2), title: "Un autre titre", blocked: true };
+    await last.pullRequest(second);
+    github.pr = { ...green(1), blocked: true };
+    await last.pullRequest(first);
+    expect(told()).toHaveLength(1);
   });
 });

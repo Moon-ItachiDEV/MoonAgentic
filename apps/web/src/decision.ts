@@ -122,13 +122,45 @@ const PERMISSION_NOTE: Record<PermissionOption["kind"], string> = {
   reject_always: "Refusé à chaque fois, sans redemander",
 };
 
-/** A permission request's options, allowing first, each with what it does. */
+/** The choice MoonAgentic adds: allow this call and every similar one in the thread. */
+export const THREAD_GRANT = "moon:thread";
+
+/** What each choice is called beside « Autoriser pour ce fil », said from its kind alone. */
+const PERMISSION_LABEL: Record<PermissionOption["kind"], string> = {
+  allow_once: "Autoriser cette fois",
+  allow_always: "Toujours autoriser",
+  reject_once: "Refuser",
+  reject_always: "Toujours refuser",
+};
+
+/**
+ * A permission request's options, allowing first. With « Autoriser pour ce fil » (recommended),
+ * the card reads as three plain choices named from their kind; an agent's own « always »
+ * choices give way to it. Without it, each keeps the agent's name and says what it does.
+ */
 export function permissionChoices(options: PermissionOption[]): Choice[] {
   const rank = (o: PermissionOption) =>
     ["allow_once", "allow_always", "reject_once", "reject_always"].indexOf(o.kind);
-  return [...options]
-    .sort((a, b) => rank(a) - rank(b))
-    .map((o) => ({ value: o.optionId, label: o.name, description: PERMISSION_NOTE[o.kind] }));
+  const thread = options.find((o) => o.optionId === THREAD_GRANT);
+  const rest = [...options].filter((o) => o !== thread).sort((a, b) => rank(a) - rank(b));
+  if (!thread) {
+    return rest.map((o) => ({
+      value: o.optionId,
+      label: o.name,
+      description: PERMISSION_NOTE[o.kind],
+    }));
+  }
+  const once = rest.find((o) => o.kind === "allow_once");
+  const no =
+    rest.find((o) => o.kind === "reject_once") ?? rest.find((o) => o.kind === "reject_always");
+  const kept = [once, no].filter((o): o is PermissionOption => !!o);
+  return [
+    { value: thread.optionId, label: "Autoriser pour ce fil", recommended: true },
+    ...(kept.length ? kept : rest).map((o) => ({
+      value: o.optionId,
+      label: PERMISSION_LABEL[o.kind],
+    })),
+  ];
 }
 
 /** A question's options, with what each says and shows when the agent gave it. */

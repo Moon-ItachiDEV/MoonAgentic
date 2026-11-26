@@ -42,6 +42,8 @@ import { connection, newId } from "../connection.ts";
 import { carriesFiles, IMAGE_ACCEPT, pastedImages } from "../images.ts";
 import { readDraft, writeDraft } from "../drafts.ts";
 import { useImageDrafts } from "../use-image-drafts.ts";
+import { type PrLink, prKey, takePrLinks, withPrLinks } from "../pr-links.ts";
+import { PrChip } from "./PrChip.tsx";
 import { readPref, writePref } from "../prefs.ts";
 import { looseDefault } from "../default-models.ts";
 import { modelNameOf } from "../model-label.ts";
@@ -83,6 +85,8 @@ export function Composer(props: {
   project: Project | undefined;
   /** What the empty field says, when it is not the usual invitation. */
   placeholder?: string;
+  /** Its name for a screen reader, when another composer is on screen beside it. */
+  label?: string;
   onNewProject: () => void;
   /**
    * With no project yet: makes the project « Discussions » and picks it, so what is written
@@ -130,12 +134,17 @@ export function Composer(props: {
   onSchedule: (task: string) => void;
 }) {
   const { agents, thread, project } = props;
-  // What was typed in this thread and not sent comes back with it.
-  const [text, setText] = useState(() => (thread ? readDraft(thread.id) : ""));
+  // What was typed in this thread and not sent comes back with it, PR chips included.
+  const [initialDraft] = useState(() =>
+    thread ? takePrLinks(readDraft(thread.id)) : { text: "", links: [] },
+  );
+  const [text, setText] = useState(initialDraft.text);
+  /** Pull request links pasted: shown as chips, sent in full. */
+  const [prs, setPrs] = useState<PrLink[]>(initialDraft.links);
   const draftOf = thread?.id;
   useEffect(() => {
-    if (draftOf) writeDraft(draftOf, text);
-  }, [draftOf, text]);
+    if (draftOf) writeDraft(draftOf, withPrLinks(text, prs));
+  }, [draftOf, text, prs]);
   const [menu, setMenu] = useState(false);
   const [plusOpen, setPlusOpenNow] = useState(false);
   /** The sheet open from the « + » menu: the rest of what it offers, or where to work. */
@@ -338,7 +347,7 @@ export function Composer(props: {
   );
 
   const canSend =
-    (text.trim().length > 0 || images.ready.length > 0) &&
+    (text.trim().length > 0 || prs.length > 0 || images.ready.length > 0) &&
     !images.sending &&
     !busy &&
     !running &&
@@ -688,7 +697,7 @@ export function Composer(props: {
 
   /** Sends what is written; `goal`: a new thread starts with that goal instead. */
   const submit = async (to?: string, goal?: string) => {
-    const typed = goal ?? text.trim();
+    const typed = goal ?? withPrLinks(text.trim(), prs);
     if ((!typed && !images.drafts.length) || busy) return;
     // MoonAgentic's own commands run here, even while the agent works; the rest of the line
     // stays in the composer.
@@ -698,6 +707,7 @@ export function Composer(props: {
         : { kind: "send" as const, text: goal };
     if (submission.kind === "action") {
       putText(submission.rest, submission.rest.length);
+      setPrs([]);
       runAction(submission.action, submission.rest);
       return;
     }
@@ -708,6 +718,7 @@ export function Composer(props: {
         return;
       }
       enqueue(submission.text);
+      setPrs([]);
       return;
     }
     const sendTo = to ?? agentId;
@@ -722,6 +733,7 @@ export function Composer(props: {
         connection.send({ type: "thread.send", threadId: thread.id, text: value, ...attachments })
       ) {
         setText("");
+        setPrs([]);
         images.sent();
       }
       return;
@@ -752,6 +764,7 @@ export function Composer(props: {
         ...(goal === undefined ? {} : { goal: {} }),
       });
       setText("");
+      setPrs([]);
       images.sent();
       // Gone to another page while the thread was being made: it is not pulled back from
       // there. The thread is in the lists, at work.
@@ -902,7 +915,7 @@ export function Composer(props: {
     if (keep !== "picker") setMenu(false);
     if (keep !== "ctx") setCtxOpen(false);
   };
-  const hasText = text.trim().length > 0;
+  const hasText = text.trim().length > 0 || prs.length > 0;
   const hasDraft = hasText || hasImages;
   const agentLabel = agent?.name ?? (thread ? "Agent retiré" : "Aucun agent installé");
   const effortName = effort?.choices.find((c) => c.id === settings[effort.id])?.name;
@@ -1116,6 +1129,17 @@ export function Composer(props: {
           aria-label="Prendre une photo"
           onChange={takePicked}
         />
+        {prs.length > 0 && (
+          <div className="cprs">
+            {prs.map((l) => (
+              <PrChip
+                key={prKey(l)}
+                link={l}
+                onRemove={() => setPrs((had) => had.filter((h) => prKey(h) !== prKey(l)))}
+              />
+            ))}
+          </div>
+        )}
         <div className="line">
           {plusButton(20)}
           {voice && (
@@ -1137,7 +1161,7 @@ export function Composer(props: {
             rows={1}
             value={text}
             placeholder={placeholder}
-            aria-label="Message"
+            aria-label={props.label ?? "Message"}
             role="combobox"
             aria-autocomplete="list"
             aria-expanded={suggesting}
@@ -1155,9 +1179,29 @@ export function Composer(props: {
             onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
             onPaste={(e) => {
               const files = pastedImages(e.clipboardData);
-              if (!files.length) return;
+              if (files.length) {
+                e.preventDefault();
+                images.add(files);
+                return;
+              }
+              const pasted = e.clipboardData.getData("text/plain");
+              if (!pasted) return;
+              const taken = takePrLinks(pasted);
+              if (!taken.links.length) return;
               e.preventDefault();
-              images.add(files);
+              setPrs((had) => [
+                ...had,
+                ...taken.links.filter((l) => !had.some((h) => prKey(h) === prKey(l))),
+              ]);
+              const el = e.currentTarget;
+              const start = el.selectionStart;
+              const end = el.selectionEnd;
+              const next = text.slice(0, start) + taken.text + text.slice(end);
+              const nextCaret = start + taken.text.length;
+              setText(next);
+              setCaret(nextCaret);
+              setActive(0);
+              requestAnimationFrame(() => el.setSelectionRange(nextCaret, nextCaret));
             }}
             onFocus={() => {
               // With no project yet, « Discussions » is made as soon as the user comes to write,

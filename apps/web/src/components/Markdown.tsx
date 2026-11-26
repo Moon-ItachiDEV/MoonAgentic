@@ -24,6 +24,12 @@ import { FileViewer } from "./FileViewer.tsx";
 
 const marked = new Marked(localFiles);
 
+/** What a link to a thread does: set by the app, which knows how to open one. */
+let openThreadLink: (id: string) => void = () => undefined;
+export function onThreadLink(open: (id: string) => void): void {
+  openThreadLink = open;
+}
+
 /**
  * Renders agent Markdown; links open outside the app. The files of the computer it names,
  * such as an image it generated, are shown from the server when `threadId` is given.
@@ -38,7 +44,16 @@ export const Markdown = memo(function Markdown({
   // Worked out once per text: a pull request's state, when it comes, redraws every answer
   // on the page, and none of them should be parsed and cleaned again for that.
   const html = useMemo(
-    () => DOMPurify.sanitize(marked.parse(text, { async: false, gfm: true, breaks: true }), CLEAN),
+    () =>
+      DOMPurify.sanitize(
+        // `fil:` is no address the cleaner keeps: the link is marked as one of the page's own.
+        marked.parse(text.replace(/\]\(fil:/g, "](#fil:"), {
+          async: false,
+          gfm: true,
+          breaks: true,
+        }),
+        CLEAN,
+      ),
     [text],
   );
   const root = useRef<HTMLDivElement>(null);
@@ -107,6 +122,13 @@ export const Markdown = memo(function Markdown({
       if ("key" in event) return;
       event.preventDefault();
       void keepImage(threadId, keep.dataset.keep ?? "");
+      return;
+    }
+    const linked = target?.closest<HTMLElement>("a.thlink[data-thread]");
+    if (linked) {
+      if ("key" in event && event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openThreadLink(linked.dataset.thread ?? "");
       return;
     }
     const local = target?.closest<HTMLElement>("[data-local]");
@@ -280,6 +302,21 @@ DOMPurify.addHook("afterSanitizeAttributes", (node) => {
       node.removeAttribute("href");
       node.removeAttribute("xlink:href");
     }
+    return;
+  }
+  // A coordinator's link to a thread, `[title](fil:id)`: it opens that thread in the app,
+  // and leads nowhere else. Which thread it is the app decides, from its own list.
+  node.removeAttribute("data-thread");
+  node.classList.remove("thlink");
+  const thread = /^#fil:([\w-]{1,80})$/.exec(node.getAttribute("href") ?? "");
+  if (thread) {
+    node.removeAttribute("href");
+    node.removeAttribute("target");
+    node.removeAttribute("rel");
+    node.setAttribute("data-thread", thread[1]!);
+    node.classList.add("thlink");
+    node.setAttribute("tabindex", "0");
+    node.setAttribute("role", "link");
     return;
   }
   // A link to the app itself leads nowhere, an answer having neither anchors nor pages of

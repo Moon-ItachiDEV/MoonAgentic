@@ -24,6 +24,14 @@ export interface PullRequestInfo {
   /** The repository's rules hold the merge back: a required review or check is missing. */
   blocked: boolean;
   checks: PullRequestCheck[];
+  /** Who opened it, its GitHub login. */
+  author?: string;
+  /** When it was opened, in milliseconds. */
+  createdAt?: number;
+  /** Lines added and taken out, and files changed. */
+  additions?: number;
+  deletions?: number;
+  files?: number;
 }
 
 /**

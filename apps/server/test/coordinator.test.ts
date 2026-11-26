@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
-import { threadGroup, WORK_KINDS } from "@moonagentic/protocol";
+import { ORIGIN_MARK, REPLY_MARK, threadGroup, WORK_KINDS } from "@moonagentic/protocol";
+import { replyGuide } from "../src/coordinator.ts";
 import { COORDINATOR_PATH, COORDINATOR_TOOLS, THREAD_KINDS } from "../src/coordinator-tools.ts";
 import { createHttpServer } from "../src/http.ts";
 import { type Client, Hub } from "../src/hub.ts";
@@ -112,7 +113,7 @@ describe("a project's coordinator", () => {
       kind: "user",
       // Marked as the coordinator's words, not the user's.
       from: "coordinator",
-      text: "Corrige : Export Safari\n\n---\nMessage d'origine de l'utilisateur, transmis tel quel par MoonAgentic :\n\n> /ouvre Export Safari",
+      text: `Corrige : Export Safari${REPLY_MARK}${replyGuide(undefined)}${ORIGIN_MARK}> /ouvre Export Safari`,
     });
     // Asked again for the same subject, it gets that thread back rather than a second one.
     expect(await say("/ouvre Export Safari")).toBe("J'ai ouvert le fil « Export Safari ».");

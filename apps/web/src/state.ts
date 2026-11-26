@@ -2,6 +2,7 @@ import type {
   AppInfo,
   Defaults,
   TeamPreset,
+  RoleMascots,
   AgentQuota,
   CoordinatorSettings,
   AgentInfo,
@@ -69,6 +70,7 @@ export interface State {
   defaults: Defaults | null;
   /** The teams set up in the settings; null while the suggested ones stand. */
   teamPresets: TeamPreset[] | null;
+  roleMascots: RoleMascots;
   /** MoonAgentic's own version and what it knows of a newer one. */
   app: AppInfo | null;
   /** Why the server saves nothing right now (a full disk, a held database); null otherwise. */
@@ -105,6 +107,7 @@ export function reduce(state: State, message: ServerMessage): State {
         favoriteOrder: message.snapshot.favoriteOrder ?? [],
         defaults: message.snapshot.defaults ?? null,
         teamPresets: message.snapshot.teamPresets ?? null,
+        roleMascots: message.snapshot.roleMascots ?? {},
         app: message.snapshot.app ?? null,
         storageError: message.snapshot.storageError ?? null,
         mcpSecretsError: message.snapshot.mcpSecretsError ?? null,
@@ -129,6 +132,8 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, storageError: message.error };
     case "teamPresets":
       return { ...state, teamPresets: message.presets };
+    case "roleMascots":
+      return { ...state, roleMascots: message.mascots };
     case "coordinatorSettings":
       return { ...state, coordinator: message.settings };
     case "requests":
@@ -334,6 +339,7 @@ export const initialState: State = {
   pairedDevice: false,
   defaults: null,
   teamPresets: null,
+  roleMascots: {},
   app: null,
   storageError: null,
   items: {},
