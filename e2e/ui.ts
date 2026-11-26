@@ -1,5 +1,5 @@
 // Steps every browser check starts with, written once: they follow the app's screens.
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 
 /**
  * « Nouveau projet » on a folder of this machine, then « Nouveau fil »: the composer of a new
@@ -14,11 +14,28 @@ export async function addProject(page: Page, folder: string, thread = true) {
   if (thread) await page.getByRole("button", { name: "Nouveau fil" }).first().click();
 }
 
+/**
+ * From the model's menu to every model: « Plus » in the phone's sheet, « Tous les modèles » in
+ * the menu above the composer on wider screens.
+ */
+export const allModelsButton = (scope: Page | Locator) =>
+  scope.getByRole("button", { name: /^(Plus|Tous les modèles)$/ });
+
+/** In the menu above the composer, the agents are folded under one row: it is opened. */
+export async function showAgents(all: Locator) {
+  const fold = all.getByRole("button", {
+    name: /^(Agent|Passer à un autre agent)\b/,
+    expanded: false,
+  });
+  if (await fold.count()) await fold.click();
+}
+
 /** The composer's model menu, opened on every agent, set on the one named. */
 export async function pickAgent(page: Page, name: RegExp = /^Agent de démo/) {
   await page.getByRole("combobox", { name: "Message" }).click();
   await page.getByRole("button", { name: /^Agent : / }).click();
-  await page.getByRole("button", { name: "Plus", exact: true }).click();
+  await allModelsButton(page).click();
+  await showAgents(page.getByRole("dialog", { name: "Tous les modèles" }));
   await page.getByRole("menuitemradio", { name }).click();
   await page.keyboard.press("Escape");
 }

@@ -169,6 +169,10 @@ export const ICONS = {
     "0 0 24 24",
     '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.8l-5.2 2.8 1-5.8-4.3-4.1 5.9-.8Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   ],
+  starf: [
+    "0 0 24 24",
+    '<path d="m12 3.5 2.6 5.4 5.9.8-4.3 4.1 1 5.8L12 16.8l-5.2 2.8 1-5.8-4.3-4.1 5.9-.8Z" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
+  ],
   gauge: [
     "0 0 24 24",
     '<path d="M4 17a8 8 0 1 1 16 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="m12 17 4-5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
