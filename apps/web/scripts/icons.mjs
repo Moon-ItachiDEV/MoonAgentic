@@ -1,8 +1,9 @@
 // Draws the app's PNG icons from public/icon.svg, which phones need to install the app:
 // iOS takes no SVG for its home screen, Android wants 192 and 512 pixel ones, and a
-// « maskable » one that it may cut to a circle. Run again after changing the icon:
+// « maskable » one that it may cut to a circle. An iPhone also asks by itself for
+// apple-touch-icon-precomposed.png, and browsers for favicon.ico. Run again after changing the icon:
 //   node apps/web/scripts/icons.mjs
-import { readFileSync } from "node:fs";
+import { copyFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
@@ -28,13 +29,41 @@ const icons = [
 ];
 
 const browser = await chromium.launch();
-for (const icon of icons) {
-  const page = await browser.newPage({ viewport: { width: icon.size, height: icon.size } });
+/** The icon drawn at `size` pixels, as PNG bytes. */
+const draw = async (size, source) => {
+  const page = await browser.newPage({ viewport: { width: size, height: size } });
   await page.setContent(
-    `<style>html,body{margin:0;background:transparent}svg{display:block;width:${icon.size}px;height:${icon.size}px}</style>${icon.svg}`,
+    `<style>html,body{margin:0;background:transparent}svg{display:block;width:${size}px;height:${size}px}</style>${source}`,
   );
-  await page.screenshot({ path: path.join(pub, icon.file), omitBackground: true });
+  const png = await page.screenshot({ omitBackground: true });
   await page.close();
-}
+  return png;
+};
+for (const icon of icons) writeFileSync(path.join(pub, icon.file), await draw(icon.size, icon.svg));
+copyFileSync(
+  path.join(pub, "apple-touch-icon.png"),
+  path.join(pub, "apple-touch-icon-precomposed.png"),
+);
+
+// favicon.ico: the rounded tile at 16, 32 and 48 pixels, each kept as a PNG inside the file.
+const sizes = [16, 32, 48];
+const pngs = [];
+for (const size of sizes) pngs.push(await draw(size, svg));
+const head = Buffer.alloc(6 + 16 * sizes.length);
+head.writeUInt16LE(0, 0);
+head.writeUInt16LE(1, 2);
+head.writeUInt16LE(sizes.length, 4);
+let offset = head.length;
+sizes.forEach((size, i) => {
+  const at = 6 + 16 * i;
+  head.writeUInt8(size, at);
+  head.writeUInt8(size, at + 1);
+  head.writeUInt16LE(1, at + 4);
+  head.writeUInt16LE(32, at + 6);
+  head.writeUInt32LE(pngs[i].length, at + 8);
+  head.writeUInt32LE(offset, at + 12);
+  offset += pngs[i].length;
+});
+writeFileSync(path.join(pub, "favicon.ico"), Buffer.concat([head, ...pngs]));
 await browser.close();
 console.log(`Icônes écrites dans ${pub}`);

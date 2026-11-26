@@ -75,7 +75,9 @@ describe("installable app", () => {
       "512x512 any",
       "512x512 maskable",
     ]);
-    for (const icon of [...png.map((i) => i.src), "/apple-touch-icon.png"]) {
+    // An iPhone also looks for these by itself, when a page gave it no icon.
+    const own = ["/apple-touch-icon.png", "/apple-touch-icon-precomposed.png"];
+    for (const icon of [...png.map((i) => i.src), ...own]) {
       const res = await fetch(`${origin}${icon}`);
       expect(res.status, icon).toBe(200);
       expect(res.headers.get("content-type"), icon).toBe("image/png");
@@ -87,11 +89,24 @@ describe("installable app", () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
     await page.goto(url);
     expect(await page.getAttribute('link[rel="apple-touch-icon"]', "href")).toBe(
-      "/apple-touch-icon.png",
+      "/apple-touch-icon.png?v=2",
     );
     expect(await page.getAttribute('meta[name="apple-mobile-web-app-capable"]', "content")).toBe(
       "yes",
     );
     await page.close();
+  });
+
+  it("answers an icon it does not have with 404, never the app's page", async () => {
+    const origin = new URL(url).origin;
+    const ico = await fetch(`${origin}/favicon.ico`);
+    expect(ico.status).toBe(200);
+    expect(ico.headers.get("content-type")).toBe("image/x-icon");
+    for (const missing of [
+      "/apple-touch-icon-180x180.png",
+      "/apple-touch-icon-120x120-precomposed.png",
+    ]) {
+      expect((await fetch(`${origin}${missing}`)).status, missing).toBe(404);
+    }
   });
 });
