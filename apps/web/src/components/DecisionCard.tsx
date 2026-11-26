@@ -50,12 +50,18 @@ const FRESH = 800;
  */
 const SETTLE_MS = 5_000;
 
-/** Whether an answer sent with this id still keeps its request off the card. */
-const answered = (sendId: string | undefined): boolean => {
+/** Answers already sent from this tab, kept across view changes so a wait cannot be answered twice while reconnecting. */
+const answeredWaits = new Map<string, string>();
+
+/** Whether an answer sent for this wait still keeps it off the card; prunes expired entries. */
+const answered = (waitId: string): boolean => {
+  const sendId = answeredWaits.get(waitId);
   if (!sendId) return false;
   if (connection.waitsForConfirmation(sendId)) return true;
   const at = connection.confirmedSince(sendId);
-  return at !== undefined && Date.now() - at < SETTLE_MS;
+  if (at !== undefined && Date.now() - at < SETTLE_MS) return true;
+  answeredWaits.delete(waitId);
+  return false;
 };
 
 const fresh = (id: string): Progress => ({
@@ -85,10 +91,9 @@ export function DecisionCard(props: {
   // Answered here, a wait leaves at once, before the server says so: no second answer. Its
   // answer may die with the connection: once the server has it, or it went again, a request
   // still there comes back.
-  const [sent, setSent] = useState<ReadonlyMap<string, string>>(new Map());
-  const waits = props.waits.filter((w) => !answered(sent.get(w.id)));
   const [, tick] = useState(0);
-  const settling = props.waits.some((w) => sent.has(w.id));
+  const waits = props.waits.filter((w) => !answered(w.id));
+  const settling = waits.length < props.waits.length;
   useEffect(() => {
     if (!settling) return;
     const timer = setInterval(() => tick((n) => n + 1), 1000);
@@ -129,7 +134,17 @@ export function DecisionCard(props: {
   const previews = choices.some((c) => c.preview);
   const layout = !previews ? "rows" : narrow || choices.length > 4 ? "detail" : "tiles";
 
-  const done = (id: string, sendId: string) => setSent((s) => new Map(s).set(id, sendId));
+  const done = (id: string, sendId: string) => {
+    answeredWaits.set(id, sendId);
+    while (answeredWaits.size > 200) {
+      const oldest = answeredWaits.keys().next().value;
+      if (oldest === undefined) break;
+      answeredWaits.delete(oldest);
+    }
+    // If the server refuses the answer and the wait comes back after SETTLE_MS, start fresh.
+    setProgress(fresh(""));
+    tick((n) => n + 1);
+  };
 
   /** Sends the whole answer of a question: every step's picks and words. */
   const answer = (w: Extract<Wait, { kind: "question" }>, answers: QuestionAnswer[]) => {

@@ -441,6 +441,8 @@ export function createHttpServer(options: {
   };
   /** Each open connection, with who opened it: a revoked device's are closed. */
   const sockets = new Map<WebSocket, Who>();
+  /** Each open connection's latest spare ws.ticket, replaced when a pong proves it alive. */
+  const spares = new Map<WebSocket, string>();
   const remote = options.remoteAccess ?? findRemoteAccess;
   const maxClients = options.maxClients ?? MAX_WS_CLIENTS;
   const wsTicketTtlMs = options.wsTicketTtlMs ?? WS_TICKET_TTL_MS;
@@ -491,7 +493,12 @@ export function createHttpServer(options: {
   /** Drops the tickets and closes the connections that `whose` says are no longer let in. */
   const shutOut = (whose: (who: Who) => boolean, code: number, reason: string) => {
     for (const [key, { who }] of wsTickets) if (whose(who)) wsTickets.delete(key);
-    for (const [socket, who] of sockets) if (whose(who)) socket.close(code, reason);
+    for (const [socket, who] of sockets) {
+      if (!whose(who)) continue;
+      sockets.delete(socket);
+      spares.delete(socket);
+      socket.close(code, reason);
+    }
     // The addresses it was given to show artifacts stop too.
     hub.artifactLinks.forget((deviceId) =>
       whose(deviceId ? { owner: false, deviceId } : { owner: true }),
@@ -667,6 +674,11 @@ export function createHttpServer(options: {
           console.error("Notifications des fenêtres de l'ancien jeton :", refusal(error));
         }
         const old = [...sockets].filter(([, w]) => w.owner).map(([socket]) => socket);
+        // Detached at once so no heartbeat can mint a new ticket for an old owner socket before close.
+        for (const socket of old) {
+          sockets.delete(socket);
+          spares.delete(socket);
+        }
         res.once("close", () => {
           for (const socket of old) socket.close(TOKEN_RENEWED, "token renewed");
         });
@@ -1009,8 +1021,8 @@ export function createHttpServer(options: {
   const heartbeatMs = options.heartbeatMs ?? HEARTBEAT_MS;
   // A connection that died without a word is replaced without asking for a ticket: the
   // browser would send that on a connection it kept, which may have died too. Each open one
-  // holds the next ticket, renewed with each heartbeat, and only one at a time.
-  const spares = new Map<WebSocket, string>();
+  // holds the next ticket, renewed once a pong proves it is still alive, so a dead socket
+  // never loses the last ticket it received.
   const spareTtlMs = 2 * heartbeatMs;
   const giveSpare = (ws: WebSocket) => {
     const who = sockets.get(ws);
@@ -1021,6 +1033,20 @@ export function createHttpServer(options: {
     spares.set(ws, ticket);
     ws.send(JSON.stringify({ type: "ws.ticket", ticket, ttlMs: spareTtlMs }));
   };
+  /**
+   * Actions whose order matters to the client (`setArchived` before `send`, or a failure
+   * reported before the trailing `ping`'s `pong`): serialized per socket without blocking
+   * behind slow read requests (`artifacts.list`, `workspace.review`, `agent.discover`…).
+   */
+  const ORDERED_ON_SOCKET = new Set([
+    "ping",
+    "thread.send",
+    "thread.setArchived",
+    "thread.cancel",
+    "thread.resume",
+    "permission.respond",
+    "question.respond",
+  ]);
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
       if (!alive.has(ws)) {
@@ -1029,7 +1055,6 @@ export function createHttpServer(options: {
       }
       alive.delete(ws);
       ws.ping();
-      giveSpare(ws);
     }
   }, heartbeatMs);
   heartbeat.unref();
@@ -1095,10 +1120,15 @@ export function createHttpServer(options: {
         });
         giveSpare(ws);
         alive.add(ws);
-        ws.on("pong", () => alive.add(ws));
+        ws.on("pong", () => {
+          if (alive.has(ws)) return;
+          alive.add(ws);
+          giveSpare(ws);
+        });
         ws.on("close", disconnect);
         // A broken connection closes on its own; without a listener its error would stop the server.
         ws.on("error", () => ws.terminate());
+        let ordered = Promise.resolve();
         ws.on("message", (data) => {
           const decoded = decode(data.toString());
           if ("error" in decoded) {
@@ -1106,13 +1136,16 @@ export function createHttpServer(options: {
             return;
           }
           const message = decoded.message;
-          hub.handle(client, message).catch((error: unknown) => {
-            client.send({
-              type: "error",
-              ...("requestId" in message ? { requestId: message.requestId } : {}),
-              message: error instanceof Error ? error.message : String(error),
+          const run = () =>
+            hub.handle(client, message).catch((error: unknown) => {
+              client.send({
+                type: "error",
+                ...("requestId" in message ? { requestId: message.requestId } : {}),
+                message: error instanceof Error ? error.message : String(error),
+              });
             });
-          });
+          if (ORDERED_ON_SOCKET.has(message.type)) ordered = ordered.then(run);
+          else void run();
         });
       });
     } catch (error) {

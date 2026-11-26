@@ -12,7 +12,7 @@ import {
   type ServerMessage,
   type Thread,
 } from "@moonagentic/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { backupNow } from "../src/backups.ts";
 import { historyBefore } from "../src/history.ts";
@@ -23,9 +23,14 @@ import { TOOL_INLINE_CHARS } from "../src/timeline.ts";
 
 class TestClient implements Client {
   openThreadIds?: Set<string>;
+  readonly deviceId?: string;
   readonly messages: ServerMessage[] = [];
   private waiters: { match: (m: ServerMessage) => boolean; resolve: (m: ServerMessage) => void }[] =
     [];
+
+  constructor(deviceId?: string) {
+    this.deviceId = deviceId;
+  }
 
   send(message: ServerMessage): void {
     this.messages.push(message);
@@ -42,7 +47,14 @@ afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
-function setup(options: { idleMs?: number; maxLiveAgents?: number; forceStopMs?: number } = {}) {
+function setup(
+  options: {
+    idleMs?: number;
+    maxLiveAgents?: number;
+    forceStopMs?: number;
+    storageRetryMs?: number;
+  } = {},
+) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-test-"));
   mkdirSync(path.join(dir, ".home"));
   const store = new Store(path.join(dir, "state.sqlite"));
@@ -2690,5 +2702,100 @@ describe("an action a screen sends again", () => {
     const errors = client.messages.length;
     await hub.handle(client, answer);
     expect(client.messages.slice(errors).filter((m) => m.type === "error")).toEqual([]);
+  });
+
+  it("does not burn a sendId when the first attempt fails, so retrying it succeeds", async () => {
+    const { hub, store, client, projectId } = setup({ storageRetryMs: 20 });
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    const said = () =>
+      store
+        .listItems(threadId)
+        .filter((i) => i.kind === "user")
+        .map((i) => (i.kind === "user" ? i.text : ""));
+
+    // Case 1: transient storage refusal on the first attempt must not burn the sendId.
+    const diskFull = Object.assign(new Error("database or disk is full"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 13,
+    });
+    const spyErr = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const spyLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(store, "putItem").mockImplementationOnce(() => {
+      throw diskFull;
+    });
+    const recovered = client.next((m) => m.type === "storage" && m.error === null);
+    const first = { type: "thread.send" as const, threadId, text: "Deux", sendId: "envoi-disque" };
+    await expect(hub.handle(client, first)).rejects.toThrow("Disque plein");
+    await recovered;
+    spyErr.mockRestore();
+    spyLog.mockRestore();
+
+    await hub.handle(client, first);
+    await hub.whenIdle(threadId);
+    expect(said()).toEqual(["Un", "Deux"]);
+
+    // Case 2: logical refusal (archived thread) also leaves sendId retryable once unarchived.
+    await hub.setArchived(threadId, true);
+    const second = {
+      type: "thread.send" as const,
+      threadId,
+      text: "Trois",
+      sendId: "envoi-archive",
+    };
+    await expect(hub.handle(client, second)).rejects.toThrow();
+    await hub.setArchived(threadId, false);
+    await hub.handle(client, second);
+    await hub.whenIdle(threadId);
+    expect(said()).toEqual(["Un", "Deux", "Trois"]);
+  });
+
+  it("isolates sendIds per device so one device cannot suppress another's action", async () => {
+    const { hub, store, client, projectId } = setup();
+    const phone = new TestClient("phone-1");
+    hub.connect(phone);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+
+    // Paired device uses sendId "partage" first.
+    await hub.handle(phone, {
+      type: "thread.send",
+      threadId,
+      text: "Depuis le téléphone",
+      sendId: "partage",
+    });
+    await hub.whenIdle(threadId);
+    // Same device replaying it is deduplicated.
+    await hub.handle(phone, {
+      type: "thread.send",
+      threadId,
+      text: "Depuis le téléphone",
+      sendId: "partage",
+    });
+    await hub.whenIdle(threadId);
+    // Owner using the same sendId is NOT suppressed by the paired device.
+    await hub.handle(client, {
+      type: "thread.send",
+      threadId,
+      text: "Depuis l'ordinateur",
+      sendId: "partage",
+    });
+    await hub.whenIdle(threadId);
+
+    const said = store
+      .listItems(threadId)
+      .filter((i) => i.kind === "user")
+      .map((i) => (i.kind === "user" ? i.text : ""));
+    expect(said).toEqual(["Un", "Depuis le téléphone", "Depuis l'ordinateur"]);
   });
 });

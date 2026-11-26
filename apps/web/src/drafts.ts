@@ -10,32 +10,52 @@ export const MAX_DRAFT_CHARS = 50_000;
 type Drafts = Record<string, { text: string; at: number }>;
 
 /** Kept here too: a device that keeps nothing (private mode) still has them until a reload. */
-let memory: Drafts | undefined;
+let memory: Drafts = {};
 
 function load(): Drafts {
-  if (memory) return memory;
-  memory = {};
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(DRAFTS_KEY) ?? "{}");
+    const raw = localStorage.getItem(DRAFTS_KEY);
+    if (raw === null) {
+      memory = {};
+      return memory;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    const read: Drafts = {};
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       for (const [id, draft] of Object.entries(parsed as Record<string, unknown>)) {
         if (!draft || typeof draft !== "object") continue;
         const { text, at } = draft as { text?: unknown; at?: unknown };
-        if (typeof text === "string" && text && typeof at === "number") memory[id] = { text, at };
+        if (typeof text === "string" && text && typeof at === "number") read[id] = { text, at };
       }
     }
+    memory = read;
+    return memory;
   } catch {
-    // nothing kept, or not readable: no drafts
+    // Private mode or unreadable storage: keep using what this tab holds in memory.
+    return memory;
   }
-  return memory;
 }
 
-function save(drafts: Drafts): void {
-  memory = drafts;
-  try {
-    localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts));
-  } catch {
-    // private mode or full: kept in this page only
+function save(entries: [string, { text: string; at: number }][]): void {
+  memory = Object.fromEntries(entries);
+  if (!entries.length) {
+    try {
+      localStorage.setItem(DRAFTS_KEY, "{}");
+    } catch {
+      // private mode
+    }
+    return;
+  }
+  // Drop the oldest drafts if storage is nearly full, so the latest one still saves.
+  for (let kept = entries.length; kept >= 1; kept -= 1) {
+    const slice = Object.fromEntries(entries.slice(0, kept));
+    try {
+      localStorage.setItem(DRAFTS_KEY, JSON.stringify(slice));
+      memory = slice;
+      return;
+    } catch {
+      // Storage is full or private mode: try fewer entries, keeping memory intact if none fits.
+    }
   }
 }
 
@@ -50,17 +70,42 @@ export function writeDraft(threadId: string, text: string): void {
   if (!text.trim()) {
     if (!(threadId in drafts)) return;
     delete drafts[threadId];
-    return save(drafts);
+    return save(Object.entries(drafts).sort((a, b) => b[1].at - a[1].at));
   }
-  if (drafts[threadId]?.text === text) return;
-  drafts[threadId] = { text: text.slice(0, MAX_DRAFT_CHARS), at: Date.now() };
-  const kept = Object.entries(drafts)
+  const clipped = text.slice(0, MAX_DRAFT_CHARS);
+  if (drafts[threadId]?.text === clipped) return;
+  delete drafts[threadId];
+  const others = Object.entries(drafts)
     .sort((a, b) => b[1].at - a[1].at)
-    .slice(0, MAX_DRAFTS);
-  save(Object.fromEntries(kept));
+    .slice(0, MAX_DRAFTS - 1);
+  // Placed first so the draft just typed is never dropped on a same-millisecond tie.
+  save([[threadId, { text: clipped, at: Date.now() }], ...others]);
+}
+
+/** Forgets the draft of a removed thread (or of several threads when a project is removed). */
+export function forgetDrafts(threadIds: Iterable<string>): void {
+  const drafts = { ...load() };
+  let changed = false;
+  for (const id of threadIds) {
+    if (id in drafts) {
+      delete drafts[id];
+      changed = true;
+    }
+  }
+  if (changed) save(Object.entries(drafts).sort((a, b) => b[1].at - a[1].at));
+}
+
+/** Forgets every draft kept on this device (when its access was revoked). */
+export function clearAllDrafts(): void {
+  memory = {};
+  try {
+    localStorage.removeItem(DRAFTS_KEY);
+  } catch {
+    // private mode
+  }
 }
 
 /** For tests: forgets what this page holds, so the next read goes to the storage. */
 export function forgetDraftsInMemory(): void {
-  memory = undefined;
+  memory = {};
 }

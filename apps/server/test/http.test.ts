@@ -39,6 +39,7 @@ async function serve(
     wsTicketTtlMs?: number;
     rateLimit?: RateLimitOptions;
     devices?: Devices;
+    handle?: Hub["handle"];
   } = {},
 ) {
   const webDir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-web-"));
@@ -58,7 +59,7 @@ async function serve(
       connected += 1;
       return () => undefined;
     },
-    handle: async () => undefined,
+    handle: options.handle ?? (async () => undefined),
     coordinatorExchange: () => {
       throw new CoordinatorRefused();
     },
@@ -664,6 +665,134 @@ describe("the HTTP server", () => {
     const spare = given.at(-1)!.ticket;
     expect(await socketOpens(`ws://${origin}/ws?ticket=${spare}`)).toBe(true);
     expect(await socketStatus(`ws://${origin}/ws?ticket=${spare}`)).toBe(401);
+  });
+
+  it("keeps a silent socket's spare ticket alive across a missed heartbeat and ignores unsolicited pongs", async () => {
+    const { origin, ticket } = await serve({ heartbeatMs: 300 });
+    const silent = new WebSocket(`ws://${origin}/ws?ticket=${await ticket()}`, { autoPong: false });
+    cleanups.unshift(() => silent.terminate());
+    const given: string[] = [];
+    silent.on("message", (data) => {
+      const msg = JSON.parse(String(data)) as { type: string; ticket?: string };
+      if (msg.type === "ws.ticket" && msg.ticket) given.push(msg.ticket);
+    });
+    await expect.poll(() => given.length).toBe(1);
+    const firstTicket = given[0]!;
+
+    // An unsolicited pong while already alive does not rotate the spare ticket.
+    silent.pong();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(given).toEqual([firstTicket]);
+
+    // After one missed heartbeat (still within 2 * heartbeatMs TTL), the last ticket received stays valid.
+    await new Promise((resolve) => setTimeout(resolve, 320));
+    expect(given).toEqual([firstTicket]);
+    expect(await socketOpens(`ws://${origin}/ws?ticket=${firstTicket}`)).toBe(true);
+    silent.terminate();
+  });
+
+  it("invalidates old owner spare tickets immediately on token renewal without minting new ones", async () => {
+    const { origin, ticket } = await serve({ heartbeatMs: 40 });
+    const oldSocket = new WebSocket(`ws://${origin}/ws?ticket=${await ticket()}`);
+    cleanups.unshift(() => oldSocket.terminate());
+    const tickets: string[] = [];
+    oldSocket.on("message", (data) => {
+      const msg = JSON.parse(String(data)) as { type: string; ticket?: string };
+      if (msg.type === "ws.ticket" && msg.ticket) tickets.push(msg.ticket);
+    });
+    const closed = new Promise<number>((resolve) => oldSocket.once("close", resolve));
+    await expect.poll(() => tickets.length).toBeGreaterThanOrEqual(1);
+
+    const res = await fetch(`http://${origin}/api/remote/token`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.status).toBe(200);
+    expect(await closed).toBe(TOKEN_RENEWED);
+    for (const oldTicket of tickets) {
+      expect(await socketStatus(`ws://${origin}/ws?ticket=${oldTicket}`)).toBe(401);
+    }
+  });
+
+  it("delivers an ordered action's error before a pipelined ping's pong, and runs setArchived before send", async () => {
+    let archived = true;
+    const order: string[] = [];
+    const { origin, ticket } = await serve({
+      handle: async (client, message) => {
+        if (message.type === "ping") {
+          client.send({ type: "pong" });
+          return;
+        }
+        if (message.type === "thread.setArchived") {
+          await new Promise((resolve) => setTimeout(resolve, 30));
+          archived = message.archived;
+          order.push(`archived:${String(archived)}`);
+          return;
+        }
+        if (message.type === "thread.send") {
+          if (message.text === "boom") throw new Error("Disque plein");
+          if (archived) throw new Error("Ce fil est résolu.");
+          order.push(`send:${message.text}`);
+        }
+      },
+    });
+    const ws = new WebSocket(`ws://${origin}/ws?ticket=${await ticket()}`);
+    cleanups.unshift(() => ws.terminate());
+    const received: { type: string; message?: string }[] = [];
+    ws.on("message", (data) => {
+      const msg = JSON.parse(String(data)) as { type: string; message?: string };
+      if (msg.type !== "ws.ticket") received.push(msg);
+    });
+    await new Promise((resolve) => ws.once("open", resolve));
+
+    // A failing send followed immediately by ping must report the error before the pong.
+    ws.send(JSON.stringify({ type: "thread.send", threadId: "t1", text: "boom", sendId: "s-1" }));
+    ws.send(JSON.stringify({ type: "ping" }));
+    await expect.poll(() => received.length).toBe(2);
+    expect(received.map((m) => m.type)).toEqual(["error", "pong"]);
+    expect(received[0]!.message).toBe("Disque plein");
+
+    // Pipelined async unarchive + send + ping must complete unarchive before send and pong last.
+    received.length = 0;
+    ws.send(
+      JSON.stringify({
+        type: "thread.setArchived",
+        threadId: "t1",
+        archived: false,
+        sendId: "s-2",
+      }),
+    );
+    ws.send(JSON.stringify({ type: "thread.send", threadId: "t1", text: "ok", sendId: "s-3" }));
+    ws.send(JSON.stringify({ type: "ping" }));
+    await expect.poll(() => received.length).toBe(1);
+    expect(received.map((m) => m.type)).toEqual(["pong"]);
+    expect(order).toEqual(["archived:false", "send:ok"]);
+    ws.terminate();
+  });
+
+  it("validates sendId characters and accepts sendId on setArchived, cancel, and resume", () => {
+    expect(
+      decode(
+        JSON.stringify({
+          type: "thread.setArchived",
+          threadId: "t1",
+          archived: false,
+          sendId: "ok_1-a",
+        }),
+      ),
+    ).toHaveProperty("message");
+    expect(
+      decode(JSON.stringify({ type: "thread.cancel", threadId: "t1", sendId: "ok-2" })),
+    ).toHaveProperty("message");
+    expect(
+      decode(JSON.stringify({ type: "thread.resume", threadId: "t1", sendId: "ok-3" })),
+    ).toHaveProperty("message");
+    expect(
+      decode(JSON.stringify({ type: "thread.send", threadId: "t1", text: "hi", sendId: "bad:id" })),
+    ).toHaveProperty("error");
+    expect(
+      decode(JSON.stringify({ type: "thread.send", threadId: "t1", text: "hi", sendId: "bad id" })),
+    ).toHaveProperty("error");
   });
 
   it("survives overlong paths without crashing and rejects non-GET/HEAD on static files and /api/build", async () => {
