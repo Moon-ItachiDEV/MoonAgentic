@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
-import { addProject } from "./ui.ts";
+import { addProject, directThread } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -157,7 +157,7 @@ describe("a project's settings", () => {
     await skills.getByRole("button", { name: "Fermer", exact: true }).click();
 
     // The composer of the project's folder offers the command.
-    await page.getByRole("button", { name: "Nouveau fil" }).first().click();
+    await directThread(page);
     const composer = page.getByRole("combobox", { name: "Message" });
     await composer.fill("/depl");
     await expect

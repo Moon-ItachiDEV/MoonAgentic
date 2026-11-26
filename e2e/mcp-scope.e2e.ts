@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium, type Page } from "playwright";
-import { pickAgent } from "./ui.ts";
+import { directThread, pickAgent } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Store } from "../apps/server/src/store.ts";
 
@@ -84,7 +84,7 @@ async function ask(page: Page, project: string, text: string) {
     .getByRole("button", { name: new RegExp(`^${project}`) })
     .click();
   await page.waitForURL(/\/p\//);
-  await page.getByRole("button", { name: "Nouveau fil" }).first().click();
+  await directThread(page);
   const composer = page.getByRole("combobox", { name: "Message" });
   await expect.poll(() => composer.isEnabled()).toBe(true);
   // The demo agent, not a real one that may be installed on this machine.

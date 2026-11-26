@@ -1,9 +1,10 @@
 // Steps every browser check starts with, written once: they follow the app's screens.
 import type { Locator, Page } from "playwright";
+import { expect } from "vitest";
 
 /**
- * « Nouveau projet » on a folder of this machine, then « Nouveau fil »: the composer of a new
- * thread in that project. The project's own page talks to its coordinator, not to an agent.
+ * « Nouveau projet » on a folder of this machine, then the composer of a new thread in that
+ * project. The project's own page talks to its coordinator, not to an agent.
  */
 export async function addProject(page: Page, folder: string, thread = true) {
   await page.getByRole("button", { name: "Nouveau projet" }).first().click();
@@ -11,7 +12,19 @@ export async function addProject(page: Page, folder: string, thread = true) {
   await page.getByLabel("Dossier", { exact: true }).fill(folder);
   await page.getByRole("button", { name: "Créer", exact: true }).click();
   await page.waitForURL(/\/p\//);
-  if (thread) await page.getByRole("button", { name: "Nouveau fil" }).first().click();
+  if (thread) await directThread(page);
+}
+
+/**
+ * The home composer, in the project last opened: a conversation straight with an agent. A
+ * project's page has no « Nouveau fil », its threads are opened by its coordinator.
+ */
+export async function directThread(page: Page) {
+  await page.goto(new URL("/", page.url()).href);
+  const composer = page.getByRole("combobox", { name: "Message" });
+  await composer.waitFor();
+  // Back on the server after the reload: until then it cannot be written in.
+  await expect.poll(() => composer.isEnabled()).toBe(true);
 }
 
 /**

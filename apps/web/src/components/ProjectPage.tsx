@@ -35,7 +35,6 @@ const GROUP_NAME: Record<ThreadGroup, string> = {
 
 interface ThreadActions {
   onOpenThread: (id: string) => void;
-  onNewThread: () => void;
   onTogglePin: (id: string, pinned: boolean) => void;
   onSetArchived: (id: string, archived: boolean) => void;
   onDeleteThread: (thread: Thread) => void;
@@ -362,10 +361,6 @@ export function ProjectOverview(
             <b>Aucun fil</b>
           </div>
         )}
-        <button className="newth press" onClick={props.onNewThread}>
-          <I n="plus" s={18} />
-          Nouveau fil
-        </button>
       </>
     ) : tab === "contexte" ? (
       <Context
