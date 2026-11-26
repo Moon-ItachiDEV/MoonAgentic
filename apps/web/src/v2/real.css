@@ -1612,9 +1612,10 @@ a.it {
 }
 
 /* The connection to the server is lost and being tried again: said on every page. */
+/* Under the top bar (44px from --st + 2px), never over a page's title. */
 .offp {
   position: absolute;
-  top: calc(var(--st) + 10px);
+  top: calc(var(--st) + 54px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 120;
