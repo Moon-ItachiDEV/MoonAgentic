@@ -48,6 +48,30 @@ export function PinPad({ onKey, disabled }: { onKey: (key: string) => void; disa
   );
 }
 
+/** The longest a typed code waits for the connection before it is said not sent. */
+const REACH_MS = 10_000;
+
+/**
+ * Resolves once the server can be asked, or after `REACH_MS`. A page loaded locked shows its
+ * pad before it is connected: a code typed right then waits, instead of being refused as not
+ * sent.
+ */
+function reached(): Promise<void> {
+  return new Promise((resolve) => {
+    const there = () => connection.getState().status === "open";
+    if (there()) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      stop();
+      resolve();
+    };
+    const stop = connection.subscribe(() => {
+      if (there()) done();
+    });
+    const timer = setTimeout(done, REACH_MS);
+  });
+}
+
 /** Locks the whole app on this device; a first code is asked for when none exists. */
 export function lockApp(hasPin: boolean): void {
   if (hasPin) appLock.lock();
@@ -120,30 +144,32 @@ export function AppLock({
 
   const check = (code: string) => {
     setState("busy");
-    connection.request({ type: "lock.check", requestId: newId(), pin: code }).then(
-      () => {
-        setState("ok");
-        try {
-          navigator.vibrate?.(12);
-        } catch {
-          // Not every browser lets a page vibrate.
-        }
-        later(() => {
-          setOpening(true);
-          later(() => appLock.unlock(), 520);
-        }, 900);
-      },
-      (e: unknown) => {
-        const why = e instanceof Error ? e.message : String(e);
-        setState("bad");
-        // A wrong code shows on the dots; only another reason needs words.
-        setMessage(/incorrect/i.test(why) ? null : why);
-        later(() => {
-          setTyped("");
-          setState("");
-        }, 650);
-      },
-    );
+    reached()
+      .then(() => connection.request({ type: "lock.check", requestId: newId(), pin: code }))
+      .then(
+        () => {
+          setState("ok");
+          try {
+            navigator.vibrate?.(12);
+          } catch {
+            // Not every browser lets a page vibrate.
+          }
+          later(() => {
+            setOpening(true);
+            later(() => appLock.unlock(), 520);
+          }, 900);
+        },
+        (e: unknown) => {
+          const why = e instanceof Error ? e.message : String(e);
+          setState("bad");
+          // A wrong code shows on the dots; only another reason needs words.
+          setMessage(/incorrect/i.test(why) ? null : why);
+          later(() => {
+            setTyped("");
+            setState("");
+          }, 650);
+        },
+      );
   };
 
   const press = (key: string) => {
