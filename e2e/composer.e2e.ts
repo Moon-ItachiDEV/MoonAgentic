@@ -679,6 +679,21 @@ describe("composer", () => {
       .first()
       .waitFor();
 
+    // Two reviews at once, and a judge who weighs their remarks: one that does not hold is
+    // dropped, and the piece is done without going back to its coder.
+    await composer(page).fill("/equipe Corrige answer, à arbitrer");
+    await composer(page).press("Enter");
+    await dialog.waitFor();
+    for (const role of ["Chef", "Codeurs", "Relecture", "Relecture 2", "Arbitre"])
+      await give(role, "demo");
+    for (const role of ["Tests", "Fusion"]) await give(role, "none");
+    await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
+    await card.getByRole("button", { name: /^Arbitre, / }).waitFor();
+    await card.getByRole("button", { name: /^Relecture 2, / }).waitFor();
+    await card.getByText(/^Terminée · /).waitFor({ timeout: 60_000 });
+    await card.getByRole("button", { name: /^Arbitre, .* : Rien à corriger$/ }).waitFor();
+    await shot(page, "c12b-equipe-arbitre");
+
     // Live: supervised coders wait on the user, and their lines say so as it happens.
     await composer(page).fill("/equipe Corrige answer");
     await composer(page).press("Enter");
@@ -696,6 +711,29 @@ describe("composer", () => {
       )
       .toBe(2);
     await shot(page, "c13-equipe-en-direct");
+    // What is written while the team works is a mission: the lead puts it in its plan.
+    expect(await composer(page).getAttribute("placeholder")).toBe("Ajouter une mission");
+    await composer(page).fill("Ajoute aussi une ligne dans MISSION.md");
+    await composer(page).press("Enter");
+    const missions = card.getByLabel("Missions ajoutées");
+    await missions.getByText("Ajoute aussi une ligne dans MISSION.md").waitFor();
+    await missions.getByText("Au plan · 1 partie").waitFor({ timeout: 30_000 });
+    // While the lead works (a mission it takes its time over), the send button adds a
+    // mission too, rather than putting the text in line for the lead.
+    await composer(page).fill("Relis tout en 5 étapes");
+    await composer(page).press("Enter");
+    await missions.getByText("Le chef la lit").waitFor();
+    await composer(page).fill("Et une autre dans MISSION.md");
+    await page
+      .getByRole("button", { name: /^(Mettre en file|Ajouter la mission)$/ })
+      .first()
+      .click({ timeout: 8_000 });
+    await missions.getByText("Et une autre dans MISSION.md").waitFor({ timeout: 5_000 });
+    await expect
+      .poll(() => missions.getByText(/^Au plan · 1 partie$/).count(), { timeout: 30_000 })
+      .toBe(2);
+    expect(await composer(page).inputValue()).toBe("");
+    await shot(page, "c13b-equipe-mission");
     // A team at work is stopped from the thread's menu, not by a button under its list.
     expect(await card.getByRole("button", { name: /Arrêter/ }).count()).toBe(0);
     await page.getByRole("button", { name: "Actions du fil" }).click();
@@ -958,10 +996,11 @@ describe("composer", () => {
     const cardOf = (title: string) =>
       page.locator(".pc").and(page.getByRole("button", { name: new RegExp(`: ${title},`) }));
 
-    // The first team's plan, laid down by its lead and carried to the end by its pieces.
+    // The plans of the two teams that finished (the first, and the one with a judge), laid
+    // down by their lead and carried to the end by their pieces.
     const delivered = column("Livré").locator(".pc");
     await delivered.filter({ hasText: "Documenter answer" }).first().waitFor();
-    expect(await delivered.count()).toBe(2);
+    expect(await delivered.count()).toBe(4);
     expect(await delivered.first().locator(".pco").textContent()).toBe("Planifiée par le chef");
     // The team that was stopped left its pieces where they stopped.
     await column("Reporté").locator(".pcw", { hasText: "arrêtée" }).first().waitFor();
@@ -1018,7 +1057,7 @@ describe("composer", () => {
     await detail.getByRole("button", { name: "Fermer", exact: true }).click();
 
     // A team's card says what moves it, and cannot be moved by hand.
-    await column("Livré").getByText("Documenter answer").click();
+    await column("Livré").getByText("Documenter answer").first().click();
     await detail.getByText("Suit le travail de l'équipe").waitFor();
     expect(await states.getByRole("button", { name: "En cours" }).isDisabled()).toBe(true);
     if (shots) await page.waitForTimeout(400);
@@ -1032,7 +1071,7 @@ describe("composer", () => {
     const lanes = page.getByRole("region", { name: "Timeline" });
     const bar = (title: string) => lanes.getByRole("button", { name: new RegExp(`: ${title},`) });
     await lanes.getByRole("region", { name: "Agent de démo" }).waitFor();
-    const done = bar("Documenter answer, Livré");
+    const done = bar("Documenter answer, Livré").first();
     await done.waitFor();
     // Delivered work is solid; the user's card is under the agent of the thread it was given.
     expect(await done.getAttribute("class")).not.toContain("planned");
@@ -1419,6 +1458,23 @@ describe("composer", () => {
     await composer(page).fill("Et dans le projet ?");
     await composer(page).press("Enter");
     await page.getByText("Et dans le projet ?").first().waitFor();
+
+    // A thread of a project is renamed from its line too: a right click in the sidebar.
+    await side
+      .getByRole("button", { name: /^Une question à déplacer/ })
+      .first()
+      .click({ button: "right" });
+    await page.getByRole("menuitem", { name: "Renommer" }).click();
+    await page.getByRole("dialog", { name: "Renommer le fil" }).waitFor();
+    const name = page.getByRole("textbox", { name: "Nom du fil" });
+    await name.fill("Question du projet");
+    await shot(page, "c25-renommer-fil");
+    await name.press("Enter");
+    await side
+      .getByRole("button", { name: /^Question du projet/ })
+      .first()
+      .waitFor();
+    await page.locator(".ttl b", { hasText: "Question du projet" }).waitFor();
     await page.close();
   });
 });

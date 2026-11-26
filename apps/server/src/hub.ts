@@ -29,8 +29,10 @@ import {
   MAX_QUEUED_MESSAGES,
   PR_WATCH_TRIES,
   RESUME_TEXT,
+  spentUntil,
   threadPullRequest,
 } from "@moonagentic/protocol";
+import type { ProjectQuotaRules, ThreadQuota } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   RoleMascots,
@@ -121,6 +123,7 @@ import { Scheduler } from "./scheduler.ts";
 import { diffText, shipTarget, Teams, teamStatus } from "./team.ts";
 import { PrReviews, REVIEW_DIFF_LIMIT, reviewPrompt, reviewStatus } from "./pr-review.ts";
 import { mcpServersFor, RESERVED_MCP_NAME } from "./mcp.ts";
+import { probeMcpTools } from "./mcp-probe.ts";
 import { type QuotaReader, Quotas } from "./quotas.ts";
 import { formContent, formQuestions, toolQuestions, type FormQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn, SettingTimeout } from "./session.ts";
@@ -131,6 +134,14 @@ import { sweepWorktrees } from "./worktree-sweep.ts";
 import { AppUpdates, type GitSource, type ShellChannel } from "./app-update.ts";
 import { backupBeforeUpdate } from "./backups.ts";
 import { redact } from "./redact.ts";
+import {
+  GIVE_UP_AFTER_MS,
+  nextFallback,
+  quotaStopped,
+  RESET_MARGIN_MS,
+  resetFromText,
+  UNKNOWN_RESET_RETRY_MS,
+} from "./quota-relief.ts";
 import { isTeamPreset } from "./saved-shapes.ts";
 import { isRecord, type Store, StorageRefused, storageTrouble, type ThreadPlace } from "./store.ts";
 import {
@@ -233,6 +244,8 @@ export interface HubOptions {
   quotaReaders?: Record<string, QuotaReader>;
   /** How often every quota is read again; 0 for only when asked or after a turn. */
   quotaEveryMs?: number;
+  /** How often threads waiting on a quota, or on a fallback model, look whether it is back. */
+  quotaTickMs?: number;
   /** Where the images sent with messages are kept; beside the worktrees unless given. */
   attachmentsDir?: string;
   /** The desktop app's channel, when it started this server. */
@@ -247,11 +260,21 @@ export interface HubOptions {
 
 /** The setting that lists the projects kept at the top. */
 const PINNED_PROJECTS = "pinnedProjects";
+/** The projects the user put away. */
+const ARCHIVED_PROJECTS = "archivedProjects";
 /** The user's defaults for a new thread, the same on every device. */
 const DEFAULTS = "defaults";
 /** Each project's icon and tint, as set in its settings. */
 const PROJECT_LOOKS = "projectLooks";
 type ProjectLook = Pick<Project, "icon" | "color">;
+/** The reviews of each pull request the user marked « Réglé », by the pull request's address. */
+const SETTLED_REVIEWS = "settledReviews";
+/** The projects that keep a thread's branch once its pull request is merged. */
+const KEEP_MERGED_BRANCHES = "keepMergedBranches";
+/** Each project's rules for a quota that runs out, by project id. */
+const PROJECT_QUOTA = "projectQuotaRules";
+/** How often threads waiting on a quota look whether it is back, unless told otherwise. */
+const QUOTA_TICK_MS = 60_000;
 
 /** The level a coordinator starts on, as agents name it. */
 const LOW_EFFORT = /^(low|bas)$/i;
@@ -514,6 +537,13 @@ export class Hub {
   private watching = false;
   private readonly prTimer: NodeJS.Timeout | undefined;
   private sweepTimer: NodeJS.Timeout | undefined;
+  private quotaTimer: NodeJS.Timeout | undefined;
+  /** Threads that wait on a quota or run on a fallback: the only ones the tick looks at. */
+  private readonly quotaThreads = new Set<string>();
+  /** When a thread whose quota gives no reset time is tried again, by thread id. */
+  private readonly quotaRetryAt = new Map<string, number>();
+  /** Threads the tick is putting back or starting again right now. */
+  private readonly quotaActing = new Set<string>();
 
   constructor(store: Store, agents: Agents, options: HubOptions) {
     this.store = store;
@@ -688,6 +718,7 @@ export class Hub {
     void this.recovered.then(() => {
       if (this.closed) return;
       this.scheduler.start();
+      this.startQuotaTick(options.quotaTickMs ?? QUOTA_TICK_MS);
       // Threads left in line when the server stopped start once places are free: until
       // now, only the end of another turn of their coordinator made them move.
       for (const t of this.store.listThreads()) {
@@ -959,7 +990,12 @@ export class Hub {
       }
       return false;
     }
-    if (message.type === "mcp.setEnabled" || message.type === "mcp.remove") {
+    if (
+      message.type === "mcp.setEnabled" ||
+      message.type === "mcp.remove" ||
+      message.type === "mcp.setAgents" ||
+      message.type === "mcp.tools"
+    ) {
       const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
       if (current?.projectIds?.some((p) => this.locks.isLocked(p))) lockedError();
       return false;
@@ -1175,6 +1211,24 @@ export class Hub {
         client.send(reply);
         return;
       }
+      case "workspace.settleRemark": {
+        const reply = await this.settleRemark(message.threadId, message.id).then(
+          (found) => ({
+            type: "prRemarks" as const,
+            requestId: message.requestId,
+            remarks: found?.remarks ?? [],
+            ...(found ? { number: found.pr.number } : {}),
+          }),
+          (error: unknown) => ({
+            type: "prRemarks" as const,
+            requestId: message.requestId,
+            remarks: [],
+            error: describe(error),
+          }),
+        );
+        client.send(reply);
+        return;
+      }
       case "workspace.sendRemarks":
         await this.sendRemarks(message.threadId, message.ids);
         client.send({ type: "done", requestId: message.requestId });
@@ -1282,6 +1336,13 @@ export class Hub {
       case "thread.resume":
         this.resume(message.threadId);
         return;
+      case "thread.quotaWait":
+        await this.waitInsteadOfFallback(message.threadId);
+        return;
+      case "thread.quotaCancel":
+        this.requireThread(message.threadId);
+        this.setThreadQuota(message.threadId, null);
+        return;
       case "item.get": {
         this.requireThread(message.threadId);
         const item = this.itemOf(message.threadId, message.itemId);
@@ -1301,6 +1362,8 @@ export class Hub {
       case "thread.switchAgent":
         await this.switchAgent(message.threadId, message.agentId);
         this.coordinators.keepChoice(message.threadId);
+        // The user's own choice: no fallback to come back from.
+        this.dropRelief(message.threadId);
         return;
       case "thread.setPermissionMode":
         this.setPermissionMode(message.threadId, message.permissionMode);
@@ -1308,12 +1371,15 @@ export class Hub {
       case "thread.setModel":
         await this.setModel(message.threadId, message.model);
         this.coordinators.keepChoice(message.threadId);
+        this.dropRelief(message.threadId);
         return;
       case "thread.setSetting":
         await this.setSetting(message.threadId, message.settingId, message.value);
         return;
       case "thread.setArchived":
         await this.setArchived(message.threadId, message.archived);
+        // Resolved after its pull request was merged: its branch has no more use.
+        if (message.archived) await this.deleteMergedBranch(message.threadId);
         return;
       case "thread.delete":
         await this.deleteThread(message.threadId);
@@ -1334,6 +1400,20 @@ export class Hub {
           // Projects removed since are dropped on the way.
           .filter((p) => p !== project.id && this.store.getProject(p));
         this.store.setSetting(PINNED_PROJECTS, message.pinned ? [...others, project.id] : others);
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
+      case "project.setArchived": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        if (this.isDiscussions(project.id)) throw new Error("Discussions ne s'archive pas.");
+        const others = this.store
+          .getSetting<string[]>(ARCHIVED_PROJECTS, [])
+          .filter((p) => p !== project.id && this.store.getProject(p));
+        this.store.setSetting(
+          ARCHIVED_PROJECTS,
+          message.archived ? [...others, project.id] : others,
+        );
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
@@ -1359,6 +1439,36 @@ export class Hub {
         this.store.setSetting(TEAM_PRESETS_SETTING, message.presets);
         this.broadcast({ type: "teamPresets", presets: message.presets });
         return;
+      case "project.setDeleteMerged": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        const others = this.store
+          .getSetting<string[]>(KEEP_MERGED_BRANCHES, [])
+          .filter((p) => p !== project.id && this.store.getProject(p));
+        this.store.setSetting(KEEP_MERGED_BRANCHES, message.on ? others : [...others, project.id]);
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
+      case "project.setQuotaRules": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        const all = Object.fromEntries(
+          Object.entries(
+            this.store.getSetting<Record<string, ProjectQuotaRules>>(PROJECT_QUOTA, {}),
+          )
+            // Projects removed since are dropped on the way.
+            .filter(([p]) => p !== project.id && this.store.getProject(p)),
+        );
+        const current = this.quotaRules(project.id) ?? {};
+        const next: ProjectQuotaRules = {
+          ...current,
+          ...(message.resume !== undefined ? { resume: message.resume } : {}),
+          ...(message.fallback ? { fallback: message.fallback } : {}),
+        };
+        this.store.setSetting(PROJECT_QUOTA, { ...all, [project.id]: next });
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
       case "project.setLook": {
         const project = this.store.getProject(message.projectId);
         if (!project) throw new Error("Ce projet n'existe plus.");
@@ -1623,6 +1733,8 @@ export class Hub {
             lead: message.lead,
             coder: message.coder,
             ...(message.reviewer ? { reviewer: message.reviewer } : {}),
+            ...(message.reviewer2 ? { reviewer2: message.reviewer2 } : {}),
+            ...(message.judge ? { judge: message.judge } : {}),
             ...(message.tester ? { tester: message.tester } : {}),
             ...(message.merger ? { merger: message.merger } : {}),
             coders: message.coders,
@@ -1666,6 +1778,10 @@ export class Hub {
         return;
       case "team.ship":
         await this.teams.ship(message.threadId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "team.addMission":
+        this.teams.addMission(message.threadId, message.text);
         client.send({ type: "done", requestId: message.requestId });
         return;
       case "team.retry":
@@ -1801,6 +1917,16 @@ export class Hub {
       case "mcp.remove":
         await this.catalog.removeMcpServer(message.id);
         return;
+      case "mcp.setAgents":
+        this.catalog.setMcpAgents(message.id, message.agentIds);
+        return;
+      case "mcp.tools": {
+        const server = (await this.catalog.mcpServers()).find((s) => s.id === message.id);
+        if (!server) throw new Error("Ce serveur MCP n'existe plus.");
+        const tools = await probeMcpTools(server);
+        client.send({ type: "mcpTools", requestId: message.requestId, tools });
+        return;
+      }
       case "workspace.review":
         // The panel waits for this reply, so a failure is sent to it rather than thrown.
         client.send(
@@ -2093,6 +2219,8 @@ export class Hub {
     lead: { agentId: string; model?: string | undefined };
     coder: { agentId: string; model?: string | undefined };
     reviewer?: { agentId: string; model?: string | undefined } | undefined;
+    reviewer2?: { agentId: string; model?: string | undefined } | undefined;
+    judge?: { agentId: string; model?: string | undefined } | undefined;
     tester?: { agentId: string; model?: string | undefined } | undefined;
     merger?: { agentId: string; model?: string | undefined } | undefined;
     coders: number;
@@ -2119,6 +2247,9 @@ export class Hub {
       lead: member(input.lead),
       coder: member(input.coder),
       reviewer: input.reviewer && member(input.reviewer),
+      // A second review and a judge only come with a first review.
+      reviewer2: input.reviewer && input.reviewer2 && member(input.reviewer2),
+      judge: input.reviewer && input.judge && member(input.judge),
       tester: input.tester && member(input.tester),
       merger: input.merger && member(input.merger),
     });
@@ -2673,7 +2804,13 @@ export class Hub {
       ...(from ? { from } : {}),
       at: Date.now(),
     });
-    this.updateThread(threadId, { status: "running", error: null });
+    this.updateThread(threadId, {
+      status: "running",
+      error: null,
+      // A turn on its way: nothing waits for the quota any more.
+      ...(thread.quota?.state === "wait" ? { quota: null } : {}),
+    });
+    this.quotaRetryAt.delete(threadId);
     // This turn's own end is the one that counts from here.
     this.unsettled.delete(threadId);
     this.turnIds.set(threadId, randomUUID());
@@ -2765,6 +2902,14 @@ export class Hub {
     const now = this.store.getThread(threadId);
     const failed = !!now && this.asEnded(now).status === "error";
     const atOnce = this.sendAfterStop.delete(threadId);
+    // A quota that ran out: a fallback model takes over, or the thread waits for the reset.
+    // Either is the thread's next step, never both, and nothing else goes on meanwhile.
+    if (!cancelled && !this.closed && !this.turns.has(threadId) && this.onQuotaStop(threadId)) {
+      this.prFixing.delete(threadId);
+      return;
+    }
+    // A thread that got through a turn on its fallback, with no going back, is just on it now.
+    if (!this.closed && !failed) this.settleRelief(threadId);
     // A fix of the pull request whose words after a refusal go on in a new turn is pushed
     // when that one ends.
     if (this.prFixing.has(threadId) && this.turns.has(threadId)) return;
@@ -3103,7 +3248,48 @@ export class Hub {
     if (!on?.github.remarks) return undefined;
     const pr = await on.github.find(on.repo, on.branch);
     if (!pr || (pr.state !== "open" && pr.state !== "draft")) return undefined;
-    return { pr, remarks: await on.github.remarks(on.repo, pr.number) };
+    const settled = new Set(
+      this.store.getSetting<Record<string, string[]>>(SETTLED_REVIEWS, {})[pr.url] ?? [],
+    );
+    const remarks = (await on.github.remarks(on.repo, pr.number)).map((r) =>
+      r.kind === "review" && settled.has(r.id) ? { ...r, settled: true as const } : r,
+    );
+    return { pr, remarks };
+  }
+
+  /**
+   * « Réglé »: the remark is done with. A conversation is resolved on GitHub, by the user's own
+   * `gh`; a review is kept settled here, for this pull request. Returns the remarks read again.
+   */
+  async settleRemark(
+    threadId: string,
+    remarkId: string,
+  ): Promise<{ pr: PullRequestInfo; remarks: PullRequestRemark[] } | undefined> {
+    this.requireThread(threadId);
+    const found = await this.pullRequestRemarks(threadId);
+    if (!found) throw new Error("Cette branche n'a plus de pull request ouverte sur GitHub.");
+    const remark = found.remarks.find((r) => r.id === remarkId);
+    if (!remark) throw new Error("Cette remarque n'est plus sur GitHub : actualise la liste.");
+    if (remark.settled) return found;
+    if (remark.kind === "thread") {
+      const on = await this.branchOnGithub(threadId);
+      if (!on?.github.resolveRemark)
+        throw new Error("GitHub CLI (gh) est requis pour régler une remarque.");
+      await on.github.resolveRemark(remark.id);
+    } else {
+      const all = this.store.getSetting<Record<string, string[]>>(SETTLED_REVIEWS, {});
+      // Pull requests no thread has any more are dropped on the way.
+      const kept = Object.fromEntries(
+        Object.entries(all).filter(([url]) =>
+          this.store.listThreads().some((t) => t.pr?.url === url),
+        ),
+      );
+      this.store.setSetting(SETTLED_REVIEWS, {
+        ...kept,
+        [found.pr.url]: [...(all[found.pr.url] ?? []), remark.id],
+      });
+    }
+    return this.pullRequestRemarks(threadId);
   }
 
   /**
@@ -3119,7 +3305,7 @@ export class Hub {
     const found = await this.pullRequestRemarks(threadId);
     if (!found) throw new Error("Cette branche n'a plus de pull request ouverte sur GitHub.");
     const wanted = new Set(ids);
-    const picked = found.remarks.filter((r) => wanted.has(r.id));
+    const picked = found.remarks.filter((r) => wanted.has(r.id) && !r.settled);
     if (!picked.length) {
       throw new Error("Ces remarques ne sont plus ouvertes sur GitHub : actualise la liste.");
     }
@@ -3171,6 +3357,34 @@ export class Hub {
     await this.setArchived(target.id, true).catch((error) =>
       console.error("Résolution après merge :", error),
     );
+    if (this.store.getThread(threadId)?.archived)
+      await this.deleteMergedBranch(threadId, info.head);
+  }
+
+  /**
+   * « Supprimer après la fusion »: once a resolved thread's pull request is merged, its branch
+   * goes from the project's repository, unless the project keeps them. Looked at again just
+   * before, like a branch deleted by hand: still merged, and nobody working on it.
+   */
+  private async deleteMergedBranch(threadId: string, mergedHead?: string): Promise<void> {
+    const thread = this.store.getThread(threadId);
+    const branch = thread?.workspace?.base ? thread.workspace.branch : undefined;
+    if (!thread?.archived || !branch || thread.pr?.state !== "merged") return;
+    if (this.store.getSetting<string[]>(KEEP_MERGED_BRANCHES, []).includes(thread.projectId))
+      return;
+    // Kept on the thread when it was merged, for a thread the user resolves later.
+    const head = mergedHead ?? thread.pr.mergedHead;
+    try {
+      const { kept } = await deleteMergedBranches(
+        this.gitProjectPath(thread.projectId),
+        this.branchOwners(),
+        [branch],
+        head ? { [branch]: head } : {},
+      );
+      if (kept.length) console.warn(`Branche ${branch} gardée : ${kept[0]!.reason}`);
+    } catch (error) {
+      if (!this.closed) console.error("Suppression de la branche après la fusion :", error);
+    }
   }
 
   /**
@@ -3516,6 +3730,8 @@ export class Hub {
         this.logs.delete(threadId);
         this.threadGrants.delete(threadId);
         this.greenTold.delete(threadId);
+        this.quotaThreads.delete(threadId);
+        this.quotaRetryAt.delete(threadId);
         this.coordinators.forget(threadId);
         this.attachments.forget(threadId);
         this.store.deleteThread(threadId);
@@ -3615,6 +3831,310 @@ export class Hub {
         });
       }
     });
+  }
+
+  /** The project's rules for a quota that runs out, once set. */
+  private quotaRules(projectId: string): ProjectQuotaRules | undefined {
+    return this.store.getSetting<Record<string, ProjectQuotaRules>>(PROJECT_QUOTA, {})[projectId];
+  }
+
+  /** The words a model goes by, for the quota windows: its id and the name its agent gives. */
+  private modelNames(agentId: string, model: string): (string | undefined)[] {
+    const name = this.store.getAgentModels(agentId)?.models.find((c) => c.id === model)?.name;
+    return [model, name];
+  }
+
+  /** When the figures, or else the agent's own words, say this model's quota is back. */
+  private quotaBackAt(ref: FavoriteRef, said: string, now = Date.now()): number | undefined {
+    const left = spentUntil(
+      this.quotas.get(ref.agentId),
+      this.modelNames(ref.agentId, ref.model),
+      now,
+    );
+    return (left && left.until) || resetFromText(said, now);
+  }
+
+  private setThreadQuota(threadId: string, quota: ThreadQuota | null): void {
+    if (!this.store.getThread(threadId)) return;
+    this.updateThread(threadId, { quota });
+    if (quota) this.quotaThreads.add(threadId);
+    else {
+      this.quotaThreads.delete(threadId);
+      this.quotaRetryAt.delete(threadId);
+    }
+  }
+
+  /** The user picked a model or an agent themselves: the thread is no longer on a fallback. */
+  private dropRelief(threadId: string): void {
+    if (this.store.getThread(threadId)?.quota?.state === "relief")
+      this.setThreadQuota(threadId, null);
+  }
+
+  /** After a turn that went through on a fallback that does not go back: just its model now. */
+  private settleRelief(threadId: string): void {
+    const thread = this.store.getThread(threadId);
+    const relief = thread?.quota?.state === "relief" ? thread.quota : undefined;
+    if (!thread || !relief) return;
+    if (this.quotaRules(thread.projectId)?.fallback?.back) {
+      // It went through: the fallbacks that ran out before may be tried again next time.
+      if (relief.tried) {
+        const { tried: _tried, ...kept } = relief;
+        this.wrote(() => this.setThreadQuota(threadId, kept));
+      }
+      return;
+    }
+    this.wrote(() => this.setThreadQuota(threadId, null));
+  }
+
+  /**
+   * Called as a turn ends, before anything else goes on: when its quota stopped it, the
+   * project's rules say what follows. A fallback with quota left takes over at once and goes
+   * on; with none, the thread waits on its own model for the reset, when the project asks;
+   * the user's other messages wait meanwhile. True when it took the thread's next step.
+   * Teams and reviews keep their own way of handling a failure.
+   */
+  private onQuotaStop(threadId: string): boolean {
+    const thread = this.store.getThread(threadId);
+    if (!thread || thread.archived || thread.parentId || thread.role) return false;
+    if (thread.team || thread.prReview) return false;
+    const ended = this.asEnded(thread);
+    const error = ended.status === "error" ? ended.error : undefined;
+    const turn = this.lastTurn(threadId);
+    const answer = turn.some((i) => i.kind === "tool")
+      ? undefined
+      : turn
+          .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
+          .join("\n")
+          .trim();
+    if (!quotaStopped(error, answer)) return false;
+    const rules = this.quotaRules(thread.projectId);
+    const said = [error, answer].filter(Boolean).join("\n");
+    const now = Date.now();
+    const spent: FavoriteRef = { agentId: thread.agentId, model: thread.model ?? "" };
+    const relief = thread.quota?.state === "relief" ? thread.quota : undefined;
+    // On a fallback, its own model is the one to come back to.
+    const own = relief?.from ?? spent;
+    const ownBack = relief ? relief.back : this.quotaBackAt(spent, said, now);
+    // Every fallback that ran out since the thread left its own model: never one twice.
+    const tried = relief ? [...(relief.tried ?? []), relief.to] : [];
+    const next = nextFallback(rules, spent, {
+      tried: relief ? [relief.from, ...tried] : [],
+      installed: (agentId) => !!this.catalog.list().find((a) => a.id === agentId && a.available),
+      quota: (agentId) => this.quotas.get(agentId),
+      names: (agentId, model) => this.modelNames(agentId, model),
+      now,
+    });
+    if (next) {
+      const back = rules?.fallback?.back ? ownBack : undefined;
+      this.runQuotaStep(threadId, () => this.takeOver(threadId, own, next, back, tried));
+      return true;
+    }
+    if (rules?.resume) {
+      this.runQuotaStep(threadId, () => this.waitForQuota(threadId, own, ownBack));
+      return true;
+    }
+    // Nothing to do but say it: a thread left on a spent fallback goes back to its own model.
+    if (relief) this.runQuotaStep(threadId, () => this.putBack(threadId, own));
+    return false;
+  }
+
+  /** Runs one step of a thread's quota handling, kept for `close` to wait on. */
+  private runQuotaStep(threadId: string, work: () => Promise<void>): void {
+    if (this.quotaActing.has(threadId)) return;
+    this.quotaActing.add(threadId);
+    const step = work()
+      .catch((error: unknown) => {
+        if (!this.closed && !this.storageFailed(error)) console.error("Quota :", error);
+      })
+      .finally(() => this.quotaActing.delete(threadId));
+    this.steps.add(step);
+    void step.finally(() => this.steps.delete(step));
+  }
+
+  /** Puts the thread on a model, changing agent when it is another one's. */
+  private async putOn(threadId: string, ref: FavoriteRef): Promise<void> {
+    const thread = this.requireLiveThread(threadId);
+    if (thread.agentId !== ref.agentId) {
+      await this.switchAgent(threadId, ref.agentId);
+      // The new agent starts on it: its models may not be known before its first start.
+      if (ref.model) this.updateThread(threadId, { model: ref.model });
+    } else if (ref.model && thread.model !== ref.model) {
+      await this.setModel(threadId, ref.model);
+    }
+  }
+
+  /** The fallback takes over, and the agent goes on where the quota stopped it. */
+  private async takeOver(
+    threadId: string,
+    own: FavoriteRef,
+    to: FavoriteRef,
+    back: number | undefined,
+    tried: FavoriteRef[],
+  ): Promise<void> {
+    await this.putOn(threadId, to);
+    if (this.closed) return;
+    this.setThreadQuota(threadId, {
+      state: "relief",
+      from: own,
+      to,
+      since: Date.now(),
+      ...(back ? { back } : {}),
+      ...(tried.length ? { tried } : {}),
+    });
+    this.send(threadId, RESUME_TEXT, undefined, undefined, undefined, true);
+  }
+
+  /** The thread waits on its own model for its quota, to start again by itself. */
+  private async waitForQuota(
+    threadId: string,
+    own: FavoriteRef,
+    until: number | undefined,
+  ): Promise<void> {
+    await this.putOn(threadId, own);
+    if (this.closed) return;
+    this.setThreadQuota(threadId, {
+      state: "wait",
+      agentId: own.agentId,
+      ...(own.model ? { model: own.model } : {}),
+      since: Date.now(),
+      ...(until ? { until } : {}),
+    });
+    if (!until) this.quotaRetryAt.set(threadId, Date.now() + UNKNOWN_RESET_RETRY_MS);
+  }
+
+  /** Back on its own model, with nothing more to do about the quota. */
+  private async putBack(threadId: string, own: FavoriteRef): Promise<void> {
+    await this.putOn(threadId, own);
+    this.setThreadQuota(threadId, null);
+  }
+
+  /**
+   * « Attendre »: the thread leaves its fallback, its turn there stopped, and waits on its own
+   * model for its quota, to start again by itself.
+   */
+  private async waitInsteadOfFallback(threadId: string): Promise<void> {
+    const thread = this.requireLiveThread(threadId);
+    const relief = thread.quota?.state === "relief" ? thread.quota : undefined;
+    if (!relief) throw new Error("Ce fil n'est pas sur un modèle de secours.");
+    if (this.quotaActing.has(threadId)) throw new Error("Attends la fin du changement de modèle.");
+    // Held while its turn stops: no tick puts it back meanwhile.
+    this.quotaActing.add(threadId);
+    try {
+      const turn = this.turns.get(threadId);
+      if (turn) {
+        await this.cancel(threadId);
+        await turn.catch(() => undefined);
+      }
+      // Something else may have moved it meanwhile: a message, a model picked, a removal.
+      const now = this.store.getThread(threadId);
+      if (
+        !now ||
+        now.archived ||
+        now.quota?.state !== "relief" ||
+        this.turns.has(threadId) ||
+        this.busy.has(threadId)
+      ) {
+        return;
+      }
+      await this.waitForQuota(threadId, relief.from, relief.back);
+    } finally {
+      this.quotaActing.delete(threadId);
+    }
+  }
+
+  private startQuotaTick(everyMs: number): void {
+    const later = Date.now() + UNKNOWN_RESET_RETRY_MS;
+    for (const thread of this.store.listThreads()) {
+      if (!thread.quota) continue;
+      this.quotaThreads.add(thread.id);
+      // With no time given, it is tried again later, not on each restart.
+      const at = thread.quota.state === "wait" ? thread.quota.until : thread.quota.back;
+      if (at === undefined) this.quotaRetryAt.set(thread.id, later);
+    }
+    if (everyMs <= 0) return;
+    this.quotaTimer = setInterval(() => void this.quotaTick(), everyMs);
+    this.quotaTimer.unref();
+    void this.quotaTick();
+  }
+
+  /**
+   * Looks at each thread that waits on a quota or runs on a fallback that goes back: once its
+   * own model has quota again, the waiting one starts again and the other goes back to it.
+   * The figures, when readable, have the last word on whether the quota is back.
+   */
+  async quotaTick(now = Date.now()): Promise<void> {
+    for (const threadId of Array.from(this.quotaThreads)) {
+      if (this.closed) return;
+      const thread = this.store.getThread(threadId);
+      const quota = thread?.quota;
+      if (!thread || !quota || thread.archived) {
+        if (thread?.quota) this.setThreadQuota(threadId, null);
+        else this.quotaThreads.delete(threadId);
+        continue;
+      }
+      if (this.quotaActing.has(threadId) || this.turns.has(threadId) || this.busy.has(threadId)) {
+        continue;
+      }
+      if (quota.state === "relief" && !this.quotaRules(thread.projectId)?.fallback?.back) continue;
+      const own: FavoriteRef =
+        quota.state === "wait" ? { agentId: quota.agentId, model: quota.model ?? "" } : quota.from;
+      const at = quota.state === "wait" ? quota.until : quota.back;
+      const due = at !== undefined ? at + RESET_MARGIN_MS : this.quotaRetryAt.get(threadId);
+      if (due !== undefined && now < due) continue;
+      if (now - quota.since > GIVE_UP_AFTER_MS) {
+        this.setThreadQuota(threadId, null);
+        continue;
+      }
+      // The figures may say it is not back yet, and when it will be. The thread is held
+      // meanwhile, and looked at again after: the user may have moved it in between.
+      this.quotaActing.add(threadId);
+      try {
+        await this.quotas.refresh(own.agentId, RESET_MARGIN_MS).catch(() => undefined);
+      } finally {
+        this.quotaActing.delete(threadId);
+      }
+      if (this.closed) return;
+      const after = this.store.getThread(threadId);
+      if (
+        !after ||
+        after.archived ||
+        JSON.stringify(after.quota) !== JSON.stringify(quota) ||
+        this.turns.has(threadId) ||
+        this.busy.has(threadId)
+      ) {
+        continue;
+      }
+      const left = spentUntil(
+        this.quotas.get(own.agentId),
+        this.modelNames(own.agentId, own.model),
+        now,
+      );
+      if (left) {
+        if (left.until && left.until !== at) {
+          this.setThreadQuota(
+            threadId,
+            quota.state === "wait"
+              ? { ...quota, until: left.until }
+              : { ...quota, back: left.until },
+          );
+        } else if (!left.until) {
+          this.quotaRetryAt.set(threadId, now + UNKNOWN_RESET_RETRY_MS);
+        }
+        continue;
+      }
+      // Unknown figures and no time given: tried now, and again later if it stops again.
+      if (at === undefined) this.quotaRetryAt.set(threadId, now + UNKNOWN_RESET_RETRY_MS);
+      if (quota.state === "wait") {
+        this.setThreadQuota(threadId, null);
+        try {
+          this.resume(threadId);
+        } catch (error) {
+          if (!this.storageFailed(error)) console.error("Reprise après le quota :", error);
+        }
+      } else {
+        this.runQuotaStep(threadId, () => this.putBack(threadId, own));
+      }
+    }
   }
 
   /**
@@ -3887,6 +4407,7 @@ export class Hub {
     clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
     clearInterval(this.sweepTimer);
+    clearInterval(this.quotaTimer);
     clearInterval(this.storageTimer);
     this.app.close();
     this.quotas.close();
@@ -4224,7 +4745,10 @@ export class Hub {
     const pinned = this.store.getSetting<string[]>(PINNED_PROJECTS, []).includes(project.id);
     const locked = this.locks.isLocked(project.id);
     const look = this.store.getSetting<Record<string, ProjectLook>>(PROJECT_LOOKS, {})[project.id];
-    return git || pinned || locked || look
+    const quota = this.quotaRules(project.id);
+    const keep = this.store.getSetting<string[]>(KEEP_MERGED_BRANCHES, []).includes(project.id);
+    const archived = this.store.getSetting<string[]>(ARCHIVED_PROJECTS, []).includes(project.id);
+    return git || pinned || locked || look || quota || keep || archived
       ? {
           ...project,
           ...(git ? { git } : {}),
@@ -4232,6 +4756,9 @@ export class Hub {
           ...(locked ? { locked } : {}),
           ...(look?.icon ? { icon: look.icon } : {}),
           ...(look?.color ? { color: look.color } : {}),
+          ...(quota ? { quota } : {}),
+          ...(keep ? { deleteMerged: false as const } : {}),
+          ...(archived ? { archived } : {}),
         }
       : project;
   }
@@ -4776,7 +5303,7 @@ export class Hub {
     const allowed =
       thread.kind === "coordinator"
         ? COORDINATOR_ALLOWED
-        : thread.role === "reviewer"
+        : thread.role === "reviewer" || thread.role === "reviewer2" || thread.role === "judge"
           ? REVIEWER_ALLOWED
           : undefined;
     const readOnlyDenied = !!allowed && !allowed.has(request.toolCall.kind ?? "");

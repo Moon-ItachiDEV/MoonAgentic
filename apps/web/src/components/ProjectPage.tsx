@@ -39,6 +39,7 @@ interface ThreadActions {
   onTogglePin: (id: string, pinned: boolean) => void;
   onSetArchived: (id: string, archived: boolean) => void;
   onDeleteThread: (thread: Thread) => void;
+  onRenameThread: (thread: Thread) => void;
 }
 
 /** The times on the lines move on by themselves. */

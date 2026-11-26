@@ -23,6 +23,8 @@ const ROLE_VERB: Record<TeamRole, string> = {
   lead: "pilote",
   coder: "code",
   reviewer: "relit",
+  reviewer2: "relit aussi",
+  judge: "arbitre",
   tester: "teste",
   merger: "fusionne",
 };

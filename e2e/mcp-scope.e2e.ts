@@ -1,6 +1,6 @@
 // MCP servers by project, in the built app against a real server: who is given one.
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -169,6 +169,52 @@ describe("serveurs MCP par projet", () => {
     await expect
       .poll(() => row.locator("small").textContent())
       .toBe("Tous les projets · toute l'équipe");
+    await page.close();
+  });
+
+  it("lists a server's tools, and gives it only to the agents picked", async () => {
+    // A real server, started by a command: it lists its tools when asked.
+    const script = path.join(dir, "outils.cjs");
+    writeFileSync(
+      script,
+      `const rl = require("node:readline").createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const m = JSON.parse(line);
+  if (m.id === undefined) return;
+  const result = m.method === "initialize"
+    ? { protocolVersion: "2025-06-18", capabilities: {} }
+    : { tools: [{ name: "browser_click", description: "Clique" }, { name: "browser_type" }] };
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: m.id, result }) + "\\n");
+});`,
+    );
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    const list = await openServers(page);
+    await list.getByRole("button", { name: "Ajouter un serveur" }).click();
+    const add = page.getByRole("dialog", { name: "Ajouter un serveur" });
+    await add.getByLabel("Nom").fill("navigateur");
+    await add.getByLabel("Commande", { exact: true }).fill(`node ${script}`);
+    await add.getByRole("button", { name: "Ajouter", exact: true }).click();
+    const row = list.getByRole("button", { name: /^navigateur/ });
+    await row.click();
+    const sheet = page.getByRole("dialog", { name: "navigateur" });
+    await sheet.getByRole("button", { name: /^Outils/ }).click();
+    const tools = sheet.getByLabel("Outils de navigateur");
+    await tools.getByText("browser_click").waitFor({ timeout: 30_000 });
+    await tools.getByText("browser_type").waitFor();
+    await sheet.getByRole("button", { name: /^Outils\s*2/ }).waitFor();
+    // Every agent gets it until one is left out.
+    const demo = sheet.getByRole("switch", { name: "Donner à Agent de démo" });
+    expect(await demo.getAttribute("aria-checked")).toBe("true");
+    await demo.click();
+    await expect.poll(() => demo.getAttribute("aria-checked")).toBe("false");
+    await shot(page, "s3-outils-agents");
+    await expect.poll(() => row.locator("small").textContent()).not.toBe("Tous les projets");
+    await sheet.getByRole("button", { name: "Fermer", exact: true }).click();
+    await closeSettings(page);
+    // The demo agent's threads no longer get it, and its « + » menu does not count it.
+    const inAlpha = await ask(page, "Alpha", "Quatre");
+    expect(inAlpha.answer).not.toContain("navigateur");
     await page.close();
   });
 

@@ -9,7 +9,7 @@ import { scrRoot } from "./scr.ts";
 const HOLD_MS = 480;
 
 /**
- * The menu of a conversation's line (pin, read, resolve, delete), opened by a right click or
+ * The menu of a conversation's line (rename, pin, read, resolve, delete), opened by a right click or
  * a long press. `bind(thread)` gives the line what it needs; `menu` is drawn once, anywhere.
  */
 export function useThreadRowMenu(
@@ -18,6 +18,7 @@ export function useThreadRowMenu(
     onTogglePin: (id: string, pinned: boolean) => void;
     onSetArchived: (id: string, archived: boolean) => void;
     onDeleteThread: (thread: Thread) => void;
+    onRenameThread: (thread: Thread) => void;
   },
 ) {
   const [at, setAt] = useState<{ id: string; x: number; y: number } | null>(null);
@@ -103,6 +104,10 @@ export function useThreadRowMenu(
         aria-label={`Actions de ${thread.title}`}
         style={{ "--x": `${at.x}px`, "--y": `${at.y}px` } as CSSProperties}
       >
+        <button className="pi2" role="menuitem" onClick={act(() => actions.onRenameThread(thread))}>
+          <I n="edit" s={20} />
+          <span className="nm">Renommer</span>
+        </button>
         {!thread.archived && (
           <button
             className="pi2"

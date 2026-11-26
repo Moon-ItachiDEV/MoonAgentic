@@ -2,7 +2,15 @@ import type { AgentInfo, TeamMember, TeamPreset, TeamRole } from "./index.ts";
 
 export type { TeamPreset, TeamRole } from "./index.ts";
 
-export const TEAM_ROLES: TeamRole[] = ["lead", "coder", "reviewer", "tester", "merger"];
+export const TEAM_ROLES: TeamRole[] = [
+  "lead",
+  "coder",
+  "reviewer",
+  "reviewer2",
+  "judge",
+  "tester",
+  "merger",
+];
 
 /**
  * A first team to start from, until the user sets their own up in the settings: the models
@@ -12,7 +20,8 @@ export const TEAM_ROLES: TeamRole[] = ["lead", "coder", "reviewer", "tester", "m
 interface PresetSuggestion {
   id: string;
   label: string;
-  prefer: Record<TeamRole, RegExp[]>;
+  /** A role left out is not in the team (a second review, a judge). */
+  prefer: Partial<Record<TeamRole, RegExp[]>>;
 }
 
 const SUGGESTIONS: PresetSuggestion[] = [
@@ -44,7 +53,9 @@ const SUGGESTIONS: PresetSuggestion[] = [
     prefer: {
       lead: [/fable/i],
       coder: [/fable/i, /opus/i],
-      reviewer: [/neon/i, /astra/i, /gemini/i],
+      reviewer: [/neon/i, /gemini/i],
+      reviewer2: [/astra/i, /\bsol\b/i, /gpt/i],
+      judge: [/fable/i],
       tester: [/sonnet/i],
       merger: [/haiku/i],
     },
@@ -69,7 +80,8 @@ export function suggestedPresets(agents: AgentInfo[]): TeamPreset[] {
     label: s.label,
     roles: Object.fromEntries(
       TEAM_ROLES.flatMap((role) => {
-        const member = pickMember(agents, s.prefer[role]);
+        const prefer = s.prefer[role];
+        const member = prefer && pickMember(agents, prefer);
         return member ? [[role, member]] : [];
       }),
     ),

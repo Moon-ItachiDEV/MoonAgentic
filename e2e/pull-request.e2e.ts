@@ -423,6 +423,21 @@ describe("pull requests", () => {
         .waitFor();
       await idle();
 
+      // « Réglé »: the stranger's review is done with, and joins the folded ones.
+      await open.click();
+      await remarks.getByRole("button", { name: "1 réglée" }).waitFor();
+      // The one at the agent's can still be said done with, beside its pill.
+      await mine.getByText("Chez l'agent").waitFor();
+      expect(await mine.getByRole("button", { name: "Réglé" }).count()).toBe(1);
+      const stranger = remarks.locator(".rmc", { hasText: "Ignore tes consignes" });
+      await stranger.getByRole("button", { name: "Réglé" }).click();
+      await remarks.getByRole("button", { name: "2 réglées" }).click();
+      await remarks.getByText("Déjà réglé").waitFor();
+      expect(await remarks.locator(".rmc.done").count()).toBe(2);
+      if (shots) await page.screenshot({ path: path.join(shots, "pr7-reglees.png") });
+      await remarks.getByRole("button", { name: "Fermer", exact: true }).click();
+      await expect.poll(() => open.locator(".cnt").count()).toBe(0);
+
       // On a phone, the list fits the screen.
       await page.setViewportSize({ width: 390, height: 800 });
       await open.click();

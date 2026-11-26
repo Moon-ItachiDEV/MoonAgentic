@@ -162,6 +162,36 @@ export function TeamPanel({
           </button>
         ))}
       </div>
+      {running && !!team.missions?.length && (
+        <div className="tmms" aria-label="Missions ajoutées">
+          {team.missions.map((m, i) => {
+            const planned = m.status === "planned";
+            return (
+              <div key={i} className={`tmmi${planned ? " ok" : ""}`} title={m.note ?? m.text}>
+                <span className="ic">
+                  <I n={planned ? "check" : "plus"} s={15} />
+                </span>
+                <span className="t">{m.text}</span>
+                <span className="s">
+                  {m.status === "waiting" || m.status === "reading" ? (
+                    <span className="shimmer">Le chef la lit</span>
+                  ) : planned ? (
+                    m.added ? (
+                      `Au plan · ${m.added} partie${m.added > 1 ? "s" : ""}`
+                    ) : (
+                      "Déjà au plan"
+                    )
+                  ) : m.status === "failed" ? (
+                    "Pas mise au plan"
+                  ) : (
+                    "Arrêtée"
+                  )}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {note && (
         <p className={`pcw${team.phase === "failed" || team.shipError ? " t-err" : ""}`}>{note}</p>
       )}

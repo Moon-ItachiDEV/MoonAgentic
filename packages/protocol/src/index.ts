@@ -12,6 +12,15 @@ export {
 import type { AppInfo } from "./app-update.ts";
 export { type Notice, noticesFor, settledTags, waitingTag } from "./notices.ts";
 export {
+  limitsModel,
+  MAX_FALLBACK_MODELS,
+  type ProjectQuotaRules,
+  spentUntil,
+  type ThreadQuota,
+  tightest,
+} from "./quota.ts";
+import { MAX_FALLBACK_MODELS, type ProjectQuotaRules, type ThreadQuota } from "./quota.ts";
+export {
   defaultTeam,
   pickMember,
   presetMembers,
@@ -219,6 +228,14 @@ export interface McpServerInfo {
    * write the code get it: a thread's own agent, a coordinator, a team's lead and coders.
    */
   allRoles?: boolean;
+  /** The agents whose threads get it: every agent when left out, none when empty. */
+  agentIds?: string[];
+}
+
+/** A tool an MCP server offers, as it lists it. */
+export interface McpTool {
+  name: string;
+  description?: string;
 }
 
 export interface Project {
@@ -230,6 +247,8 @@ export interface Project {
   git?: boolean;
   /** Kept at the top of the list of projects. */
   pinned?: boolean;
+  /** Put away: out of the lists and the pickers, its threads kept as they are. */
+  archived?: boolean;
   /**
    * Locked with /lock: nothing of it is sent, its threads, cards, plans and requests, until
    * the code is given. Its agents keep working.
@@ -239,6 +258,13 @@ export interface Project {
   icon?: string;
   /** The tint of its icon, among {@link PROJECT_COLORS}. */
   color?: ProjectColor;
+  /** What its threads do when a model's quota runs out; nothing while unset. */
+  quota?: ProjectQuotaRules;
+  /**
+   * False when a thread's branch is kept once its pull request is merged: by default
+   * MoonAgentic deletes it then, in the project's repository only (« Supprimer après la fusion »).
+   */
+  deleteMerged?: false;
 }
 
 /** The tints a project's icon can take; the web app gives each its shade in both themes. */
@@ -348,7 +374,8 @@ export type ThreadStatus = "idle" | "running" | "waiting" | "error";
 
 export type PermissionMode = "supervised" | "full";
 
-export type TeamRole = "lead" | "coder" | "reviewer" | "tester" | "merger";
+/** `reviewer2`: a second review of each piece, beside the first; `judge`: weighs the reviews. */
+export type TeamRole = "lead" | "coder" | "reviewer" | "reviewer2" | "judge" | "tester" | "merger";
 
 /** What one lane of a team's timeline is doing: the lead's, a piece's, or the merge's. */
 export type TeamLanePhase =
@@ -389,6 +416,7 @@ export interface TeamTask {
     | "running"
     | "reviewing"
     | "testing"
+    | "judging"
     | "lead"
     | "blocked"
     | "done"
@@ -397,7 +425,14 @@ export interface TeamTask {
   /** The coder's own thread, once it has started. */
   threadId?: string;
   reviewThreadId?: string;
+  /** The second reviewer's and the judge's threads, for a team that has them. */
+  review2ThreadId?: string;
+  judgeThreadId?: string;
   testThreadId?: string;
+  /** The verdicts of this round of reviews, kept until every reviewer has given its own. */
+  verdicts?: { reviewer?: "ok" | "fix"; reviewer2?: "ok" | "fix" };
+  /** True once the second reviewer was asked again for the verdict it left out. */
+  reasked2?: boolean;
   /** Corrections sent back to the coder so far. */
   tries?: number;
   /** True once the lead has rewritten the brief, which it does once. */
@@ -410,6 +445,19 @@ export interface TeamTask {
   merged?: boolean;
 }
 
+/**
+ * A mission the user adds while the team works: the lead reads it, then puts it in its plan
+ * as new pieces (`added` of them; none when the plan already covers it).
+ */
+export interface TeamMission {
+  text: string;
+  at: number;
+  status: "waiting" | "reading" | "planned" | "failed" | "stopped";
+  added?: number;
+  /** Why it could not be put in the plan. */
+  note?: string;
+}
+
 /** What a team, run from its lead's thread, is doing. The server keeps it. */
 export interface Team {
   phase: TeamPhase;
@@ -418,6 +466,10 @@ export interface Team {
   coder: TeamMember;
   /** Reads each piece's changes before it counts as done. */
   reviewer?: TeamMember;
+  /** Reads them too, at the same time, for a second view. */
+  reviewer2?: TeamMember;
+  /** Weighs the reviews and says what is really to be corrected. */
+  judge?: TeamMember;
   /** Runs the tests, and writes the missing ones, on each piece's branch. */
   tester?: TeamMember;
   /** Settles merge conflicts, then checks the pieces work together. */
@@ -449,6 +501,10 @@ export interface Team {
   planTries?: number;
   /** The piece whose brief the lead is rewriting, one at a time. */
   leadTask?: number;
+  /** Missions the user added while the team works, oldest first. */
+  missions?: TeamMission[];
+  /** The mission the lead is reading, one at a time, after the briefs it rewrites. */
+  leadMission?: number;
   error?: string;
 }
 
@@ -652,6 +708,8 @@ export interface Thread {
   goal?: ThreadGoal;
   /** Watches its pull request and has the agent fix it; see `PrWatch`. */
   prWatch?: PrWatch;
+  /** What it does about a quota that ran out: waits for it, or goes on with a fallback. */
+  quota?: ThreadQuota;
   /** The team lead's thread, for a coder's thread. */
   parentId?: string;
   /** The thread's part in a team. */
@@ -678,6 +736,8 @@ export interface ThreadPullRequest {
   conflicts?: true;
   /** The repository's rules hold the merge back. */
   blocked?: true;
+  /** Once merged, the commit GitHub merged: its branch still on it is merged. */
+  mergedHead?: string;
 }
 
 /** What a list of threads keeps of a pull request. */
@@ -696,6 +756,7 @@ export function threadPullRequest(pr: PullRequestInfo): ThreadPullRequest {
           : "none",
     ...(pr.conflicts ? { conflicts: true as const } : {}),
     ...(pr.blocked ? { blocked: true as const } : {}),
+    ...(pr.state === "merged" && pr.head ? { mergedHead: pr.head } : {}),
   };
 }
 
@@ -1091,6 +1152,8 @@ export interface TeamSetup {
   lead: TeamMember;
   coder: TeamMember;
   reviewer?: TeamMember;
+  reviewer2?: TeamMember;
+  judge?: TeamMember;
   tester?: TeamMember;
   merger?: TeamMember;
   coders: number;
@@ -1265,6 +1328,8 @@ export interface TeamPreset {
     lead?: TeamMember;
     coder?: TeamMember;
     reviewer?: TeamMember | null;
+    reviewer2?: TeamMember | null;
+    judge?: TeamMember | null;
     tester?: TeamMember | null;
     merger?: TeamMember | null;
   };
@@ -1328,6 +1393,7 @@ export type ServerMessage =
   /** Every question an agent holds its turn on, after one is asked or answered. */
   | { type: "questions"; questions: PendingQuestion[] }
   | { type: "mcpServers"; servers: McpServerInfo[]; error?: string }
+  | { type: "mcpTools"; requestId: string; tools: McpTool[] }
   | { type: "project"; project: Project }
   | { type: "defaults"; defaults: Defaults }
   /** The app's version, settings or update changed. */
@@ -1607,6 +1673,8 @@ export const McpServerInput = z.object({
   projectIds: z.array(id).max(500).optional(),
   /** Given to a team's reviewers, testers and mergers too. */
   allRoles: z.boolean().optional(),
+  /** The agents whose threads get it: every agent when left out. */
+  agentIds: z.array(id).max(100).optional(),
 });
 export type McpServerInput = z.infer<typeof McpServerInput>;
 
@@ -1747,6 +1815,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
    */
   z.object({ type: z.literal("thread.resume"), threadId: id, sendId: sendId.optional() }),
   /**
+   * « Attendre »: a thread on a fallback model goes back to its own and waits for its quota,
+   * to start again by itself once it is reset. Its turn on the fallback, if any, is stopped.
+   */
+  z.object({ type: z.literal("thread.quotaWait"), threadId: id }),
+  /** The thread no longer starts again by itself when its quota is reset. */
+  z.object({ type: z.literal("thread.quotaCancel"), threadId: id }),
+  /**
    * Keeps a message for after the turn under way. Sent at once instead when the thread
    * is free and nothing waits before it.
    */
@@ -1830,6 +1905,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
     lead: z.object({ agentId: id, model: id.optional() }),
     coder: z.object({ agentId: id, model: id.optional() }),
     reviewer: z.object({ agentId: id, model: id.optional() }).optional(),
+    reviewer2: z.object({ agentId: id, model: id.optional() }).optional(),
+    judge: z.object({ agentId: id, model: id.optional() }).optional(),
     tester: z.object({ agentId: id, model: id.optional() }).optional(),
     merger: z.object({ agentId: id, model: id.optional() }).optional(),
     coders: z.number().int().min(1).max(4),
@@ -1880,6 +1957,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
     type: z.literal("team.ship"),
     requestId: id,
     threadId: id,
+  }),
+  /** A mission added while the team works: its lead puts it in the plan. */
+  z.object({
+    type: z.literal("team.addMission"),
+    requestId: id,
+    threadId: id,
+    text: z.string().trim().min(1).max(20_000),
   }),
   z.object({
     type: z.literal("team.retry"),
@@ -1971,6 +2055,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     name: z.string().trim().min(1).max(120),
   }),
   z.object({ type: z.literal("project.setPinned"), projectId: id, pinned: z.boolean() }),
+  z.object({ type: z.literal("project.setArchived"), projectId: id, archived: z.boolean() }),
   /** Changes the defaults of every device: those not given stay. */
   z.object({
     type: z.literal("defaults.set"),
@@ -1997,6 +2082,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
               lead: teamMember.optional(),
               coder: teamMember.optional(),
               reviewer: teamMember.nullable().optional(),
+              reviewer2: teamMember.nullable().optional(),
+              judge: teamMember.nullable().optional(),
               tester: teamMember.nullable().optional(),
               merger: teamMember.nullable().optional(),
             })
@@ -2022,6 +2109,30 @@ export const ClientMessage = z.discriminatedUnion("type", [
       .nullable(),
     color: z.enum(PROJECT_COLORS).nullable(),
   }),
+  /**
+   * What the project's threads do when a model's quota runs out. Each part left out stays as
+   * it is.
+   */
+  z.object({
+    type: z.literal("project.setQuotaRules"),
+    projectId: id,
+    resume: z.boolean().optional(),
+    fallback: z
+      .object({
+        on: z.boolean(),
+        back: z.boolean(),
+        models: z
+          .array(z.object({ agentId: id, model: id }))
+          .max(MAX_FALLBACK_MODELS)
+          .refine(
+            (list) => new Set(list.map((m) => `${m.agentId}\u0000${m.model}`)).size === list.length,
+            "Modèle en double.",
+          ),
+      })
+      .optional(),
+  }),
+  /** « Supprimer après la fusion »: whether a thread's branch goes once its PR is merged. */
+  z.object({ type: z.literal("project.setDeleteMerged"), projectId: id, on: z.boolean() }),
   /** What the project gives its agents, read from its folder: answered with projectSetup. */
   z.object({ type: z.literal("project.setup"), requestId: id, projectId: id }),
   /** Writes `AGENTS.md` at the project's root. */
@@ -2229,6 +2340,14 @@ export const ClientMessage = z.discriminatedUnion("type", [
     allRoles: z.boolean(),
   }),
   z.object({ type: z.literal("mcp.remove"), id }),
+  /** Says which agents get the server: `null` for every agent. */
+  z.object({
+    type: z.literal("mcp.setAgents"),
+    id,
+    agentIds: z.array(id).max(100).nullable(),
+  }),
+  /** Starts the server briefly to list its tools; answered with `mcpTools`. */
+  z.object({ type: z.literal("mcp.tools"), requestId: id, id }),
   /**
    * Starts the agent briefly to learn which models it offers, and whether it is ready.
    * Without a project, it starts in the user's home folder.
@@ -2285,6 +2404,17 @@ export const ClientMessage = z.discriminatedUnion("type", [
     requestId: id,
     threadId: id,
     ids: z.array(z.string().min(1).max(200)).min(1).max(100),
+  }),
+  /**
+   * « Réglé »: a remark of the thread's pull request is done with. A conversation is resolved
+   * on GitHub; a review, which GitHub cannot resolve, is kept settled in MoonAgentic. Answered
+   * with prRemarks, read again.
+   */
+  z.object({
+    type: z.literal("workspace.settleRemark"),
+    requestId: id,
+    threadId: id,
+    id: z.string().min(1).max(200),
   }),
   /** Asks GitHub for the state of the pull request at this address, to draw its link. */
   z.object({
