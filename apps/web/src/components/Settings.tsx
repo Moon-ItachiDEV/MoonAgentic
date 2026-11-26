@@ -33,7 +33,7 @@ import { copyDiagnosticText, downloadDiagnosticText } from "../diagnostics.ts";
 import { disablePush, enablePush, pushOn, pushReached, pushSupport } from "../push.ts";
 import type { PushSupport } from "../push-device.ts";
 import type { SettingsSection } from "../router.ts";
-import { mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
+import { mcpAgentsLabel, mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
 import { isDiscussionsProject } from "../default-models.ts";
 import { matchSections } from "../settings-search.ts";
 import { formatPercent, tightest } from "../quotas.ts";
@@ -578,7 +578,10 @@ function McpPage(props: PageProps & GithubProps) {
           <button key={s.id} className="it" onClick={() => setOpened(s.id)}>
             <span className="tx">
               {s.name}
-              <small>{mcpScopeLabel(scopeOf(s), props.projects)}</small>
+              <small>
+                {mcpScopeLabel(scopeOf(s), props.projects)}
+                {s.agentIds ? ` · ${mcpAgentsLabel(s.agentIds, props.agents)}` : ""}
+              </small>
             </span>
             <span className="rt">
               {s.enabled ? (
@@ -598,9 +601,15 @@ function McpPage(props: PageProps & GithubProps) {
       <McpServerSheet
         server={props.mcpServers.find((s) => s.id === opened)}
         projects={props.projects}
+        agents={props.agents}
         onClose={() => setOpened(undefined)}
       />
-      <McpAddSheet open={adding} projects={props.projects} onClose={() => setAdding(false)} />
+      <McpAddSheet
+        open={adding}
+        projects={props.projects}
+        agents={props.agents}
+        onClose={() => setAdding(false)}
+      />
     </>
   );
 }

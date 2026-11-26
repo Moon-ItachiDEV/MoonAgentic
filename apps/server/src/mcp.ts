@@ -24,6 +24,7 @@ export function mcpInfo(server: McpServerRecord): McpServerInfo {
     secretNames: (t.type === "stdio" ? t.env : t.headers).map((s) => s.name),
     ...(server.projectIds ? { projectIds: server.projectIds } : {}),
     ...(server.allRoles ? { allRoles: true } : {}),
+    ...(server.agentIds ? { agentIds: server.agentIds } : {}),
   };
 }
 
@@ -34,11 +35,14 @@ export function mcpInfo(server: McpServerRecord): McpServerInfo {
  */
 export function mcpServersFor(
   servers: McpServerRecord[],
-  thread: Pick<Thread, "projectId" | "role">,
+  thread: Pick<Thread, "projectId" | "role" | "agentId">,
 ): McpServerRecord[] {
   const checks = !!thread.role && thread.role !== "lead" && thread.role !== "coder";
   return servers.filter(
-    (s) => (!s.projectIds || s.projectIds.includes(thread.projectId)) && (!checks || !!s.allRoles),
+    (s) =>
+      (!s.projectIds || s.projectIds.includes(thread.projectId)) &&
+      (!s.agentIds || s.agentIds.includes(thread.agentId)) &&
+      (!checks || !!s.allRoles),
   );
 }
 

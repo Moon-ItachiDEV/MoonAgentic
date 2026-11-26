@@ -951,7 +951,10 @@ export function Composer(props: {
     project,
     ...(!thread && props.projects && props.onPickProject ? { projects: props.projects } : {}),
     ...(thread?.workspace ? { branch: thread.workspace.branch } : {}),
-    mcpServers: props.mcpServers ?? [],
+    // Only those the agent that answers gets.
+    mcpServers: (props.mcpServers ?? []).filter(
+      (s) => !s.agentIds || (!!agentId && s.agentIds.includes(agentId)),
+    ),
   };
   const openImages = (from: "files" | "camera") => {
     setPlusOpen(false);

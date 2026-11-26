@@ -50,6 +50,7 @@ const isMcpServer = (value: unknown): value is McpServerRecord => {
   if (value.enabled !== undefined && typeof value.enabled !== "boolean") return false;
   if (value.projectIds !== undefined && !isStrings(value.projectIds)) return false;
   if (value.allRoles !== undefined && typeof value.allRoles !== "boolean") return false;
+  if (value.agentIds !== undefined && !isStrings(value.agentIds)) return false;
   const t = value.transport;
   if (!isRecord(t)) return false;
   return t.type === "stdio"
@@ -542,6 +543,18 @@ export class AgentCatalog {
           ...(projectIds ? { projectIds: this.knownProjects(projectIds) } : {}),
           ...(allRoles ? { allRoles: true } : {}),
         };
+      }),
+    );
+  }
+
+  /** Says which agents get the server: `null` for every agent. */
+  setMcpAgents(id: string, agentIds: string[] | null): void {
+    if (!this.rawMcpServers().some((s) => s.id === id)) return;
+    this.updateMcpServers((servers) =>
+      servers.map((s) => {
+        if (s.id !== id) return s;
+        const { agentIds: _agents, ...rest } = s;
+        return { ...rest, ...(agentIds ? { agentIds: [...new Set(agentIds)] } : {}) };
       }),
     );
   }

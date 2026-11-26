@@ -123,6 +123,7 @@ import { Scheduler } from "./scheduler.ts";
 import { diffText, shipTarget, Teams, teamStatus } from "./team.ts";
 import { PrReviews, REVIEW_DIFF_LIMIT, reviewPrompt, reviewStatus } from "./pr-review.ts";
 import { mcpServersFor, RESERVED_MCP_NAME } from "./mcp.ts";
+import { probeMcpTools } from "./mcp-probe.ts";
 import { type QuotaReader, Quotas } from "./quotas.ts";
 import { formContent, formQuestions, toolQuestions, type FormQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn, SettingTimeout } from "./session.ts";
@@ -987,7 +988,12 @@ export class Hub {
       }
       return false;
     }
-    if (message.type === "mcp.setEnabled" || message.type === "mcp.remove") {
+    if (
+      message.type === "mcp.setEnabled" ||
+      message.type === "mcp.remove" ||
+      message.type === "mcp.setAgents" ||
+      message.type === "mcp.tools"
+    ) {
       const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
       if (current?.projectIds?.some((p) => this.locks.isLocked(p))) lockedError();
       return false;
@@ -1895,6 +1901,16 @@ export class Hub {
       case "mcp.remove":
         await this.catalog.removeMcpServer(message.id);
         return;
+      case "mcp.setAgents":
+        this.catalog.setMcpAgents(message.id, message.agentIds);
+        return;
+      case "mcp.tools": {
+        const server = (await this.catalog.mcpServers()).find((s) => s.id === message.id);
+        if (!server) throw new Error("Ce serveur MCP n'existe plus.");
+        const tools = await probeMcpTools(server);
+        client.send({ type: "mcpTools", requestId: message.requestId, tools });
+        return;
+      }
       case "workspace.review":
         // The panel waits for this reply, so a failure is sent to it rather than thrown.
         client.send(

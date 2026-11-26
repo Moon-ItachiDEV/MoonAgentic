@@ -228,6 +228,14 @@ export interface McpServerInfo {
    * write the code get it: a thread's own agent, a coordinator, a team's lead and coders.
    */
   allRoles?: boolean;
+  /** The agents whose threads get it: every agent when left out, none when empty. */
+  agentIds?: string[];
+}
+
+/** A tool an MCP server offers, as it lists it. */
+export interface McpTool {
+  name: string;
+  description?: string;
 }
 
 export interface Project {
@@ -1374,6 +1382,7 @@ export type ServerMessage =
   /** Every question an agent holds its turn on, after one is asked or answered. */
   | { type: "questions"; questions: PendingQuestion[] }
   | { type: "mcpServers"; servers: McpServerInfo[]; error?: string }
+  | { type: "mcpTools"; requestId: string; tools: McpTool[] }
   | { type: "project"; project: Project }
   | { type: "defaults"; defaults: Defaults }
   /** The app's version, settings or update changed. */
@@ -1653,6 +1662,8 @@ export const McpServerInput = z.object({
   projectIds: z.array(id).max(500).optional(),
   /** Given to a team's reviewers, testers and mergers too. */
   allRoles: z.boolean().optional(),
+  /** The agents whose threads get it: every agent when left out. */
+  agentIds: z.array(id).max(100).optional(),
 });
 export type McpServerInput = z.infer<typeof McpServerInput>;
 
@@ -2317,6 +2328,14 @@ export const ClientMessage = z.discriminatedUnion("type", [
     allRoles: z.boolean(),
   }),
   z.object({ type: z.literal("mcp.remove"), id }),
+  /** Says which agents get the server: `null` for every agent. */
+  z.object({
+    type: z.literal("mcp.setAgents"),
+    id,
+    agentIds: z.array(id).max(100).nullable(),
+  }),
+  /** Starts the server briefly to list its tools; answered with `mcpTools`. */
+  z.object({ type: z.literal("mcp.tools"), requestId: id, id }),
   /**
    * Starts the agent briefly to learn which models it offers, and whether it is ready.
    * Without a project, it starts in the user's home folder.
