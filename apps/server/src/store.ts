@@ -396,6 +396,10 @@ export const MIGRATIONS: ((db: DatabaseSync) => void)[] = [
 
 /** How many messages the search's index takes in one write. */
 const INDEX_BATCH = 100;
+/** A search fills the index this long at most before it looks; the rest is filled after. */
+const SEARCH_INDEX_MS = 30;
+/** The fewest letters searched for: the index cuts text in groups of three. */
+export const MIN_SEARCH_CHARS = 3;
 
 /**
  * Brings the database up to the schema this version knows, one step at a time, each in a
@@ -992,6 +996,17 @@ export class Store {
     });
   }
 
+  /** The thread's last message from the user and what came after it; all of it without one. */
+  lastTurnItems(threadId: string): Item[] {
+    const { seq } = this.sql(
+      `SELECT MAX(seq) AS seq FROM items WHERE thread_id = ? AND json_extract(data, '$.kind') = 'user'`,
+    ).get(threadId) as { seq: number | null };
+    const rows = this.sql(
+      `SELECT data FROM items WHERE thread_id = ? AND seq >= ? ORDER BY seq`,
+    ).all(threadId, seq ?? 0) as { data: string }[];
+    return rows.flatMap((r) => this.readItem(r.data) ?? []);
+  }
+
   listItems(threadId: string): Item[] {
     const rows = this.sql(`SELECT data FROM items WHERE thread_id = ? ORDER BY seq`).all(
       threadId,
@@ -1009,6 +1024,7 @@ export class Store {
     threadId: string,
     before: number = Number.MAX_SAFE_INTEGER,
     reach?: string,
+    size = PAGE_ITEMS,
   ): { items: Item[]; first: number; earlier: number } {
     const seqOf = (sql: string, ...params: (string | number)[]) =>
       (this.sql(sql).get(...params) as { seq: number | null } | undefined)?.seq ?? undefined;
@@ -1018,7 +1034,7 @@ export class Store {
         `SELECT seq FROM items WHERE thread_id = ? AND seq < ? ORDER BY seq DESC LIMIT 1 OFFSET ?`,
         threadId,
         before,
-        PAGE_ITEMS - 1,
+        size - 1,
       ) ?? 0;
     if (reach !== undefined) {
       const reached = seqOf(
@@ -1090,7 +1106,9 @@ export class Store {
    */
   private indexSearchIfWritable(): void {
     try {
-      this.indexSearch();
+      // The latest first, for a while only: the first time after an update, all of them
+      // took 23 s. The rest is done in the background.
+      this.indexSearch(SEARCH_INDEX_MS);
     } catch (error) {
       if (!storageTrouble(error)) throw error;
     }
@@ -1106,7 +1124,7 @@ export class Store {
       const stale = this.sql(
         `SELECT d.n, i.data FROM search_docs d
            JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
-           WHERE d.stale = 1 ORDER BY d.n LIMIT ?`,
+           WHERE d.stale = 1 ORDER BY d.n DESC LIMIT ?`,
       ).all(INDEX_BATCH) as { n: number; data: string }[];
       if (!stale.length) return false;
       this.transaction(() => {
@@ -1130,6 +1148,8 @@ export class Store {
    * push visible hits out of the result set.
    */
   searchItems(query: string, limit = 30, hidden: string[] = []): SearchHit[] {
+    // Shorter, the index names nothing and every message would be read.
+    if ([...fold(query)].length < MIN_SEARCH_CHARS) return [];
     // What was written since the index was last filled is found too.
     this.indexSearchIfWritable();
     // The folded text is looked for as it is, `*`, `?` and `[` included. From three letters
@@ -1191,6 +1211,8 @@ export class Store {
     // Drive the trigram index with the longest term (most selective), then require every other term.
     const ordered = [...terms].sort((a, b) => b.length - a.length);
     const primary = ordered[0]!;
+    // Shorter, the index names nothing and every message would be read.
+    if ([...primary].length < MIN_SEARCH_CHARS) return [];
     const rest = ordered.slice(1);
     const pattern = `*${primary.replace(/[*?[]/g, (c) => `[${c}]`)}*`;
     const extraClauses = rest.map(() => `AND instr(f.text, ?) > 0`).join("\n            ");
@@ -1352,6 +1374,16 @@ export class Store {
   /** Deletes the thread and its timeline. */
   deleteThread(id: string): void {
     this.sql(`DELETE FROM threads WHERE id = ?`).run(id);
+  }
+
+  /** Deletes up to `limit` of the thread's messages, the latest first; true while some remain. */
+  deleteSomeItems(threadId: string, limit: number): boolean {
+    const { changes } = this.sql(
+      `DELETE FROM items WHERE thread_id = ? AND seq IN (
+         SELECT seq FROM items WHERE thread_id = ? ORDER BY seq DESC LIMIT ?
+       )`,
+    ).run(threadId, threadId, limit);
+    return Number(changes) >= limit;
   }
 
   /** Deletes the project, its threads, their timelines, and its shared memory. */

@@ -374,7 +374,8 @@ function DrawerSearch(props: {
   // Messages are searched on the server, which holds every thread's timeline. A search typed
   // before the connection opens is sent once it does: an ask before then fails at once.
   useEffect(() => {
-    if (q.length < 2 || !online) return;
+    // From three letters: the server's index looks for groups of three.
+    if ([...q].length < 3 || !online) return;
     let current = true;
     const timer = setTimeout(() => {
       connection

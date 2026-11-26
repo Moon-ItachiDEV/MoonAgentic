@@ -197,9 +197,10 @@ describe("searching messages", () => {
       kind: "user",
       snippet: "Où est l'État du système ?",
     });
-    // Two letters are found too, without the index.
-    expect(found(store, "où")).toEqual(["u1"]);
-    expect(found(store, "ts")).toEqual(["a1"]);
+    // Two letters are not looked for: the index names nothing, and every message would be
+    // read (audit of 2026-11-25, N23).
+    expect(found(store, "où")).toEqual([]);
+    expect(found(store, "ts")).toEqual([]);
     expect(found(store, "introuvable")).toEqual([]);
     // No more than asked for, the latest written first.
     expect(found(store, "syst", 1)).toEqual(["a1"]);

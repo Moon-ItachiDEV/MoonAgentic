@@ -1281,9 +1281,9 @@ export type ServerMessage =
       before: number;
       first: number;
       earlier: number;
+      /** Asked for a use that is not shown: the screen keeps what it holds. */
+      apart?: true;
     }
-  /** A whole timeline, for a use that needs all of it at once, such as an export. */
-  | { type: "timeline"; requestId: string; threadId: string; items: Item[] }
   | {
       type: "review";
       threadId: string;
@@ -1440,6 +1440,9 @@ export type ServerMessage =
    */
   | { type: "ws.ticket"; ticket: string; ttlMs: number }
   | { type: "error"; requestId?: string; message: string };
+
+/** The most items one page of a timeline holds: an export reads a long thread by these. */
+export const MAX_PAGE_ITEMS = 1000;
 
 const id = z.string().min(1).max(200);
 /**
@@ -1623,16 +1626,20 @@ export const ClientMessage = z.discriminatedUnion("type", [
     threadId: id,
     since: z.object({ epoch: id, rev: seq, first: seq }).optional(),
   }),
-  /** Asks for the items just before the one numbered `before`, back to `reach` if given. */
+  /**
+   * Asks for the items just before the one numbered `before`, back to `reach` if given.
+   * `apart` is for a use that is not shown (an export): the screen keeps what it holds, and
+   * the page may be bigger, `size` items.
+   */
   z.object({
     type: z.literal("thread.page"),
     requestId: id,
     threadId: id,
     before: seq,
     reach: id.optional(),
+    size: z.number().int().min(1).max(MAX_PAGE_ITEMS).optional(),
+    apart: z.literal(true).optional(),
   }),
-  /** Asks for the whole timeline at once. */
-  z.object({ type: z.literal("thread.read"), requestId: id, threadId: id }),
   /** The window no longer shows the thread: what its agent says next is unread. */
   z.object({ type: z.literal("thread.leave"), threadId: id }),
   z.object({ type: z.literal("thread.setUnread"), threadId: id, unread: z.boolean() }),

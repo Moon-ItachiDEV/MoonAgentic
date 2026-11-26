@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -11,6 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ReviewFile } from "@moonagentic/protocol";
@@ -86,6 +87,64 @@ export function git(
         else resolve(stdout);
       },
     );
+  });
+}
+
+/**
+ * Runs git and hands `take` what it writes as it comes, a piece at a time: an output of
+ * hundreds of megabytes is never held whole, and the server answers between two pieces.
+ */
+function gitStream(
+  cwd: string,
+  args: string[],
+  env: NodeJS.ProcessEnv | undefined,
+  take: (text: string) => void,
+  timeout = LOCAL_TIMEOUT_MS,
+): Promise<void> {
+  const startedAt = Date.now();
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", [...GIT_QUIET, ...args], {
+      cwd,
+      env: { ...process.env, ...NO_PROMPT, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let failed: Error | undefined;
+    let stderr = "";
+    let settled = false;
+    const settle = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const elapsed = Date.now() - startedAt;
+      if (elapsed >= SLOW_GIT_MS) slowGitListener?.(gitSubcommand(args), elapsed);
+      if (error) reject(error);
+      else resolve();
+    };
+    const timer = setTimeout(() => {
+      failed ??= new Error(NO_ANSWER);
+      child.kill();
+    }, timeout);
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (text: string) => {
+      if (failed) return;
+      try {
+        take(text);
+      } catch (error) {
+        failed = error instanceof Error ? error : new Error(String(error));
+        child.kill();
+      }
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (text: string) => {
+      if (stderr.length < 64_000) stderr += text;
+    });
+    child.on("error", (error) => settle(failed ?? error));
+    child.on("close", (code) => {
+      if (failed) settle(failed);
+      else if (code !== 0) settle(new Error(stderr.trim() || `git a échoué (code ${code}).`));
+      else settle();
+    });
   });
 }
 
@@ -377,7 +436,8 @@ async function dropWorktree(repoDir: string, worktree: string): Promise<void> {
   // fails (a file held open on Windows), the caller hears it rather than leaving it behind.
   if (existsSync(worktree)) {
     try {
-      rmSync(worktree, { recursive: true, force: true, maxRetries: 3 });
+      // Not in one go: a folder of 50 000 files held the server for seconds.
+      await rm(worktree, { recursive: true, force: true, maxRetries: 3 });
     } catch (error) {
       throw new Error(
         `Impossible de supprimer la copie de travail ${worktree} : ${error instanceof Error ? error.message : String(error)}. Ferme ce qui l'utilise puis réessaie.`,
@@ -444,13 +504,17 @@ export function reviewChanges(
     }
     const numstat = await git(dir, ["diff", "--numstat", "-z", "-M", base], env);
     // An external diff tool from the user's config would replace the unified diff, and a
-    // text converter named by the repository would be run on each file shown.
-    const patch = await git(
+    // text converter named by the repository would be run on each file shown. Read as it
+    // comes: a file of 300 MB made more than git's output may hold.
+    const patch = new PatchReader(MAX_REVIEW_LINES);
+    await gitStream(
       dir,
       ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", base],
       env,
+      (text) => patch.take(text),
     );
-    const files = parseDiff(numstat, patch);
+    patch.end();
+    const files = filesOf(numstat, patch.parts);
     let lines = 0;
     const shown = files.slice(0, MAX_REVIEW_FILES).map((file) => {
       if (lines >= MAX_REVIEW_LINES && file.patch) {
@@ -570,8 +634,86 @@ export async function dropCheckpoints(dir: string, refs: string[]): Promise<void
   for (const ref of refs) await git(dir, ["update-ref", "-d", ref]);
 }
 
+/** One file's section of a patch: its header lines, then the start of its hunks. */
+interface PatchPart {
+  head: string[];
+  /** Its first hunk lines, at most `MAX_PATCH_LINES`. */
+  body: string[];
+  /** How many hunk lines it has in all. */
+  lines: number;
+}
+
+/** Past this, a patch line is cut: a minified file may be one line of megabytes. */
+const MAX_PATCH_LINE_CHARS = 100_000;
+/** Header lines kept for one file's section; a header has a handful. */
+const MAX_HEAD_LINES = 50;
+
+/**
+ * Reads a patch as git writes it, a piece at a time: each file's header and the start of
+ * its hunks are kept, the rest only counted. A patch of hundreds of megabytes is never held
+ * whole, nor gone through in one go. Past `budget` hunk lines kept in all, the next files'
+ * hunks are only counted.
+ */
+class PatchReader {
+  readonly parts: PatchPart[] = [];
+  private rest = "";
+  private kept = 0;
+  private inBody = false;
+
+  private readonly budget: number;
+
+  constructor(budget = Infinity) {
+    this.budget = budget;
+  }
+
+  take(text: string): void {
+    let from = 0;
+    for (let end = text.indexOf("\n"); end !== -1; end = text.indexOf("\n", from)) {
+      const line = this.rest + text.slice(from, Math.min(end, from + MAX_PATCH_LINE_CHARS));
+      this.rest = "";
+      this.line(line.length > MAX_PATCH_LINE_CHARS ? line.slice(0, MAX_PATCH_LINE_CHARS) : line);
+      from = end + 1;
+    }
+    if (this.rest.length < MAX_PATCH_LINE_CHARS) {
+      this.rest += text.slice(from, from + MAX_PATCH_LINE_CHARS - this.rest.length);
+    }
+  }
+
+  end(): void {
+    if (this.rest) this.line(this.rest);
+    this.rest = "";
+  }
+
+  private line(line: string): void {
+    if (line.startsWith("diff --git ")) {
+      this.parts.push({ head: [line], body: [], lines: 0 });
+      this.inBody = false;
+      return;
+    }
+    const part = this.parts.at(-1);
+    if (!part) return;
+    if (!this.inBody && !line.startsWith("@@")) {
+      if (part.head.length < MAX_HEAD_LINES) part.head.push(line);
+      return;
+    }
+    this.inBody = true;
+    part.lines += 1;
+    if (part.body.length < MAX_PATCH_LINES && (part.body.length || this.kept < this.budget)) {
+      part.body.push(line);
+      this.kept += 1;
+    }
+  }
+}
+
 /** Pairs `git diff --numstat -z` counts with each file's section of the patch. */
 export function parseDiff(numstat: string, patch: string): ReviewFile[] {
+  const reader = new PatchReader();
+  reader.take(patch);
+  reader.end();
+  return filesOf(numstat, reader.parts);
+}
+
+function filesOf(numstat: string, patchParts: PatchPart[]): ReviewFile[] {
   const counts: {
     path: string;
     from?: string;
@@ -594,38 +736,32 @@ export function parseDiff(numstat: string, patch: string): ReviewFile[] {
   }
   // A file whose type changed (a file replaced by a symbolic link, say) comes as two
   // sections under the same header, a deletion then a creation, but one count.
-  const sections: string[][] = [];
-  for (const section of patch.split(/^(?=diff --git )/m)) {
-    if (!section.startsWith("diff --git ")) continue;
-    const header = section.slice(0, section.indexOf("\n"));
+  const sections: PatchPart[][] = [];
+  for (const part of patchParts) {
     const last = sections.at(-1);
     const first = last?.[0];
-    if (last?.length === 1 && first?.startsWith(`${header}\n`) && isDeletion(first)) {
-      last.push(section);
+    if (last?.length === 1 && first && first.head[0] === part.head[0] && isDeletion(first)) {
+      last.push(part);
     } else {
-      sections.push([section]);
+      sections.push([part]);
     }
   }
   return counts.map((count, i) => {
     const parts = sections[i] ?? [];
-    const section = parts[0] ?? "";
+    const head = (parts[0]?.head ?? []).join("\n");
     const status: ReviewFile["status"] =
       parts.length > 1
         ? "modified"
-        : /^new file mode/m.test(section)
+        : /^new file mode/m.test(head)
           ? "added"
-          : /^deleted file mode/m.test(section)
+          : /^deleted file mode/m.test(head)
             ? "deleted"
-            : /^rename from /m.test(section)
+            : /^rename from /m.test(head)
               ? "renamed"
               : "modified";
     // Each part's hunks, without the header lines before them.
-    const body = parts.flatMap((part) => {
-      const lines = part.split("\n");
-      if (lines.at(-1) === "") lines.pop();
-      const start = lines.findIndex((l) => l.startsWith("@@"));
-      return start === -1 ? [] : lines.slice(start);
-    });
+    const body = parts.flatMap((part) => part.body);
+    const lines = parts.reduce((sum, part) => sum + part.lines, 0);
     return {
       path: count.path,
       ...(count.from ? { from: count.from } : {}),
@@ -633,16 +769,13 @@ export function parseDiff(numstat: string, patch: string): ReviewFile[] {
       added: count.added,
       removed: count.removed,
       patch: body.slice(0, MAX_PATCH_LINES).join("\n"),
-      ...(body.length > MAX_PATCH_LINES ? { truncated: true } : {}),
+      ...(lines > Math.min(body.length, MAX_PATCH_LINES) ? { truncated: true } : {}),
     };
   });
 }
 
 /** True for a diff section whose header block says the file was deleted. */
-const isDeletion = (section: string) => {
-  const hunk = section.indexOf("\n@@");
-  return /^deleted file mode/m.test(hunk === -1 ? section : section.slice(0, hunk));
-};
+const isDeletion = (part: PatchPart) => part.head.some((l) => l.startsWith("deleted file mode"));
 
 /** owner/name of a GitHub remote, from its https or ssh URL. */
 export function githubRepo(remoteUrl: string): string | undefined {
