@@ -10,9 +10,6 @@ import {
   utf8Bytes,
 } from "@moonagentic/protocol";
 
-/** A few icons to pick from at once; any emoji or letters can be typed too. */
-export const ICON_PICKS = ["🌙", "🚀", "🛠️", "📦", "🎨", "🧪", "📚", "⚡"];
-
 /** Why this icon cannot be kept, or nothing when it can (empty puts the folder back). */
 export function iconProblem(icon: string): string | undefined {
   const value = icon.trim();

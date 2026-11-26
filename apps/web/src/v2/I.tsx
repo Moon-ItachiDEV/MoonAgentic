@@ -1,3 +1,4 @@
+import { PROJECT_SPRITE } from "../project-icons.ts";
 import { type IconName, SPRITE } from "./sprite.ts";
 
 /** The sprite itself, drawn once at the top of the app. */
@@ -8,7 +9,7 @@ export function Sprite() {
       height="0"
       style={{ position: "absolute" }}
       aria-hidden="true"
-      dangerouslySetInnerHTML={{ __html: `<defs>${SPRITE}</defs>` }}
+      dangerouslySetInnerHTML={{ __html: `<defs>${SPRITE}${PROJECT_SPRITE}</defs>` }}
     />
   );
 }
