@@ -191,6 +191,15 @@ export function App() {
   /** On a phone, the settings show their list rather than a section. */
   const [settingsList, setSettingsList] = useState(false);
 
+  // A coordinator's link to a thread opens it as its line would, when the app knows it.
+  const openThreadRef = useRef<(id: string) => void>(() => undefined);
+  useEffect(
+    () =>
+      onThreadLink((id) => {
+        if (connection.getState().threads.some((t) => t.id === id)) openThreadRef.current(id);
+      }),
+    [],
+  );
   // Every hook is above: an early return before one of them breaks the page when the state changes.
   if (state.status === "unauthorized") return <PairGate />;
 
@@ -298,16 +307,7 @@ export function App() {
       go({ name: "project", projectId: target.projectId });
     } else go({ name: "thread", threadId: id });
   };
-  // A coordinator's link to a thread opens it as its line would, when the app knows it.
-  const openThreadRef = useRef(openThread);
   openThreadRef.current = openThread;
-  useEffect(
-    () =>
-      onThreadLink((id) => {
-        if (connection.getState().threads.some((t) => t.id === id)) openThreadRef.current(id);
-      }),
-    [],
-  );
   const togglePin = (id: string, pinned: boolean) =>
     connection.send({ type: "thread.setPinned", threadId: id, pinned });
   const exportThread = (t: Thread | undefined = spoken) => {
