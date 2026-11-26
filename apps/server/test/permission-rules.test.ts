@@ -91,6 +91,57 @@ describe("permission rules", () => {
     }
   });
 
+  it("asks when another spelling hides a command, a write or a program of the project", () => {
+    for (const cmd of [
+      // `\'` is a plain quote in bash: what follows it is not inside quotes.
+      "echo \\' ; rm -rf x ; echo \\'",
+      "ls \\; rm x",
+      // Long options are taken shortened.
+      "sort --out=x a.txt",
+      "sort --o x a.txt",
+      "sort --compress-prog=sh a.txt",
+      "git grep --open-files-in=sh foo",
+      "file --comp",
+      "rg --hostname-bin ./x --hyperlink-format 'file://{host}{path}' foo",
+      // A file of the project named like a program that reads.
+      "./cat README.md",
+      "scripts/diff a b",
+      "/tmp/x/ls",
+      "x\\cat a",
+      // PowerShell runs a block given to a command that reads.
+      "Get-ChildItem | Sort-Object { Remove-Item $_ -Force }",
+      "dir | Sort-Object {Remove-Item x}",
+    ]) {
+      expect(readOnlyCommand(cmd), cmd).toBe(false);
+    }
+    for (const cmd of [
+      "Get-Content apps\\web\\src\\a.ts",
+      "/usr/bin/git status",
+      "git log --oneline | sort -r",
+      "rg -n foo src",
+    ]) {
+      expect(readOnlyCommand(cmd), cmd).toBe(true);
+    }
+    const call = (rawInput: unknown) => ({
+      toolCallId: "x",
+      title: "t",
+      kind: "execute" as const,
+      rawInput,
+    });
+    // The shell reads a file of its own before the script, or runs another one.
+    expect(readOnlyCall(call({ command: ["bash", "--rcfile", "rc", "-i", "-c", "ls"] }))).toBe(
+      false,
+    );
+    expect(readOnlyCall(call({ command: ["pwsh", "-File", "x.ps1", "-Command", "ls"] }))).toBe(
+      false,
+    );
+    expect(readOnlyCall(call({ command: ["pwsh", "-NoProfile", "-Command", "ls"] }))).toBe(true);
+    // The arguments sent apart from the program count as much as it.
+    expect(readOnlyCall(call({ command: "find", args: [".", "-delete"] }))).toBe(false);
+    expect(readOnlyCall(call({ command: "find", args: [".", "-name", "a.ts"] }))).toBe(true);
+    expect(grantKeys(call({ command: "git", args: ["push"] }))).toEqual(["execute:git push"]);
+  });
+
   it("finds the command an agent runs, whatever shape it sends", () => {
     const call = (rawInput: unknown, title = "t") => ({
       toolCallId: "x",

@@ -111,11 +111,32 @@ const QUIET_REDIRECT =
 /** Characters or expansions that can run arbitrary code or hide commands even inside quotes. */
 const ALWAYS_UNSAFE = /[\n\r\0`]|[$][({]/;
 
+/** Flags of a shell that change nothing of what its script does. */
+const SHELL_PLAIN_FLAG = /^-(l|NoProfile|NoLogo|NonInteractive)$/i;
+
+/** Folders whose programs are the system's own, not files of the project. */
+const SYSTEM_PROGRAM = /^\/(?:usr\/(?:local\/)?)?s?bin\/[^\\/]+$/;
+
+/**
+ * True when `arg` is the long option or a shorter spelling of it: GNU programs and git take
+ * `--out=x` for `--output=x`.
+ */
+const spells = (arg: string, option: string): boolean => {
+  const name = arg.split("=")[0]!;
+  return name.length > 2 && option.startsWith(name);
+};
+
 /** The command a tool call runs, as the agent sent it. */
 export function commandOf(call: acp.ToolCallUpdate | acp.ToolCall): string | undefined {
-  const raw = (call.rawInput ?? undefined) as { command?: unknown; cmd?: unknown } | undefined;
+  const raw = (call.rawInput ?? undefined) as
+    { command?: unknown; cmd?: unknown; args?: unknown } | undefined;
   const command = raw?.command ?? raw?.cmd;
-  if (typeof command === "string") return unwrap(command);
+  if (typeof command === "string") {
+    if (raw?.args === undefined) return unwrap(command);
+    // { command: "find", args: [".", "-delete"] }: the arguments count as much as the program.
+    if (!Array.isArray(raw.args) || !raw.args.every((a) => typeof a === "string")) return undefined;
+    return unwrap([command, ...(raw.args as string[])].join(" "));
+  }
   if (Array.isArray(command) && command.every((c) => typeof c === "string")) {
     const parts = command as string[];
     // ["bash", "-lc", "git diff"]: the shell's script is the command (only when it is the sole arg).
@@ -128,7 +149,9 @@ export function commandOf(call: acp.ToolCallUpdate | acp.ToolCall): string | und
       first === "pwsh"
     ) {
       const shell = parts.findIndex((p) => /^-(l?c|Command)$/i.test(p));
-      if (shell >= 0 && parts.length === shell + 2) return parts[shell + 1]!.trim();
+      // Any other flag before it (`--rcfile x -i`, `-File x.ps1`) runs more than the script.
+      const plain = parts.slice(1, shell).every((p) => SHELL_PLAIN_FLAG.test(p));
+      if (shell >= 0 && plain && parts.length === shell + 2) return parts[shell + 1]!.trim();
     }
     return unwrap(parts.join(" "));
   }
@@ -200,6 +223,11 @@ function tokenize(command: string): string[][] | undefined {
     }
 
     if (c === ">" || c === "<" || c === "(" || c === ")") return undefined;
+    // PowerShell runs a block given to a command that reads (`Sort-Object { Remove-Item x }`).
+    if (c === "{" || c === "}") return undefined;
+    // `\'` is a plain quote in bash, so what follows is not quoted as it looks here. Only a
+    // path's backslash (`src\app.ts`) passes.
+    if (c === "\\" && !/[\w.-]/.test(command[i + 1] ?? "")) return undefined;
 
     if (c === "&") {
       if (command[i + 1] !== "&" || command[i + 2] === "&") return undefined;
@@ -262,6 +290,8 @@ function readOnlySegment(w: string[]): boolean {
   const head = w[0];
   // Never strip leading `VAR=val` assignments (`GIT_PAGER=sh`, `LD_PRELOAD=...`).
   if (!head || head.includes("=")) return false;
+  // Given by its path, a program is whatever file is there (`./cat`, `scripts/diff`).
+  if (/[\\/]/.test(head) && !SYSTEM_PROGRAM.test(head)) return false;
   const prog = program(head);
   const args = w.slice(1);
   if (prog === "cd") return true;
@@ -296,7 +326,9 @@ function readOnlySegment(w: string[]): boolean {
         a === "--pre" ||
         a.startsWith("--pre=") ||
         a === "--pre-glob" ||
-        a.startsWith("--pre-glob="),
+        a.startsWith("--pre-glob=") ||
+        a === "--hostname-bin" ||
+        a.startsWith("--hostname-bin="),
     );
   }
   if (prog === "gh") {
@@ -308,10 +340,7 @@ function readOnlySegment(w: string[]): boolean {
   }
   if (prog === "sort") {
     return !args.some(
-      (a) =>
-        /^-[^-]*o|^--output/.test(a) ||
-        a === "--compress-program" ||
-        a.startsWith("--compress-program="),
+      (a) => /^-[^-]*o/.test(a) || spells(a, "--output") || spells(a, "--compress-program"),
     );
   }
   if (prog === "tree") return !args.some((a) => /^-[^-]*o/.test(a));
@@ -334,7 +363,7 @@ function readOnlySegment(w: string[]): boolean {
     return positional <= 1;
   }
   if (prog === "file") {
-    return !args.some((a) => /^-[^-]*C/.test(a) || a === "--compile");
+    return !args.some((a) => /^-[^-]*C/.test(a) || spells(a, "--compile"));
   }
   return READ_PROGRAMS.has(prog);
 }
@@ -408,7 +437,7 @@ function readOnlyGit(args: string[]): boolean {
   }
   if (
     sub === "grep" &&
-    opts.some((a) => /^-[^-]*O/.test(a) || a.startsWith("--open-files-in-pager"))
+    opts.some((a) => /^-[^-]*O/.test(a) || spells(a, "--open-files-in-pager"))
   ) {
     return false;
   }
