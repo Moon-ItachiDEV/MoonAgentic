@@ -374,7 +374,8 @@ function DrawerSearch(props: {
   // Messages are searched on the server, which holds every thread's timeline. A search typed
   // before the connection opens is sent once it does: an ask before then fails at once.
   useEffect(() => {
-    if (q.length < 2 || !online) return;
+    // From three letters: the server's index looks for groups of three.
+    if ([...q].length < 3 || !online) return;
     let current = true;
     const timer = setTimeout(() => {
       connection
@@ -430,7 +431,7 @@ function DrawerSearch(props: {
         icon: <I n="right" s={18} className="ic2" />,
         run: a.run,
       })),
-    ...(q.length >= 2 && hits?.query === q ? hits.hits : []).map((h) => ({
+    ...([...q].length >= 3 && hits?.query === q ? hits.hits : []).map((h) => ({
       key: `hit:${h.threadId}:${h.itemId}`,
       group: "Messages",
       label: h.snippet,
@@ -496,7 +497,7 @@ function DrawerSearch(props: {
       <div className="dscroll" id="ds-list" role="listbox" ref={list}>
         {entries.length === 0 && (
           <div className="nores">
-            {q.length >= 2 && hits?.query !== q
+            {[...q].length >= 3 && online && hits?.query !== q
               ? "Je cherche…"
               : q
                 ? `Aucune discussion ne contient « ${q} ».`

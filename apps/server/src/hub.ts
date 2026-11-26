@@ -131,7 +131,7 @@ import { AppUpdates, type GitSource, type ShellChannel } from "./app-update.ts";
 import { backupBeforeUpdate } from "./backups.ts";
 import { redact } from "./redact.ts";
 import { isTeamPreset } from "./saved-shapes.ts";
-import { isRecord, type Store, StorageRefused, storageTrouble } from "./store.ts";
+import { isRecord, type Store, StorageRefused, storageTrouble, type ThreadPlace } from "./store.ts";
 import {
   forecastFor,
   listedWorktreeFile,
@@ -367,6 +367,11 @@ function within(work: Promise<unknown>, ms: number): Promise<void> {
   });
 }
 
+/** How many of a deleted thread's messages go at once, between two answers to screens. */
+const DELETE_BATCH = 250;
+/** Lets what waits on the server run (a screen's message, a timer) before going on. */
+const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+
 /** How many of the user's last actions are known by their id, for one sent again. */
 const MAX_SENDS_KEPT = 5000;
 
@@ -457,6 +462,8 @@ export class Hub {
   private readonly gitProjects = new Map<string, boolean>();
   /** Projects being removed, which take no new thread meanwhile. */
   private readonly removingProjects = new Set<string>();
+  /** Threads whose items are being deleted in batches: exports/pages fail instead of returning a half-deleted timeline. */
+  private readonly deletingThreads = new Set<string>();
   /** The text each thread's agent is streaming, ahead of what is written down. */
   /** Names this run of the server: a screen's mark from another run means nothing here. */
   private readonly epoch = randomUUID();
@@ -775,12 +782,15 @@ export class Hub {
    * The other threads that hold this folder too, oldest first: two ids that start alike once
    * gave two threads one folder. It is the oldest one's, and nobody's to remove meanwhile.
    */
-  private sharingFolder(threadId: string, dir: string): Thread[] {
+  private sharingFolder(
+    threadId: string,
+    dir: string,
+    threads: ThreadPlace[] = this.store.listThreadPlaces(),
+  ): ThreadPlace[] {
     const real = onceEach(canonicalPath);
     const name = this.ourFolder(dir, real);
     if (!name) return [];
-    return this.store
-      .listThreads()
+    return threads
       .filter(
         (t) =>
           t.id !== threadId &&
@@ -791,8 +801,8 @@ export class Hub {
   }
 
   /** Whether the folder is one of ours that only this thread holds: its own to remove. */
-  private ownFolder(threadId: string, dir: string): boolean {
-    return this.isOurWorktree(dir) && !this.sharingFolder(threadId, dir).length;
+  private ownFolder(threadId: string, dir: string, threads?: ThreadPlace[]): boolean {
+    return this.isOurWorktree(dir) && !this.sharingFolder(threadId, dir, threads).length;
   }
 
   /** The agents, their models and checks, the MCP servers and the favorites. */
@@ -979,20 +989,38 @@ export class Hub {
   }
 
   /**
-   * The user's actions a screen sent, by the id it gave them: one it sends again, its
+   * The user's actions each device sent, by the id it gave them: one it sends again, its
    * connection having died before it could tell whether this one got there, is done once.
+   * Kept per device so one device cannot flush another's ids, and recorded only once done
+   * so an action that failed can still be retried.
    */
-  private readonly sends = new Set<string>();
+  private readonly sends = new Map<string, Set<string>>();
 
-  /** True when the action is one already done; else it is remembered, the oldest forgotten. */
-  private sentAgain(sendId: string): boolean {
-    if (this.sends.has(sendId)) return true;
-    this.sends.add(sendId);
-    if (this.sends.size > MAX_SENDS_KEPT) {
-      const oldest = this.sends.values().next().value;
-      if (oldest !== undefined) this.sends.delete(oldest);
+  private sendKey(
+    client: Client,
+    message: ClientMessage,
+  ): { actor: string; key: string } | undefined {
+    if (!("sendId" in message) || message.sendId === undefined) return undefined;
+    const actor = client.deviceId ?? "owner";
+    const thread = "threadId" in message ? message.threadId : "";
+    return { actor, key: `${message.type}:${thread}:${message.sendId}` };
+  }
+
+  private alreadySent(actor: string, key: string): boolean {
+    return this.sends.get(actor)?.has(key) ?? false;
+  }
+
+  private rememberSend(actor: string, key: string): void {
+    let seen = this.sends.get(actor);
+    if (!seen) {
+      seen = new Set();
+      this.sends.set(actor, seen);
     }
-    return false;
+    seen.add(key);
+    if (seen.size > MAX_SENDS_KEPT) {
+      const oldest = seen.values().next().value;
+      if (oldest !== undefined) seen.delete(oldest);
+    }
   }
 
   /** Does what a screen asks. A write the database refuses is said in the user's words. */
@@ -1011,9 +1039,18 @@ export class Hub {
       throw new Error(ONLY_ON_COMPUTER);
     }
     if (this.refuseLocked(message)) return;
-    if ("sendId" in message && message.sendId !== undefined && this.sentAgain(message.sendId)) {
-      return;
+    const sent = this.sendKey(client, message);
+    if (sent && this.alreadySent(sent.actor, sent.key)) return;
+    if (sent) this.rememberSend(sent.actor, sent.key);
+    try {
+      await this.runMessage(client, message);
+    } catch (error) {
+      if (sent) this.sends.get(sent.actor)?.delete(sent.key);
+      throw error;
     }
+  }
+
+  private async runMessage(client: Client, message: ClientMessage): Promise<void> {
     switch (message.type) {
       case "ping":
         client.send({ type: "pong" });
@@ -1177,8 +1214,18 @@ export class Hub {
         );
         return;
       case "thread.page": {
-        this.requireThread(message.threadId);
-        const page = this.store.pageItems(message.threadId, message.before, message.reach);
+        const thread = this.requireThread(message.threadId);
+        if (this.deletingThreads.has(thread.id) || this.removingProjects.has(thread.projectId)) {
+          throw new Error("Ce fil est en cours de suppression.");
+        }
+        // Bigger pages only for a use that is not shown: an export reads all of a long
+        // thread by them, where one answer of all of it held the server for 0.7 s.
+        const page = this.store.pageItems(
+          message.threadId,
+          message.before,
+          message.reach,
+          message.apart ? message.size : undefined,
+        );
         client.send({
           type: "page",
           requestId: message.requestId,
@@ -1187,18 +1234,10 @@ export class Hub {
           items: page.items.map(light),
           first: page.first,
           earlier: page.earlier,
+          ...(message.apart ? { apart: true as const } : {}),
         });
         return;
       }
-      case "thread.read":
-        this.requireThread(message.threadId);
-        client.send({
-          type: "timeline",
-          requestId: message.requestId,
-          threadId: message.threadId,
-          items: this.items(message.threadId).map(light),
-        });
-        return;
       case "thread.send":
         this.sendByUser(message.threadId, message.text, message.attachments);
         return;
@@ -1722,6 +1761,8 @@ export class Hub {
             (this.flushAll(),
             this.store.searchItems(message.query, 30, this.locks.lockedProjects())),
         });
+        // What the search left unindexed is filled in the background.
+        this.indexSearchSoon();
         return;
       case "agent.setMascot":
         this.setMascot(message.agentId, message.mascot);
@@ -2252,7 +2293,7 @@ export class Hub {
 
   /** Everything the agent said in the thread's last turn. */
   private lastReply(threadId: string): string {
-    const items = this.items(threadId);
+    const items = this.lastTurn(threadId);
     return items
       .slice(items.findLastIndex((i) => i.kind === "user") + 1)
       .flatMap((i) => (i.kind === "agent" ? [i.text] : []))
@@ -2754,10 +2795,11 @@ export class Hub {
     if (!thread?.openedBy || thread.archived || thread.status !== "idle") return;
     if (thread.team || thread.queue?.length) return;
     if (!this.store.getThread(thread.openedBy)) return;
-    const asked = this.items(threadId).findLast((i) => i.kind === "user");
+    const turn = this.lastTurn(threadId);
+    const asked = turn.findLast((i) => i.kind === "user");
     if (asked?.kind !== "user" || asked.from !== "coordinator") return;
     // Its conclusion: what it said last, after its tools, not how it set out.
-    const last = this.items(threadId).findLast((i) => i.kind === "agent" || i.kind === "user");
+    const last = turn.findLast((i) => i.kind === "agent" || i.kind === "user");
     const summary = last?.kind === "agent" ? leadOf(last.text, 2, RESULT_LIMIT) : "";
     if (!summary) return;
     const changed = await this.review(threadId).catch(() => undefined);
@@ -3428,30 +3470,44 @@ export class Hub {
     for (const id of [...members, threadId]) await this.deleteOneThread(id);
   }
 
-  private async deleteOneThread(threadId: string): Promise<void> {
+  /**
+   * `threads`, when given, are all the threads there are: a project's removal reads them
+   * once for all of its own, instead of once for each.
+   */
+  private async deleteOneThread(threadId: string, threads?: ThreadPlace[]): Promise<void> {
     const thread = this.requireThread(threadId);
     await this.exclusive(threadId, "Attends la fin de la suppression.", async () => {
-      await this.releaseFolder(threadId);
-      await this.forgetSession(threadId);
-      this.settlePermissions(threadId);
-      const project = this.store.getProject(thread.projectId);
-      const workspace = thread.workspace;
-      if (workspace && project) {
-        if (this.ownFolder(threadId, workspace.path))
-          await removeWorktree(project.path, workspace.path);
-        await dropRefs(project.path, `refs/moonagentic/${threadId}/`).catch(() => undefined);
+      this.deletingThreads.add(threadId);
+      try {
+        await this.releaseFolder(threadId, threads);
+        await this.forgetSession(threadId);
+        this.settlePermissions(threadId);
+        const project = this.store.getProject(thread.projectId);
+        const workspace = thread.workspace;
+        if (workspace && project) {
+          if (this.ownFolder(threadId, workspace.path, threads))
+            await removeWorktree(project.path, workspace.path);
+          await dropRefs(project.path, `refs/moonagentic/${threadId}/`).catch(() => undefined);
+        }
+        // Drop pending drafts and held writes before yielding across deletion batches so
+        // neither flushAll() nor storage recovery writes items back into a deleted thread.
+        clearTimeout(this.drafts.get(threadId)?.timer);
+        this.drafts.delete(threadId);
+        this.dropHeld(threadId);
+        // A long timeline goes a stretch at a time, the latest first, so screens are answered
+        // meanwhile: in one go, 20 000 messages held the server half a second.
+        while (this.store.deleteSomeItems(threadId, DELETE_BATCH)) await nextTurn();
+        this.setPendingRestore(threadId, undefined);
+        this.logs.delete(threadId);
+        this.coordinators.forget(threadId);
+        this.attachments.forget(threadId);
+        this.store.deleteThread(threadId);
+        this.broadcast({ type: "threadRemoved", threadId });
+        this.planner.threadDeleted(threadId);
+        this.scheduler.threadDeleted(threadId);
+      } finally {
+        this.deletingThreads.delete(threadId);
       }
-      this.setPendingRestore(threadId, undefined);
-      clearTimeout(this.drafts.get(threadId)?.timer);
-      this.drafts.delete(threadId);
-      this.logs.delete(threadId);
-      this.coordinators.forget(threadId);
-      this.attachments.forget(threadId);
-      this.store.deleteThread(threadId);
-      this.dropHeld(threadId);
-      this.broadcast({ type: "threadRemoved", threadId });
-      this.planner.threadDeleted(threadId);
-      this.scheduler.threadDeleted(threadId);
     });
   }
 
@@ -3460,7 +3516,8 @@ export class Hub {
     if (!this.store.getProject(projectId)) throw new Error("Projet introuvable.");
     if (this.removingProjects.has(projectId))
       throw new Error("Ce projet est déjà en cours de retrait.");
-    const threads = this.store.listThreads().filter((t) => t.projectId === projectId);
+    const all = this.store.listThreadPlaces();
+    const threads = all.filter((t) => t.projectId === projectId);
     if (
       threads.some((t) => this.turns.has(t.id) || this.busy.has(t.id) || this.groupActive(t.id))
     ) {
@@ -3473,9 +3530,15 @@ export class Hub {
     const step = (async () => {
       // A team's reviewers and testers go before the coders whose folder they work in.
       const order = [...threads].sort((a, b) => Number(!a.worksIn) - Number(!b.worksIn));
+      // Read once: each thread's removal reading them all again held the server for
+      // seconds with a few thousand threads. A thread made meanwhile is in another project.
+      const left = new Map(all.map((t) => [t.id, t]));
       for (const thread of order) {
         this.busy.delete(thread.id);
-        await this.deleteOneThread(thread.id);
+        await this.deleteOneThread(thread.id, [...left.values()]);
+        left.delete(thread.id);
+        // Screens are answered between two threads.
+        await nextTurn();
       }
       this.store.deleteProject(projectId);
       this.catalog.projectRemoved(projectId);
@@ -3563,8 +3626,11 @@ export class Hub {
    * the folder goes: Windows will not remove a folder a process works in. They keep their
    * session, to pick up if the folder comes back.
    */
-  private async releaseFolder(threadId: string): Promise<void> {
-    const borrowers = this.store.listThreads().filter((t) => t.worksIn === threadId);
+  private async releaseFolder(
+    threadId: string,
+    threads: ThreadPlace[] = this.store.listThreadPlaces(),
+  ): Promise<void> {
+    const borrowers = threads.filter((t) => t.worksIn === threadId);
     const busy = borrowers.find((t) => this.turns.has(t.id) || this.busy.has(t.id));
     if (busy) throw new Error(`« ${busy.title} » travaille dans ce dossier : arrête-le d'abord.`);
     await Promise.all(borrowers.map((t) => this.pool.stop(t.id)));
@@ -4481,6 +4547,15 @@ export class Hub {
 
   private flushAll(): void {
     for (const threadId of this.drafts.keys()) this.flushText(threadId, false);
+  }
+
+  /**
+   * The thread's last turn, from the user's last message, streamed text included: a long
+   * thread is not read whole for it.
+   */
+  private lastTurn(threadId: string): Item[] {
+    this.flushText(threadId, false);
+    return this.withHeld(threadId, this.store.lastTurnItems(threadId), true);
   }
 
   /** The thread's timeline, streamed text included. */

@@ -4,6 +4,7 @@ import type {
   RemoteAccess,
   ServerMessage,
 } from "@moonagentic/protocol";
+import { clearAllDrafts, forgetDrafts } from "./drafts.ts";
 import { nextFrame } from "./frame.ts";
 import { deviceName } from "./remote.ts";
 import { initialState, reduce, type State } from "./state.ts";
@@ -72,7 +73,14 @@ export const DEVICE_REMOVED =
 /** Set on a device whose access was taken back, so that the reason survives a reload. */
 const REMOVED_KEY = "moonagentic.removed";
 /** Actions of the user's that are sent again when the connection died under them. */
-const KEPT_UNTIL_CONFIRMED = new Set(["thread.send", "permission.respond", "question.respond"]);
+const KEPT_UNTIL_CONFIRMED = new Set([
+  "thread.send",
+  "thread.setArchived",
+  "thread.cancel",
+  "thread.resume",
+  "permission.respond",
+  "question.respond",
+]);
 /** At most this many actions wait to be sent again. */
 const MAX_UNCONFIRMED = 50;
 /** How long before it expires a ticket for the next connection is no longer used. */
@@ -149,6 +157,7 @@ function storedToken(): string | null {
 
 /** The token was taken from this device: it is forgotten, and why is remembered. */
 function forgetRemoved(): void {
+  clearAllDrafts();
   try {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.setItem(REMOVED_KEY, "1");
@@ -229,49 +238,47 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
           ? Extract<ServerMessage, { type: "fullItem" }>
           : T extends "thread.page"
             ? Extract<ServerMessage, { type: "page" }>
-            : T extends "thread.read"
-              ? Extract<ServerMessage, { type: "timeline" }>
-              : T extends "github.status"
-                ? Extract<ServerMessage, { type: "github" }>
-                : T extends "github.repos"
-                  ? Extract<ServerMessage, { type: "githubRepos" }>
-                  : T extends "github.login"
-                    ? Extract<ServerMessage, { type: "githubDevice" }>
-                    : T extends "local.clones"
-                      ? Extract<ServerMessage, { type: "localClones" }>
-                      : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
-                        ? Extract<ServerMessage, { type: "pullRequest" }>
-                        : T extends "workspace.prRemarks"
-                          ? Extract<ServerMessage, { type: "prRemarks" }>
-                          : T extends "workspace.forecast"
-                            ? Extract<ServerMessage, { type: "forecast" }>
-                            : T extends "workspace.files"
-                              ? Extract<ServerMessage, { type: "worktreeFiles" }>
-                              : T extends "workspace.readFile"
-                                ? Extract<ServerMessage, { type: "worktreeFile" }>
-                                : T extends "project.branches"
-                                  ? Extract<ServerMessage, { type: "projectBranches" }>
-                                  : T extends
-                                        | "project.setup"
-                                        | "project.saveRules"
-                                        | "project.saveMemory"
-                                        | "project.linkClaude"
-                                        | "project.saveCommand"
-                                        | "project.removeCommand"
-                                        | "project.saveSkill"
-                                        | "project.removeSkill"
-                                    ? Extract<ServerMessage, { type: "projectSetup" }>
-                                    : T extends "project.deleteBranches"
-                                      ? Extract<ServerMessage, { type: "branchesDeleted" }>
-                                      : T extends "artifacts.list"
-                                        ? Extract<ServerMessage, { type: "artifacts" }>
-                                        : T extends "artifacts.open"
-                                          ? Extract<ServerMessage, { type: "artifactLink" }>
-                                          : T extends "file.open"
-                                            ? Extract<ServerMessage, { type: "fileLink" }>
-                                            : T extends "push.state"
-                                              ? Extract<ServerMessage, { type: "pushState" }>
-                                              : ServerMessage;
+            : T extends "github.status"
+              ? Extract<ServerMessage, { type: "github" }>
+              : T extends "github.repos"
+                ? Extract<ServerMessage, { type: "githubRepos" }>
+                : T extends "github.login"
+                  ? Extract<ServerMessage, { type: "githubDevice" }>
+                  : T extends "local.clones"
+                    ? Extract<ServerMessage, { type: "localClones" }>
+                    : T extends "workspace.pr" | "workspace.mergePr" | "github.pr"
+                      ? Extract<ServerMessage, { type: "pullRequest" }>
+                      : T extends "workspace.prRemarks"
+                        ? Extract<ServerMessage, { type: "prRemarks" }>
+                        : T extends "workspace.forecast"
+                          ? Extract<ServerMessage, { type: "forecast" }>
+                          : T extends "workspace.files"
+                            ? Extract<ServerMessage, { type: "worktreeFiles" }>
+                            : T extends "workspace.readFile"
+                              ? Extract<ServerMessage, { type: "worktreeFile" }>
+                              : T extends "project.branches"
+                                ? Extract<ServerMessage, { type: "projectBranches" }>
+                                : T extends
+                                      | "project.setup"
+                                      | "project.saveRules"
+                                      | "project.saveMemory"
+                                      | "project.linkClaude"
+                                      | "project.saveCommand"
+                                      | "project.removeCommand"
+                                      | "project.saveSkill"
+                                      | "project.removeSkill"
+                                  ? Extract<ServerMessage, { type: "projectSetup" }>
+                                  : T extends "project.deleteBranches"
+                                    ? Extract<ServerMessage, { type: "branchesDeleted" }>
+                                    : T extends "artifacts.list"
+                                      ? Extract<ServerMessage, { type: "artifacts" }>
+                                      : T extends "artifacts.open"
+                                        ? Extract<ServerMessage, { type: "artifactLink" }>
+                                        : T extends "file.open"
+                                          ? Extract<ServerMessage, { type: "fileLink" }>
+                                          : T extends "push.state"
+                                            ? Extract<ServerMessage, { type: "pushState" }>
+                                            : ServerMessage;
 
 export class Connection {
   private state: State = initialState;
@@ -385,6 +392,7 @@ export class Connection {
   private keep(token: string): void {
     this.token = token;
     this.untried = null;
+    this.spare = undefined;
     forgetOffered();
     try {
       localStorage.setItem(TOKEN_KEY, token);
@@ -421,6 +429,7 @@ export class Connection {
       throw new Error(body?.message ?? `Le serveur a répondu ${response.status}.`);
     }
     this.keep(body.token);
+    this.unconfirmed = [];
     this.pairError = null;
     this.set({ ...this.state, status: "connecting" });
     void this.open();
@@ -476,17 +485,8 @@ export class Connection {
     this.pings = [];
   }
 
-  /**
-   * Pings after actions of the user's: the server answers pings in order, so the answer to
-   * this one says it got them. Without one in time the connection is dead: it is replaced,
-   * and they go again.
-   */
-  private confirm(socket: WebSocket): void {
-    const ids = this.unconfirmed.map((m) => m.sendId);
-    if (!ids.length) return;
-    socket.send(JSON.stringify({ type: "ping" }));
-    this.pings.push(ids);
-    if (this.confirmTimer !== undefined) return;
+  private armConfirm(socket: WebSocket): void {
+    clearTimeout(this.confirmTimer);
     this.confirmTimer = setTimeout(() => {
       this.confirmTimer = undefined;
       if (this.socket !== socket) return;
@@ -498,6 +498,19 @@ export class Connection {
         // already gone
       }
     }, CONFIRM_MS);
+  }
+
+  /**
+   * Pings after actions of the user's: the server answers pings in order, so the answer to
+   * this one says it got them. Without one in time the connection is dead: it is replaced,
+   * and they go again.
+   */
+  private confirm(socket: WebSocket): void {
+    const ids = this.unconfirmed.map((m) => m.sendId);
+    if (!ids.length) return;
+    socket.send(JSON.stringify({ type: "ping" }));
+    this.pings.push(ids);
+    if (this.confirmTimer === undefined) this.armConfirm(socket);
   }
 
   /** The server answered the oldest ping on its way: what was sent before it got there. */
@@ -517,6 +530,9 @@ export class Connection {
     if (!this.pings.some((p) => p.length)) {
       clearTimeout(this.confirmTimer);
       this.confirmTimer = undefined;
+    } else if (ids?.length && this.socket) {
+      // Earlier action confirmed: give the next action in line its own full wait.
+      this.armConfirm(this.socket);
     }
   }
 
@@ -754,10 +770,11 @@ export class Connection {
         this.hurry = true;
         abort.abort();
       }, TICKET_TIMEOUT_MS);
+      const usedToken = this.token;
       try {
         const response = await fetch("/api/ws-ticket", {
           method: "POST",
-          headers: { authorization: `Bearer ${this.token ?? ""}` },
+          headers: { authorization: `Bearer ${usedToken ?? ""}` },
           signal: abort.signal,
         });
         if (attempt !== this.attempt) return;
@@ -767,8 +784,8 @@ export class Connection {
             if (attempt === this.attempt) void this.open();
             return;
           }
-          // Another tab renewed the token meanwhile: this one goes on with it.
-          if (!this.untried && this.tokenChanged(storedToken())) {
+          // Another tab renewed the token meanwhile (before or during this request): retry with it.
+          if (!this.untried && (this.token !== usedToken || this.tokenChanged(storedToken()))) {
             void this.open();
             return;
           }
@@ -781,12 +798,13 @@ export class Connection {
             void this.open();
             return;
           }
+          this.unconfirmed = [];
           this.set({ ...this.state, status: "unauthorized" });
           return;
         }
         if (response.ok) {
           // Accepted: a token that came from the address is now the one this device keeps.
-          if (this.untried && this.token) this.keep(this.token);
+          if (this.untried && usedToken && this.token === usedToken) this.keep(usedToken);
           const body = (await response.json().catch(() => null)) as { ticket?: unknown } | null;
           if (typeof body?.ticket === "string" && body.ticket) ticket = body.ticket;
         }
@@ -821,6 +839,14 @@ export class Connection {
     }, OPEN_TIMEOUT_MS);
     socket.onopen = () => {
       clearTimeout(notOpened);
+      if (this.socket !== socket) {
+        try {
+          socket.close();
+        } catch {
+          // already gone
+        }
+        return;
+      }
       opened = true;
       this.retry = 0;
       // Connected: a pairing that failed earlier says nothing about a later loss of access.
@@ -877,6 +903,13 @@ export class Connection {
           else pending.resolve(message);
         }
       }
+      if (message.type === "threadRemoved") {
+        forgetDrafts([message.threadId]);
+      } else if (message.type === "projectRemoved") {
+        forgetDrafts(
+          this.state.threads.filter((t) => t.projectId === message.projectId).map((t) => t.id),
+        );
+      }
       const next = reduce(this.state, message);
       if (message.type === "append") this.setSoon(next);
       else this.set(next);
@@ -916,31 +949,43 @@ export class Connection {
     // A refused upgrade looks like any other failure; ask the server whether the token is the cause.
     // After a renewal the old token is refused too, so it is asked again, with the new one
     // on the device that renewed it.
-    const check = Promise.resolve(this.renewal).then(() =>
-      wasOpen && code !== TOKEN_RENEWED && code !== DEVICE_REVOKED ? true : this.tokenAccepted(),
-    );
-    void check.then((accepted) => {
+    const check = Promise.resolve(this.renewal).then(async () => {
+      if (wasOpen && code !== TOKEN_RENEWED && code !== DEVICE_REVOKED) {
+        return { accepted: true, usedToken: this.token };
+      }
+      const usedToken = this.token;
+      const accepted = await this.tokenAccepted(usedToken);
+      return { accepted, usedToken };
+    });
+    void check.then(({ accepted, usedToken }) => {
       if (attempt !== this.attempt) return;
       if (accepted) return this.scheduleRetry();
-      // Renewed in another tab: this one goes on with the token it keeps now.
-      if (this.tokenChanged(storedToken())) return this.scheduleRetry();
+      // Renewed in another tab (before or during /api/auth): go on with the token kept now.
+      if (this.token !== usedToken || this.tokenChanged(storedToken())) {
+        return this.scheduleRetry();
+      }
       if (code === DEVICE_REVOKED) {
         forgetRemoved();
         this.pairError = DEVICE_REMOVED;
       }
+      this.unconfirmed = [];
       this.set({ ...this.state, status: "unauthorized" });
     });
   }
 
-  private async tokenAccepted(): Promise<boolean> {
+  private async tokenAccepted(token: string | null): Promise<boolean> {
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), TICKET_TIMEOUT_MS);
     try {
       const response = await fetch("/api/auth", {
-        headers: { authorization: `Bearer ${this.token}` },
-        signal: AbortSignal.timeout(TICKET_TIMEOUT_MS),
+        headers: { authorization: `Bearer ${token ?? ""}` },
+        signal: abort.signal,
       });
       return response.status !== 401;
     } catch {
       return true;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

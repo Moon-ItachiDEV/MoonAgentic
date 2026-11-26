@@ -1,5 +1,13 @@
+import {
+  type AgentInfo,
+  type Item,
+  MAX_PAGE_ITEMS,
+  type Project,
+  type Schedule,
+  type Thread,
+} from "@moonagentic/protocol";
 import { onThreadLink } from "./components/Markdown.tsx";
-import type { AgentInfo, Item, Project, Schedule, Thread } from "@moonagentic/protocol";
+import { wholeThread } from "./whole-thread.ts";
 import {
   Fragment,
   lazy,
@@ -315,11 +323,24 @@ export function App() {
     if (!t || !items) return;
     const save = (all: Item[]) =>
       downloadMarkdown(exportFileName(t.title), threadMarkdown(t, all, state.agents));
-    if (!state.held[t.id]?.earlier) return save(items);
-    // Only the end of a long thread is here: the whole of it is asked for.
-    connection
-      .ask({ type: "thread.read", requestId: newId(), threadId: t.id })
-      .then((reply) => save(reply.items))
+    const held = state.held[t.id];
+    if (!held?.earlier) return save(items);
+    // Only the end of a long thread is here: what is before it is asked for, a page at a time.
+    wholeThread(
+      (before) =>
+        connection.ask({
+          type: "thread.page",
+          requestId: newId(),
+          threadId: t.id,
+          before,
+          size: MAX_PAGE_ITEMS,
+          apart: true,
+        }),
+      items,
+      held.first,
+      held.earlier,
+    )
+      .then(save)
       .catch((error: unknown) =>
         connection.notify(error instanceof Error ? error.message : String(error)),
       );

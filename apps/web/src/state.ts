@@ -234,8 +234,8 @@ export function reduce(state: State, message: ServerMessage): State {
       const items = state.items[message.threadId];
       const held = state.held[message.threadId];
       // Only the stretch just before what is held: an answer that comes late, after the
-      // timeline was sent again, has nowhere to go.
-      if (!items || held?.first !== message.before) return state;
+      // timeline was sent again, has nowhere to go. One asked for an export is not shown.
+      if (message.apart || !items || held?.first !== message.before) return state;
       const known = new Set(items.map((i) => i.id));
       return {
         ...state,
@@ -263,7 +263,6 @@ export function reduce(state: State, message: ServerMessage): State {
     case "searched":
     case "activity":
     case "fullItem":
-    case "timeline":
     case "github":
     case "githubRepos":
     case "githubDevice":

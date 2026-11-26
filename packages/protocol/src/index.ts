@@ -1322,9 +1322,9 @@ export type ServerMessage =
       before: number;
       first: number;
       earlier: number;
+      /** Asked for a use that is not shown: the screen keeps what it holds. */
+      apart?: true;
     }
-  /** A whole timeline, for a use that needs all of it at once, such as an export. */
-  | { type: "timeline"; requestId: string; threadId: string; items: Item[] }
   | {
       type: "review";
       threadId: string;
@@ -1482,12 +1482,15 @@ export type ServerMessage =
   | { type: "ws.ticket"; ticket: string; ttlMs: number }
   | { type: "error"; requestId?: string; message: string };
 
+/** The most items one page of a timeline holds: an export reads a long thread by these. */
+export const MAX_PAGE_ITEMS = 1000;
+
 const id = z.string().min(1).max(200);
 /**
  * Names an action of the user's that a screen sends again when it cannot tell whether the
  * server got it, a connection having died under it: the server does it once.
  */
-const sendId = z.string().min(1).max(64);
+const sendId = z.string().regex(/^[\w-]{1,64}$/);
 /** Who takes a role in a team: an agent, on one of its models or its own default. */
 const teamMember = z.object({ agentId: id, model: id.optional() }).strict();
 /** How many bytes a text takes in UTF-8. */
@@ -1664,16 +1667,20 @@ export const ClientMessage = z.discriminatedUnion("type", [
     threadId: id,
     since: z.object({ epoch: id, rev: seq, first: seq }).optional(),
   }),
-  /** Asks for the items just before the one numbered `before`, back to `reach` if given. */
+  /**
+   * Asks for the items just before the one numbered `before`, back to `reach` if given.
+   * `apart` is for a use that is not shown (an export): the screen keeps what it holds, and
+   * the page may be bigger, `size` items.
+   */
   z.object({
     type: z.literal("thread.page"),
     requestId: id,
     threadId: id,
     before: seq,
     reach: id.optional(),
+    size: z.number().int().min(1).max(MAX_PAGE_ITEMS).optional(),
+    apart: z.literal(true).optional(),
   }),
-  /** Asks for the whole timeline at once. */
-  z.object({ type: z.literal("thread.read"), requestId: id, threadId: id }),
   /** The window no longer shows the thread: what its agent says next is unread. */
   z.object({ type: z.literal("thread.leave"), threadId: id }),
   z.object({ type: z.literal("thread.setUnread"), threadId: id, unread: z.boolean() }),
@@ -1688,12 +1695,12 @@ export const ClientMessage = z.discriminatedUnion("type", [
       sendId: sendId.optional(),
     })
     .refine(saysSomething),
-  z.object({ type: z.literal("thread.cancel"), threadId: id }),
+  z.object({ type: z.literal("thread.cancel"), threadId: id, sendId: sendId.optional() }),
   /**
    * Takes a thread up again after its agent stopped: what waits goes first, else the agent
    * is asked to go on where it was. A new agent session starts with the thread's model.
    */
-  z.object({ type: z.literal("thread.resume"), threadId: id }),
+  z.object({ type: z.literal("thread.resume"), threadId: id, sendId: sendId.optional() }),
   /**
    * Keeps a message for after the turn under way. Sent at once instead when the thread
    * is free and nothing waits before it.
@@ -1896,7 +1903,12 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("schedule.remove"), requestId: id, id }),
   /** Starts the planned task now, whatever its time; its next time does not move. */
   z.object({ type: z.literal("schedule.run"), requestId: id, id }),
-  z.object({ type: z.literal("thread.setArchived"), threadId: id, archived: z.boolean() }),
+  z.object({
+    type: z.literal("thread.setArchived"),
+    threadId: id,
+    archived: z.boolean(),
+    sendId: sendId.optional(),
+  }),
   z.object({ type: z.literal("thread.delete"), requestId: id, threadId: id }),
   z.object({ type: z.literal("project.remove"), requestId: id, projectId: id }),
   /** Gives the project another name in MoonAgentic; its folder keeps its own. */

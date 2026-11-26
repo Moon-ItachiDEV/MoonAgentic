@@ -928,4 +928,246 @@ describe("access taken back or renewed", () => {
     FakeWebSocket.instances.at(-1)!.open();
     expect(conn.getState().status).toBe("open");
   });
+
+  it("retries instead of going unauthorized when another tab renews while /api/auth is in flight", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    const { kept, store } = storage("old-token");
+    type Listener = (event: { key: string; newValue: string | null }) => void;
+    const listeners = new Map<string, Listener>();
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: Listener) => listeners.set(type, listener),
+    });
+    vi.stubGlobal("document", { addEventListener: () => undefined, visibilityState: "visible" });
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/" });
+    vi.stubGlobal("localStorage", store);
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    let resolveAuth: ((res: Response) => void) | undefined;
+    const tickets: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string, init?: { headers?: Record<string, string> }) => {
+        const token = init?.headers?.authorization?.replace("Bearer ", "") ?? "";
+        if (input === "/api/auth" && token === "old-token") {
+          return new Promise<Response>((resolve) => {
+            resolveAuth = resolve;
+          });
+        }
+        if (input === "/api/ws-ticket") {
+          tickets.push(token);
+          return Promise.resolve(
+            new Response(JSON.stringify({ ticket: `t-${token}` }), { status: 200 }),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const conn = new Connection({ pingMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    FakeWebSocket.instances[0]!.open();
+
+    // Server closes with TOKEN_RENEWED; /api/auth with old-token starts and stays in flight.
+    FakeWebSocket.instances[0]!.closeNow(4001);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolveAuth).toBeDefined();
+
+    // Meanwhile the other tab writes the new token and fires the storage event.
+    kept.set("moonagentic.token", "new-token");
+    listeners.get("storage")?.({ key: "moonagentic.token", newValue: "new-token" });
+
+    // Now the stale /api/auth (sent with old-token) answers 401.
+    resolveAuth!(new Response(null, { status: 401 }));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(conn.getState().status).not.toBe("unauthorized");
+    expect(tickets.at(-1)).toBe("new-token");
+    FakeWebSocket.instances.at(-1)!.open();
+    expect(conn.getState().status).toBe("open");
+  });
+
+  it("retries instead of going unauthorized when another tab renews while /api/ws-ticket is in flight", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    const { kept, store } = storage("old-token");
+    type Listener = (event: { key: string; newValue: string | null }) => void;
+    const listeners = new Map<string, Listener>();
+    vi.stubGlobal("window", {
+      addEventListener: (type: string, listener: Listener) => listeners.set(type, listener),
+    });
+    vi.stubGlobal("document", { addEventListener: () => undefined, visibilityState: "visible" });
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/" });
+    vi.stubGlobal("localStorage", store);
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    let resolveFirstTicket: ((res: Response) => void) | undefined;
+    const tickets: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: string, init?: { headers?: Record<string, string> }) => {
+        const token = init?.headers?.authorization?.replace("Bearer ", "") ?? "";
+        if (input === "/api/ws-ticket") {
+          tickets.push(token);
+          if (token === "old-token") {
+            return new Promise<Response>((resolve) => {
+              resolveFirstTicket = resolve;
+            });
+          }
+          return Promise.resolve(
+            new Response(JSON.stringify({ ticket: `t-${token}` }), { status: 200 }),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const conn = new Connection({ pingMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resolveFirstTicket).toBeDefined();
+
+    // Storage updates token while the first /api/ws-ticket request is still in flight.
+    kept.set("moonagentic.token", "new-token");
+    listeners.get("storage")?.({ key: "moonagentic.token", newValue: "new-token" });
+
+    // Stale /api/ws-ticket with old-token returns 401: must retry with new-token.
+    resolveFirstTicket!(new Response(null, { status: 401 }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(conn.getState().status).not.toBe("unauthorized");
+    expect(tickets).toEqual(["old-token", "new-token"]);
+    FakeWebSocket.instances.at(-1)!.open();
+    expect(conn.getState().status).toBe("open");
+  });
+
+  it("clears drafts and unconfirmed actions when a device is revoked", async () => {
+    vi.useFakeTimers();
+    FakeWebSocket.instances = [];
+    const { kept, store } = storage("phone-token");
+    kept.set("moonagentic.drafts", JSON.stringify({ t1: { text: "Secret", at: 1 } }));
+    vi.stubGlobal("location", { href: "http://127.0.0.1:4747/" });
+    vi.stubGlobal("localStorage", store);
+    vi.stubGlobal("history", { state: null, replaceState: () => undefined });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string) =>
+        input === "/api/ws-ticket"
+          ? new Response(JSON.stringify({ ticket: "t1" }), { status: 200 })
+          : new Response(null, { status: 401 }),
+      ),
+    );
+    vi.stubGlobal("WebSocket", FakeWebSocket);
+    const conn = new Connection({ pingMs: 0 });
+    await vi.advanceTimersByTimeAsync(0);
+    const s1 = FakeWebSocket.instances[0]!;
+    s1.open();
+    conn.send({ type: "thread.send", threadId: "t1", text: "Avant révocation" });
+    const sendId = sentOn(s1)[0]!.sendId!;
+    expect(conn.waitsForConfirmation(sendId)).toBe(true);
+
+    s1.closeNow(4003);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(conn.getState().status).toBe("unauthorized");
+    expect(kept.has("moonagentic.drafts")).toBe(false);
+    expect(conn.waitsForConfirmation(sendId)).toBe(false);
+  });
+});
+
+describe("confirmation timer and stale socket guards", () => {
+  it("resets the confirmation deadline for a second action when the first is confirmed", async () => {
+    const { conn, socket } = await setupConnection();
+    socket.open();
+    conn.send({ type: "thread.send", threadId: "t", text: "Un" });
+    const firstId = sentOn(socket)[0]!.sendId!;
+
+    await vi.advanceTimersByTimeAsync(CONFIRM_MS - 500);
+    conn.send({ type: "thread.send", threadId: "t", text: "Deux" });
+    const secondId = sentOn(socket).find((m) => m.text === "Deux")!.sendId!;
+
+    // First pong arrives 100ms before the original deadline: second action must get a full window.
+    await vi.advanceTimersByTimeAsync(400);
+    socket.emitMessage(JSON.stringify({ type: "pong" }));
+    expect(conn.waitsForConfirmation(firstId)).toBe(false);
+    expect(conn.waitsForConfirmation(secondId)).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    expect(conn.getState().status).toBe("open");
+
+    // Once the full window expires without the second pong, reconnect replays only the second action.
+    await vi.advanceTimersByTimeAsync(CONFIRM_MS);
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    const next = FakeWebSocket.instances[1]!;
+    next.open();
+    const replayed = sentOn(next).filter((m) => m.type === "thread.send");
+    expect(replayed.map((m) => m.text)).toEqual(["Deux"]);
+  });
+
+  it("replays thread.setArchived and thread.send in order after a silent drop", async () => {
+    const { conn, socket } = await setupConnection();
+    socket.open();
+    conn.send({ type: "thread.setArchived", threadId: "t", archived: false });
+    conn.send({ type: "thread.send", threadId: "t", text: "Relance" });
+
+    await vi.advanceTimersByTimeAsync(CONFIRM_MS + 10);
+    const next = FakeWebSocket.instances.at(-1)!;
+    expect(next).not.toBe(socket);
+    next.open();
+    const replayed = sentOn(next).filter((m) => m.type !== "ping");
+    expect(replayed.map((m) => m.type)).toEqual(["thread.setArchived", "thread.send"]);
+  });
+
+  it("ignores a late onopen from a socket already replaced after OPEN_TIMEOUT_MS", async () => {
+    const { conn, socket } = await setupConnection();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(conn.getState().status).toBe("closed");
+
+    // Stale socket finishes opening late: must be ignored and not flip state to open.
+    socket.open();
+    expect(conn.getState().status).toBe("closed");
+  });
+
+  it("forgets local drafts when threads or projects are removed", async () => {
+    const kept = new Map<string, string>([
+      ["moonagentic.token", "secret-token"],
+      [
+        "moonagentic.drafts",
+        JSON.stringify({
+          t1: { text: "Brouillon 1", at: 1 },
+          t2: { text: "Brouillon 2", at: 2 },
+          t3: { text: "Brouillon 3", at: 3 },
+        }),
+      ],
+    ]);
+    const { socket } = await setupConnection();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => kept.get(k) ?? null,
+      setItem: (k: string, v: string) => void kept.set(k, v),
+      removeItem: (k: string) => void kept.delete(k),
+    });
+    socket.open();
+    socket.emitMessage(
+      JSON.stringify({
+        type: "snapshot",
+        snapshot: {
+          projects: [{ id: "p1", name: "P1", path: "/p1", git: false }],
+          threads: [
+            { id: "t1", projectId: "p1", title: "T1", status: "idle" },
+            { id: "t2", projectId: "p1", title: "T2", status: "idle" },
+            { id: "t3", projectId: "p2", title: "T3", status: "idle" },
+          ],
+          agents: [],
+          requests: [],
+          questions: [],
+          plan: [],
+          schedules: [],
+        },
+      }),
+    );
+
+    socket.emitMessage(JSON.stringify({ type: "threadRemoved", threadId: "t1" }));
+    expect(Object.keys(JSON.parse(kept.get("moonagentic.drafts")!) as object).sort()).toEqual([
+      "t2",
+      "t3",
+    ]);
+
+    socket.emitMessage(JSON.stringify({ type: "projectRemoved", projectId: "p1" }));
+    expect(Object.keys(JSON.parse(kept.get("moonagentic.drafts")!) as object)).toEqual(["t3"]);
+  });
 });

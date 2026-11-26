@@ -1109,9 +1109,10 @@ describe("a write refused in the middle of a turn", () => {
   /** The agent's text a screen reads in the thread now, written or still waiting to be. */
   const shown = async (hub: Hub, threadId: string) => {
     const reader = new Screen();
-    await hub.handle(reader, { type: "thread.read", requestId: "lu", threadId });
-    const timeline = reader.messages.find((m) => m.type === "timeline");
-    return timeline?.type === "timeline" ? agentText(timeline.items) : "";
+    await hub.handle(reader, { type: "thread.open", threadId });
+    await hub.handle(reader, { type: "thread.leave", threadId });
+    const timeline = reader.messages.find((m) => m.type === "items");
+    return timeline?.type === "items" ? agentText(timeline.items) : "";
   };
 
   it("keeps an answer whose very first words the database refused", async () => {
