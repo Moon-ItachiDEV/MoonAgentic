@@ -153,8 +153,23 @@ export function AppLock({
     setMessage(null);
     const next = typed + key;
     setTyped(next);
-    if (fullPin(next)) check(next);
+    if (!fullPin(next)) return;
+    // Typed as the app opens again, before its connection is back: sent once it is.
+    if (ready) check(next);
+    else {
+      setState("busy");
+      early.current = next;
+    }
   };
+  const early = useRef<string | null>(null);
+  useEffect(() => {
+    if (!ready || early.current === null) return;
+    const code = early.current;
+    early.current = null;
+    check(code);
+    // `check` is remade on every render; only the connection coming back matters here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
   const pressRef = useRef(press);
   pressRef.current = press;
 

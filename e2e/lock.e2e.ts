@@ -150,6 +150,25 @@ describe("/lock", () => {
     await shut.waitFor();
     await page.keyboard.type("123456");
     await expect.poll(() => shut.count()).toBe(0);
+    // The code typed as the app opens again, before its connection is back (as on a busy
+    // machine, or a phone waking up): it is checked once the connection is there.
+    await page.addInitScript(() => {
+      const Real = window.WebSocket;
+      window.WebSocket = class extends Real {
+        constructor(url: string | URL, protocols?: string | string[]) {
+          super(sessionStorage.getItem("e2e-hold-ws") ? "ws://127.0.0.1:9/" : url, protocols);
+        }
+      };
+    });
+    await page.keyboard.press("Control+Shift+L");
+    await shut.waitFor();
+    await page.evaluate(() => sessionStorage.setItem("e2e-hold-ws", "1"));
+    await page.reload();
+    await shut.waitFor();
+    await page.keyboard.type("123456");
+    await page.waitForTimeout(300);
+    await page.evaluate(() => sessionStorage.removeItem("e2e-hold-ws"));
+    await expect.poll(() => shut.count(), { timeout: 15_000 }).toBe(0);
     expect(errors).toEqual([]);
     await other.close();
     await page.close();
