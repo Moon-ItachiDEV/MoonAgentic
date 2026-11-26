@@ -57,6 +57,7 @@ const TYPES: Record<string, string> = {
   ".js": "text/javascript",
   ".css": "text/css",
   ".svg": "image/svg+xml",
+  ".ico": "image/x-icon",
   ".png": "image/png",
   ".woff2": "font/woff2",
   ".json": "application/json",
@@ -247,6 +248,13 @@ export function staticFile(webDir: string, rawUrl: string): string | typeof MISS
   }
   if (isFile) return requested;
   if (inside && requested.startsWith(path.join(webDir, "assets") + path.sep)) return MISSING;
+  // A file at the root that is not there (an icon an iPhone looks for on its own): the page
+  // in its place would be read as a broken image, and the home screen would show a letter.
+  if (
+    inside &&
+    /^\/[^/]+\.(?:png|ico|svg|jpe?g|webp|webmanifest|json|js|css|map|txt)$/i.test(pathname)
+  )
+    return MISSING;
   return path.join(webDir, "index.html");
 }
 
