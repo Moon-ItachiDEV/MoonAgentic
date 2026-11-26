@@ -40,8 +40,10 @@ function run(dir: string, until?: (run: Run) => boolean): Promise<Run> {
       env: { ...process.env, MOONAGENTIC_HOME: dir },
     });
     const result: Run = { code: null, out: "", messages: [] };
+    // Ends it as its supervisor does on every system: by closing the channel (Windows
+    // has no SIGTERM, which would end it there without its own stop).
     const look = () => {
-      if (until?.(result)) child.kill("SIGTERM");
+      if (until?.(result) && child.connected) child.disconnect();
     };
     child.stdout?.on("data", (chunk: Buffer) => ((result.out += chunk.toString()), look()));
     child.stderr?.on("data", (chunk: Buffer) => ((result.out += chunk.toString()), look()));
