@@ -66,8 +66,11 @@ export function resetFromText(text: string, now = Date.now()): number | undefine
     }
     return ms > 0 ? now + ms : undefined;
   }
-  // A time of day: the next one to come, in this computer's time zone.
-  const clock = text.match(/resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+  // A time of day: the next one to come, in the time zone named after it, else this
+  // computer's (« resets 3pm (Europe/Paris) »).
+  const clock = text.match(
+    /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b(?:\s*\(([A-Za-z_]+(?:\/[A-Za-z_+-]+)*)\))?/i,
+  );
   if (clock && (clock[2] !== undefined || clock[3] !== undefined)) {
     let hours = Number(clock[1]);
     const minutes = Number(clock[2] ?? 0);
@@ -75,12 +78,55 @@ export function resetFromText(text: string, now = Date.now()): number | undefine
     if (half === "pm" && hours < 12) hours += 12;
     if (half === "am" && hours === 12) hours = 0;
     if (hours > 23 || minutes > 59) return undefined;
+    const zone = clock[4] && zoneOffset(clock[4], now) !== undefined ? clock[4] : undefined;
+    if (zone) return nextInZone(zone, hours, minutes, now);
     const at = new Date(now);
     at.setHours(hours, minutes, 0, 0);
     if (at.getTime() <= now) at.setDate(at.getDate() + 1);
     return at.getTime();
   }
   return undefined;
+}
+
+/** How far ahead of UTC the zone's clocks are at `at`, in ms; undefined for an unknown zone. */
+function zoneOffset(zone: string, at: number): number | undefined {
+  let parts: Intl.DateTimeFormatPart[];
+  try {
+    parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone,
+      hourCycle: "h23",
+      year: "numeric",
+      month: "numeric",
+      day: "numeric",
+      hour: "numeric",
+      minute: "numeric",
+      second: "numeric",
+    }).formatToParts(at);
+  } catch {
+    return undefined;
+  }
+  const n = (type: string) => Number(parts.find((p) => p.type === type)?.value);
+  const local = Date.UTC(n("year"), n("month") - 1, n("day"), n("hour"), n("minute"), n("second"));
+  return local - Math.floor(at / 1000) * 1000;
+}
+
+/** The next moment after `now` when the zone's clocks show hours:minutes. */
+function nextInZone(zone: string, hours: number, minutes: number, now: number): number {
+  const offset = zoneOffset(zone, now)!;
+  const today = new Date(now + offset);
+  for (let day = 0; day < 3; day++) {
+    const wall = Date.UTC(
+      today.getUTCFullYear(),
+      today.getUTCMonth(),
+      today.getUTCDate() + day,
+      hours,
+      minutes,
+    );
+    // The offset of that day, which a change of summer time may have moved.
+    const at = wall - (zoneOffset(zone, wall - offset) ?? offset);
+    if (at > now) return at;
+  }
+  return now + 24 * HOUR;
 }
 
 /** The words a model goes by: its id and its name, for the quota windows to match. */

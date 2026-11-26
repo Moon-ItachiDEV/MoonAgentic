@@ -49,6 +49,18 @@ describe("telling a quota that ran out from any other failure", () => {
     expect(resetFromText("You've hit your limit", now)).toBeUndefined();
   });
 
+  it("reads a time of day in the time zone the agent names", () => {
+    const now = Date.UTC(2026, 10, 26, 10, 0);
+    // Paris is an hour ahead of UTC in November.
+    expect(resetFromText("You've hit your limit · resets 3pm (Europe/Paris)", now)).toBe(
+      Date.UTC(2026, 10, 26, 14, 0),
+    );
+    expect(resetFromText("resets 9am (UTC)", now)).toBe(Date.UTC(2026, 10, 27, 9, 0));
+    expect(resetFromText("resets 11:30 (America/New_York)", now)).toBe(
+      Date.UTC(2026, 10, 26, 16, 30),
+    );
+  });
+
   it("reads from the figures whether a model has no quota left, and until when", () => {
     const now = Date.now();
     const quota = (usedPercent: number, resetsAt?: number): AgentQuota => ({
