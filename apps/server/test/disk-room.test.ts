@@ -17,6 +17,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import type { ServerMessage } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agents } from "../src/agents.ts";
@@ -26,11 +27,19 @@ import { MAX_KEPT_IGNORED_TOTAL, saveCheckpoint } from "../src/git.ts";
 import { Hub } from "../src/hub.ts";
 import { freePages, MIGRATIONS, migrate, Store } from "../src/store.ts";
 import { TimelineLog } from "../src/timeline.ts";
+import * as sweep from "../src/worktree-sweep.ts";
 import { dropOldOrphans, ORPHAN_KEEP_MS, orphanRef } from "../src/worktree-sweep.ts";
+
+// The hub's calls are seen, the real work still done.
+vi.mock("../src/worktree-sweep.ts", async (original) => {
+  const real = await original<typeof import("../src/worktree-sweep.ts")>();
+  return { ...real, dropOldOrphans: vi.fn(real.dropOldOrphans) };
+});
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
@@ -80,6 +89,24 @@ function fill(store: Store, projectId: string, threads: number, from = 0): void 
   }
 }
 
+/** A hub on a database of its own, in `dir`. */
+function hubIn(dir: string) {
+  const store = new Store(path.join(dir, "state.sqlite"));
+  const hub = new Hub(store, new Agents({ demo: true }), {
+    worktreesDir: path.join(dir, "wt"),
+    homeDir: dir,
+    prWatchMs: 0,
+  });
+  cleanups.unshift(async () => {
+    await hub.close();
+    store.close();
+  });
+  const sent: ServerMessage[] = [];
+  const client = { send: (m: ServerMessage) => void sent.push(m) };
+  hub.connect(client);
+  return { store, hub, sent, client };
+}
+
 describe("copies faites avant une mise à jour du schéma", () => {
   it("seule la dernière reste à côté de la base", () => {
     const dir = tempDir();
@@ -104,6 +131,20 @@ describe("copies faites avant une mise à jour du schéma", () => {
       "autre.sqlite.v3-1.bak",
       "state.sqlite.v5-notes.bak",
       expect.stringMatching(/^state\.sqlite\.v6-\d+\.bak$/),
+    ]);
+  });
+});
+
+describe("copies laissées par une version d'avant", () => {
+  it("s'en vont à l'ouverture d'une base déjà à jour, la dernière gardée", () => {
+    const dir = tempDir();
+    const file = path.join(dir, "state.sqlite");
+    new Store(file).close();
+    for (const name of ["v3-1000", "v5-3000", "v4-2000"])
+      writeFileSync(path.join(dir, `state.sqlite.${name}.bak`), "x");
+    new Store(file).close();
+    expect(readdirSync(dir).filter((n) => n.endsWith(".bak"))).toEqual([
+      "state.sqlite.v5-3000.bak",
     ]);
   });
 });
@@ -203,6 +244,80 @@ describe("la place de ce qui est retiré", () => {
   });
 });
 
+describe("la place rendue et la copie du journal", () => {
+  it("ne se font pas en même temps, et rendre des pages n'est pas un temps calme", async () => {
+    const dir = tempDir();
+    const file = path.join(dir, "state.sqlite");
+    const store = new Store(file);
+    cleanups.unshift(() => store.close());
+    const checkpoints = (store as unknown as { checkpoints: Checkpoints }).checkpoints;
+    const inside = checkpoints as unknown as { timer: NodeJS.Timeout; busy: boolean };
+    clearInterval(inside.timer);
+    store.addProject({ id: "p", name: "p", path: dir, createdAt: 1 });
+    fill(store, "p", 6);
+    for (const t of ["t1", "t2", "t3", "t4", "t5"]) store.removeItemsFrom(t, "tool:0");
+    expect(freePages(store.db)).toBeGreaterThan(SHRINK_PAGES * 2);
+    expect(statSync(`${file}-wal`).size).toBeGreaterThan(8 * 1024 * 1024);
+    // While the thread copies the log, nothing else writes to it.
+    inside.busy = true;
+    const free = freePages(store.db);
+    checkpoints.look();
+    expect(freePages(store.db)).toBe(free);
+    inside.busy = false;
+    const asked = vi.spyOn(Worker.prototype, "postMessage");
+    const look = async () => {
+      checkpoints.look();
+      while (inside.busy) await new Promise((resolve) => setTimeout(resolve, 10));
+    };
+    // No row written between two looks, but pages given back: the log is not cut back.
+    await look();
+    await look();
+    expect(freePages(store.db)).toBeLessThan(free - SHRINK_PAGES);
+    expect(asked.mock.calls.map(([message]) => message)).not.toContain("truncate");
+  }, 60_000);
+
+  it("supprimer un fil rend sa place par bouts bornés", async () => {
+    const dir = tempDir();
+    const { store, hub } = hubIn(dir);
+    const projectId = hub.createProject("demo", dir);
+    const id = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Bonjour",
+    });
+    await hub.whenIdle(id);
+    // Fewer items than a batch of deletion, but tens of megabytes.
+    const big = "y".repeat(400_000);
+    store.transaction(() => {
+      for (let i = 0; i < 100; i++)
+        store.putItem(id, {
+          id: `tool:big${i}`,
+          kind: "tool",
+          title: "lecture",
+          toolKind: "read",
+          status: "completed",
+          content: [{ type: "text", text: `${i}:${big}` }],
+          at: 1,
+        });
+    });
+    const real = store.shrink.bind(store);
+    const calls: { pages?: number; free: number }[] = [];
+    vi.spyOn(store, "shrink").mockImplementation((pages?: number) => {
+      calls.push({ pages, free: freePages(store.db) });
+      return real(pages);
+    });
+    await hub.deleteThread(id);
+    expect(calls.length).toBeGreaterThan(5);
+    // Each stretch at most SHRINK_PAGES; the last, unbounded, finds nearly nothing left.
+    for (const call of calls)
+      expect(call.pages ?? (call.free < SHRINK_PAGES ? 0 : Infinity)).toBeLessThanOrEqual(
+        SHRINK_PAGES,
+      );
+    expect(freePages(store.db)).toBe(0);
+  });
+});
+
 describe("listes de fichiers gardées par dossier", () => {
   it("quelques dossiers seulement, et quelques secondes", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -281,6 +396,10 @@ describe("journal des changements d'un fil rangé", () => {
     expect(held).toBeGreaterThan(0);
     await hub.setArchived(id, true);
     expect(logs.has(id)).toBe(false);
+    // Read while put away: no log is made for it.
+    await hub.handle(client, { type: "thread.open", threadId: id });
+    expect(sent.some((m) => m.type === "items" && m.threadId === id)).toBe(true);
+    expect(logs.has(id)).toBe(false);
     await hub.setArchived(id, false);
     const epoch = (hub as unknown as { epoch: string }).epoch;
     sent.length = 0;
@@ -309,6 +428,30 @@ describe("fichiers des copies orphelines gardés dans le dépôt", () => {
     expect(await dropOldOrphans(repo, now)).toEqual([old]);
     const refs = git(repo, "for-each-ref", "--format=%(refname)", "refs/moonagentic/").split("\n");
     expect(refs.sort()).toEqual(["refs/moonagentic/t1/cp-1", recent].sort());
+  });
+});
+
+describe("le ménage des copies orphelines", () => {
+  it("ne lance git que pour les projets qui sont des dépôts", async () => {
+    const dir = tempDir();
+    const repo = path.join(dir, "repo");
+    const plain = path.join(dir, "notes");
+    mkdirSync(repo);
+    mkdirSync(plain);
+    git(repo, "init", "-q", "-b", "main");
+    writeFileSync(path.join(repo, "a.txt"), "a");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "début");
+    const { hub } = hubIn(dir);
+    hub.createProject("repo", repo);
+    hub.createProject("notes", plain);
+    const calls = vi.mocked(sweep.dropOldOrphans);
+    calls.mockClear();
+    await (hub as unknown as { dropOldOrphans(): Promise<void> }).dropOldOrphans();
+    // The daily sweep, started with the hub, may ask too: for the repository only.
+    const asked = calls.mock.calls.map(([where]) => where);
+    expect(asked).toContain(repo);
+    expect(asked).not.toContain(plain);
   });
 });
 

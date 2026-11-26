@@ -477,9 +477,10 @@ export function migrate(
 
 /**
  * Removes the copies earlier migrations left next to the database: each is a whole copy of
- * it, one more at each update of the schema. Only `kept`, the one just made, stays.
+ * it, one more at each update of the schema. Only `kept`, the one just made, or else the
+ * latest, stays.
  */
-function dropOlderCopies(file: string, kept: string): void {
+export function dropOlderCopies(file: string, kept?: string): void {
   const dir = path.dirname(file);
   const name = path.basename(file);
   let entries: string[];
@@ -488,15 +489,24 @@ function dropOlderCopies(file: string, kept: string): void {
   } catch {
     return;
   }
-  for (const entry of entries) {
-    if (!entry.startsWith(`${name}.v`) || !/^\.v\d+-\d+\.bak$/.test(entry.slice(name.length)))
-      continue;
+  const copies = entries.flatMap((entry) => {
+    const found = /^\.v\d+-(\d+)\.bak$/.exec(entry.slice(name.length));
+    if (!entry.startsWith(`${name}.v`) || !found) return [];
     const copy = path.join(dir, entry);
-    if (copy === kept) continue;
     try {
-      if (statSync(copy).isFile()) unlinkSync(copy);
+      return statSync(copy).isFile() ? [{ copy, at: Number(found[1]) }] : [];
     } catch {
-      // Held by another program for a moment: it goes with the next update.
+      return [];
+    }
+  });
+  // Without one just made, the latest stays: copies left by an earlier version go too.
+  const keep = kept ?? copies.sort((a, b) => b.at - a.at)[0]?.copy;
+  for (const { copy } of copies) {
+    if (copy === keep) continue;
+    try {
+      unlinkSync(copy);
+    } catch {
+      // Held by another program for a moment: it goes at the next start.
     }
   }
 }
@@ -608,6 +618,7 @@ export class Store {
     this.db.exec(`PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;`);
     migrate(this.db, file);
     if (file !== ":memory:") {
+      dropOlderCopies(file);
       makeShrinkable(this.db);
       this.checkpoints = new Checkpoints(file, this.db);
     }

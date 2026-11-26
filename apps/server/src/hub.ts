@@ -128,6 +128,7 @@ import { type QuotaReader, Quotas } from "./quotas.ts";
 import { formContent, formQuestions, toolQuestions, type FormQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn, SettingTimeout } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
+import { SHRINK_PAGES } from "./checkpoints.ts";
 import { light, TimelineLog } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
 import { dropOldOrphans, sweepWorktrees } from "./worktree-sweep.ts";
@@ -758,7 +759,13 @@ export class Hub {
 
   /** In each project's repository, the files of orphan folders kept for too long go. */
   private async dropOldOrphans(): Promise<void> {
-    const repos = new Set(this.store.listProjects().map((p) => p.path));
+    // Only git repositories hold them: no git command for the others (Discussions).
+    const repos = new Set(
+      this.store
+        .listProjects()
+        .filter((p) => this.withGit(p).git)
+        .map((p) => p.path),
+    );
     for (const repo of repos) {
       if (this.closed) return;
       if (!existsSync(repo)) continue;
@@ -3742,8 +3749,10 @@ export class Hub {
         // A long timeline goes a stretch at a time, the latest first, so screens are answered
         // meanwhile: in one go, 20 000 messages held the server half a second.
         // Their room goes back to the disk a stretch at a time too.
-        while (this.store.deleteSomeItems(threadId, DELETE_BATCH)) {
-          this.store.shrink();
+        for (;;) {
+          const more = this.store.deleteSomeItems(threadId, DELETE_BATCH);
+          while (this.store.shrink(SHRINK_PAGES)) await nextTurn();
+          if (!more) break;
           await nextTurn();
         }
         this.setPendingRestore(threadId, undefined);
@@ -5220,7 +5229,8 @@ export class Hub {
       first: page.first,
       earlier: page.earlier,
       epoch: this.epoch,
-      rev: this.log(threadId).rev,
+      // Not a log made for it: a thread put away and only read keeps none in memory.
+      rev: this.logs.get(threadId)?.rev ?? this.logsFrom,
     };
   }
 
