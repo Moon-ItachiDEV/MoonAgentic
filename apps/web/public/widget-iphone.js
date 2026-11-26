@@ -60,15 +60,25 @@ async function setUp(saved) {
   ask.title = "MoonAgentic";
   ask.message =
     "Adresse de MoonAgentic, puis un code d'appairage (Réglages › Accès distant, sur l'ordinateur).";
-  ask.addTextField("https://…ts.net", saved ? saved.url : "");
-  ask.addTextField("Code d'appairage", "");
-  ask.addTextField("Lien du salon Discord (facultatif)", saved ? saved.discordText || "" : "");
+  const fields = [
+    ask.addTextField("https://…ts.net", saved ? saved.url : ""),
+    ask.addTextField("Code d'appairage", ""),
+    ask.addTextField("Lien du salon Discord (facultatif)", saved ? saved.discordText || "" : ""),
+  ];
+  // On some iPhones `textFieldValue` gives back null, even for a filled field: the field
+  // itself is then read.
+  const typed = (place) => {
+    let value = ask.textFieldValue(place);
+    if (typeof value !== "string" && fields[place]) value = fields[place].text;
+    return typeof value === "string" ? value.trim() : "";
+  };
   ask.addAction("Relier");
   ask.addCancelAction("Annuler");
   if ((await ask.presentAlert()) === -1) return null;
-  const url = ask.textFieldValue(0).trim().replace(/\/+$/, "");
-  const code = ask.textFieldValue(1).trim();
-  const discordText = ask.textFieldValue(2).trim();
+  const url = typed(0).replace(/\/+$/, "");
+  const code = typed(1);
+  const discordText = typed(2);
+  if (!url) throw new Error("Il faut l'adresse de MoonAgentic et un code d'appairage.");
   const discord = discordLink(discordText);
   // Said before the code is used: a pairing code only serves once.
   if (discordText && !discord) {

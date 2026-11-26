@@ -454,3 +454,29 @@ describe("review of PR 177", () => {
     expect((await show("medium", "hermes journal", data)).texts()[0]).toBe("Hermes · Journal");
   });
 });
+
+// The first try on a real iPhone, 26 November 2026.
+describe("first try on a real iPhone", () => {
+  it("links on an iPhone whose alert gives back no field value", async () => {
+    const run = await runScript(SCRIPT, {
+      fieldValuesLost: true,
+      alerts: [{ pick: 0 }, { pick: 0, fields: [`${URL}/`, " 123-456 ", ""] }],
+      answer: () => ({ status: 200, body: JSON.stringify({ token: "jeton" }) }),
+    });
+    expect(run.alerts.at(-1)).toMatchObject({ title: "Relié" });
+    expect(JSON.parse(run.keychain.get(KEY)!)).toMatchObject({ url: URL, token: "jeton" });
+  });
+
+  it("says what is missing when nothing was typed, on such an iPhone too", async () => {
+    for (const fieldValuesLost of [false, true]) {
+      const run = await runScript(SCRIPT, {
+        fieldValuesLost,
+        alerts: [{ pick: 0 }, { pick: 0 }],
+        answer: () => ({ status: 500 }),
+      });
+      expect(run.alerts.at(-1)).toMatchObject({ title: "Pas relié" });
+      expect(run.alerts.at(-1)!.message).toMatch(/adresse/);
+      expect(run.asked).toEqual([]);
+    }
+  });
+});

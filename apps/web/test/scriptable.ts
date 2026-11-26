@@ -288,6 +288,8 @@ export interface Phone {
   };
   /** The answers typed into each alert in turn: the button's place, and the fields. */
   alerts?: { pick: number; fields?: string[] }[];
+  /** True for an iPhone whose alerts lose what `textFieldValue` should give back. */
+  fieldValuesLost?: boolean;
   keychain?: Map<string, string>;
   files?: Map<string, string | Picture | null>;
 }
@@ -344,22 +346,26 @@ export async function runScript(
     title = "";
     message = "";
     private readonly actions: string[] = [];
-    private readonly fields: string[] = [];
-    private typed: string[] = [];
+    private readonly fields: { text: string }[] = [];
     addAction(label: string) {
       this.actions.push(label);
     }
     addCancelAction(_label: string) {}
     addTextField(_placeholder: string, text = "") {
-      this.fields.push(text);
+      const field = { text };
+      this.fields.push(field);
+      return field;
     }
+    /** Some iPhones give back nothing here, even for a field that was filled. */
     textFieldValue(place: number) {
-      return this.typed[place] ?? this.fields[place] ?? "";
+      return phone.fieldValuesLost ? null : (this.fields[place]?.text ?? null);
     }
     private present() {
       shown.push({ title: this.title, message: this.message, actions: this.actions });
       const next = alerts.shift() ?? { pick: 0 };
-      this.typed = next.fields ?? [];
+      (next.fields ?? []).forEach((text, place) => {
+        if (this.fields[place]) this.fields[place].text = text;
+      });
       return next.pick;
     }
     async presentAlert() {

@@ -167,7 +167,7 @@ describe("the HTTP server", () => {
     expect(old.headers.get("cache-control")).toBe("no-store");
     const kept = await fetch(`http://${origin}/assets/index-nouveau.js`);
     expect(kept.status).toBe(200);
-    expect(kept.headers.get("content-type")).toBe("text/javascript");
+    expect(kept.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
     // Only the built files are strict: an app route still gets the page.
     expect((await fetch(`http://${origin}/assets-du-projet`)).status).toBe(200);
     // So is a file at the root, such as an icon an iPhone looks for by itself.
