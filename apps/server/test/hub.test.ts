@@ -230,6 +230,7 @@ describe("Hub with the demo agent", () => {
     // « Refuser » backwards behind the same one: the user is shown what is really there.
     expect(request.item.title).toBe("Lire le fichier hs.tixe-lruc README.md");
     expect(request.item.options).toEqual([
+      { optionId: "moon:thread", name: "Autoriser pour ce fil", kind: "allow_always" },
       { optionId: "allow", name: "Autoriser", kind: "allow_once" },
       { optionId: "reject", name: "resufeR", kind: "reject_once" },
     ]);
@@ -322,6 +323,74 @@ describe("Hub with the demo agent", () => {
     hub.respondToPermission(threadId, open()!.id, "allow");
     await hub.whenIdle(threadId);
     expect(store.getThread(threadId)).toMatchObject({ status: "idle" });
+  });
+
+  it("lets reads pass in « Demande d'abord », and remembers « Autoriser pour ce fil »", async () => {
+    const { hub, store, client, projectId } = setup();
+    const asked = client.next(isPermissionRequest);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "/autorisations",
+    });
+    client.openThreadIds = new Set([threadId]);
+    const open = () =>
+      store.listItems(threadId).filter((i) => i.kind === "permission" && i.outcome === null);
+    // The read and the read-only git commands passed: the first question is the test command.
+    const first = await asked;
+    if (first.type !== "item" || first.item.kind !== "permission") throw new Error("unreachable");
+    expect(first.item.title).toBe("npm test");
+    hub.respondToPermission(threadId, first.item.id, "moon:thread");
+    // `npm test -- --run` is like it and passes; a chained `rm` still asks and never offers
+    // « Autoriser pour ce fil » for multiple programs at once.
+    await expect
+      .poll(() => open().map((i) => i.kind === "permission" && i.title))
+      .toEqual(["npm test && rm -rf dist"]);
+    const chainedReq = open()[0]!;
+    if (chainedReq.kind !== "permission") throw new Error("unreachable");
+    expect(chainedReq.options.some((o) => o.optionId === "moon:thread")).toBe(false);
+    hub.respondToPermission(threadId, chainedReq.id, "reject");
+    // A redirection still asks and never offers « Autoriser pour ce fil ».
+    await expect
+      .poll(() => open().map((i) => i.kind === "permission" && i.title))
+      .toEqual(["npm test > out.txt"]);
+    const redirectReq = open()[0]!;
+    if (redirectReq.kind !== "permission") throw new Error("unreachable");
+    expect(redirectReq.options.some((o) => o.optionId === "moon:thread")).toBe(false);
+    hub.respondToPermission(threadId, redirectReq.id, "reject");
+    // Bare `rm` asks too.
+    await expect
+      .poll(() => open().map((i) => i.kind === "permission" && i.title))
+      .toEqual(["rm -rf dist"]);
+    hub.respondToPermission(threadId, open()[0]!.id, "reject");
+    await hub.whenIdle(threadId);
+    expect(lastTurnSaid(store.listItems(threadId))).toContain(
+      "Réponses : allow, allow, allow, allow, reject, reject, reject.",
+    );
+    // Four questions were asked in the thread (`npm test`, chained `rm`, redirect, bare `rm`).
+    expect(store.listItems(threadId).filter((i) => i.kind === "permission")).toHaveLength(4);
+  });
+
+  it("keeps the mascot the user picked for a role, for every device, until put back", async () => {
+    const { hub, client } = setup();
+    await hub.handle(client, {
+      type: "roleMascots.set",
+      job: "relit",
+      look: { phase: "star", color: "rose" },
+    });
+    expect(client.messages.at(-1)).toEqual({
+      type: "roleMascots",
+      mascots: { relit: { phase: "star", color: "rose" } },
+    });
+    const other = new TestClient();
+    hub.connect(other);
+    const snapshot = other.messages.find((m) => m.type === "snapshot");
+    expect(snapshot?.type === "snapshot" && snapshot.snapshot.roleMascots).toEqual({
+      relit: { phase: "star", color: "rose" },
+    });
+    await hub.handle(client, { type: "roleMascots.set", job: "relit", look: null });
+    expect(client.messages.at(-1)).toEqual({ type: "roleMascots", mascots: {} });
   });
 
   it("answers permission requests itself in full access", async () => {

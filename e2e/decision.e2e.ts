@@ -161,7 +161,7 @@ describe("decision card", () => {
     await card(page).getByRole("heading", { name: "Modifier src/app.ts" }).waitFor();
     await expect
       .poll(() => card(page).locator(".opt .on").allTextContents())
-      .toEqual(["Autoriser", "Refuser"]);
+      .toEqual(["Autoriser pour ce filRecommandé", "Autoriser cette fois", "Refuser"]);
     await card(page)
       .getByRole("button", { name: /Autre chose…/ })
       .waitFor();
@@ -192,9 +192,7 @@ describe("decision card", () => {
       .poll(() => page.getByRole("button", { name: /Rouvrir la demande/ }).count())
       .toBe(0);
     await say(page, "Corrige la réponse");
-    await card(page)
-      .getByRole("button", { name: /Autoriser/ })
-      .click();
+    await card(page).getByRole("button", { name: "Autoriser cette fois" }).click();
     await page.getByText("C'est fait, la réponse vaut 42.").last().waitFor();
     expect(await card(page).count()).toBe(0);
     await page.close();

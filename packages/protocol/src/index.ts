@@ -464,6 +464,44 @@ export const AGENT_SILENCE_STOP_MS = 30 * 60_000;
  */
 export const AGENT_STOPPED = "L'agent s'est arrêté avant la fin de sa réponse.";
 /** What « Reprendre » asks the agent, after a stop. */
+/**
+ * What a coordinator's brief to a thread is followed by when the user's own words are joined
+ * to it: the agent gets both, the thread shows only the brief.
+ */
+export const ORIGIN_MARK =
+  "\n\n---\nMessage d'origine de l'utilisateur, transmis tel quel par MoonAgentic :\n\n";
+/** The roles of a team (chef, coders, review, tests, merge) and of a review (reviewers, judge). */
+export const ROLE_JOBS = ["chef", "code", "relit", "tests", "fusion", "rev", "arb"] as const;
+export type RoleJob = (typeof ROLE_JOBS)[number];
+/** The shapes a role's mascot takes. */
+export const ROLE_PHASES = ["crescent", "full", "star", "planet", "chef"] as const;
+/** The tints a role's mascot takes. */
+export const ROLE_COLORS = [
+  "moon",
+  "blue",
+  "orange",
+  "emerald",
+  "violet",
+  "rose",
+  "gold",
+  "crimson",
+  "silver",
+] as const;
+export interface RoleMascot {
+  phase: (typeof ROLE_PHASES)[number];
+  color: (typeof ROLE_COLORS)[number];
+}
+export type RoleMascots = Partial<Record<RoleJob, RoleMascot>>;
+
+/** Starts how the agent of a coordinator's thread is asked to answer: for it, not shown. */
+export const REPLY_MARK = "\n\n---\nComment répondre, consigne de MoonAgentic :\n\n";
+/** The language a fenced block of an answer is marked with to be shown as a review card. */
+export const VERDICT_FENCE = "moon-revue";
+/** The part of a coordinator's message the thread shows: its brief, without what is for the agent. */
+export const briefOf = (text: string): string => {
+  const at = [text.indexOf(REPLY_MARK), text.indexOf(ORIGIN_MARK)].filter((i) => i >= 0);
+  return at.length ? text.slice(0, Math.min(...at)) : text;
+};
 export const RESUME_TEXT = "Tu as été interrompu : reprends là où tu t'es arrêté.";
 
 /** True for a thread error that says its agent stopped, as said now or by an older server. */
@@ -1153,6 +1191,8 @@ export interface Snapshot {
   defaults?: Defaults;
   /** The teams the user set up in the settings; none until edited once. */
   teamPresets?: TeamPreset[];
+  /** The mascot of each role of a team or a review the user changed; the others keep theirs. */
+  roleMascots?: RoleMascots;
   /** This MoonAgentic's version and what it knows of a newer one. */
   app?: AppInfo;
   /**
@@ -1250,6 +1290,7 @@ export type ServerMessage =
   /** The database refuses writes (see `Snapshot.storageError`), or takes them again (`null`). */
   | { type: "storage"; error: string | null }
   | { type: "teamPresets"; presets: TeamPreset[] | null }
+  | { type: "roleMascots"; mascots: RoleMascots }
   | { type: "projectSetup"; requestId: string; projectId: string; setup: ProjectSetup }
   | { type: "thread"; thread: Thread }
   /** The thread was deleted, its timeline with it. */
@@ -1882,6 +1923,12 @@ export const ClientMessage = z.discriminatedUnion("type", [
     type: z.literal("defaults.set"),
     permissionMode: z.enum(["supervised", "full"]).optional(),
     isolated: z.boolean().optional(),
+  }),
+  /** One role's mascot in teams and reviews, for every device; null puts back its own. */
+  z.object({
+    type: z.literal("roleMascots.set"),
+    job: z.enum(ROLE_JOBS),
+    look: z.object({ phase: z.enum(ROLE_PHASES), color: z.enum(ROLE_COLORS) }).nullable(),
   }),
   /** Keeps these teams, in this order; null goes back to the suggested ones. */
   z.object({

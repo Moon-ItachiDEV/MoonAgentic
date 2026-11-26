@@ -81,7 +81,7 @@ async function allow(page: Page) {
   const requests = page.getByRole("region", { name: "À traiter" });
   const row = requests.locator(".rq").first();
   const answered = await row.elementHandle();
-  await row.getByRole("button", { name: "Autoriser" }).click();
+  await row.getByRole("button", { name: "Autoriser cette fois" }).click();
   // That request goes. The list may not stay empty: the message in line starts a turn of
   // its own at once, and the demo agent asks again.
   await answered!.waitForElementState("hidden");

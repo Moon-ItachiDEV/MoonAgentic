@@ -265,7 +265,7 @@ describe("pull requests", () => {
       expect(await watch.getAttribute("aria-checked")).toBe("false");
 
       // The first task is still waiting on the user: no other task is sent to a thread at work.
-      const allow = page.getByRole("button", { name: /Autoriser/ }).first();
+      const allow = page.getByRole("button", { name: "Autoriser cette fois" }).first();
       // Whatever the agent asks along the way is allowed, until it is done.
       const idle = () =>
         expect
@@ -393,7 +393,7 @@ describe("pull requests", () => {
       if (shots) await page.screenshot({ path: path.join(shots, "pr6-remarques.png") });
 
       // Whatever the agent asks along the way is allowed, until it is done.
-      const allow = page.getByRole("button", { name: /Autoriser/ }).first();
+      const allow = page.getByRole("button", { name: "Autoriser cette fois" }).first();
       const idle = () =>
         expect
           .poll(

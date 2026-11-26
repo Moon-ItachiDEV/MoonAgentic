@@ -141,7 +141,7 @@ describe("a connection that dies without a word", () => {
     await card.getByRole("heading", { name: "Modifier src/app.ts" }).waitFor({ timeout: 30_000 });
 
     cut();
-    await card.getByRole("button", { name: /Autoriser/ }).click();
+    await card.getByRole("button", { name: "Autoriser cette fois" }).click();
     await page.getByText("C'est fait, la réponse vaut 42.").last().waitFor({ timeout: 30_000 });
     await idle(page);
     expect(await card.count()).toBe(0);

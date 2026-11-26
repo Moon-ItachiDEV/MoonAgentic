@@ -1621,14 +1621,3 @@ a.it {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-/* Project page on a very wide screen: the conversation stays a centred column beside the threads. */
-.scr.xl[data-s="project"] .view {
-  padding-right: calc(350px + max(0px, (100% - 350px) / 2 - 340px));
-}
-.scr.xl[data-s="project"] .bottom {
-  padding-right: calc(350px + max(0px, (100% - 350px) / 2 - 348px));
-}
-.scr.xl[data-s="project"] .sugm {
-  right: calc(350px + max(0px, (100% - 350px) / 2 - 348px));
-}
