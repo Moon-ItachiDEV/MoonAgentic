@@ -1691,6 +1691,94 @@ describe("Composer: files, skills, commands, pins and search", () => {
     expect(store.getThread(threadId)?.status).toBe("idle");
   });
 
+  // Neon's review of PR #167: what a conversation was allowed outside any project does not
+  // follow it into a project's code.
+  it("forgets « Autoriser pour ce fil » when a conversation moves into a project", async () => {
+    const { hub, store, client, dir, projectId } = setup();
+    mkdirSync(path.join(dir, "Discussions"));
+    const discussions = hub.createProject("Discussions", path.join(dir, "Discussions"));
+    const open = (id: string) =>
+      store.listItems(id).filter((i) => i.kind === "permission" && i.outcome === null);
+    const answerAll = async (id: string, first: string) => {
+      await expect.poll(() => open(id).length).toBe(1);
+      hub.respondToPermission(id, open(id)[0]!.id, first);
+      for (;;) {
+        await Promise.race([hub.whenIdle(id), expect.poll(() => open(id).length).toBe(1)]);
+        if (!open(id).length) break;
+        hub.respondToPermission(id, open(id)[0]!.id, "reject");
+      }
+      await hub.whenIdle(id);
+    };
+    const threadId = hub.createThread({
+      projectId: discussions,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "/autorisations",
+    });
+    client.openThreadIds = new Set([threadId]);
+    await expect
+      .poll(() => open(threadId).map((i) => i.kind === "permission" && i.title))
+      .toEqual(["npm test"]);
+    await answerAll(threadId, "moon:thread");
+    await hub.handle(client, { type: "thread.move", threadId, projectId });
+    hub.send(threadId, "/autorisations");
+    // In the project, `npm test` is asked again.
+    await expect
+      .poll(() => open(threadId).map((i) => i.kind === "permission" && i.title))
+      .toEqual(["npm test"]);
+    await answerAll(threadId, "reject");
+  });
+
+  it("does not move a conversation into a project removed or locked while it moves", async () => {
+    const { hub, store, client, dir, projectId } = setup();
+    mkdirSync(path.join(dir, "Discussions"));
+    const discussions = hub.createProject("Discussions", path.join(dir, "Discussions"));
+    const make = async () => {
+      const id = hub.createThread({
+        projectId: discussions,
+        agentId: "demo",
+        permissionMode: "full",
+        text: "Une question",
+      });
+      await hub.whenIdle(id);
+      return id;
+    };
+    // Removed meanwhile.
+    const other = path.join(dir, "autre");
+    mkdirSync(other);
+    const target = hub.createProject("autre", other);
+    const second = await make();
+    const moved = hub.handle(client, { type: "thread.move", threadId: second, projectId: target });
+    const removed = hub.removeProject(target);
+    await expect(moved).rejects.toThrow("Projet introuvable");
+    await removed;
+    expect(store.getThread(second)?.projectId).toBe(discussions);
+    // Locked between the first checks and the move.
+    const first = await make();
+    hub["locks"].setPin("123456");
+    const moving = hub.handle(client, { type: "thread.move", threadId: first, projectId });
+    hub["locks"].lock(projectId);
+    await expect(moving).rejects.toThrow("verrouillé");
+    expect(store.getThread(first)?.projectId).toBe(discussions);
+  });
+
+  it("keeps a renamed thread's title free of characters that hide or reorder it", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    await hub.handle(client, {
+      type: "thread.rename",
+      threadId,
+      title: "Facture \u202Efdp.exe\u202C",
+    });
+    expect(store.getThread(threadId)?.title).toBe("Facture fdp.exe");
+  });
+
   it("holds a message sent while the model is being switched", async () => {
     const { hub, projectId } = setup();
     const threadId = hub.createThread({
