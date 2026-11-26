@@ -409,6 +409,7 @@ describe("Teams with a second review and a judge", () => {
     const threads = new Map<string, Thread>();
     const replies = new Map<string, string>();
     const sent: { threadId: string; text: string }[] = [];
+    const cancelled: string[] = [];
     let seq = 0;
     const host = {
       thread: (id: string) => threads.get(id),
@@ -432,7 +433,7 @@ describe("Teams with a second review and a judge", () => {
         return id;
       },
       send: (threadId: string, text: string) => void sent.push({ threadId, text }),
-      cancel: async () => undefined,
+      cancel: async (threadId: string) => void cancelled.push(threadId),
       setTeam: (threadId: string, team: Team) => {
         const existing = threads.get(threadId);
         if (existing) threads.set(threadId, { ...existing, team });
@@ -461,7 +462,7 @@ describe("Teams with a second review and a judge", () => {
     replies.set(leadId, '```json\n{"tasks": [{"title": "Export", "brief": "Fais-le"}]}\n```');
     teams.turnEnded(leadId, false);
     const byRole = (role: string) => [...threads.values()].find((t) => t.role === role)!;
-    return { threads, replies, sent, teams, team, task, byRole };
+    return { threads, replies, sent, cancelled, teams, team, task, byRole };
   }
 
   it("asks both reviewers at once, and goes on once both say it is good", async () => {
@@ -536,5 +537,26 @@ describe("Teams with a second review and a judge", () => {
     const fix = sent.at(-1)!.text;
     expect(fix).toContain("Le premier relecteur demande des corrections :\n\nIl manque un test.");
     expect(fix).toContain("Le second relecteur demande des corrections :\n\nNom mal choisi.");
+  });
+
+  it("stops the other reviewer once one of them blocks the piece", async () => {
+    for (const how of ["error", "no verdict", "stopped"] as const) {
+      const { threads, replies, cancelled, teams, task, byRole } = setup({ reviewer2: true });
+      teams.turnEnded(task().threadId!, false);
+      await teams.settled();
+      const [one, two] = [byRole("reviewer"), byRole("reviewer2")];
+      if (how === "error") {
+        threads.set(one.id, { ...one, status: "error", error: "plus de quota" });
+        teams.turnEnded(one.id, false);
+      } else if (how === "stopped") {
+        teams.turnEnded(one.id, true);
+      } else {
+        replies.set(one.id, "Je ne sais pas.");
+        teams.turnEnded(one.id, false);
+        teams.turnEnded(one.id, false);
+      }
+      expect(task().status, how).not.toBe("reviewing");
+      expect(cancelled, how).toEqual([two.id]);
+    }
   });
 });

@@ -813,6 +813,19 @@ export class Teams {
               : "Le testeur";
       this.settle(lead, this.verdict(lead.id, team, index, thread, who, failure));
     }
+    // Once one review ends the round (blocked, stopped), the other one is no longer wanted.
+    if (role === "reviewer" || role === "reviewer2") this.dropOtherReview(lead.id, index, role);
+  }
+
+  /** Stops the piece's other reviewer when its review round is over without it. */
+  private dropOtherReview(leadId: string, index: number, role: "reviewer" | "reviewer2"): void {
+    const task = this.host.thread(leadId)?.team?.tasks[index];
+    if (!task || task.status === "reviewing") return;
+    const other = role === "reviewer" ? task.review2ThreadId : task.reviewThreadId;
+    const thread = other ? this.host.thread(other) : undefined;
+    if (thread && (thread.status === "running" || thread.status === "waiting")) {
+      void this.host.cancel(thread.id).catch(() => undefined);
+    }
   }
 
   /** What the reviewer's or tester's answer makes of the piece. */
@@ -1100,6 +1113,7 @@ export class Teams {
           note: `${how.what} n'a pas pu commencer : ${message(error)}`,
         }),
       );
+      if (role === "reviewer" || role === "reviewer2") this.dropOtherReview(leadId, index, role);
     });
     this.track(work);
   }
