@@ -412,6 +412,35 @@ describe("what lists of threads keep of a pull request", () => {
     expect(existsSync(dir)).toBe(false);
   });
 
+  it("deletes the branch of a thread resolved after its merge, unless the project keeps it", async () => {
+    for (const keep of [false, true]) {
+      const { hub, store, github, client, threadId } = await threadOnGithub();
+      const thread = store.getThread(threadId)!;
+      const repo = store.getProject(thread.projectId)!.path;
+      const branch = thread.workspace!.branch;
+      if (keep) {
+        await hub.handle(client, {
+          type: "project.setDeleteMerged",
+          projectId: thread.projectId,
+          on: false,
+        });
+        expect(hub.snapshot().projects.find((p) => p.id === thread.projectId)?.deleteMerged).toBe(
+          false,
+        );
+      }
+      // Work the project's folder has not fetched: merged on GitHub only.
+      writeFileSync(path.join(thread.workspace!.path, "fait.md"), "fait\n");
+      const head = settle(thread.workspace!.path);
+      github.pr = { ...OPEN, head };
+      await hub.pullRequest(threadId);
+      github.pr = { ...OPEN, head, state: "merged" };
+      await hub.watchPullRequests();
+      expect(store.getThread(threadId)!.archived).toBe(true);
+      const left = git(repo, "branch", "--list", branch);
+      expect(left.includes(branch)).toBe(keep);
+    }
+  });
+
   it("leaves a merged thread as it is when work was added past the merge", async () => {
     const { hub, store, github, threadId } = await threadOnGithub();
     const dir = store.getThread(threadId)!.workspace!.path;

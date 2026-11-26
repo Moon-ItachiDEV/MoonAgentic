@@ -250,6 +250,11 @@ export interface Project {
   color?: ProjectColor;
   /** What its threads do when a model's quota runs out; nothing while unset. */
   quota?: ProjectQuotaRules;
+  /**
+   * False when a thread's branch is kept once its pull request is merged: by default
+   * MoonAgentic deletes it then, in the project's repository only (« Supprimer après la fusion »).
+   */
+  deleteMerged?: false;
 }
 
 /** The tints a project's icon can take; the web app gives each its shade in both themes. */
@@ -2058,6 +2063,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
       })
       .optional(),
   }),
+  /** « Supprimer après la fusion »: whether a thread's branch goes once its PR is merged. */
+  z.object({ type: z.literal("project.setDeleteMerged"), projectId: id, on: z.boolean() }),
   /** What the project gives its agents, read from its folder: answered with projectSetup. */
   z.object({ type: z.literal("project.setup"), requestId: id, projectId: id }),
   /** Writes `AGENTS.md` at the project's root. */

@@ -264,6 +264,8 @@ const DEFAULTS = "defaults";
 /** Each project's icon and tint, as set in its settings. */
 const PROJECT_LOOKS = "projectLooks";
 type ProjectLook = Pick<Project, "icon" | "color">;
+/** The projects that keep a thread's branch once its pull request is merged. */
+const KEEP_MERGED_BRANCHES = "keepMergedBranches";
 /** Each project's rules for a quota that runs out, by project id. */
 const PROJECT_QUOTA = "projectQuotaRules";
 /** How often threads waiting on a quota look whether it is back, unless told otherwise. */
@@ -1348,6 +1350,8 @@ export class Hub {
         return;
       case "thread.setArchived":
         await this.setArchived(message.threadId, message.archived);
+        // Resolved after its pull request was merged: its branch has no more use.
+        if (message.archived) await this.deleteMergedBranch(message.threadId);
         return;
       case "thread.delete":
         await this.deleteThread(message.threadId);
@@ -1393,6 +1397,16 @@ export class Hub {
         this.store.setSetting(TEAM_PRESETS_SETTING, message.presets);
         this.broadcast({ type: "teamPresets", presets: message.presets });
         return;
+      case "project.setDeleteMerged": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        const others = this.store
+          .getSetting<string[]>(KEEP_MERGED_BRANCHES, [])
+          .filter((p) => p !== project.id && this.store.getProject(p));
+        this.store.setSetting(KEEP_MERGED_BRANCHES, message.on ? others : [...others, project.id]);
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
       case "project.setQuotaRules": {
         const project = this.store.getProject(message.projectId);
         if (!project) throw new Error("Ce projet n'existe plus.");
@@ -3239,6 +3253,32 @@ export class Hub {
     await this.setArchived(target.id, true).catch((error) =>
       console.error("Résolution après merge :", error),
     );
+    if (this.store.getThread(threadId)?.archived)
+      await this.deleteMergedBranch(threadId, info.head);
+  }
+
+  /**
+   * « Supprimer après la fusion »: once a resolved thread's pull request is merged, its branch
+   * goes from the project's repository, unless the project keeps them. Looked at again just
+   * before, like a branch deleted by hand: still merged, and nobody working on it.
+   */
+  private async deleteMergedBranch(threadId: string, mergedHead?: string): Promise<void> {
+    const thread = this.store.getThread(threadId);
+    const branch = thread?.workspace?.base ? thread.workspace.branch : undefined;
+    if (!thread?.archived || !branch || thread.pr?.state !== "merged") return;
+    if (this.store.getSetting<string[]>(KEEP_MERGED_BRANCHES, []).includes(thread.projectId))
+      return;
+    try {
+      const { kept } = await deleteMergedBranches(
+        this.gitProjectPath(thread.projectId),
+        this.branchOwners(),
+        [branch],
+        mergedHead ? { [branch]: mergedHead } : {},
+      );
+      if (kept.length) console.warn(`Branche ${branch} gardée : ${kept[0]!.reason}`);
+    } catch (error) {
+      if (!this.closed) console.error("Suppression de la branche après la fusion :", error);
+    }
   }
 
   /**
@@ -4535,7 +4575,8 @@ export class Hub {
     const locked = this.locks.isLocked(project.id);
     const look = this.store.getSetting<Record<string, ProjectLook>>(PROJECT_LOOKS, {})[project.id];
     const quota = this.quotaRules(project.id);
-    return git || pinned || locked || look || quota
+    const keep = this.store.getSetting<string[]>(KEEP_MERGED_BRANCHES, []).includes(project.id);
+    return git || pinned || locked || look || quota || keep
       ? {
           ...project,
           ...(git ? { git } : {}),
@@ -4544,6 +4585,7 @@ export class Hub {
           ...(look?.icon ? { icon: look.icon } : {}),
           ...(look?.color ? { color: look.color } : {}),
           ...(quota ? { quota } : {}),
+          ...(keep ? { deleteMerged: false as const } : {}),
         }
       : project;
   }

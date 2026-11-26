@@ -96,8 +96,18 @@ export async function deleteMergedBranches(
   dir: string,
   owners: BranchOwner[],
   names: string[],
+  /**
+   * The last commit of each branch whose pull request GitHub merged: a branch still on it is
+   * merged even when the project's folder has not fetched that merge yet.
+   */
+  mergedHeads: Record<string, string> = {},
 ): Promise<{ deleted: string[]; kept: { name: string; reason: string }[] }> {
-  const { branches } = await projectBranches(dir, owners);
+  const [{ branches }, refs] = await Promise.all([
+    projectBranches(dir, owners),
+    Object.keys(mergedHeads).length ? moonBranchRefs(dir) : Promise.resolve([]),
+  ]);
+  const mergedOnGithub = (name: string) =>
+    !!mergedHeads[name] && refs.some((r) => r.name === name && r.commit === mergedHeads[name]);
   const deleted: string[] = [];
   const kept: { name: string; reason: string }[] = [];
   for (const name of new Set(names)) {
@@ -112,7 +122,7 @@ export async function deleteMergedBranches(
             ? "Un fil travaille encore dessus."
             : "Elle est ouverte dans un dossier de travail.",
       });
-    } else if (branch.state === "unmerged") {
+    } else if (branch.state === "unmerged" && !mergedOnGithub(name)) {
       kept.push({ name, reason: "Elle a du travail qui n'est pas fusionné." });
     } else {
       try {
