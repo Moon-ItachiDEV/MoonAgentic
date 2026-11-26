@@ -498,19 +498,18 @@ function ModelPop(props: {
   const { open, onClose } = props;
   const [out, setOut] = useState(false);
   const box = useRef<HTMLDivElement>(null);
-  const was = useRef(open);
+  // Closing is known in the same render: the menu stays drawn, without a frame where it is gone
+  // and then mounted again (which gave the search the focus back, and the user's typing with it).
+  const [was, setWas] = useState(open);
+  if (was !== open) {
+    setWas(open);
+    setOut(!open);
+  }
   useEffect(() => {
-    if (open) {
-      was.current = true;
-      setOut(false);
-      return;
-    }
-    if (!was.current) return;
-    was.current = false;
-    setOut(true);
+    if (!out) return;
     const timer = setTimeout(() => setOut(false), POP_OUT_MS);
     return () => clearTimeout(timer);
-  }, [open]);
+  }, [out]);
   useEffect(() => {
     if (!open) return;
     const close = (event: PointerEvent) => {
@@ -562,6 +561,7 @@ function ModelPop(props: {
       role="dialog"
       aria-label={props.wide ? "Tous les modèles" : "Modèle"}
       aria-hidden={!open || undefined}
+      inert={!open}
     >
       {props.children}
     </div>
