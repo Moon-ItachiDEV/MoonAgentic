@@ -4194,11 +4194,11 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  height: 50px;
+  height: 46px;
   padding: 0 12px;
   border-radius: 14px;
-  font-size: 17px;
-  font-weight: 500;
+  font-size: 16px;
+  font-weight: 400;
   color: var(--fg);
   text-align: left;
   width: 100%;
@@ -4208,7 +4208,12 @@
   background: var(--hover);
 }
 .ni svg {
-  color: var(--fg);
+  color: var(--fg2);
+}
+/* Menu: thin line icons, like the popups. */
+.drawer :is(.ni, .pj, .dsec, .rc) svg :is(path, circle, rect, line, polyline, ellipse),
+.dfoot .me svg :is(path, circle, rect, line, polyline, ellipse) {
+  stroke-width: 1.5px;
 }
 .ni .sp {
   flex: 1;
@@ -4289,9 +4294,10 @@
   justify-content: space-between;
   width: 100%;
   padding: 0 12px;
-  height: 36px;
-  font-size: 14px;
+  height: 34px;
+  font-size: 13px;
   font-weight: 500;
+  letter-spacing: 0.01em;
   color: var(--muted);
 }
 .dsec svg {
@@ -4316,11 +4322,11 @@
   display: flex;
   align-items: center;
   gap: 14px;
-  height: 50px;
+  height: 46px;
   padding: 0 12px;
   border-radius: 14px;
-  font-size: 17px;
-  font-weight: 500;
+  font-size: 16px;
+  font-weight: 400;
   width: 100%;
   text-align: left;
 }
@@ -4338,10 +4344,10 @@
 .rc {
   display: flex;
   align-items: center;
-  height: 46px;
+  height: 42px;
   padding: 0 12px;
   border-radius: 14px;
-  font-size: 16px;
+  font-size: 15px;
   color: var(--fg2);
   width: 100%;
   text-align: left;
