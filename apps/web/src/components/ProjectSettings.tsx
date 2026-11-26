@@ -23,8 +23,6 @@ import {
   claudeAction,
   commandProblem,
   fits,
-  ICON_PICKS,
-  iconProblem,
   memoryFits,
   oneLine,
   skillProblem,
@@ -35,13 +33,20 @@ import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
 import { BranchCleanup } from "./BranchCleanup.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
+import {
+  findProjectIcons,
+  PROJECT_ICON_PREFIX,
+  PROJECT_ICONS,
+  projectIconName,
+} from "../project-icons.ts";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 
 const why = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-type Pane = "main" | "commands" | "skills" | "fallback";
+type Pane = "main" | "icon" | "commands" | "skills" | "fallback";
 const PANE_TITLE: Record<Pane, string> = {
   main: "Réglages du projet",
+  icon: "Icône",
   commands: "Commandes",
   skills: "Skills",
   fallback: "Modèle de secours",
@@ -88,7 +93,6 @@ export function ProjectSettings(props: {
   const [memory, setMemory] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [iconOpen, setIconOpen] = useState(false);
   const agents = useSyncExternalStore(connection.subscribe, connection.getState).agents;
   const fallback = project.quota?.fallback ?? NO_FALLBACK;
   const setFallback = (next: typeof fallback) =>
@@ -174,13 +178,15 @@ export function ProjectSettings(props: {
   };
 
   let body: ReactNode;
-  if (pane !== "main") {
+  if (pane === "icon") {
+    body = <IconPane project={project} />;
+  } else if (pane === "fallback") {
+    body = <FallbackPane agents={agents} fallback={fallback} onChange={setFallback} />;
+  } else if (pane !== "main") {
     body = loadError ? (
       <p className="snone">{loadError}</p>
     ) : !setup ? (
       <p className="snone">Lecture du dossier…</p>
-    ) : pane === "fallback" ? (
-      <FallbackPane agents={agents} fallback={fallback} onChange={setFallback} />
     ) : pane === "commands" ? (
       <CommandsTab setup={setup} projectId={projectId} change={change} onConfirm={setConfirm} />
     ) : (
@@ -202,7 +208,7 @@ export function ProjectSettings(props: {
           />
         </label>
         <div className="gl2">Apparence</div>
-        <LookTab project={project} open={iconOpen} onToggle={() => setIconOpen(!iconOpen)} />
+        <LookTab project={project} onOpenIcons={() => setPane("icon")} />
         <div className="gl2">Consignes pour les agents</div>
         {setup?.rules.tooBig ? (
           <div className="ins">
@@ -604,102 +610,136 @@ function FallbackPane(props: {
   );
 }
 
-function LookTab({
-  project,
-  open,
-  onToggle,
-}: {
-  project: Project;
-  open: boolean;
-  onToggle: () => void;
-}) {
-  const [icon, setIcon] = useState(project.icon ?? "");
-  const field = useRef<HTMLInputElement>(null);
-  // Changed from another window: shown here too, unless the user is typing in the field,
-  // where the echo of what they typed a moment ago would undo what they type now.
-  useEffect(() => {
-    if (document.activeElement !== field.current) setIcon(project.icon ?? "");
-  }, [project.icon]);
-  const problem = iconProblem(icon);
-  const send = (next: { icon?: string | undefined; color?: ProjectColor | undefined }) =>
-    connection.send({
-      type: "project.setLook",
-      projectId: project.id,
-      icon: (next.icon ?? "").trim() || null,
-      color: next.color ?? null,
-    });
-  const keepIcon = (value: string) => {
-    setIcon(value);
-    if (!iconProblem(value)) send({ icon: value, color: project.color });
-  };
+/** Sends a project's icon and tint: an empty icon puts back the folder. */
+const sendLook = (projectId: string, icon: string | undefined, color: ProjectColor | undefined) =>
+  connection.send({
+    type: "project.setLook",
+    projectId,
+    icon: (icon ?? "").trim() || null,
+    color: color ?? null,
+  });
 
+/** What a project's icon is called: its folder, one of the drawn icons, or what was typed. */
+const iconName = (icon: string | undefined) => {
+  const drawn = projectIconName(icon);
+  return !icon ? "Dossier" : drawn ? PROJECT_ICONS[drawn][0] : icon;
+};
+
+/** The tints a project can take; the one it has takes it back to the usual tint. */
+function Swatches({ project }: { project: Project }) {
+  return (
+    <div className="sw" role="radiogroup" aria-label="Couleur">
+      {PROJECT_COLORS.map((color) => (
+        <button
+          key={color}
+          type="button"
+          role="radio"
+          aria-checked={project.color === color}
+          aria-pressed={project.color === color}
+          aria-label={COLOR_NAME[color]}
+          title={COLOR_NAME[color]}
+          style={{ "--c": `var(--pc-${color})` } as React.CSSProperties}
+          onClick={() =>
+            sendLook(project.id, project.icon, project.color === color ? undefined : color)
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
+function LookTab({ project, onOpenIcons }: { project: Project; onOpenIcons: () => void }) {
   return (
     <div className={`ins${project.color ? ` pc-${project.color}` : ""}`}>
-      <button className="ico-pick" aria-expanded={open} onClick={onToggle}>
+      <button className="ico-pick" onClick={onOpenIcons}>
         <span className="pv">
-          <ProjectIcon project={{ ...project, icon: icon.trim() || undefined }} size={20} />
+          <ProjectIcon project={project} size={20} />
         </span>
         <span className="tx">
           Icône
           <small>
-            {project.icon ? project.icon : "Dossier"}
+            {iconName(project.icon)}
             {project.color ? ` · ${COLOR_NAME[project.color]}` : ""}
           </small>
         </span>
-        <I n={open ? "down" : "right"} s={15} />
+        <I n="right" s={15} />
       </button>
-      {open && (
-        <div className="icp">
-          <input
-            ref={field}
-            aria-label="Icône"
-            value={icon}
-            placeholder="🚀 ou AB"
-            maxLength={16}
-            onChange={(e) => keepIcon(e.target.value)}
-          />
-          {ICON_PICKS.map((pick) => (
+      <div className="sep" />
+      <Swatches project={project} />
+    </div>
+  );
+}
+
+/** Every icon a project can wear, in its tint, with a search. */
+function IconPane({ project }: { project: Project }) {
+  const [query, setQuery] = useState("");
+  const keep = (icon: string) => sendLook(project.id, icon, project.color);
+  const found = findProjectIcons(query);
+  const q = query.trim().toLowerCase();
+  const showFolder = !q || "dossier".startsWith(q) || "folder".startsWith(q);
+  const current = project.icon ?? "";
+  const tint = project.color ? ` pc-${project.color}` : "";
+
+  return (
+    <>
+      <div className={`ipv${tint}`}>
+        <span className="pv">
+          <ProjectIcon project={project} size={28} />
+        </span>
+        <span className="tx">
+          <b>{project.name}</b>
+          <small>
+            {iconName(project.icon)}
+            {project.color ? ` · ${COLOR_NAME[project.color]}` : ""}
+          </small>
+        </span>
+      </div>
+      <div className="ins">
+        <Swatches project={project} />
+      </div>
+      <label className="fld ipq">
+        <I n="search" s={19} />
+        <input
+          aria-label="Chercher une icône"
+          placeholder="Chercher"
+          value={query}
+          autoComplete="off"
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </label>
+      <div className={`ins${tint}`}>
+        <div className="ipk" role="radiogroup" aria-label="Icône">
+          {showFolder && (
             <button
-              key={pick}
               type="button"
-              aria-pressed={icon.trim() === pick}
-              aria-label={`Icône ${pick}`}
-              onClick={() => keepIcon(pick)}
+              role="radio"
+              aria-checked={!current}
+              aria-label="Dossier"
+              title="Dossier"
+              onClick={() => keep("")}
             >
-              {pick}
-            </button>
-          ))}
-          {project.icon && (
-            <button type="button" className="icd" onClick={() => keepIcon("")}>
-              Dossier
+              <I n="folder" s={22} />
             </button>
           )}
-          {problem && <small className="mer">{problem}</small>}
+          {found.map((name) => (
+            <button
+              key={name}
+              type="button"
+              role="radio"
+              aria-checked={current === PROJECT_ICON_PREFIX + name}
+              aria-label={PROJECT_ICONS[name][0]}
+              title={PROJECT_ICONS[name][0]}
+              onClick={() => keep(PROJECT_ICON_PREFIX + name)}
+            >
+              <svg width={22} height={22} aria-hidden="true">
+                <use href={`#pi-${name}`} />
+              </svg>
+            </button>
+          ))}
         </div>
-      )}
-      <div className="sep" />
-      <div className="sw" role="radiogroup" aria-label="Couleur">
-        {PROJECT_COLORS.map((color) => (
-          <button
-            key={color}
-            type="button"
-            role="radio"
-            aria-checked={project.color === color}
-            aria-pressed={project.color === color}
-            aria-label={COLOR_NAME[color]}
-            title={COLOR_NAME[color]}
-            style={{ "--c": `var(--pc-${color})` } as React.CSSProperties}
-            onClick={() =>
-              send({
-                // An icon being typed that cannot be kept stays as it was.
-                icon: iconProblem(icon) ? project.icon : icon,
-                color: project.color === color ? undefined : color,
-              })
-            }
-          />
-        ))}
+        {found.length === 0 && !showFolder && <p className="snone">Aucune icône</p>}
       </div>
-    </div>
+    </>
   );
 }
 

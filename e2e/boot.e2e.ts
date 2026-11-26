@@ -141,8 +141,9 @@ describe("before the app", () => {
     const page = await context.newPage();
     let loads = 0;
     page.on("load", () => (loads += 1));
-    await page.route(/\/(manifest\.webmanifest|icon\.svg|apple-touch-icon\.png)$/, (route) =>
-      route.fulfill({ status: 404, body: "" }),
+    await page.route(
+      /\/(manifest\.webmanifest|icon\.svg|apple-touch-icon\.png)(\?v=\d+)?$/,
+      (route) => route.fulfill({ status: 404, body: "" }),
     );
     await page.goto(`${origin}/`);
     await expect.poll(() => page.getByText("Appairer cet appareil").isVisible()).toBe(true);

@@ -1239,6 +1239,29 @@ describe("composer", () => {
     expect(recent).toBeLessThan(rows.findIndex((r) => r.includes("Une question hors projet")));
     await shot(page, "c23-discussions-recents");
 
+    // Outside a project, the header keeps only « … »: no changes to look at.
+    expect(await page.getByRole("button", { name: /^Modifications/ }).count()).toBe(0);
+    // Renamed from its « … » menu, for every list of threads.
+    await page.getByRole("button", { name: "Actions du fil" }).click();
+    await page.getByRole("menuitem", { name: "Renommer" }).hover();
+    await shot(page, "c23b-menu-hors-projet");
+    await page.getByRole("menuitem", { name: "Renommer" }).click();
+    const name = page.getByRole("textbox", { name: "Nom de la discussion" });
+    await name.fill("Nouveautés IA");
+    await shot(page, "c23c-renommer");
+    await name.press("Enter");
+    await side
+      .getByRole("button", { name: /^Nouveautés IA/ })
+      .first()
+      .waitFor();
+    await page.locator(".ttl b", { hasText: "Nouveautés IA" }).waitFor();
+    await page.setViewportSize({ width: 390, height: 780 });
+    await page.getByRole("button", { name: "Actions du fil" }).click();
+    await page.getByRole("menuitem", { name: "Renommer" }).waitFor();
+    await shot(page, "c23d-menu-telephone");
+    await page.keyboard.press("Escape");
+    await page.setViewportSize({ width: 1280, height: 820 });
+
     // Resolved, it has no project to sit under: « Résolus » below « Récents » keeps it.
     // The demo agent waits for a yes to change a file: stopped first, so the turn is over.
     await page.getByRole("button", { name: "Arrêter", exact: true }).click();
@@ -1248,9 +1271,66 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Actions du fil" }).click();
     await page.getByRole("menuitem", { name: "Marquer résolu" }).click();
     await page.getByText("Ce fil est résolu").waitFor();
-    await expect.poll(() => line.count()).toBe(0);
+    const renamed = side.getByRole("button", { name: /^Nouveautés IA/ });
+    await expect.poll(() => renamed.count()).toBe(0);
     await side.getByRole("button", { name: /^Résolus \(\d+\)$/ }).click();
-    await line.first().waitFor();
+    await renamed.first().waitFor();
+    await page.close();
+  });
+
+  it("moves a conversation started outside a project into a project", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    const side = menu(page);
+    const dest = path.join(dir, "destination");
+    write(dest, { "README.md": "# Destination\n" });
+    await addProject(page, dest, false);
+    await side.getByRole("button", { name: "Nouvelle discussion" }).click();
+    await expect.poll(() => composer(page).isEnabled()).toBe(true);
+    await composer(page).click();
+    await page.getByRole("button", { name: "Ajouter", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^Projet/ }).click();
+    const where = page.getByRole("dialog", { name: "Où travailler" });
+    await where.getByRole("button", { name: /^Hors projet/ }).click();
+    await where.waitFor({ state: "hidden" });
+    await pickAgent(page);
+    await supervised(page);
+    await composer(page).fill("Une question à déplacer");
+    await composer(page).press("Enter");
+    await page.waitForURL(/\/t\//);
+    await page.getByRole("button", { name: "Arrêter", exact: true }).click();
+    await expect
+      .poll(() => page.getByRole("button", { name: "Arrêter", exact: true }).count())
+      .toBe(0);
+
+    await page.getByRole("button", { name: "Actions du fil" }).click();
+    await page.getByRole("menuitem", { name: "Déplacer vers un projet" }).click();
+    const projects = page.getByRole("menu", { name: "Déplacer vers un projet" });
+    await projects.getByRole("menuitem", { name: "destination" }).waitFor();
+    await page.waitForTimeout(400);
+    await shot(page, "c24-deplacer");
+    await projects.getByRole("menuitem", { name: "destination" }).click();
+    // The project's now: its menu no longer offers to move it.
+    await expect
+      .poll(async () => {
+        await page.getByRole("button", { name: "Actions du fil" }).click();
+        await page.getByRole("menuitem", { name: "Renommer" }).waitFor();
+        const offered = await page
+          .getByRole("menuitem", { name: "Déplacer vers un projet" })
+          .count();
+        await page.keyboard.press("Escape");
+        await page.getByRole("menu", { name: "Actions du fil" }).waitFor({ state: "hidden" });
+        return offered;
+      })
+      .toBe(0);
+    // Listed on the project's page.
+    await side.getByRole("button", { name: /^destination/ }).click();
+    await page.getByText("Une question à déplacer").first().waitFor();
+    await page.goBack();
+    // It goes on in the project.
+    await composer(page).fill("Et dans le projet ?");
+    await composer(page).press("Enter");
+    await page.getByText("Et dans le projet ?").first().waitFor();
     await page.close();
   });
 });

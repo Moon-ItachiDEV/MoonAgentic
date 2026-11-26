@@ -20,6 +20,7 @@ import type {
   Thread,
   TimelineMark,
 } from "@moonagentic/protocol";
+import { unpackSnapshot } from "@moonagentic/protocol";
 
 export type ConnectionStatus = "connecting" | "open" | "closed" | "unauthorized";
 
@@ -94,23 +95,25 @@ export interface State {
 export function reduce(state: State, message: ServerMessage): State {
   switch (message.type) {
     case "snapshot": {
+      // Each list of `/` commands came once: every thread gets its own back.
+      const snapshot = unpackSnapshot(message.snapshot);
       // A thread left out (removed, or of a project just locked) leaves nothing behind here.
-      const kept = new Set(message.snapshot.threads.map((t) => t.id));
+      const kept = new Set(snapshot.threads.map((t) => t.id));
       const keep = <T>(byThread: Record<string, T>) =>
         Object.fromEntries(Object.entries(byThread).filter(([id]) => kept.has(id)));
       return {
         ...state,
         ready: true,
-        ...message.snapshot,
-        lockPin: message.snapshot.lockPin ?? false,
-        pairedDevice: message.snapshot.pairedDevice ?? false,
-        favoriteOrder: message.snapshot.favoriteOrder ?? [],
-        defaults: message.snapshot.defaults ?? null,
-        teamPresets: message.snapshot.teamPresets ?? null,
-        roleMascots: message.snapshot.roleMascots ?? {},
-        app: message.snapshot.app ?? null,
-        storageError: message.snapshot.storageError ?? null,
-        mcpSecretsError: message.snapshot.mcpSecretsError ?? null,
+        ...snapshot,
+        lockPin: snapshot.lockPin ?? false,
+        pairedDevice: snapshot.pairedDevice ?? false,
+        favoriteOrder: snapshot.favoriteOrder ?? [],
+        defaults: snapshot.defaults ?? null,
+        teamPresets: snapshot.teamPresets ?? null,
+        roleMascots: snapshot.roleMascots ?? {},
+        app: snapshot.app ?? null,
+        storageError: snapshot.storageError ?? null,
+        mcpSecretsError: snapshot.mcpSecretsError ?? null,
         items: keep(state.items),
         held: keep(state.held),
         reviews: keep(state.reviews),

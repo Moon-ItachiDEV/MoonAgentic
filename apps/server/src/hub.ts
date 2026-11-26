@@ -23,6 +23,7 @@ import type * as acp from "@agentclientprotocol/sdk";
 import {
   AGENT_STOPPED,
   DEFAULT_MAX_TURNS,
+  packSnapshot,
   GOAL_MORE_TURNS,
   GOAL_TURNS,
   MAX_QUEUED_MESSAGES,
@@ -855,7 +856,9 @@ export class Hub {
     };
     this.clients.add(client);
     this.quotas.onClientConnect();
-    client.send({ type: "snapshot", snapshot: this.snapshot(!!client.deviceId) });
+    // Sent at each connection, a phone's return to the screen included: each list of `/`
+    // commands goes once, not once per thread.
+    client.send({ type: "snapshot", snapshot: packSnapshot(this.snapshot(!!client.deviceId)) });
     return () => this.clients.delete(client);
   }
 
@@ -1005,7 +1008,7 @@ export class Hub {
 
   /** Every window gets the whole state again, as /lock now lets it out. */
   private sendSnapshots(): void {
-    const owner = this.snapshot(false);
+    const owner = packSnapshot(this.snapshot(false));
     let paired: Snapshot | undefined;
     for (const client of this.clients) {
       const snapshot = client.deviceId ? (paired ??= { ...owner, pairedDevice: true }) : owner;
@@ -1777,6 +1780,16 @@ export class Hub {
         this.requireThread(message.threadId);
         this.updateThread(message.threadId, { pinned: message.pinned });
         return;
+      case "thread.move":
+        await this.moveThread(message.threadId, message.projectId);
+        return;
+      case "thread.rename": {
+        this.requireThread(message.threadId);
+        // One line: a name pasted with its line breaks would break the lists of threads.
+        const title = message.title.replace(/\s+/g, " ").trim();
+        if (title) this.updateThread(message.threadId, { title });
+        return;
+      }
       case "files.search": {
         const dir = this.folderOf(message.projectId, message.threadId);
         const files = searchFiles(await listFiles(dir), message.query, message.limit);
@@ -3926,6 +3939,49 @@ export class Hub {
         this.runQuotaStep(threadId, () => this.putBack(threadId, own));
       }
     }
+  }
+
+  /**
+   * Takes a conversation started outside any project (« Discussions ») into a project, between
+   * two turns. Its agent starts again there, in that project's folder, with the conversation so
+   * far and the project's memory. A copy of work it had in « Discussions » is kept in git first.
+   */
+  async moveThread(threadId: string, projectId: string): Promise<void> {
+    const thread = this.requireLiveThread(threadId);
+    if (thread.projectId === projectId) return;
+    if (!this.isDiscussions(thread.projectId)) {
+      throw new Error("Seule une discussion hors projet se déplace dans un projet.");
+    }
+    const from = this.store.getProject(thread.projectId);
+    const to = this.store.getProject(projectId);
+    if (!to || this.removingProjects.has(projectId)) throw new Error("Projet introuvable.");
+    if (this.isDiscussions(projectId)) throw new Error("Choisis un projet.");
+    if (this.locks.isLocked(projectId)) throw new Error("Ce projet est verrouillé.");
+    await this.exclusive(threadId, "Attends la fin du déplacement.", async () => {
+      await this.releaseFolder(threadId);
+      await this.forgetSession(threadId);
+      const workspace = this.store.getThread(threadId)?.workspace;
+      if (
+        workspace?.base &&
+        from &&
+        this.ownFolder(threadId, workspace.path) &&
+        existsSync(workspace.path)
+      ) {
+        await saveCheckpoint(workspace.path, archiveRef(threadId), true);
+        await removeWorktree(from.path, workspace.path);
+      }
+      this.store.moveThread(threadId, projectId);
+      // In its new project the thread works in the project's folder, like any thread
+      // started there without a branch of its own.
+      this.updateThread(threadId, {
+        workspace: undefined,
+        usage: undefined,
+        canCompact: undefined,
+        commands: undefined,
+        status: "idle",
+        error: null,
+      });
+    });
   }
 
   /** How many agents run for threads right now, starting ones included. */

@@ -45,7 +45,7 @@ import { useImageDrafts } from "../use-image-drafts.ts";
 import { type PrLink, prKey, takePrLinks, withPrLinks } from "../pr-links.ts";
 import { PrChip } from "./PrChip.tsx";
 import { readPref, writePref } from "../prefs.ts";
-import { looseDefault } from "../default-models.ts";
+import { isDiscussionsProject, looseDefault } from "../default-models.ts";
 import { modelNameOf } from "../model-label.ts";
 import type { ModelPick } from "../model-pick.ts";
 import { setDefault, useDefaults } from "../defaults.ts";
@@ -951,6 +951,8 @@ export function Composer(props: {
   };
   const usage = thread?.usage;
   const usedShare = usage && usage.size > 0 ? Math.round((usage.used / usage.size) * 100) : 0;
+  // A chat outside any project (« Discussions ») shows no context gauge: short questions.
+  const outside = isDiscussionsProject(project);
 
   const plusButton = (size: number) => (
     <button
@@ -1271,7 +1273,7 @@ export function Composer(props: {
             )}
           </span>
           <span className="sp" />
-          {usage && (
+          {usage && !outside && (
             <button
               className={`gz${usedShare >= 90 ? " full" : ""}${ctxOpen ? " on" : ""}`}
               aria-label={`Contexte utilisé : ${usedShare} %`}
@@ -1345,7 +1347,7 @@ export function Composer(props: {
           }}
         />
       )}
-      {ctxOpen && usage && (
+      {ctxOpen && usage && !outside && (
         <div className="ctxp" role="dialog" aria-label="Contexte de l'agent">
           <div className="cxh">
             <b>{usedShare} %</b>

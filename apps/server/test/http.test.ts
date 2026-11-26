@@ -170,6 +170,10 @@ describe("the HTTP server", () => {
     expect(kept.headers.get("content-type")).toBe("text/javascript");
     // Only the built files are strict: an app route still gets the page.
     expect((await fetch(`http://${origin}/assets-du-projet`)).status).toBe(200);
+    // So is a file at the root, such as an icon an iPhone looks for by itself.
+    expect((await fetch(`http://${origin}/apple-touch-icon-precomposed.png`)).status).toBe(404);
+    expect((await fetch(`http://${origin}/favicon.ico?v=2`)).status).toBe(404);
+    expect((await fetch(`http://${origin}/reglages`)).status).toBe(200);
   });
 
   it("tells which build it serves, and notices a new one", async () => {
