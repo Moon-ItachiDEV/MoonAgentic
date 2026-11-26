@@ -20,9 +20,11 @@ import { type Client, Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
+// Closing the database waits, up to 10 s, for the copy of its log under way (checkpoints.ts): after
+// the removal of 20 000 messages, a Windows runner took longer than the 10 s a hook has.
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
-});
+}, 30_000);
 
 /** Longer than this, a screen waits on the server for something it can see. */
 const STALL_MS = 200;
