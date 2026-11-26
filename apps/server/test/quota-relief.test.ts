@@ -365,6 +365,110 @@ describe("a thread whose quota runs out", () => {
     expect(thread.quota).toBeUndefined();
   });
 
+  it("tries each fallback once, never going round them again", async () => {
+    const { hub, store, projectId, spend, rules } = setup();
+    // Every model spent, and no figures to tell it beforehand.
+    spend("rapide", "precis");
+    await rules({
+      fallback: {
+        on: true,
+        back: true,
+        models: [
+          { agentId: "demo", model: "precis" },
+          { agentId: "demo-2", model: "rapide" },
+        ],
+      },
+    });
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      model: "rapide",
+      text: "Un",
+    });
+    // Going round them again would leave it on a fallback for ever.
+    const thread = await settled(
+      hub,
+      store,
+      threadId,
+      () => userTexts(store.listItems(threadId)).length >= 3 && !store.getThread(threadId)?.quota,
+    );
+    // Each fallback once, then back on its own model.
+    expect(userTexts(store.listItems(threadId))).toEqual(["Un", RESUME_TEXT, RESUME_TEXT]);
+    expect(thread.agentId).toBe("demo");
+    expect(thread.model).toBe("rapide");
+  });
+
+  it("does not start a thread the user stopped waiting while the figures were read", async () => {
+    let release = () => {};
+    let reads = 0;
+    const { hub, store, client, projectId, spend, rules } = setup({
+      demo: () => {
+        reads += 1;
+        // The first reading is the turn's own; the tick's one waits for the user.
+        if (reads === 1) return Promise.resolve({ state: "none", windows: [], extras: [] });
+        return new Promise((resolve) => {
+          release = () => resolve({ state: "none", windows: [], extras: [] });
+        });
+      },
+    });
+    spend("rapide");
+    await rules({ resume: true });
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      model: "rapide",
+      text: "Un",
+    });
+    await settled(hub, store, threadId, () => store.getThread(threadId)?.quota?.state === "wait");
+    spend();
+    reads = 1;
+    // The last reading is forgotten, so the tick reads the figures again.
+    (hub as unknown as { quotas: { lastAsked: Map<string, number> } }).quotas.lastAsked.clear();
+    const tick = hub.quotaTick(Date.now() + 3 * HOUR);
+    await vi.waitFor(() => expect(reads).toBe(2));
+    await hub.handle(client, { type: "thread.quotaCancel", threadId });
+    release();
+    await tick;
+    await hub.whenIdle(threadId);
+    expect(userTexts(store.listItems(threadId))).toEqual(["Un"]);
+  });
+
+  it("does not start at once on a restart a thread that waits with no time given", async () => {
+    const { dir, hub, store, projectId, spend, rules } = setup();
+    spend("rapide|You've hit your usage limit.");
+    await rules({ resume: true });
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      model: "rapide",
+      text: "Un",
+    });
+    const waiting = await settled(
+      hub,
+      store,
+      threadId,
+      () => store.getThread(threadId)?.quota?.state === "wait",
+    );
+    expect(waiting.quota).not.toHaveProperty("until");
+    await hub.close();
+    // Started again: nothing says the quota is back, so it waits its turn to be tried.
+    const again = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(dir, ".worktrees"),
+      homeDir: path.join(dir, ".home"),
+      quotaEveryMs: 0,
+      quotaTickMs: 0,
+    });
+    cleanups.unshift(() => again.close());
+    const watched = (again as unknown as { quotaThreads: Set<string> }).quotaThreads;
+    await vi.waitFor(() => expect(watched.has(threadId)).toBe(true));
+    await again.quotaTick(Date.now() + 60_000);
+    await again.whenIdle(threadId);
+    expect(userTexts(store.listItems(threadId))).toEqual(["Un"]);
+  });
+
   it("keeps the project's rules for every device", async () => {
     const { hub, projectId, rules } = setup();
     await rules({ resume: true });

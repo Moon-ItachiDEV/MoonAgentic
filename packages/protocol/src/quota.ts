@@ -25,7 +25,15 @@ export interface ProjectQuotaRules {
  */
 export type ThreadQuota =
   | { state: "wait"; agentId: string; model?: string; since: number; until?: number }
-  | { state: "relief"; from: FavoriteRef; to: FavoriteRef; since: number; back?: number };
+  | {
+      state: "relief";
+      from: FavoriteRef;
+      to: FavoriteRef;
+      since: number;
+      back?: number;
+      /** The fallbacks that already ran out for this thread, before `to`: never tried again. */
+      tried?: FavoriteRef[];
+    };
 
 /** Lowercase words of a model's id or name: « claude-fable-5-2 » gives « claude fable 5 2 ». */
 const modelWords = (text: string) =>

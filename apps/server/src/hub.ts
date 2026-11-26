@@ -3728,6 +3728,8 @@ export class Hub {
         this.logs.delete(threadId);
         this.threadGrants.delete(threadId);
         this.greenTold.delete(threadId);
+        this.quotaThreads.delete(threadId);
+        this.quotaRetryAt.delete(threadId);
         this.coordinators.forget(threadId);
         this.attachments.forget(threadId);
         this.store.deleteThread(threadId);
@@ -3871,7 +3873,14 @@ export class Hub {
     const thread = this.store.getThread(threadId);
     const relief = thread?.quota?.state === "relief" ? thread.quota : undefined;
     if (!thread || !relief) return;
-    if (this.quotaRules(thread.projectId)?.fallback?.back) return;
+    if (this.quotaRules(thread.projectId)?.fallback?.back) {
+      // It went through: the fallbacks that ran out before may be tried again next time.
+      if (relief.tried) {
+        const { tried: _tried, ...kept } = relief;
+        this.wrote(() => this.setThreadQuota(threadId, kept));
+      }
+      return;
+    }
     this.wrote(() => this.setThreadQuota(threadId, null));
   }
 
@@ -3904,8 +3913,10 @@ export class Hub {
     // On a fallback, its own model is the one to come back to.
     const own = relief?.from ?? spent;
     const ownBack = relief ? relief.back : this.quotaBackAt(spent, said, now);
+    // Every fallback that ran out since the thread left its own model: never one twice.
+    const tried = relief ? [...(relief.tried ?? []), relief.to] : [];
     const next = nextFallback(rules, spent, {
-      tried: relief ? [relief.from] : [],
+      tried: relief ? [relief.from, ...tried] : [],
       installed: (agentId) => !!this.catalog.list().find((a) => a.id === agentId && a.available),
       quota: (agentId) => this.quotas.get(agentId),
       names: (agentId, model) => this.modelNames(agentId, model),
@@ -3913,7 +3924,7 @@ export class Hub {
     });
     if (next) {
       const back = rules?.fallback?.back ? ownBack : undefined;
-      this.runQuotaStep(threadId, () => this.takeOver(threadId, own, next, back));
+      this.runQuotaStep(threadId, () => this.takeOver(threadId, own, next, back, tried));
       return true;
     }
     if (rules?.resume) {
@@ -3956,6 +3967,7 @@ export class Hub {
     own: FavoriteRef,
     to: FavoriteRef,
     back: number | undefined,
+    tried: FavoriteRef[],
   ): Promise<void> {
     await this.putOn(threadId, to);
     if (this.closed) return;
@@ -3965,6 +3977,7 @@ export class Hub {
       to,
       since: Date.now(),
       ...(back ? { back } : {}),
+      ...(tried.length ? { tried } : {}),
     });
     this.send(threadId, RESUME_TEXT, undefined, undefined, undefined, true);
   }
@@ -4002,18 +4015,39 @@ export class Hub {
     const relief = thread.quota?.state === "relief" ? thread.quota : undefined;
     if (!relief) throw new Error("Ce fil n'est pas sur un modèle de secours.");
     if (this.quotaActing.has(threadId)) throw new Error("Attends la fin du changement de modèle.");
-    const turn = this.turns.get(threadId);
-    if (turn) {
-      await this.cancel(threadId);
-      await turn.catch(() => undefined);
+    // Held while its turn stops: no tick puts it back meanwhile.
+    this.quotaActing.add(threadId);
+    try {
+      const turn = this.turns.get(threadId);
+      if (turn) {
+        await this.cancel(threadId);
+        await turn.catch(() => undefined);
+      }
+      // Something else may have moved it meanwhile: a message, a model picked, a removal.
+      const now = this.store.getThread(threadId);
+      if (
+        !now ||
+        now.archived ||
+        now.quota?.state !== "relief" ||
+        this.turns.has(threadId) ||
+        this.busy.has(threadId)
+      ) {
+        return;
+      }
+      await this.waitForQuota(threadId, relief.from, relief.back);
+    } finally {
+      this.quotaActing.delete(threadId);
     }
-    // Nothing sent in between, so the thread is still the user's to put back.
-    await this.waitForQuota(threadId, relief.from, relief.back);
   }
 
   private startQuotaTick(everyMs: number): void {
+    const later = Date.now() + UNKNOWN_RESET_RETRY_MS;
     for (const thread of this.store.listThreads()) {
-      if (thread.quota) this.quotaThreads.add(thread.id);
+      if (!thread.quota) continue;
+      this.quotaThreads.add(thread.id);
+      // With no time given, it is tried again later, not on each restart.
+      const at = thread.quota.state === "wait" ? thread.quota.until : thread.quota.back;
+      if (at === undefined) this.quotaRetryAt.set(thread.id, later);
     }
     if (everyMs <= 0) return;
     this.quotaTimer = setInterval(() => void this.quotaTick(), everyMs);
@@ -4049,9 +4083,25 @@ export class Hub {
         this.setThreadQuota(threadId, null);
         continue;
       }
-      // The figures may say it is not back yet, and when it will be.
-      await this.quotas.refresh(own.agentId, RESET_MARGIN_MS).catch(() => undefined);
+      // The figures may say it is not back yet, and when it will be. The thread is held
+      // meanwhile, and looked at again after: the user may have moved it in between.
+      this.quotaActing.add(threadId);
+      try {
+        await this.quotas.refresh(own.agentId, RESET_MARGIN_MS).catch(() => undefined);
+      } finally {
+        this.quotaActing.delete(threadId);
+      }
       if (this.closed) return;
+      const after = this.store.getThread(threadId);
+      if (
+        !after ||
+        after.archived ||
+        JSON.stringify(after.quota) !== JSON.stringify(quota) ||
+        this.turns.has(threadId) ||
+        this.busy.has(threadId)
+      ) {
+        continue;
+      }
       const left = spentUntil(
         this.quotas.get(own.agentId),
         this.modelNames(own.agentId, own.model),
