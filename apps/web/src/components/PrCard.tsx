@@ -190,30 +190,30 @@ function RemarksSheet(props: {
               <p>{remark.body}</p>
               {!remark.settled && (
                 <div className="rma">
-                  {sent ? (
+                  {sent && (
                     <span className="ppill">
                       <Glyph />
                       Chez l'agent
                     </span>
-                  ) : (
-                    <>
-                      <button
-                        className="b2 soft press"
-                        disabled={!!settling}
-                        onClick={() => settle(remark.id)}
-                      >
-                        <I n="check" s={15} />
-                        Réglé
-                      </button>
-                      <button
-                        className="b2 ink press"
-                        disabled={props.busy || sending}
-                        onClick={() => send([remark.id])}
-                      >
-                        <I n="up" s={15} />
-                        Envoyer à l'agent
-                      </button>
-                    </>
+                  )}
+                  {/* Still said done with once at the agent's, when its fix is seen. */}
+                  <button
+                    className="b2 soft press"
+                    disabled={!!settling}
+                    onClick={() => settle(remark.id)}
+                  >
+                    <I n="check" s={15} />
+                    Réglé
+                  </button>
+                  {!sent && (
+                    <button
+                      className="b2 ink press"
+                      disabled={props.busy || sending}
+                      onClick={() => send([remark.id])}
+                    >
+                      <I n="up" s={15} />
+                      Envoyer à l'agent
+                    </button>
                   )}
                 </div>
               )}
