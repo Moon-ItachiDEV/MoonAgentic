@@ -116,6 +116,37 @@ async function supervised(page: Page) {
   await setAccess(page, /Demande d'abord/);
 }
 
+/** The first team's thread, once it is done: a new team is given its task from there. */
+let firstTeam = "";
+const teamThread = async (page: Page) => {
+  const address = new URL(url);
+  address.pathname = firstTeam;
+  await page.goto(address.toString());
+  await page.getByRole("region", { name: "Équipe", exact: true }).waitFor();
+  await expect.poll(() => composer(page).isEnabled()).toBe(true);
+};
+
+/** Who takes a role: the demo agent, not a real one that may be installed here, or no one. */
+const giveRole = async (page: Page, role: string, to: "demo" | "none") => {
+  const dialog = page.getByRole("dialog", { name: "Confier à une équipe" });
+  await dialog.getByRole("button", { name: new RegExp(`^${role} : `) }).click();
+  const sheet = page.getByRole("dialog", { name: role, exact: true });
+  const wanted =
+    to === "none"
+      ? sheet.getByRole("radio", { name: "Personne", exact: true })
+      : sheet.getByRole("group", { name: "Agent de démo", exact: true }).getByRole("radio").first();
+  const all = sheet.getByRole("button", { name: "Tous", exact: true });
+  await expect
+    .poll(async () => {
+      if (await wanted.count()) return true;
+      if (await all.count()) await all.click();
+      return false;
+    })
+    .toBe(true);
+  await wanted.click();
+  await sheet.waitFor({ state: "hidden" });
+};
+
 describe("composer", () => {
   it("offers commands, files and skills, sends them, pins the thread and finds it again", async () => {
     // The port is chosen by the system; the address printed is the one to open.
@@ -585,30 +616,8 @@ describe("composer", () => {
     await expect
       .poll(() => dialog.getByLabel("Tâche").inputValue())
       .toBe("Corrige answer et documente-la");
-    /** Who takes a role: the demo agent, not a real one that may be installed here, or no one. */
-    const give = async (role: string, to: "demo" | "none") => {
-      await dialog.getByRole("button", { name: new RegExp(`^${role} : `) }).click();
-      const sheet = page.getByRole("dialog", { name: role, exact: true });
-      const wanted =
-        to === "none"
-          ? sheet.getByRole("radio", { name: "Personne", exact: true })
-          : sheet
-              .getByRole("group", { name: "Agent de démo", exact: true })
-              .getByRole("radio")
-              .first();
-      const all = sheet.getByRole("button", { name: "Tous", exact: true });
-      await expect
-        .poll(async () => {
-          if (await wanted.count()) return true;
-          if (await all.count()) await all.click();
-          return false;
-        })
-        .toBe(true);
-      await wanted.click();
-      await sheet.waitFor({ state: "hidden" });
-    };
     for (const role of ["Chef", "Codeurs", "Relecture", "Tests", "Fusion"])
-      await give(role, "demo");
+      await giveRole(page, role, "demo");
     await shot(page, "c10-equipe-lancer");
     // The team opens its pull request at the end unless told not to.
     const autoShip = dialog.getByRole("switch", { name: "Ouvrir la PR à la fin" });
@@ -661,13 +670,22 @@ describe("composer", () => {
     await shot(page, "c11b-equipe-codeur");
     await back.click();
     await card.getByText("Terminée · 6 sur 6").waitFor();
+    firstTeam = new URL(page.url()).pathname;
+    await page.close();
+  });
+
+  it("sends a piece the reviewer keeps refusing back three times, then to the lead, then to the user", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await teamThread(page);
+    const dialog = page.getByRole("dialog", { name: "Confier à une équipe" });
+    const card = page.getByRole("region", { name: "Équipe", exact: true });
 
     // A piece the reviewer keeps refusing goes back three times, then to the lead, then to the user.
     await composer(page).fill("/equipe Corrige answer, à toujours refuser");
     await composer(page).press("Enter");
     await dialog.waitFor();
-    for (const role of ["Chef", "Codeurs", "Relecture"]) await give(role, "demo");
-    for (const role of ["Tests", "Fusion"]) await give(role, "none");
+    for (const role of ["Chef", "Codeurs", "Relecture"]) await giveRole(page, role, "demo");
+    for (const role of ["Tests", "Fusion"]) await giveRole(page, role, "none");
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
     await card.getByText(/^T'attend · /).waitFor({ timeout: 60_000 });
     await shot(page, "c12-equipe-bloquee");
@@ -678,6 +696,14 @@ describe("composer", () => {
       .or(card.getByText(/^T'attend · /))
       .first()
       .waitFor();
+    await page.close();
+  });
+
+  it("has two reviews weighed by a judge, who drops a remark that does not hold", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await teamThread(page);
+    const dialog = page.getByRole("dialog", { name: "Confier à une équipe" });
+    const card = page.getByRole("region", { name: "Équipe", exact: true });
 
     // Two reviews at once, and a judge who weighs their remarks: one that does not hold is
     // dropped, and the piece is done without going back to its coder.
@@ -685,21 +711,29 @@ describe("composer", () => {
     await composer(page).press("Enter");
     await dialog.waitFor();
     for (const role of ["Chef", "Codeurs", "Relecture", "Relecture 2", "Arbitre"])
-      await give(role, "demo");
-    for (const role of ["Tests", "Fusion"]) await give(role, "none");
+      await giveRole(page, role, "demo");
+    for (const role of ["Tests", "Fusion"]) await giveRole(page, role, "none");
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
     await card.getByRole("button", { name: /^Arbitre, / }).waitFor();
     await card.getByRole("button", { name: /^Relecture 2, / }).waitFor();
     await card.getByText(/^Terminée · /).waitFor({ timeout: 60_000 });
     await card.getByRole("button", { name: /^Arbitre, .* : Rien à corriger$/ }).waitFor();
     await shot(page, "c12b-equipe-arbitre");
+    await page.close();
+  });
+
+  it("shows supervised coders waiting live, takes missions while the team works, and stops it", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await teamThread(page);
+    const dialog = page.getByRole("dialog", { name: "Confier à une équipe" });
+    const card = page.getByRole("region", { name: "Équipe", exact: true });
 
     // Live: supervised coders wait on the user, and their lines say so as it happens.
     await composer(page).fill("/equipe Corrige answer");
     await composer(page).press("Enter");
     await dialog.waitFor();
-    for (const role of ["Chef", "Codeurs"]) await give(role, "demo");
-    for (const role of ["Relecture", "Tests", "Fusion"]) await give(role, "none");
+    for (const role of ["Chef", "Codeurs"]) await giveRole(page, role, "demo");
+    for (const role of ["Relecture", "Tests", "Fusion"]) await giveRole(page, role, "none");
     await dialog.getByRole("radio", { name: "Me demander" }).click();
     await dialog.getByRole("button", { name: "Lancer l'équipe" }).click();
     await expect

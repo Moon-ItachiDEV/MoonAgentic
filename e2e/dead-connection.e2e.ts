@@ -9,7 +9,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Browser, chromium, type Page } from "playwright";
+import { type Browser, chromium, devices, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { addProject, pickAgent } from "./ui.ts";
 
@@ -29,6 +29,8 @@ const cut = () => {
   for (const conn of held) conn.dead = true;
   held.clear();
 };
+/** While set, the relay closes each new connection at once: the server can't be reached. */
+let refusing = false;
 
 beforeAll(async () => {
   if (!existsSync(path.join(root, "apps/web/dist/index.html"))) {
@@ -57,6 +59,10 @@ beforeAll(async () => {
   });
   const target = new URL(direct);
   relay = net.createServer((client) => {
+    if (refusing) {
+      client.destroy();
+      return;
+    }
     const upstream = net.connect(Number(target.port), target.hostname);
     const conn = {
       dead: false,
@@ -178,5 +184,39 @@ describe("a connection that dies without a word", () => {
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
     expect(await composer(page).inputValue()).toBe("");
     await page.close();
+  });
+
+  it("shows « Reconnexion » under the phone's top bar, not over the thread's title", async () => {
+    // The thread's address, found on the computer's screen.
+    const computer = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await computer.goto(url);
+    await computer
+      .getByRole("button", { name: /^Bonjour/ })
+      .first()
+      .click();
+    await computer.waitForURL(/\/t\//);
+    const thread = new URL(computer.url()).pathname;
+    await computer.close();
+    const context = await browser.newContext({ ...devices["iPhone 15 Pro"] });
+    const page = await context.newPage();
+    const address = new URL(url);
+    address.pathname = thread;
+    await page.goto(address.toString());
+    const title = page.locator(".mtop .ttl");
+    await title.waitFor();
+    refusing = true;
+    try {
+      for (const conn of held) conn.end();
+      held.clear();
+      const pill = page.locator(".offp", { hasText: "Reconnexion" });
+      await pill.waitFor({ timeout: 15_000 });
+      const over = (await title.boundingBox())!;
+      const shown = (await pill.boundingBox())!;
+      expect(shown.y).toBeGreaterThanOrEqual(over.y + over.height);
+    } finally {
+      refusing = false;
+    }
+    await page.locator(".offp").waitFor({ state: "detached", timeout: 30_000 });
+    await context.close();
   });
 });

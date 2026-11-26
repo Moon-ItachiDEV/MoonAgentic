@@ -1700,7 +1700,8 @@ describe("Composer: files, skills, commands, pins and search", () => {
     const open = (id: string) =>
       store.listItems(id).filter((i) => i.kind === "permission" && i.outcome === null);
     const answerAll = async (id: string, first: string) => {
-      await expect.poll(() => open(id).length).toBe(1);
+      // An agent that starts takes its time on a Windows runner: more than a second.
+      await expect.poll(() => open(id).length, { timeout: 10_000 }).toBe(1);
       hub.respondToPermission(id, open(id)[0]!.id, first);
       for (;;) {
         await Promise.race([hub.whenIdle(id), expect.poll(() => open(id).length).toBe(1)]);
@@ -1717,14 +1718,18 @@ describe("Composer: files, skills, commands, pins and search", () => {
     });
     client.openThreadIds = new Set([threadId]);
     await expect
-      .poll(() => open(threadId).map((i) => i.kind === "permission" && i.title))
+      .poll(() => open(threadId).map((i) => i.kind === "permission" && i.title), {
+        timeout: 10_000,
+      })
       .toEqual(["npm test"]);
     await answerAll(threadId, "moon:thread");
     await hub.handle(client, { type: "thread.move", threadId, projectId });
     hub.send(threadId, "/autorisations");
     // In the project, `npm test` is asked again.
     await expect
-      .poll(() => open(threadId).map((i) => i.kind === "permission" && i.title))
+      .poll(() => open(threadId).map((i) => i.kind === "permission" && i.title), {
+        timeout: 10_000,
+      })
       .toEqual(["npm test"]);
     await answerAll(threadId, "reject");
   });

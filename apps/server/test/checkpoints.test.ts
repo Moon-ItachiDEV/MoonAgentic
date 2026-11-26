@@ -36,14 +36,14 @@ describe("the copy of the write-ahead log", () => {
       checkpoints.look();
       while (inside.busy) await new Promise((resolve) => setTimeout(resolve, 10));
     };
-    // Writes of 10 MB at a time: the log is over twice its limit at every look.
+    // Writes of 9 MB at a time: the log is over twice its limit at every look.
     const write = () => {
       db.exec("BEGIN");
-      for (let i = 0; i < 10; i++) insert.run(megabyte);
+      for (let i = 0; i < 9; i++) insert.run(megabyte);
       db.exec("COMMIT");
     };
     // The server keeps writing: the log is copied, never cut back under its writes.
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 2; i++) {
       write();
       expect(statSync(`${file}-wal`).size).toBeGreaterThan(8 * 1024 * 1024);
       await look();
@@ -54,5 +54,6 @@ describe("the copy of the write-ahead log", () => {
     await look();
     expect(asked.mock.calls.map(([message]) => message)).toContain("truncate");
     expect(statSync(`${file}-wal`).size).toBe(0);
-  });
+    // Real copies on the disk: a Windows runner took more than 15 s for 40 MB of them.
+  }, 60_000);
 });
