@@ -1324,10 +1324,14 @@ describe("Store.recoverAfterRestart", () => {
     });
     store.recoverAfterRestart();
 
-    expect(store.getThread("t")?.status).toBe("idle");
+    // A turn cut short says so, with « Reprendre » under it (N11).
+    expect(store.getThread("t")).toMatchObject({
+      status: "error",
+      error: `${AGENT_STOPPED}\nLe serveur s'est arrêté pendant ce tour.`,
+    });
     expect(store.getItem("t", "perm")).toMatchObject({ outcome: "cancelled" });
     // A turn cut short is not quiet any more, and keeps the rest of its state.
-    expect(store.getThread("quiet")).toMatchObject({ status: "idle", pinned: true });
+    expect(store.getThread("quiet")).toMatchObject({ status: "error", pinned: true });
     expect(store.getThread("quiet")?.quietSince).toBeUndefined();
     expect(store.getThread("only-quiet")?.quietSince).toBeUndefined();
     expect(store.getThread("in-line")?.inLine).toBeUndefined();
@@ -2658,9 +2662,10 @@ describe("a planner card started from the board", () => {
       homeDir: path.join(dir, ".home"),
     });
     cleanups.push(() => restarted.close());
-    // Its turn was cut short: the thread is free again, and the card is to check.
-    expect(store.getThread(threadId)?.status).toBe("idle");
-    expect(store.getPlanTask(card.id)!.status).toBe("test");
+    // Its turn was cut short: the thread says so and is free again, and its card says it
+    // needs a look, as after a clean stop.
+    expect(store.getThread(threadId)?.status).toBe("error");
+    expect(store.getPlanTask(card.id)!.status).toBe("report");
   });
 
   it("refuses an agent that is not there, and leaves the card as it was", async () => {

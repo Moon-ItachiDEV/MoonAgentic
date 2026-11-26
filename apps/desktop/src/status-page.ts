@@ -15,13 +15,21 @@ export function stateLabel(state: ServerState, port: number): string {
       return "Arrêt des agents…";
     case "stopped":
       return "Arrêté";
+    case "failed":
+      return "Ne peut pas démarrer";
   }
 }
 
 /** The page the window shows until the server first answers. */
 export function statusPage(state: ServerState, logDir: string): string {
-  const title = state.kind === "restarting" ? "MoonAgentic redémarre" : "MoonAgentic démarre";
-  const detail = state.kind === "restarting" ? state.reason : "Le serveur se lance.";
+  const title =
+    state.kind === "failed"
+      ? "MoonAgentic ne peut pas démarrer"
+      : state.kind === "restarting"
+        ? "MoonAgentic redémarre"
+        : "MoonAgentic démarre";
+  const detail =
+    state.kind === "restarting" || state.kind === "failed" ? state.reason : "Le serveur se lance.";
   return `<!doctype html>
 <html lang="fr"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">

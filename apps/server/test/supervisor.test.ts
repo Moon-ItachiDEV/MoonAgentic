@@ -9,8 +9,9 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { backupNow } from "../src/backups.ts";
+import { CANNOT_START } from "../src/cannot-start.ts";
 import {
   createLineBuffer,
   DailyLog,
@@ -21,6 +22,23 @@ import {
   supervise,
 } from "../src/supervisor.ts";
 import { Store } from "../src/store.ts";
+
+/** For one test: the parent reads a child's error output only a while after the child's exit. */
+const held = vi.hoisted(() => ({ ms: 0 }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const spawn = ((...call: Parameters<typeof actual.spawn>) => {
+    const child = actual.spawn(...call);
+    const ms = held.ms;
+    if (ms > 0 && child.stderr) {
+      // Paused before anything listens: what the child wrote waits in the pipe.
+      child.stderr.pause();
+      child.once("exit", () => setTimeout(() => child.stderr?.resume(), ms));
+    }
+    return child;
+  }) as typeof actual.spawn;
+  return { ...actual, default: { ...actual, spawn }, spawn };
+});
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -159,6 +177,179 @@ describe("supervisor", () => {
     expect(logged).toContain("redémarre dans 1 s");
     expect(logged).toContain("token=…");
     expect(logged).not.toContain("secret");
+  });
+
+  it("ends and starts again a server that stopped answering once ready (N4)", async () => {
+    const dir = tempDir();
+    const script = path.join(dir, "server.mjs");
+    const runs = path.join(dir, "runs");
+    // Says it answers, then holds its thread for good the first time; ends cleanly after.
+    writeFileSync(
+      script,
+      `import { appendFileSync, existsSync } from "node:fs";
+      const first = !existsSync(${JSON.stringify(runs)});
+      appendFileSync(${JSON.stringify(runs)}, "x");
+      process.send({ heartbeat: Date.now() });
+      if (first) for (;;) {}
+      process.exit(0);`,
+    );
+    const lines: string[] = [];
+    const started = Date.now();
+    const code = await new Promise<number>((resolve) => {
+      supervise({
+        script,
+        args: [],
+        logDir: path.join(dir, "logs"),
+        exit: resolve,
+        heartbeatLimitMs: 1_000,
+        stdout: { write: () => undefined },
+        stderr: { write: (chunk) => void lines.push(String(chunk)) },
+      });
+    });
+    expect(code).toBe(0);
+    expect(readFileSync(runs, "utf8")).toBe("xx");
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(lines.join("")).toContain("Le serveur ne répond plus depuis 1 s");
+  });
+
+  it("does not end a server that answers because the clock jumped, as after a sleep (N4)", async () => {
+    const dir = tempDir();
+    const script = path.join(dir, "server.mjs");
+    const runs = path.join(dir, "runs");
+    // Answers every 600 ms, and says so on its output, for the test to know when.
+    writeFileSync(
+      script,
+      `import { appendFileSync } from "node:fs";
+      appendFileSync(${JSON.stringify(runs)}, "x");
+      const beat = () => { process.send({ heartbeat: Date.now() }); console.log("beat"); };
+      beat();
+      setInterval(beat, 600);
+      process.once("disconnect", () => process.exit(0));`,
+    );
+    const lines: string[] = [];
+    let beats = 0;
+    let jump = 0;
+    const realNow = Date.now.bind(Date);
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => realNow() + jump);
+    try {
+      let supervisor: { stop(): void } | undefined;
+      const code = await new Promise<number>((resolve) => {
+        supervisor = supervise({
+          script,
+          args: [],
+          logDir: path.join(dir, "logs"),
+          exit: resolve,
+          heartbeatLimitMs: 1_000,
+          stdout: {
+            write: (chunk) => {
+              if (!String(chunk).includes("beat")) return;
+              beats++;
+              // The machine slept two minutes right after a beat: the watchdog's next look
+              // comes before the server's next beat.
+              if (beats === 2) setTimeout(() => (jump = 120_000), 50);
+              if (beats === 5) supervisor?.stop();
+            },
+          },
+          stderr: { write: (chunk) => void lines.push(String(chunk)) },
+        });
+      });
+      expect(code).toBe(0);
+      expect(lines.join("")).not.toContain("Le serveur ne répond plus");
+      expect(readFileSync(runs, "utf8")).toBe("x");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("does not take a server that is stopping its agents for one that hangs (N4)", async () => {
+    const dir = tempDir();
+    const script = path.join(dir, "server.mjs");
+    const done = path.join(dir, "done");
+    // Answers, then takes longer than the silence allowed to stop once asked to: its channel
+    // is closed by then, so it cannot say it still answers.
+    writeFileSync(
+      script,
+      `import { writeFileSync } from "node:fs";
+      process.send({ heartbeat: Date.now() });
+      const stop = () => setTimeout(() => {
+        writeFileSync(${JSON.stringify(done)}, "x");
+        process.exit(0);
+      }, 2_500);
+      process.once("disconnect", stop);
+      process.on("SIGTERM", () => undefined);
+      setInterval(() => undefined, 1_000);
+      console.log("prêt");`,
+    );
+    const lines: string[] = [];
+    let supervisor: { stop(): void } | undefined;
+    const code = await new Promise<number>((resolve) => {
+      supervisor = supervise({
+        script,
+        args: [],
+        logDir: path.join(dir, "logs"),
+        exit: resolve,
+        heartbeatLimitMs: 1_000,
+        stdout: { write: (chunk) => void (String(chunk).includes("prêt") && supervisor?.stop()) },
+        stderr: { write: (chunk) => void lines.push(String(chunk)) },
+      });
+    });
+    expect(code).toBe(0);
+    expect(lines.join("")).not.toContain("Le serveur ne répond plus");
+    expect(existsSync(done)).toBe(true);
+  });
+
+  it("does not start again a server that cannot open its database, and ends with its code", async () => {
+    const dir = tempDir();
+    const script = path.join(dir, "server.mjs");
+    const runs = path.join(dir, "runs");
+    writeFileSync(
+      script,
+      `import { appendFileSync } from "node:fs";
+      appendFileSync(${JSON.stringify(runs)}, "x");
+      console.error("MoonAgentic ne peut pas démarrer : sa base de données est abîmée.");
+      process.exit(${CANNOT_START});`,
+    );
+    const code = await new Promise<number>((resolve) => {
+      supervise({
+        script,
+        args: [],
+        logDir: path.join(dir, "logs"),
+        exit: resolve,
+        stdout: { write: () => undefined },
+        stderr: { write: () => undefined },
+      });
+    });
+    expect(code).toBe(CANNOT_START);
+    expect(readFileSync(runs, "utf8")).toBe("x");
+  });
+
+  it("passes on why it cannot start, though that line is read after the server's exit (N4)", async () => {
+    const dir = tempDir();
+    const script = path.join(dir, "late.mjs");
+    writeFileSync(
+      script,
+      `process.stderr.write("MoonAgentic ne peut pas démarrer : raison tardive\\n");
+      process.exit(${CANNOT_START});`,
+    );
+    let said = "";
+    held.ms = 300;
+    try {
+      // What was said when it ends, as the launcher's own exit ends everything at once.
+      const ended = await new Promise<{ code: number; said: string }>((resolve) => {
+        supervise({
+          script,
+          args: [],
+          logDir: path.join(dir, "logs"),
+          exit: (code) => resolve({ code, said }),
+          stdout: { write: () => undefined },
+          stderr: { write: (chunk: string | Buffer) => void (said += chunk.toString()) },
+        });
+      });
+      expect(ended.code).toBe(CANNOT_START);
+      expect(ended.said).toContain("MoonAgentic ne peut pas démarrer : raison tardive");
+    } finally {
+      held.ms = 0;
+    }
   });
 
   it("redacts split-chunk secrets in both DailyLog and forwarded stdout when redactOutput is enabled", async () => {

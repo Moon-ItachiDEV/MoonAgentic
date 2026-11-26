@@ -1,6 +1,14 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -225,6 +233,80 @@ describe("Updater", () => {
     expect(u.installer).toBeUndefined();
     expect(readdirSync(dir)).toEqual([]);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "fails the look, without an exception nobody hears, when the installer cannot be written (N36)",
+    async () => {
+      const installer = Buffer.alloc(200_000, 7);
+      const { fetch } = release(installer);
+      const { u, dir } = updater(fetch);
+      // A folder where the download goes, as a file held by an antivirus would refuse it.
+      mkdirSync(path.join(dir, `${EXE}.part`));
+      const heard: unknown[] = [];
+      const hear = (error: unknown) => heard.push(error);
+      process.on("uncaughtException", hear);
+      try {
+        const ended = await Promise.race([
+          u.check().then(() => "ended"),
+          new Promise((resolve) => setTimeout(() => resolve("still running"), 5_000)),
+        ]);
+        expect(ended).toBe("ended");
+      } finally {
+        process.off("uncaughtException", hear);
+      }
+      expect(heard).toEqual([]);
+      expect(u.state).toMatchObject({
+        state: "failed",
+        error: expect.stringMatching(/Écriture de l'installeur impossible/),
+      });
+      expect(u.installer).toBeUndefined();
+    },
+  );
+
+  it.runIf(process.platform === "linux" && existsSync("/dev/full"))(
+    "fails the look when the disk is full mid-download (N36)",
+    async () => {
+      const installer = Buffer.alloc(2_000_000, 7);
+      const { fetch } = release(installer);
+      let dir = "";
+      // Once the download starts, each write to its file finds the disk full.
+      const full = (async (url: string | URL, init?: RequestInit) => {
+        if (String(url).endsWith(`/${EXE}`))
+          symlinkSync("/dev/full", path.join(dir, `${EXE}.part`));
+        return fetch(url, init);
+      }) as typeof globalThis.fetch;
+      const made = updater(full);
+      const u = made.u;
+      dir = made.dir;
+      await u.check();
+      expect(u.state).toMatchObject({ state: "failed", error: expect.stringMatching(/ENOSPC/) });
+      expect(existsSync(path.join(dir, EXE))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform === "linux" && existsSync("/dev/full"))(
+    "says the installer could not be written when the disk is found full at the last write (N36)",
+    async () => {
+      // Small enough to be held until the file is ended: no write failed before that.
+      const installer = Buffer.alloc(2_000, 7);
+      const { fetch } = release(installer);
+      let dir = "";
+      const full = (async (url: string | URL, init?: RequestInit) => {
+        if (String(url).endsWith(`/${EXE}`))
+          symlinkSync("/dev/full", path.join(dir, `${EXE}.part`));
+        return fetch(url, init);
+      }) as typeof globalThis.fetch;
+      const made = updater(full);
+      const u = made.u;
+      dir = made.dir;
+      await u.check();
+      expect(u.state).toMatchObject({
+        state: "failed",
+        error: expect.stringMatching(/Écriture de l'installeur impossible : ENOSPC/),
+      });
+      expect(readdirSync(dir)).toEqual([]);
+    },
+  );
 
   it("downloads nothing from a release without SHA256SUMS.txt", async () => {
     const { fetch, asked } = release(Buffer.from("x"), { sums: null });
