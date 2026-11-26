@@ -401,8 +401,10 @@ export class Updater {
       // says so as an event, which nothing heard. It took the app down, or the download
       // waited for ever for room to write.
       let broken: Error | undefined;
+      const unwritable = (error: Error) =>
+        new Error(`Écriture de l'installeur impossible : ${error.message}`);
       out.on("error", (error) => {
-        broken ??= new Error(`Écriture de l'installeur impossible : ${error.message}`);
+        broken ??= unwritable(error);
         controller.abort();
       });
       const room = () =>
@@ -441,7 +443,10 @@ export class Updater {
         if (broken) out.destroy();
         else
           await new Promise<void>((resolve, reject) =>
-            out.end((error?: Error | null) => (error ? reject(error) : resolve())),
+            // The last writes are made here: a disk found full only now is said the same way.
+            out.end((error?: Error | null) =>
+              error ? reject(broken ?? unwritable(error)) : resolve(),
+            ),
           );
       }
       if (broken) throw broken;

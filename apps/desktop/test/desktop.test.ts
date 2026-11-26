@@ -168,6 +168,51 @@ describe("ServerProcess, when things go wrong (N4, N37)", () => {
     await server.stop();
   });
 
+  it("still says why, and that it cannot start, when the reason is read after the launcher's exit", async () => {
+    const { server, states } = run("cannot-late");
+    server.start();
+    await wait(2_500);
+    expect(states.filter((s) => s.kind === "starting")).toHaveLength(1);
+    // Never « it starts again » once it has ended for good: nothing would start it.
+    expect(server.state).toEqual({
+      kind: "failed",
+      reason: expect.stringMatching(/abîmée.*remplace x par la sauvegarde y/),
+    });
+    await server.stop();
+  });
+
+  it("reads a last line that has no end of line", async () => {
+    const { server } = run("cannot-unended");
+    server.start();
+    await wait(1_500);
+    expect(server.state).toEqual({
+      kind: "failed",
+      reason: expect.stringMatching(/abîmée.*remplace x par la sauvegarde y/),
+    });
+    await server.stop();
+  });
+
+  // Ended by its signal, which Windows does not have.
+  it.skipIf(process.platform === "win32")(
+    "starts once when asked to start again, though the run before closes its output late",
+    async () => {
+      const { server, states } = run("lingering");
+      server.start();
+      await wait(600);
+      await server.restart();
+      await wait(1_500);
+      expect(states.map((s) => s.kind)).toEqual([
+        "starting",
+        "ready",
+        "stopping",
+        "stopped",
+        "starting",
+        "ready",
+      ]);
+      await server.stop();
+    },
+  );
+
   it("keeps the server's own reason when its supervisor then says it starts again", async () => {
     const { server } = run("port");
     server.start();

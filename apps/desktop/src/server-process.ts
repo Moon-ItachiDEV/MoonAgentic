@@ -59,6 +59,8 @@ export function readLine(line: string): LineEvent {
 export const MAX_RESTART_DELAY_MS = 60_000;
 /** How long the server may take to stop its agents when asked, before it is ended. */
 export const STOP_LIMIT_MS = 25_000;
+/** How long the launcher's output may stay open after its exit, before it is taken as read. */
+const OUTPUT_LIMIT_MS = 2_000;
 /** A supervisor that ran this long before ending does not count as failing again. */
 const STEADY_MS = 10 * 60_000;
 
@@ -176,12 +178,18 @@ export class ServerProcess {
       // A character cut between two reads (the « ê » of « prêt ») is put back whole.
       const decoder = new StringDecoder("utf8");
       let rest = "";
+      // A run already replaced by the next one, or ended, no longer says where the server stands.
+      const read = (line: string) => {
+        if (this.child === child) this.line(line);
+      };
       stream?.on("data", (chunk: Buffer) => {
         // A progress line rewritten with \r ends there too.
         const parts = (rest + decoder.write(chunk)).split(/\r\n|\r|\n/);
         rest = parts.pop() ?? "";
-        for (const line of parts) this.line(line);
+        for (const line of parts) read(line);
       });
+      // A last line that has no end of line is read too.
+      stream?.on("end", () => read(rest + decoder.end()));
     };
     lines(child.stdout);
     lines(child.stderr);
@@ -192,7 +200,10 @@ export class ServerProcess {
     const end = (code: number | null, said?: string) => {
       if (ended) return;
       ended = true;
-      if (this.child === child) this.child = undefined;
+      // Stopped, then started again before this one's output closed: the new run is the one
+      // that counts.
+      if (this.child !== child) return;
+      this.child = undefined;
       if (!this.wanted) return;
       if (code === CANNOT_START_CODE) {
         // Its database cannot be opened: the reason it gave stays, with what to do.
@@ -216,7 +227,16 @@ export class ServerProcess {
       // Once running, an error is a signal or a message that could not go: the exit says the rest.
       if (child.pid === undefined) end(null, `Impossible de lancer le serveur : ${error.message}.`);
     });
-    child.once("exit", (code) => end(code));
+    // Once its output is read to the end, not at its exit: the line that says why it ended
+    // may be read after the exit, and would otherwise be taken for a restart under way. The
+    // wait has a limit: an output something else keeps open does not hold the restart back.
+    child.once("exit", (code) => {
+      const limit = setTimeout(() => end(code), OUTPUT_LIMIT_MS);
+      child.once("close", () => {
+        clearTimeout(limit);
+        end(code);
+      });
+    });
   }
 
   private line(line: string): void {

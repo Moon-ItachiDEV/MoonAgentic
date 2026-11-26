@@ -21,6 +21,8 @@ export const MAX_RESTART_DELAY_MS = 60_000;
 /** How long the server may take to stop when asked, before it is ended. */
 const STOP_LIMIT_MS = 20_000;
 /** How often a server that is ready tells its supervisor it still answers. */
+/** How long a server's output may stay open after its exit, before it is taken as read. */
+const OUTPUT_LIMIT_MS = 2_000;
 export const HEARTBEAT_MS = 10_000;
 /**
  * Silent this long once ready, the server is taken for stuck (a loop, a stopped process) and
@@ -250,18 +252,26 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
     child = started;
     // Watched from its first beat on: a start that takes long (a migration) is not a hang.
     let lastBeat: number | undefined;
-    const watch = setInterval(
-      () => {
-        if (lastBeat === undefined || Date.now() - lastBeat < limit) return;
-        clearInterval(watch);
-        say(
-          `${UNRESPONSIVE_LINE} depuis ${Math.round(limit / 1000)} s : il est arrêté, puis relancé. Journal : ${log.file()}`,
-          true,
-        );
-        started.kill("SIGKILL");
-      },
-      Math.min(HEARTBEAT_MS, limit / 4),
-    );
+    const every = Math.min(HEARTBEAT_MS, limit / 4);
+    let lastLook = Date.now();
+    const watch = setInterval(() => {
+      const now = Date.now();
+      // A look that comes long after the one before, or before it, follows a sleep or a clock
+      // set again: the server gets the whole time to say it answers, counted from here.
+      const jumped = now - lastLook > every * 2 || now < lastLook;
+      lastLook = now;
+      if (lastBeat === undefined) return;
+      if (jumped) lastBeat = now;
+      // Asked to stop, its channel is closed: it can no longer say it answers, and has
+      // STOP_LIMIT_MS to end.
+      if (stopping || now - lastBeat < limit) return;
+      clearInterval(watch);
+      say(
+        `${UNRESPONSIVE_LINE} depuis ${Math.round(limit / 1000)} s : il est arrêté, puis relancé. Journal : ${log.file()}`,
+        true,
+      );
+      started.kill("SIGKILL");
+    }, every);
     watch.unref();
     // What the server says to the desktop app goes on up, when the app started this one.
     started.on("message", (message) => {
@@ -295,6 +305,22 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
     );
     started.once("exit", (code, signal) => {
       clearInterval(watch);
+      // The line that says why it ended may be read after its exit: its output is read to
+      // the end first. Not for ever: something it started may keep that output open.
+      const open = [started.stdout, started.stderr].filter((s) => s && !s.readableEnded);
+      if (open.length === 0) return ended(code, signal);
+      let left = open.length;
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(limit);
+        ended(code, signal);
+      };
+      const limit = setTimeout(finish, OUTPUT_LIMIT_MS);
+      for (const stream of open) stream?.once("end", () => --left === 0 && finish());
+    });
+    const ended = (code: number | null, signal: NodeJS.Signals | null) => {
       outBuf.flush();
       errBuf.flush();
       child = undefined;
@@ -312,7 +338,7 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
         true,
       );
       restartTimer = setTimeout(start, delay);
-    });
+    };
   };
 
   const stop = () => {

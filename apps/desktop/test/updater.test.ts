@@ -257,7 +257,7 @@ describe("Updater", () => {
       expect(heard).toEqual([]);
       expect(u.state).toMatchObject({
         state: "failed",
-        error: /Écriture de l'installeur impossible/,
+        error: expect.stringMatching(/Écriture de l'installeur impossible/),
       });
       expect(u.installer).toBeUndefined();
     },
@@ -279,8 +279,32 @@ describe("Updater", () => {
       const u = made.u;
       dir = made.dir;
       await u.check();
-      expect(u.state).toMatchObject({ state: "failed", error: /ENOSPC/ });
+      expect(u.state).toMatchObject({ state: "failed", error: expect.stringMatching(/ENOSPC/) });
       expect(existsSync(path.join(dir, EXE))).toBe(false);
+    },
+  );
+
+  it.runIf(process.platform === "linux" && existsSync("/dev/full"))(
+    "says the installer could not be written when the disk is found full at the last write (N36)",
+    async () => {
+      // Small enough to be held until the file is ended: no write failed before that.
+      const installer = Buffer.alloc(2_000, 7);
+      const { fetch } = release(installer);
+      let dir = "";
+      const full = (async (url: string | URL, init?: RequestInit) => {
+        if (String(url).endsWith(`/${EXE}`))
+          symlinkSync("/dev/full", path.join(dir, `${EXE}.part`));
+        return fetch(url, init);
+      }) as typeof globalThis.fetch;
+      const made = updater(full);
+      const u = made.u;
+      dir = made.dir;
+      await u.check();
+      expect(u.state).toMatchObject({
+        state: "failed",
+        error: expect.stringMatching(/Écriture de l'installeur impossible : ENOSPC/),
+      });
+      expect(readdirSync(dir)).toEqual([]);
     },
   );
 

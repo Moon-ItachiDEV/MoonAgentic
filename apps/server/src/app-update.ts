@@ -306,6 +306,11 @@ export class AppUpdates {
       throw new Error("Aucune version n'est prête à installer.");
     }
     if (this.phase) throw new Error("L'installation a déjà commencé.");
+    // Why the try before did not go is no longer what the screens should say of this one.
+    if (this.desktop.update.error !== undefined) {
+      const { error: _before, ...update } = this.desktop.update;
+      this.desktop = { ...this.desktop, update };
+    }
     this.install = { when, at: this.now(), by };
     this.working = this.options.working();
     this.changed();

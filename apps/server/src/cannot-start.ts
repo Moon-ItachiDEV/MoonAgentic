@@ -38,8 +38,10 @@ export function cannotStart(error: unknown, file: string, backupsDir: string): s
   const primary = typeof code === "number" ? code & 0xff : undefined;
   if (primary !== SQLITE_CORRUPT && primary !== SQLITE_NOTADB) return undefined;
   const latest = latestBackup(backupsDir);
+  // The log left beside the damaged file goes first: SQLite would take it for the backup's
+  // own, and write it over the backup at the next start.
   const remedy = latest
-    ? `Ferme MoonAgentic, puis remplace ${file} par la sauvegarde ${path.join(backupsDir, latest)} (renommée state.sqlite).`
+    ? `Ferme MoonAgentic, supprime ${file}-wal et ${file}-shm s'ils existent, puis remplace ${file} par la sauvegarde ${path.join(backupsDir, latest)} (renommée state.sqlite).`
     : `Aucune sauvegarde dans ${backupsDir} : ferme MoonAgentic et déplace ${file} ailleurs pour repartir d'une base vide.`;
   return `${CANNOT_START_LINE} : sa base de données est abîmée (${error.message}). ${remedy}`;
 }

@@ -297,6 +297,23 @@ describe("AppUpdates", () => {
     expect(t.toShell.filter((m) => m.moon === "install")).toHaveLength(1);
   });
 
+  it("no longer says why the last install did not go, once asked again (N39)", async () => {
+    const t = setup();
+    t.report(ready());
+    t.app.requestInstall("now", "x");
+    await flush();
+    await flush();
+    t.advance(INSTALL_LIMIT_MS);
+    t.tick();
+    expect(t.app.info().update.error).toMatch(/n'a pas lancé l'installation/);
+    t.setWorking(1);
+    t.app.requestInstall("idle", "x");
+    // Waiting for the threads at work: the try before is not what holds this one.
+    expect(t.app.info().update).toMatchObject({ state: "ready", install: { when: "idle" } });
+    expect(t.app.info().update.error).toBeUndefined();
+    expect(t.sent.at(-1)?.update.error).toBeUndefined();
+  });
+
   it("asks for a look when one is due, not more often", () => {
     const t = setup({ everyMs: 1_000_000 });
     t.report(ready({ state: "none", checkedAt: 1_000 }));
