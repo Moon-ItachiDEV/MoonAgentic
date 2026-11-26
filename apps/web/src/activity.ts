@@ -104,11 +104,11 @@ export function activityFeed(items: Item[]): FeedBlock[] {
 
 /**
  * A search the agent runs on the web, not in the code: agents give it the `search` kind
- * too, so only its title tells (`search_web`, `WebSearch`, « Searching the web », Google).
- * A path such as `apps/web/src` is not the web.
+ * too, so only its title tells (`search_web`, `google_search`, `WebSearch`, « Recherche web »).
+ * A word in a search of the code (`grep google src/`, `apps/web/src`) is not the web.
  */
 const WEB_SEARCH =
-  /web[\s_-]?search|search(?:ing)?[\s_:-]+(?:the[\s_]+)?web\b|\bgoogle\b|\binternet\b|^\W*https?:\/\//i;
+  /\b(?:web|google)[\s_-]?search|\bsearch(?:ing)?[\s_:-]+(?:(?:the|on)[\s_]+)?(?:web|google|internet)\b|\brecherch\w*[\s_:-]+(?:sur[\s_]+(?:le[\s_]+)?)?(?:web|google|internet)\b|^\W*https?:\/\//i;
 
 /** The last name of a file in a tool's title, such as `session.ts` in a full path. */
 function fileIn(title: string): string | undefined {
