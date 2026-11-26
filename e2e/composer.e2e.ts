@@ -982,10 +982,11 @@ describe("composer", () => {
     const cardOf = (title: string) =>
       page.locator(".pc").and(page.getByRole("button", { name: new RegExp(`: ${title},`) }));
 
-    // The first team's plan, laid down by its lead and carried to the end by its pieces.
+    // The plans of the two teams that finished (the first, and the one with a judge), laid
+    // down by their lead and carried to the end by their pieces.
     const delivered = column("Livré").locator(".pc");
     await delivered.filter({ hasText: "Documenter answer" }).first().waitFor();
-    expect(await delivered.count()).toBe(2);
+    expect(await delivered.count()).toBe(4);
     expect(await delivered.first().locator(".pco").textContent()).toBe("Planifiée par le chef");
     // The team that was stopped left its pieces where they stopped.
     await column("Reporté").locator(".pcw", { hasText: "arrêtée" }).first().waitFor();
@@ -1042,7 +1043,7 @@ describe("composer", () => {
     await detail.getByRole("button", { name: "Fermer", exact: true }).click();
 
     // A team's card says what moves it, and cannot be moved by hand.
-    await column("Livré").getByText("Documenter answer").click();
+    await column("Livré").getByText("Documenter answer").first().click();
     await detail.getByText("Suit le travail de l'équipe").waitFor();
     expect(await states.getByRole("button", { name: "En cours" }).isDisabled()).toBe(true);
     if (shots) await page.waitForTimeout(400);
@@ -1056,7 +1057,7 @@ describe("composer", () => {
     const lanes = page.getByRole("region", { name: "Timeline" });
     const bar = (title: string) => lanes.getByRole("button", { name: new RegExp(`: ${title},`) });
     await lanes.getByRole("region", { name: "Agent de démo" }).waitFor();
-    const done = bar("Documenter answer, Livré");
+    const done = bar("Documenter answer, Livré").first();
     await done.waitFor();
     // Delivered work is solid; the user's card is under the agent of the thread it was given.
     expect(await done.getAttribute("class")).not.toContain("planned");
