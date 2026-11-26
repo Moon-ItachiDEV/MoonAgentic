@@ -1,6 +1,8 @@
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { createReadStream, readFileSync, statSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { isIP } from "node:net";
+import os from "node:os";
 import path from "node:path";
 import {
   ClientMessage,
@@ -20,8 +22,19 @@ import { storageTrouble } from "./store.ts";
 
 /** How often each connection is pinged. */
 const HEARTBEAT_MS = 30_000;
-/** Default ceiling on simultaneous WebSocket clients. */
+/** Default ceiling on simultaneous WebSocket clients, the paired devices' all together. */
 export const MAX_WS_CLIENTS = 64;
+/**
+ * The most one paired device keeps open: a phone that opened 64 left the computer refused
+ * (N17). The computer has its own places, up to `MAX_WS_CLIENTS`.
+ */
+export const MAX_WS_PER_DEVICE = 16;
+/**
+ * What a connection may leave unread before it is cut: an iPhone asleep reads nothing, and
+ * kept the server 107 MB for 100 messages (N17). Cut, it gets the whole state again when it
+ * comes back. Far above a snapshot of thousands of threads.
+ */
+export const MAX_WS_BUFFERED_BYTES = 32 * 1024 * 1024;
 /** Lifetime of a single-use WebSocket upgrade ticket returned by `POST /api/ws-ticket`. */
 export const WS_TICKET_TTL_MS = 30_000;
 const MAX_WS_TICKETS = 256;
@@ -30,6 +43,8 @@ const DEFAULT_MAX_AUTH_FAILURES = 20;
 const DEFAULT_MAX_API_REQUESTS = 240;
 const DEFAULT_MAX_COORDINATOR_REQUESTS = 240;
 const DEFAULT_MAX_WS_UPGRADES = 120;
+/** What one artifact address may serve in a window: a page and its images, with room. */
+const DEFAULT_MAX_ARTIFACT_REQUESTS = 2_000;
 
 /** What to say of a failure; a write the database refused is said in the user's words. */
 const refusal = (error: unknown): string => {
@@ -188,6 +203,37 @@ export interface RateLimitOptions {
   maxApiRequests?: number;
   maxCoordinatorRequests?: number;
   maxWsUpgrades?: number;
+  maxArtifactRequests?: number;
+}
+
+/**
+ * Whether a request's `Host` names this server: a loopback name, an address, this machine's
+ * own name, a Tailscale name, or one listed in `MOONAGENTIC_ALLOWED_HOSTS`. A page of
+ * another site whose name was pointed at 127.0.0.1 (DNS rebinding) is the same origin for
+ * the browser: it could send anything, and lock the computer out of its own quotas (N8).
+ */
+export function allowedHost(
+  hostHeader: string | undefined,
+  machine = os.hostname(),
+  extra = process.env.MOONAGENTIC_ALLOWED_HOSTS ?? "",
+): boolean {
+  // HTTP/1.0 sends none; a browser always does.
+  if (hostHeader === undefined) return true;
+  let name: string;
+  try {
+    name = new URL(`http://${hostHeader}`).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (name.startsWith("[") || isIP(name)) return true;
+  if (name === "localhost" || name.endsWith(".localhost")) return true;
+  if (name.endsWith(".ts.net")) return true;
+  const own = machine.toLowerCase();
+  if (own && (name === own || name.startsWith(`${own}.`))) return true;
+  return extra
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .some((h) => h && (h === name || (h.startsWith(".") && name.endsWith(h))));
 }
 
 /** What `staticFile` answers for a built file that is not there (an old tab's asset). */
@@ -420,8 +466,12 @@ export function createHttpServer(options: {
   heartbeatMs?: number;
   /** How the server can be reached from elsewhere; asked again each time, as it changes. */
   remoteAccess?: (host: string, port: number) => Promise<RemoteAccess>;
-  /** Maximum number of simultaneous WebSocket clients. */
+  /** Maximum number of simultaneous WebSocket clients: the computer's, and the devices'. */
   maxClients?: number;
+  /** Maximum number of simultaneous WebSocket clients of one paired device. */
+  maxPerDevice?: number;
+  /** What a connection may leave unread before it is cut. */
+  maxBufferedBytes?: number;
   /** Lifetime of a single-use WebSocket ticket issued by `POST /api/ws-ticket`. */
   wsTicketTtlMs?: number;
   /** Custom rate-limiting parameters (for tests or hardened deployments). */
@@ -445,6 +495,8 @@ export function createHttpServer(options: {
   const spares = new Map<WebSocket, string>();
   const remote = options.remoteAccess ?? findRemoteAccess;
   const maxClients = options.maxClients ?? MAX_WS_CLIENTS;
+  const maxPerDevice = options.maxPerDevice ?? MAX_WS_PER_DEVICE;
+  const maxBuffered = options.maxBufferedBytes ?? MAX_WS_BUFFERED_BYTES;
   const wsTicketTtlMs = options.wsTicketTtlMs ?? WS_TICKET_TTL_MS;
   const rateWindowMs = options.rateLimit?.windowMs ?? DEFAULT_RATE_WINDOW_MS;
   const authFailures = new RateLimiter(
@@ -465,6 +517,12 @@ export function createHttpServer(options: {
   );
   const wsLimiter = new RateLimiter(
     options.rateLimit?.maxWsUpgrades ?? DEFAULT_MAX_WS_UPGRADES,
+    rateWindowMs,
+  );
+  // Counted by address given, apart from the rest: a page of 250 images took the whole
+  // quota of its device, the next connection's ticket with it (N8).
+  const artifactLimiter = new RateLimiter(
+    options.rateLimit?.maxArtifactRequests ?? DEFAULT_MAX_ARTIFACT_REQUESTS,
     rateWindowMs,
   );
   /** Single-use short-lived tickets issued for WebSocket upgrades, with whom each is for. */
@@ -522,6 +580,12 @@ export function createHttpServer(options: {
   const handleRequest = (req: IncomingMessage, res: ServerResponse) => {
     for (const [name, value] of Object.entries(securityHeaders(req.headers.host)))
       res.setHeader(name, value);
+    if (!allowedHost(req.headers.host)) {
+      dropRest(req);
+      res.writeHead(421, { "content-type": "text/plain; charset=utf-8" });
+      res.end("Ce nom ne désigne pas ce serveur MoonAgentic.");
+      return;
+    }
     const given = bearerToken(req.headers.authorization);
     const remoteIp = req.socket.remoteAddress ?? "unknown";
     const clientKey = rateKey(req);
@@ -825,14 +889,16 @@ export function createHttpServer(options: {
     if (asked.startsWith(`${ARTIFACTS_PATH}/`)) {
       // An artifact shown in the app (inside a sandboxed iframe with an opaque origin):
       // its short-lived ticket in the URL is the permission, not same-origin headers.
-      const limit = apiLimiter.take(clientKey);
-      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
       if (req.method !== "GET" && req.method !== "HEAD") {
         res.writeHead(405).end();
         return;
       }
       const notFound = () => void res.writeHead(404, { "cache-control": "no-store" }).end();
       const [ticket, ...rest] = asked.slice(ARTIFACTS_PATH.length + 1).split("/");
+      // An address never given costs a look in a table, and counts against nothing.
+      if (!ticket || !hub.artifactLinks.known(ticket)) return notFound();
+      const limit = artifactLimiter.take(ticket);
+      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
       let file: string;
       try {
         const parts = rest.map(decodeURIComponent);
@@ -1014,7 +1080,9 @@ export function createHttpServer(options: {
   });
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
-  let upgrading = 0;
+  /** Connections open and being opened, by whom: "owner", or a device's id. */
+  const open = new Map<string, number>();
+  const upgrading = new Map<string, number>();
   // A phone that left the network never says goodbye: a connection that does not answer a
   // ping by the next one is closed, so nothing is kept for a window that is gone.
   const alive = new WeakSet<WebSocket>();
@@ -1065,6 +1133,10 @@ export function createHttpServer(options: {
         socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
         return;
       }
+      if (!allowedHost(req.headers.host)) {
+        socket.end("HTTP/1.1 421 Misdirected Request\r\n\r\n");
+        return;
+      }
       if (!allowedWsOrigin(req.headers.origin, req.headers.host)) {
         socket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
         return;
@@ -1090,24 +1162,43 @@ export function createHttpServer(options: {
         socket.end("HTTP/1.1 401 Unauthorized\r\n\r\n");
         return;
       }
-      if (wss.clients.size + upgrading >= maxClients) {
+      // The computer has its places, each device its own few: one device cannot take them all.
+      const whose = who.owner ? "owner" : who.deviceId;
+      const held = (open.get(whose) ?? 0) + (upgrading.get(whose) ?? 0);
+      let devicesHeld = 0;
+      for (const [key, n] of open) if (key !== "owner") devicesHeld += n;
+      for (const [key, n] of upgrading) if (key !== "owner") devicesHeld += n;
+      if (who.owner ? held >= maxClients : held >= maxPerDevice || devicesHeld >= maxClients) {
         socket.end("HTTP/1.1 503 Service Unavailable\r\n\r\n");
         return;
       }
-      upgrading += 1;
+      const count = (map: Map<string, number>, by: number) => {
+        const n = (map.get(whose) ?? 0) + by;
+        if (n > 0) map.set(whose, n);
+        else map.delete(whose);
+      };
+      count(upgrading, 1);
       let settled = false;
       const finishUpgrade = () => {
         if (settled) return;
         settled = true;
-        upgrading -= 1;
+        count(upgrading, -1);
       };
       socket.once("close", finishUpgrade);
       socket.once("error", finishUpgrade);
       wss.handleUpgrade(req, socket, head, (ws) => {
         finishUpgrade();
+        count(open, 1);
+        ws.once("close", () => count(open, -1));
         const client: Client = {
           send: (message: ServerMessage) => {
-            if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(message));
+            if (ws.readyState !== ws.OPEN) return;
+            // Still holding that much it did not read: it reads no more. Cut, it comes back.
+            if (ws.bufferedAmount > maxBuffered) {
+              ws.terminate();
+              return;
+            }
+            ws.send(JSON.stringify(message));
           },
           ...(who.owner ? {} : { deviceId: who.deviceId }),
         };

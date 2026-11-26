@@ -1,4 +1,11 @@
-import type { Item, PlanTask, Schedule, ServerMessage, Thread } from "@moonagentic/protocol";
+import {
+  type Item,
+  packSnapshot,
+  type PlanTask,
+  type Schedule,
+  type ServerMessage,
+  type Thread,
+} from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import { initialState, reduce } from "./state.ts";
 
@@ -66,6 +73,33 @@ describe("client state", () => {
       ["b", false],
       ["a", true],
     ]);
+  });
+
+  it("gives each thread its own commands back from a snapshot that sent each list once", () => {
+    const listed = [{ name: "revue", description: "Relit" }];
+    const state = reduce(initialState, {
+      type: "snapshot",
+      snapshot: packSnapshot({
+        coordinator: { routes: {} },
+        favorites: {},
+        requests: [],
+        questions: [],
+        mcpServers: [],
+        agents: [],
+        projects: [],
+        threads: [
+          { ...thread("a"), commands: listed },
+          thread("b"),
+          { ...thread("c"), commands: [...listed] },
+        ],
+        plan: [],
+        schedules: [],
+        quotas: [],
+      }),
+    });
+    expect(state.threads.map((t) => t.commands)).toEqual([listed, undefined, listed]);
+    expect(state.threads.some((t) => "commandList" in t)).toBe(false);
+    expect("commandLists" in state).toBe(false);
   });
 
   it("forgets a deleted thread, and a removed project with its threads", () => {
