@@ -404,10 +404,11 @@ export class Hub {
       grant?: { key: string; optionId: string };
     }
   >();
-  /** Green pull requests not yet told to their coordinator, by coordinator then thread. */
-  private readonly greenWaiting = new Map<string, Map<string, string>>();
-  /** The pull request each thread's green state was last told for. */
-  private readonly greenTold = new Map<string, string>();
+  /**
+   * The green pull requests already told to each coordinator, as `thread url`. Read back from
+   * its conversation the first time: a server started again tells none of them twice.
+   */
+  private readonly greenTold = new Map<string, Set<string>>();
   /** What « Autoriser pour ce fil » allowed, by thread: similar calls then pass without asking. */
   private readonly threadGrants = new Map<string, Set<string>>();
   /**
@@ -3167,33 +3168,34 @@ export class Hub {
   private noteGreen(thread: Thread, pr: Thread["pr"] | undefined) {
     const coordinatorId = thread.openedBy;
     if (!coordinatorId || !this.store.getThread(coordinatorId)) return;
-    const green =
-      !!pr &&
-      (pr.state === "open" || pr.state === "draft") &&
-      pr.checks === "passed" &&
-      !pr.conflicts;
-    const waiting = this.greenWaiting.get(coordinatorId) ?? new Map<string, string>();
-    if (!green || !pr) {
-      waiting.delete(thread.id);
-      this.greenWaiting.set(coordinatorId, waiting);
-      return;
+    const green = (p: Thread["pr"] | undefined): p is NonNullable<Thread["pr"]> =>
+      !!p && (p.state === "open" || p.state === "draft") && p.checks === "passed" && !p.conflicts;
+    if (!green(pr)) return;
+    let told = this.greenTold.get(coordinatorId);
+    if (!told) {
+      told = new Set<string>();
+      for (const item of this.store.listItems(coordinatorId)) {
+        if (item.kind !== "agent" || !item.id.startsWith("green:")) continue;
+        for (const m of item.text.matchAll(/\]\(fil:([\w-]+)\) : sa PR (\S+) /g))
+          told.add(`${m[1]} ${m[2]}`);
+      }
+      this.greenTold.set(coordinatorId, told);
     }
-    // Already told for this pull request at this state.
-    const key = `${pr.url}`;
-    if (this.greenTold.get(thread.id) === key) return;
-    waiting.set(thread.id, key);
-    this.greenWaiting.set(coordinatorId, waiting);
-    if (waiting.size < GREEN_AT_ONCE) return;
-    const lines = [...waiting.keys()].flatMap((id) => {
-      const t = this.store.getThread(id);
-      if (!t?.pr) return [];
-      this.greenTold.set(id, t.pr.url);
-      return [
-        `- [${t.title.replace(/[[\]]/g, "")}](fil:${t.id}) : sa PR ${t.pr.url} passe toutes ses vérifications.`,
-      ];
+    // Counted from the threads as they are kept, not from what this run saw turn green: one
+    // that turned green before the server started again waits as much as the others.
+    const urls = new Set<string>();
+    const waiting = this.store.listThreads().filter((t) => {
+      if (t.openedBy !== coordinatorId || !green(t.pr)) return false;
+      // A team's lead shows its merge thread's pull request: it counts once.
+      if (told.has(`${t.id} ${t.pr.url}`) || urls.has(t.pr.url)) return false;
+      urls.add(t.pr.url);
+      return true;
     });
-    this.greenWaiting.set(coordinatorId, new Map());
-    if (lines.length < GREEN_AT_ONCE) return;
+    if (waiting.length < GREEN_AT_ONCE) return;
+    const lines = waiting.map((t) => {
+      told.add(`${t.id} ${t.pr!.url}`);
+      return `- [${t.title.replace(/[[\]]/g, "")}](fil:${t.id}) : sa PR ${t.pr!.url} passe toutes ses vérifications.`;
+    });
     this.putItem(coordinatorId, {
       id: `green:${randomUUID()}`,
       kind: "agent",
@@ -3501,8 +3503,6 @@ export class Hub {
         this.logs.delete(threadId);
         this.threadGrants.delete(threadId);
         this.greenTold.delete(threadId);
-        this.greenWaiting.delete(threadId);
-        for (const waiting of this.greenWaiting.values()) waiting.delete(threadId);
         this.coordinators.forget(threadId);
         this.attachments.forget(threadId);
         this.store.deleteThread(threadId);

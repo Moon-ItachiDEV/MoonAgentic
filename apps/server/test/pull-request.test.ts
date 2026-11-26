@@ -265,7 +265,18 @@ async function threadOnGithub(remoteUrl = "https://github.com/moon/demo.git") {
   const messages: ServerMessage[] = [];
   const client: Client = { send: (m) => messages.push(m) };
   const reply = () => messages.findLast((m) => m.type === "pullRequest");
-  return { hub, store, github, threadId, branch, client, reply };
+  /** The server started again on the same database: what it only remembered is gone. */
+  const restarted = async () => {
+    await hub.close();
+    const next = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+      pullRequests: () => pullRequests,
+    });
+    cleanups.unshift(() => next.close());
+    await next.recovered;
+    return next;
+  };
+  return { hub, store, github, threadId, branch, client, reply, restarted };
 }
 
 const OPEN = parsePullRequest(view(), "moon/demo")!;
@@ -581,6 +592,44 @@ describe("pull requests turned green", () => {
     await hub.pullRequest(second);
     github.pr = green(1);
     await hub.pullRequest(first);
+    expect(told()).toHaveLength(1);
+  });
+
+  it("are still counted and not told again after the server starts again", async () => {
+    const { hub, store, github, threadId: coordinator, restarted } = await threadOnGithub();
+    const projectId = store.getThread(coordinator)!.projectId;
+    const open = async (on: Hub, text: string) => {
+      const id = on.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        isolated: true,
+        text,
+        openedBy: coordinator,
+      });
+      await on.whenIdle(id);
+      return id;
+    };
+    const first = await open(hub, "Ajoute le suivi");
+    const second = await open(hub, "Corrige le menu");
+    const told = () =>
+      store.listItems(coordinator).filter((i) => i.kind === "agent" && i.id.startsWith("green:"));
+    github.pr = green(1);
+    await hub.pullRequest(first);
+    expect(told()).toEqual([]);
+
+    // The first turned green before the restart, the second after: two wait on a review.
+    const next = await restarted();
+    github.pr = green(2);
+    await next.pullRequest(second);
+    expect(told()).toHaveLength(1);
+
+    // Started once more, a pull request that changes while green is not told a second time.
+    const last = await restarted();
+    github.pr = { ...green(2), title: "Un autre titre", blocked: true };
+    await last.pullRequest(second);
+    github.pr = { ...green(1), blocked: true };
+    await last.pullRequest(first);
     expect(told()).toHaveLength(1);
   });
 });
