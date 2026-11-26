@@ -15,6 +15,7 @@ import { AttachmentRefused } from "./attachments.ts";
 import { ARTIFACTS_PATH } from "./artifacts.ts";
 import { COORDINATOR_PATH } from "./coordinator-tools.ts";
 import { HERMES_PATH } from "./hermes-tools.ts";
+import { WIDGET_PATH } from "./widget.ts";
 import { Devices } from "./devices.ts";
 import type { DiagnosticsMonitor } from "./diagnostics.ts";
 import { type Client, CoordinatorRefused, HermesRefused, type Hub } from "./hub.ts";
@@ -75,6 +76,8 @@ const TYPES: Record<string, string> = {
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
   ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
   ".woff2": "font/woff2",
   ".json": "application/json",
   ".webmanifest": "application/manifest+json",
@@ -681,6 +684,23 @@ export function createHttpServer(options: {
     if (req.url === "/api/auth") {
       if (!authGate()) return;
       res.writeHead(204).end();
+      return;
+    }
+    if (req.url === WIDGET_PATH) {
+      // The iPhone widgets: a paired device's token, reading only.
+      if (!authGate()) return;
+      if (req.method !== "GET") {
+        dropRest(req);
+        res.writeHead(405).end();
+        return;
+      }
+      hub.widget().then(
+        (data) => json(res, 200, data),
+        (error: unknown) => {
+          hub.storageFailed(error);
+          if (!res.writableEnded) json(res, 500, { message: refusal(error) });
+        },
+      );
       return;
     }
     if (req.url === "/api/ws-ticket") {

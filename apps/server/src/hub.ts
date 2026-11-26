@@ -16,6 +16,7 @@ import {
 } from "./project-setup.ts";
 import { Push, type PushSend } from "./push.ts";
 import { Hermes, type WebhookSend } from "./hermes.ts";
+import { ThreadClock, type WidgetData, widgetData } from "./widget.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import os from "node:os";
@@ -169,6 +170,8 @@ export interface Client {
 
 /** The changed files a result names; the others are counted. */
 const RESULT_FILES = 6;
+/** A widget waits this long at most for quotas read again: iOS gives it a few seconds. */
+const WIDGET_QUOTA_WAIT_MS = 2500;
 /** How much of a thread's last answer its result carries. */
 const RESULT_LIMIT = 400;
 
@@ -468,6 +471,8 @@ export class Hub {
   readonly push: Push;
   /** Hermes Agent, driven from Discord. */
   readonly hermes: Hermes;
+  /** Since when each thread waits or works, for the iPhone widgets. */
+  private readonly threadClock = new ThreadClock();
   /** MoonAgentic's own version and updates. */
   readonly app: AppUpdates;
   /** The projects locked with /lock, and the code that opens them. */
@@ -630,6 +635,7 @@ export class Hub {
       options.webhookSend,
     );
     this.hermes.know(store.listThreads());
+    this.threadClock.know(store.listThreads());
     const backupsDir =
       options.backupsDir ?? path.join(path.dirname(options.worktreesDir), "backups");
     this.app = new AppUpdates({
@@ -2480,6 +2486,35 @@ export class Hub {
   /** The bridge's first call: what it was started with, once, for the token of its project. */
   coordinatorExchange(bootstrap: string): string {
     return this.coordinators.coordinatorExchange(bootstrap);
+  }
+
+  /**
+   * What the iPhone widgets show: quotas, the threads that wait or work, Hermes. Asking reads
+   * the quotas again when they are old, as an open window does, without waiting for long.
+   */
+  async widget(): Promise<WidgetData> {
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      this.quotas.fresh().catch(() => undefined),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, WIDGET_QUOTA_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+    return widgetData({
+      now: Date.now(),
+      agents: this.catalog.list(),
+      quotas: this.quotas.list(),
+      projects: this.store.listProjects(),
+      threads: this.store.listThreads().map((t) => this.asEnded(t)),
+      requests: this.pendingRequests(),
+      questions: this.pendingQuestions(),
+      schedules: this.scheduler.list(),
+      hermes: this.hermes.status(),
+      clock: this.threadClock,
+      locked: (projectId) => this.locks.isLocked(projectId),
+      modelName: (agentId, model) => this.modelNames(agentId, model)[1],
+    });
   }
 
   /** One tool call of Hermes, from its bridge. */
@@ -5927,9 +5962,11 @@ export class Hub {
     if (message.type === "thread") {
       this.push.threadChanged(message.thread);
       this.hermes.threadChanged(message.thread);
+      this.threadClock.threadChanged(message.thread);
     } else if (message.type === "threadRemoved") {
       this.push.threadRemoved(message.threadId);
       this.hermes.threadRemoved(message.threadId);
+      this.threadClock.threadRemoved(message.threadId);
     }
     for (const client of this.clients) client.send(message);
   }

@@ -1048,6 +1048,15 @@ export class Quotas {
     void this.refresh(undefined, this.everyMs);
   }
 
+  /**
+   * For a reader that keeps no connection open (a widget): reads again what is older than a
+   * period, and resolves once the figures are in.
+   */
+  fresh(): Promise<void> {
+    if (this.closed || this.everyMs <= 0) return Promise.resolve();
+    return this.refresh(undefined, this.everyMs);
+  }
+
   close(): void {
     this.closed = true;
     clearInterval(this.timer);
