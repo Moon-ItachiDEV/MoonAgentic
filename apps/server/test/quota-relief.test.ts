@@ -469,6 +469,25 @@ describe("a thread whose quota runs out", () => {
     expect(userTexts(store.listItems(threadId))).toEqual(["Un"]);
   });
 
+  it("forgets a waiting thread once it is deleted", async () => {
+    const { hub, store, client, projectId, spend, rules } = setup();
+    spend("rapide|You've hit your usage limit.");
+    await rules({ resume: true });
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      model: "rapide",
+      text: "Un",
+    });
+    await settled(hub, store, threadId, () => store.getThread(threadId)?.quota?.state === "wait");
+    const inner = hub as unknown as { quotaThreads: Set<string>; quotaRetryAt: Map<string, number> };
+    inner.quotaRetryAt.set(threadId, Date.now());
+    await hub.handle(client, { type: "thread.delete", requestId: "d1", threadId });
+    expect(inner.quotaThreads.has(threadId)).toBe(false);
+    expect(inner.quotaRetryAt.has(threadId)).toBe(false);
+  });
+
   it("keeps the project's rules for every device", async () => {
     const { hub, projectId, rules } = setup();
     await rules({ resume: true });
