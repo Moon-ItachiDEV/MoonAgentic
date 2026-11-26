@@ -1645,6 +1645,52 @@ describe("Composer: files, skills, commands, pins and search", () => {
     expect(store.getThread(threadId)?.pinned).toBeUndefined();
   });
 
+  it("renames a thread with the user's own name", async () => {
+    const { hub, store, client, projectId } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Un",
+    });
+    await hub.whenIdle(threadId);
+    await hub.handle(client, { type: "thread.rename", threadId, title: "  Nouveautés IA  " });
+    expect(store.getThread(threadId)?.title).toBe("Nouveautés IA");
+    expect(client.messages.at(-1)).toMatchObject({
+      type: "thread",
+      thread: { title: "Nouveautés IA" },
+    });
+  });
+
+  it("moves a conversation outside any project into a project", async () => {
+    const { hub, store, client, dir, projectId } = setup();
+    mkdirSync(path.join(dir, "Discussions"));
+    const discussions = hub.createProject("Discussions", path.join(dir, "Discussions"));
+    const threadId = hub.createThread({
+      projectId: discussions,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Une question",
+    });
+    await hub.whenIdle(threadId);
+    // Only into a real project.
+    await expect(
+      hub.handle(client, { type: "thread.move", threadId, projectId: discussions }),
+    ).resolves.toBeUndefined();
+    await hub.handle(client, { type: "thread.move", threadId, projectId });
+    expect(store.getThread(threadId)).toMatchObject({ projectId, status: "idle" });
+    expect(store.getSessionId(threadId)).toBeNull();
+    expect(client.messages.at(-1)).toMatchObject({ type: "thread", thread: { projectId } });
+    // A thread of a project stays in it.
+    await expect(
+      hub.handle(client, { type: "thread.move", threadId, projectId: discussions }),
+    ).rejects.toThrow("Seule une discussion hors projet");
+    // It goes on in its new project, with the conversation so far.
+    hub.send(threadId, "Et ensuite ?");
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)?.status).toBe("idle");
+  });
+
   it("holds a message sent while the model is being switched", async () => {
     const { hub, projectId } = setup();
     const threadId = hub.createThread({
