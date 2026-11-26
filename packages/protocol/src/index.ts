@@ -426,6 +426,19 @@ export interface TeamTask {
   merged?: boolean;
 }
 
+/**
+ * A mission the user adds while the team works: the lead reads it, then puts it in its plan
+ * as new pieces (`added` of them; none when the plan already covers it).
+ */
+export interface TeamMission {
+  text: string;
+  at: number;
+  status: "waiting" | "reading" | "planned" | "failed" | "stopped";
+  added?: number;
+  /** Why it could not be put in the plan. */
+  note?: string;
+}
+
 /** What a team, run from its lead's thread, is doing. The server keeps it. */
 export interface Team {
   phase: TeamPhase;
@@ -465,6 +478,10 @@ export interface Team {
   planTries?: number;
   /** The piece whose brief the lead is rewriting, one at a time. */
   leadTask?: number;
+  /** Missions the user added while the team works, oldest first. */
+  missions?: TeamMission[];
+  /** The mission the lead is reading, one at a time, after the briefs it rewrites. */
+  leadMission?: number;
   error?: string;
 }
 
@@ -1899,6 +1916,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
     type: z.literal("team.ship"),
     requestId: id,
     threadId: id,
+  }),
+  /** A mission added while the team works: its lead puts it in the plan. */
+  z.object({
+    type: z.literal("team.addMission"),
+    requestId: id,
+    threadId: id,
+    text: z.string().trim().min(1).max(20_000),
   }),
   z.object({
     type: z.literal("team.retry"),

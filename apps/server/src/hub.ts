@@ -1756,6 +1756,10 @@ export class Hub {
         await this.teams.ship(message.threadId);
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "team.addMission":
+        this.teams.addMission(message.threadId, message.text);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "team.retry":
         await this.teams.retry(message.threadId, message.index);
         client.send({ type: "done", requestId: message.requestId });

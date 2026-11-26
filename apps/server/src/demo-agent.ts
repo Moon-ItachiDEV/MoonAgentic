@@ -916,6 +916,13 @@ const app = acp
         'Nouvelle consigne :\n\n```json\n{"brief": "Passe answer à 42, et rien d\'autre."}\n```',
       );
     }
+    // As a team lead given a mission on the way, it adds one piece to its plan.
+    if (ask.startsWith("L'utilisateur ajoute une mission")) {
+      const plan = {
+        tasks: [{ title: "Mission ajoutée", brief: "Ajoute une ligne dans MISSION.md." }],
+      };
+      return answer("Je l'ajoute au plan.\n\n```json\n" + JSON.stringify(plan) + "\n```");
+    }
     // As a team lead, it splits the work into two pieces, the way MoonAgentic asks.
     if (ask.includes("tu es le chef d'une équipe") || ask.includes("Tu es le chef d'une équipe")) {
       if (ask.includes("sans plan")) {

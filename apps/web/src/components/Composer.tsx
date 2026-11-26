@@ -238,6 +238,10 @@ export function Composer(props: {
       ? modeSetting.choices.find((c) => c.id === settings[modeSetting.id])?.name
       : undefined;
   const running = thread?.status === "running" || thread?.status === "waiting";
+  // On a team's own thread, what is written while it works is a mission for its lead.
+  const missions =
+    thread?.role === "lead" &&
+    (thread.team?.phase === "planning" || thread.team?.phase === "coding");
   // Nearly out on its subscription: said over the composer, with an agent that has room.
   const quotas = useQuotas();
   const quotaSeen = useQuotaSeen();
@@ -712,6 +716,28 @@ export function Composer(props: {
       runAction(submission.action, submission.rest);
       return;
     }
+    if (thread && missions) {
+      if (images.drafts.length) {
+        connection.notify("Une mission part sans image : décris-la en mots.");
+        return;
+      }
+      setBusy(true);
+      try {
+        await connection.request({
+          type: "team.addMission",
+          requestId: newId(),
+          threadId: thread.id,
+          text: submission.text,
+        });
+        setText("");
+        setPrs([]);
+      } catch (e) {
+        connection.notify(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     // While the agent works, what is written waits for the end of its turn.
     if (thread && running) {
       if (images.drafts.length) {
@@ -861,15 +887,15 @@ export function Composer(props: {
       ? props.placeholder
       : thread?.archived
         ? "Écrire pour rouvrir le fil"
-        : thread && running
-          ? thread.team
-            ? "Ajouter une mission"
-            : "Ajouter une consigne"
-          : thread
-            ? `Répondre à ${speaker}`
-            : `Demander à ${(modelName ?? agent?.name ?? "tes agents")
-                .replace(/^Gemini \d+(\.\d+)? /, "")
-                .replace(/\s*\([^)]*\)$/, "")}`;
+        : missions
+          ? "Ajouter une mission"
+          : thread && running
+            ? "Ajouter une consigne"
+            : thread
+              ? `Répondre à ${speaker}`
+              : `Demander à ${(modelName ?? agent?.name ?? "tes agents")
+                  .replace(/^Gemini \d+(\.\d+)? /, "")
+                  .replace(/\s*\([^)]*\)$/, "")}`;
 
   // On a phone the composer is one line until it is used, as in the mockup.
   const hasImages = images.drafts.length > 0;

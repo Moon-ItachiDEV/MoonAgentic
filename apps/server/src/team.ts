@@ -5,6 +5,7 @@ import type {
   ReviewFile,
   Team,
   TeamMember,
+  TeamMission,
   TeamRole,
   TeamTask,
   Thread,
@@ -13,6 +14,10 @@ import type { ShipResult } from "./git.ts";
 
 /** Pieces of work a lead may hand out, so a plan never floods the machine with agents. */
 const MAX_TASKS = 8;
+/** Pieces a team holds at most, missions added along the way included. */
+const MAX_TEAM_TASKS = 32;
+/** Missions the user may add to one team. */
+const MAX_MISSIONS = 16;
 /** Times the lead is asked again for a plan that could not be read. */
 const MAX_PLAN_TRIES = 2;
 /** Corrections a coder gets before the lead rewrites its brief. */
@@ -152,6 +157,24 @@ Regarde le projet et ce qui bloque, sans rien modifier, puis écris une nouvelle
 {"brief": "nouvelle consigne complète"}
 \`\`\``;
 
+const missionPrompt = (team: Team, mission: TeamMission) =>
+  `L'utilisateur ajoute une mission à l'équipe pendant qu'elle travaille :
+
+${mission.text}
+
+La tâche de l'équipe : ${team.task}
+
+Le plan en cours :
+${team.tasks.map((t) => `- ${t.title} (${t.status === "done" ? "fait" : t.status === "waiting" ? "pas commencé" : "en cours"})`).join("\n") || "(vide)"}
+
+Lis le projet sans rien modifier, puis découpe cette mission en nouvelles sous-tâches pour les codeurs (${MAX_TASKS} au plus). Une sous-tâche ne doit pas modifier les fichiers d'une sous-tâche en cours. Pour chacune, écris une consigne complète : le codeur ne verra que sa consigne. Si le plan couvre déjà la mission, donne une liste vide.
+
+Termine ta réponse par ce bloc, et rien après :
+
+\`\`\`json
+{"tasks": [{"title": "titre court", "brief": "consigne complète"}]}
+\`\`\``;
+
 const briefPrompt = (brief: string) =>
   `Le chef a revu ta consigne. Reprends ta sous-tâche avec celle-ci :
 
@@ -216,10 +239,17 @@ function jsonObjects(reply: string, key: string): Record<string, unknown>[] {
   });
 }
 
-/** Reads the lead's plan from the last JSON block of its reply, or undefined. */
-export function readPlan(reply: string): { title: string; brief: string }[] | undefined {
+/**
+ * Reads the lead's plan from the last JSON block of its reply, or undefined. `empty`: an
+ * empty list is an answer too (a mission the plan already covers).
+ */
+export function readPlan(
+  reply: string,
+  empty = false,
+): { title: string; brief: string }[] | undefined {
   for (const parsed of jsonObjects(reply, "tasks")) {
     if (!Array.isArray(parsed.tasks)) continue;
+    if (empty && !parsed.tasks.length) return [];
     const tasks = parsed.tasks.flatMap((t: unknown) => {
       if (typeof t !== "object" || t === null) return [];
       const { title, brief } = t as { title?: unknown; brief?: unknown };
@@ -279,6 +309,8 @@ const working = (t: TeamTask) =>
   t.status === "testing" ||
   t.status === "lead";
 const open = (t: TeamTask) => t.status === "waiting" || working(t);
+/** A mission the lead has still to put in its plan. */
+const unread = (m: TeamMission) => m.status === "waiting" || m.status === "reading";
 const cut = (text: string) => (text.length > NOTE_LIMIT ? `${text.slice(0, NOTE_LIMIT)}…` : text);
 /** The branch that holds a finished team's work: the merge's, or its only piece's. */
 export const shipTarget = (team: Team): string | undefined =>
@@ -291,9 +323,17 @@ const prBody = (team: Team) =>
     "",
     "## Sous-tâches",
     ...team.tasks.map((t) => `- ${t.title}`),
+    ...(team.missions?.length
+      ? ["", "## Missions ajoutées en route", ...team.missions.map((m) => `- ${firstLine(m.text)}`)]
+      : []),
     "",
     "Ouverte par l'équipe MoonAgentic, après relecture et tests de chaque sous-tâche.",
   ].join("\n");
+
+const firstLine = (text: string) => {
+  const line = text.trim().split("\n")[0]!.trim();
+  return line.length > 200 ? `${line.slice(0, 200)}…` : line;
+};
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -309,8 +349,24 @@ const runningThread = (t: TeamTask) =>
 
 /** The team with every piece at work cut short, what was done kept: a stop or a restart. */
 const cutShort = (team: Team): Team => {
-  const { leadTask: _lead, mergeStep: _step, mergeReasked: _reasked, ...rest } = team;
-  return { ...rest, tasks: team.tasks.map((t) => (open(t) ? { ...t, status: "stopped" } : t)) };
+  const {
+    leadTask: _lead,
+    leadMission: _mission,
+    mergeStep: _step,
+    mergeReasked: _reasked,
+    ...rest
+  } = team;
+  return {
+    ...rest,
+    tasks: team.tasks.map((t) => (open(t) ? { ...t, status: "stopped" } : t)),
+    ...(team.missions
+      ? {
+          missions: team.missions.map((m) =>
+            unread(m) ? { ...m, status: "stopped" as const } : m,
+          ),
+        }
+      : {}),
+  };
 };
 
 /** Events kept per team, the oldest dropped first. */
@@ -506,6 +562,32 @@ export class Teams {
     const team = this.host.thread(leadId)?.team;
     if (team && team.permissionMode !== permissionMode)
       this.save(leadId, { ...team, permissionMode });
+  }
+
+  /**
+   * A mission the user adds while the team plans or codes: the lead reads it once free, and
+   * puts it in its plan as new pieces.
+   */
+  addMission(leadId: string, text: string): void {
+    const lead = this.host.thread(leadId);
+    const team = lead?.team;
+    if (!lead || !team) throw new Error("Ce fil ne mène pas d'équipe.");
+    if (team.phase !== "planning" && team.phase !== "coding") {
+      throw new Error(
+        team.phase === "merging"
+          ? "L'équipe fusionne déjà son travail : lance une nouvelle équipe pour cette mission."
+          : "L'équipe ne travaille plus : relance-la ou lance une nouvelle équipe.",
+      );
+    }
+    const missions = team.missions ?? [];
+    if (missions.length >= MAX_MISSIONS) throw new Error("Cette équipe a déjà assez de missions.");
+    const next: Team = {
+      ...team,
+      missions: [...missions, { text: text.trim(), at: Date.now(), status: "waiting" }],
+    };
+    // While it plans, the lead reads the mission once its plan is made.
+    if (team.phase === "planning") this.save(leadId, next);
+    else this.settle(lead, next);
   }
 
   /** Starts the team; returns the lead's thread. */
@@ -747,6 +829,10 @@ export class Teams {
 
   /** The lead's turn while the team codes: the brief it rewrote, or a turn of the user's. */
   private leadAnswered(lead: Thread, team: Team, cancelled: boolean): void {
+    if (team.leadMission !== undefined) {
+      this.missionAnswered(lead, team, cancelled);
+      return;
+    }
     const index = team.leadTask;
     const { leadTask: _done, ...free } = team;
     const task = index === undefined ? undefined : team.tasks[index];
@@ -776,6 +862,43 @@ export class Teams {
     } catch (error) {
       this.settle(lead, put({ ...helped, status: "blocked", note: message(error) }));
     }
+  }
+
+  /** The lead's answer to a mission: its new pieces join the plan, waiting for a coder. */
+  private missionAnswered(lead: Thread, team: Team, cancelled: boolean): void {
+    const { leadMission: index, ...free } = team;
+    const missions = team.missions ?? [];
+    const mission = index === undefined ? undefined : missions[index];
+    if (index === undefined || mission?.status !== "reading") {
+      this.settle(lead, free);
+      return;
+    }
+    const put = (next: TeamMission, tasks = free.tasks) =>
+      this.settle(lead, { ...free, tasks, missions: missions.with(index, next) });
+    if (cancelled) return put({ ...mission, status: "stopped" });
+    if (lead.status === "error") {
+      return put({
+        ...mission,
+        status: "failed",
+        note: `Le chef s'est arrêté sur une erreur : ${lead.error ?? "erreur inconnue"}`,
+      });
+    }
+    const plan = readPlan(this.host.lastReply(lead.id), true);
+    if (!plan) {
+      return put({ ...mission, status: "failed", note: "Le chef n'a pas donné de plan lisible." });
+    }
+    const room = Math.max(0, MAX_TEAM_TASKS - free.tasks.length);
+    const added: TeamTask[] = plan.slice(0, room).map((p) => ({ ...p, status: "waiting" }));
+    const { note: _note, ...read } = mission;
+    put(
+      {
+        ...read,
+        status: "planned",
+        added: added.length,
+        ...(plan.length > room ? { note: "L'équipe a déjà assez de sous-tâches." } : {}),
+      },
+      [...free.tasks, ...added],
+    );
   }
 
   /** What follows a step of a piece that went well: the review, the tests, or done. */
@@ -919,7 +1042,7 @@ export class Teams {
     }
     // The lead rewrites one brief at a time; the others wait their turn.
     let leadTask = team.leadTask;
-    if (leadTask === undefined) {
+    if (leadTask === undefined && team.leadMission === undefined) {
       const waiting = tasks.findIndex((t) => t.status === "lead");
       const task = tasks[waiting];
       if (task) {
@@ -940,13 +1063,39 @@ export class Teams {
         }
       }
     }
-    const { leadTask: _old, ...rest } = team;
+    // Then the missions the user added, one at a time too.
+    let missions = team.missions;
+    let leadMission = team.leadMission;
+    if (leadTask === undefined && leadMission === undefined && missions) {
+      const waiting = missions.findIndex((m) => m.status === "waiting");
+      const mission = missions[waiting];
+      if (mission) {
+        try {
+          this.host.send(lead.id, missionPrompt({ ...team, tasks }, mission));
+          leadMission = waiting;
+          missions = missions.with(waiting, { ...mission, status: "reading" });
+        } catch (error) {
+          // As above: busy with the user, the lead reads it once that turn ends.
+          const status = this.host.thread(lead.id)?.status;
+          if (status !== "running" && status !== "waiting") {
+            missions = missions.with(waiting, {
+              ...mission,
+              status: "failed",
+              note: `Le chef n'a pas pu lire la mission : ${message(error)}`,
+            });
+          }
+        }
+      }
+    }
+    const { leadTask: _old, leadMission: _oldMission, missions: _missions, ...rest } = team;
     const failed = tasks.filter((t) => t.status === "failed").length;
     this.save(lead.id, {
       ...rest,
       tasks,
+      ...(missions ? { missions } : {}),
       ...(leadTask === undefined ? {} : { leadTask }),
-      ...(tasks.some(open)
+      ...(leadMission === undefined ? {} : { leadMission }),
+      ...(tasks.some(open) || missions?.some(unread)
         ? {}
         : tasks.some((t) => t.status === "blocked")
           ? { phase: "blocked" }

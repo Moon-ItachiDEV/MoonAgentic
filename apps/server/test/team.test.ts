@@ -233,6 +233,134 @@ describe("Teams.planned", () => {
   });
 });
 
+describe("Teams.addMission", () => {
+  function setup(busy?: () => boolean) {
+    const threads = new Map<string, Thread>();
+    const replies = new Map<string, string>();
+    const sent: { threadId: string; text: string }[] = [];
+    let seq = 0;
+    const host = {
+      thread: (id: string) => threads.get(id),
+      threads: () => [...threads.values()],
+      createThread: (input: Parameters<TeamHost["createThread"]>[0]) => {
+        const id = `t${++seq}`;
+        threads.set(id, {
+          id,
+          projectId: input.projectId,
+          title: input.title,
+          agentId: input.agentId,
+          status: "running",
+          permissionMode: input.permissionMode,
+          ...(input.parentId ? { parentId: input.parentId } : {}),
+          role: input.role,
+          ...(input.team ? { team: input.team } : {}),
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        return id;
+      },
+      send: (threadId: string, text: string) => {
+        if (busy?.() && threads.get(threadId)?.role === "lead") throw new Error("occupé");
+        sent.push({ threadId, text });
+      },
+      cancel: async () => undefined,
+      setTeam: (threadId: string, team: Team) => {
+        const existing = threads.get(threadId);
+        if (existing) threads.set(threadId, { ...existing, team });
+      },
+      lastReply: (threadId: string) => replies.get(threadId) ?? "",
+      changes: async () => ({ files: [] }),
+      mergeInto: async () => [],
+      ship: async () => ({ prOpened: false }),
+      unfinishedMerge: async () => undefined,
+      contains: async () => false,
+    } satisfies TeamHost;
+    const teams = new Teams(host);
+    const leadId = teams.start({
+      projectId: "p1",
+      task: "Export CSV",
+      lead: { agentId: "demo" },
+      coder: { agentId: "demo" },
+      coders: 1,
+      permissionMode: "full",
+    });
+    const team = () => threads.get(leadId)!.team!;
+    const plan = (...titles: string[]) =>
+      "```json\n" +
+      JSON.stringify({ tasks: titles.map((title) => ({ title, brief: `Fais ${title}` })) }) +
+      "\n```";
+    return { threads, replies, sent, teams, leadId, team, plan };
+  }
+
+  it("has the lead read a mission added while it plans, then adds its pieces to the plan", () => {
+    const { replies, sent, teams, leadId, team, plan } = setup();
+    teams.addMission(leadId, "Ajoute aussi un bouton dans les rapports");
+    expect(team().missions).toMatchObject([{ status: "waiting" }]);
+    expect(sent).toHaveLength(0);
+
+    replies.set(leadId, plan("Export"));
+    teams.turnEnded(leadId, false);
+    expect(team().phase).toBe("coding");
+    expect(team().missions).toMatchObject([{ status: "reading" }]);
+    expect(team().leadMission).toBe(0);
+    const asked = sent.at(-1)!;
+    expect(asked.threadId).toBe(leadId);
+    expect(asked.text).toContain("Ajoute aussi un bouton dans les rapports");
+    expect(asked.text).toContain("- Export (en cours)");
+
+    replies.set(leadId, plan("Bouton"));
+    teams.turnEnded(leadId, false);
+    expect(team().missions).toMatchObject([{ status: "planned", added: 1 }]);
+    expect(team().leadMission).toBeUndefined();
+    expect(team().tasks.map((t) => [t.title, t.status])).toEqual([
+      ["Export", "running"],
+      ["Bouton", "waiting"],
+    ]);
+
+    // The first coder done, the mission's piece takes its place; both done, they merge.
+    teams.turnEnded(team().tasks[0]!.threadId!, false);
+    expect(team().tasks[1]!.status).toBe("running");
+    teams.turnEnded(team().tasks[1]!.threadId!, false);
+    expect(team().phase).toBe("merging");
+  });
+
+  it("keeps the team at work while a mission waits on a busy lead, and says when it is covered", () => {
+    let busy = false;
+    const { threads, replies, teams, leadId, team, plan } = setup(() => busy);
+    replies.set(leadId, plan("Export"));
+    teams.turnEnded(leadId, false);
+
+    busy = true;
+    teams.addMission(leadId, "Vérifie les accents");
+    expect(team().missions).toMatchObject([{ status: "waiting" }]);
+    // Its only piece done, the team still waits for the mission.
+    teams.turnEnded(team().tasks[0]!.threadId!, false);
+    expect(team().phase).toBe("coding");
+
+    busy = false;
+    replies.set(leadId, "Je réponds à l'utilisateur.");
+    teams.turnEnded(leadId, false);
+    expect(team().missions).toMatchObject([{ status: "reading" }]);
+
+    replies.set(leadId, '```json\n{"tasks": []}\n```');
+    teams.turnEnded(leadId, false);
+    expect(team().missions).toMatchObject([{ status: "planned", added: 0 }]);
+    expect(team().phase).toBe("done");
+    expect(() => teams.addMission(leadId, "Encore")).toThrow("ne travaille plus");
+    expect(threads.get(leadId)?.team?.missions).toHaveLength(1);
+  });
+
+  it("stops the missions left with the team", async () => {
+    const { replies, teams, leadId, team, plan } = setup();
+    replies.set(leadId, plan("Export"));
+    teams.turnEnded(leadId, false);
+    teams.addMission(leadId, "Une de plus");
+    await teams.stop(leadId);
+    expect(team().missions).toMatchObject([{ status: "stopped" }]);
+    expect(team().leadMission).toBeUndefined();
+  });
+});
+
 describe("teamStatus", () => {
   const team: Team = {
     phase: "coding",

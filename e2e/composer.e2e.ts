@@ -610,6 +610,15 @@ describe("composer", () => {
       )
       .toBe(2);
     await shot(page, "c13-equipe-en-direct");
+    // What is written while the team works is a mission: the lead puts it in its plan.
+    expect(await composer(page).getAttribute("placeholder")).toBe("Ajouter une mission");
+    await composer(page).fill("Ajoute aussi une ligne dans MISSION.md");
+    await composer(page).press("Enter");
+    const missions = card.getByLabel("Missions ajoutées");
+    await missions.getByText("Ajoute aussi une ligne dans MISSION.md").waitFor();
+    await missions.getByText("Au plan · 1 partie").waitFor({ timeout: 30_000 });
+    expect(await composer(page).inputValue()).toBe("");
+    await shot(page, "c13b-equipe-mission");
     // A team at work is stopped from the thread's menu, not by a button under its list.
     expect(await card.getByRole("button", { name: /Arrêter/ }).count()).toBe(0);
     await page.getByRole("button", { name: "Actions du fil" }).click();
