@@ -110,6 +110,7 @@ export function PlanSchedules({
                 </>
               )}
             </span>
+            {s.by === "hermes" && <span className="pco">Ajoutée par Hermes</span>}
             {s.lastError && <p className="pcw t-err">{s.lastError}</p>}
             <div className="scf">
               <span className={`scs${missed ? " warn" : state.tone === "done" ? " ok" : ""}`}>

@@ -46,6 +46,8 @@ export interface ScheduleAdd {
   isolated?: boolean | undefined;
   repeat: ScheduleRepeat;
   at: number;
+  /** Planned by Hermes from Discord. */
+  by?: "hermes" | undefined;
 }
 
 export interface SchedulePatch {
@@ -118,6 +120,7 @@ export class Scheduler {
       nextAt: this.firstTime(input.repeat, input.at, now),
       enabled: true,
       runs: 0,
+      ...(input.by ? { by: input.by } : {}),
       createdAt: now,
     };
     this.put(schedule);

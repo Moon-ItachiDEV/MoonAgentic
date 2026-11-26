@@ -35,7 +35,7 @@ import { firstPick, type ModelPick } from "../model-pick.ts";
 import { PlanSchedules } from "./PlanSchedules.tsx";
 import { PlanTimeline } from "./PlanTimeline.tsx";
 
-type Filter = "all" | "lead" | "user";
+type Filter = "all" | "lead" | "hermes" | "user";
 type PlanRequest = Extract<ClientMessage, { type: `plan.${string}` }>;
 
 /** Sends a change to the server; a refusal is shown rather than lost. */
@@ -149,6 +149,8 @@ export function Planner({
   const cards = everyCard.filter((c) => inScope === "all" || c.projectId === inScope);
   const shown = cards.filter((c) => filter === "all" || c.source === filter);
   const fromLead = cards.filter((c) => c.source === "lead").length;
+  const fromHermes = cards.filter((c) => c.source === "hermes").length;
+  const sorted = fromLead + fromHermes > 0;
   const open = cards.find((c) => c.id === openId);
   const dragged = cards.find((c) => c.id === dragId);
   const now = Date.now();
@@ -182,7 +184,7 @@ export function Planner({
           </button>
         ))}
       </div>
-      {(fromLead > 0 || withCards.length > 1 || view === "timeline") && (
+      {(sorted || withCards.length > 1 || view === "timeline") && (
         <div className="chips plf" role="group" aria-label="Filtrer les tâches">
           {withCards.length > 1 && (
             <>
@@ -195,14 +197,15 @@ export function Planner({
                   {p.name}
                 </button>
               ))}
-              {fromLead > 0 && <span className="sp" />}
+              {sorted && <span className="sp" />}
             </>
           )}
-          {fromLead > 0 &&
+          {sorted &&
             (
               [
                 ["all", "Toutes"],
-                ["lead", "Planifiées par le chef"],
+                ...(fromLead > 0 ? ([["lead", "Planifiées par le chef"]] as const) : []),
+                ...(fromHermes > 0 ? ([["hermes", "Planifiées par Hermes"]] as const) : []),
                 ["user", "Ajoutées à la main"],
               ] as const
             ).map(([key, label]) => (
@@ -468,6 +471,7 @@ function Card({
         <span className="pcl">en retard · {dueLabel(card.due)}</span>
       )}
       {card.source === "lead" && <span className="pco">Planifiée par le chef</span>}
+      {card.source === "hermes" && <span className="pco">Planifiée par Hermes</span>}
       {onRun && (
         <button
           className="mini press"

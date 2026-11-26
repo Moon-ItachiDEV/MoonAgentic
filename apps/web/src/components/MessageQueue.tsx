@@ -125,11 +125,16 @@ function Queued({
         className="cqt"
         title="Modifier ce message"
         aria-label={`Modifier le message ${place}${
-          message.from === "coordinator" ? " du coordinateur" : ""
+          message.from === "coordinator"
+            ? " du coordinateur"
+            : message.from === "hermes"
+              ? " venu de Discord"
+              : ""
         } : ${message.text}`}
         onClick={() => setDraft(message.text)}
       >
         {message.from === "coordinator" && <small>Coordinateur</small>}
+        {message.from === "hermes" && <small>Hermes · Discord</small>}
         {message.text}
       </button>
       <button className="cqb press" aria-label="Modifier" onClick={() => setDraft(message.text)}>

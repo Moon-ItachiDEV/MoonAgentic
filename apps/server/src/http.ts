@@ -14,9 +14,10 @@ import { type WebSocket, WebSocketServer } from "ws";
 import { AttachmentRefused } from "./attachments.ts";
 import { ARTIFACTS_PATH } from "./artifacts.ts";
 import { COORDINATOR_PATH } from "./coordinator-tools.ts";
+import { HERMES_PATH } from "./hermes-tools.ts";
 import { Devices } from "./devices.ts";
 import type { DiagnosticsMonitor } from "./diagnostics.ts";
-import { type Client, CoordinatorRefused, type Hub } from "./hub.ts";
+import { type Client, CoordinatorRefused, HermesRefused, type Hub } from "./hub.ts";
 import { findRemoteAccess } from "./remote.ts";
 import { storageTrouble } from "./store.ts";
 
@@ -747,6 +748,60 @@ export function createHttpServer(options: {
             if (error instanceof CoordinatorRefused) coordAuthFailures.record(remoteIp);
             if (!res.writableEnded) {
               json(res, error instanceof CoordinatorRefused ? 401 : 400, {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          },
+        );
+      });
+      return;
+    }
+    if (req.url === HERMES_PATH) {
+      // Only Hermes's bridge, started on this computer, comes here: never a browser, never
+      // through the remote access. Its own access opens it; the app's token opens nothing here.
+      const from = req.socket.remoteAddress ?? "";
+      if (!LOCAL.has(from) || req.headers["x-forwarded-for"] || req.headers.origin) {
+        dropRest(req);
+        res.writeHead(403).end();
+        return;
+      }
+      if (req.method !== "POST") {
+        dropRest(req);
+        res.writeHead(405).end();
+        return;
+      }
+      const limit = coordLimiter.take(`hermes:${remoteIp}`);
+      if (!limit.ok) return tooMany(res, limit.retryAfterSec);
+      const authLimit = coordAuthFailures.check(`hermes:${remoteIp}`);
+      if (!authLimit.ok) return tooMany(res, authLimit.retryAfterSec);
+      const chunks: Buffer[] = [];
+      let size = 0;
+      req.on("data", (chunk: Buffer) => {
+        size += chunk.length;
+        if (size > MAX_COORDINATOR_BODY) req.destroy();
+        else chunks.push(chunk);
+      });
+      req.on("error", () => undefined);
+      req.on("end", () => {
+        let body: { tool?: unknown; args?: unknown };
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as typeof body;
+        } catch {
+          json(res, 400, { error: "Requête illisible." });
+          return;
+        }
+        const abort = new AbortController();
+        res.once("close", () => {
+          if (!res.writableEnded) abort.abort();
+        });
+        hub.hermesCall(given ?? "", String(body?.tool ?? ""), body?.args, abort.signal).then(
+          (result) => {
+            if (!res.writableEnded) json(res, 200, { result });
+          },
+          (error: unknown) => {
+            if (error instanceof HermesRefused) coordAuthFailures.record(`hermes:${remoteIp}`);
+            if (!res.writableEnded) {
+              json(res, error instanceof HermesRefused ? 401 : 400, {
                 error: error instanceof Error ? error.message : String(error),
               });
             }

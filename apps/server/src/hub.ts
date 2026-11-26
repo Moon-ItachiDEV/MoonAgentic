@@ -15,6 +15,7 @@ import {
   saveSkill,
 } from "./project-setup.ts";
 import { Push, type PushSend } from "./push.ts";
+import { Hermes, type WebhookSend } from "./hermes.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
 import os from "node:os";
@@ -32,7 +33,12 @@ import {
   spentUntil,
   threadPullRequest,
 } from "@moonagentic/protocol";
-import type { ProjectQuotaRules, ThreadQuota } from "@moonagentic/protocol";
+import type {
+  ProjectQuotaRules,
+  Schedule,
+  ScheduleRepeat,
+  ThreadQuota,
+} from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
   RoleMascots,
@@ -231,6 +237,8 @@ export interface HubOptions {
   worktreesDir: string;
   /** How Web Push messages are sent; to push services over the network when not given. */
   pushSend?: PushSend;
+  /** How Discord webhook messages are sent; to Discord over the network when not given. */
+  webhookSend?: WebhookSend;
   homeDir?: string;
   idleMs?: number;
   maxLiveAgents?: number;
@@ -456,6 +464,8 @@ export class Hub {
   readonly attachments: Attachments;
   /** The notifications sent to phones while MoonAgentic is closed. */
   readonly push: Push;
+  /** Hermes Agent, driven from Discord. */
+  readonly hermes: Hermes;
   /** MoonAgentic's own version and updates. */
   readonly app: AppUpdates;
   /** The projects locked with /lock, and the code that opens them. */
@@ -582,6 +592,42 @@ export class Hub {
       quiet: (projectId) => this.locks.isLocked(projectId),
     });
     this.push.know(store.listThreads());
+    this.hermes = new Hermes(
+      {
+        getSetting: (key, fallback) => store.getSetting(key, fallback),
+        setSetting: (key, value) => store.setSetting(key, value),
+        // As the app sees them: archived, a git repository.
+        projects: () => store.listProjects().map((p) => this.withGit(p)),
+        threads: () => store.listThreads(),
+        thread: (id) => store.getThread(id),
+        items: (id) => this.items(id),
+        markRelayed: (threadId, itemId) => {
+          const item = this.store.getItem(threadId, itemId);
+          if (item?.kind === "user" && !item.relayed) {
+            this.putItem(threadId, { ...item, relayed: true });
+          }
+        },
+        running: (id) => this.turns.has(id),
+        whenIdle: (id) => this.whenIdle(id),
+        sendFromHermes: (id, text) => this.sendFromHermes(id, text),
+        addPlanCard: (input) => this.planner.add(input, { source: "hermes" }),
+        addSchedule: (input) => this.hermesSchedule(input),
+        pendingRequests: () => this.pendingRequests(),
+        pendingQuestions: () => this.pendingQuestions(),
+        respondToPermission: (threadId, itemId, optionId) =>
+          this.respondToPermission(threadId, itemId, optionId),
+        respondToQuestion: (threadId, itemId, answers) =>
+          this.respondToQuestion(threadId, itemId, answers),
+        closed: (id) =>
+          this.locks.isLocked(id) || this.removingProjects.has(id) || this.isDiscussions(id),
+        quiet: (id) => this.locks.isLocked(id),
+        broadcast: (m) => this.broadcast(m),
+        url: () => this.coordinators.url,
+      },
+      options.dataDir,
+      options.webhookSend,
+    );
+    this.hermes.know(store.listThreads());
     const backupsDir =
       options.backupsDir ?? path.join(path.dirname(options.worktreesDir), "backups");
     this.app = new AppUpdates({
@@ -1562,6 +1608,25 @@ export class Hub {
         this.sendSnapshots();
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "hermes.get":
+        client.send({ type: "hermes", hermes: this.hermes.status() });
+        return;
+      case "hermes.connect":
+        this.hermes.connect();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "hermes.cut":
+        this.hermes.cut();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "hermes.set":
+        this.hermes.set(message);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "hermes.test":
+        await this.hermes.test();
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "push.state":
         client.send({
           type: "pushState",
@@ -2415,6 +2480,11 @@ export class Hub {
     return this.coordinators.coordinatorExchange(bootstrap);
   }
 
+  /** One tool call of Hermes, from its bridge. */
+  hermesCall(token: string, tool: string, args: unknown, signal?: AbortSignal): Promise<unknown> {
+    return this.hermes.call(token, tool, args, signal);
+  }
+
   /** One tool call of a coordinator, from its bridge. */
   coordinatorCall(
     token: string,
@@ -2504,7 +2574,7 @@ export class Hub {
    * coordinator leaves. With the thread free and nothing waiting before it, it is sent at
    * once: its turn ended while it was being written.
    */
-  queueMessage(threadId: string, text: string, from?: "coordinator"): void {
+  queueMessage(threadId: string, text: string, from?: "coordinator" | "hermes"): void {
     const thread = this.requireLiveThread(threadId);
     const queue = thread.queue ?? [];
     if (!this.turns.has(threadId) && queue.length === 0) {
@@ -2523,7 +2593,67 @@ export class Hub {
   private sendQueued(threadId: string, message: Pick<QueuedMessage, "text" | "from">): void {
     if (message.from === "coordinator") {
       this.coordinators.sendFromCoordinator(threadId, message.text);
-    } else this.sendByUser(threadId, message.text);
+    } else if (message.from === "hermes") this.sendHermesNow(threadId, message.text);
+    else this.sendByUser(threadId, message.text);
+  }
+
+  /**
+   * The user's own message, written on Discord and brought by Hermes: sent as theirs, with
+   * its origin shown, or kept for after the turn under way.
+   */
+  sendFromHermes(threadId: string, text: string): "sent" | "queued" {
+    const thread = this.requireLiveThread(threadId);
+    if (this.turns.has(threadId) || thread.queue?.length) {
+      this.queueMessage(threadId, text, "hermes");
+      return "queued";
+    }
+    this.sendHermesNow(threadId, text);
+    return "sent";
+  }
+
+  private sendHermesNow(threadId: string, text: string): void {
+    const held = this.store.getThread(threadId)?.held;
+    this.send(
+      threadId,
+      held ? `${held}\n\n${text}` : text,
+      this.leadContext(threadId) ?? this.coordinators.coordinatorContext(threadId),
+      undefined,
+      "hermes",
+    );
+    if (held) this.updateThread(threadId, { held: null });
+  }
+
+  /**
+   * A task Hermes plans: started on the agent coordinators send work to, supervised, on its
+   * own branch when the project is a git repository.
+   */
+  private hermesSchedule(input: {
+    projectId: string;
+    title?: string;
+    text: string;
+    at: number;
+    repeat: ScheduleRepeat;
+  }): Schedule {
+    const found = this.store.getProject(input.projectId);
+    if (!found) throw new Error("Projet introuvable.");
+    const project = this.withGit(found);
+    const route = this.coordinators.coordinatorSettings().routes.default;
+    const coordinator = this.store
+      .listThreads()
+      .find((t) => t.projectId === input.projectId && t.kind === "coordinator");
+    const agentId = route?.agentId ?? coordinator?.agentId;
+    if (!agentId) {
+      throw new Error("Aucun agent par défaut : ouvre le coordinateur du projet dans MoonAgentic.");
+    }
+    this.agents.launch(agentId);
+    return this.scheduler.add({
+      ...input,
+      agentId,
+      model: route ? route.model : coordinator?.model,
+      permissionMode: "supervised",
+      isolated: !!project.git,
+      by: "hermes",
+    });
   }
 
   /** Changes a message that waits; an empty text takes it out. */
@@ -2775,7 +2905,7 @@ export class Hub {
     text: string,
     context?: string,
     byTeam?: boolean,
-    from?: "coordinator" | "goal" | "pr" | "remarks",
+    from?: "coordinator" | "goal" | "pr" | "remarks" | "hermes",
     auto?: boolean,
     /** The images joined to the message, already sent to the server. */
     attachments?: readonly string[],
@@ -5752,10 +5882,16 @@ export class Hub {
   }
 
   private broadcast(message: ServerMessage): void {
-    if (message.type === "thread") this.push.threadChanged(message.thread);
-    else if (message.type === "threadRemoved") this.push.threadRemoved(message.threadId);
+    if (message.type === "thread") {
+      this.push.threadChanged(message.thread);
+      this.hermes.threadChanged(message.thread);
+    } else if (message.type === "threadRemoved") {
+      this.push.threadRemoved(message.threadId);
+      this.hermes.threadRemoved(message.threadId);
+    }
     for (const client of this.clients) client.send(message);
   }
 }
 
 export { CoordinatorRefused, coordinatorPrompt } from "./coordinator.ts";
+export { HermesRefused } from "./hermes.ts";
