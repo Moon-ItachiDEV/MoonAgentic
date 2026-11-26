@@ -1,5 +1,5 @@
-import type { McpServerInfo, Project } from "@moonagentic/protocol";
-import { useEffect, useState } from "react";
+import type { AgentInfo, McpServerInfo, McpTool, Project } from "@moonagentic/protocol";
+import { useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { mcpServerInput } from "../mcp-input.ts";
 import { type McpScope, mcpScopeLabel, scopeOf } from "../mcp-scope.ts";
@@ -90,17 +90,143 @@ function ScopeRows({
   );
 }
 
+/**
+ * Which agents get a server, one switch each: `null` for every agent, the list once the user
+ * leaves one out. An agent added later gets the servers that are for every agent.
+ */
+function AgentRows({
+  agentIds,
+  agents,
+  onChange,
+}: {
+  agentIds: string[] | null;
+  agents: AgentInfo[];
+  onChange: (agentIds: string[] | null) => void;
+}) {
+  if (!agents.length) return null;
+  const on = (id: string) => !agentIds || agentIds.includes(id);
+  return (
+    <>
+      <div className="gl2">Agents</div>
+      <div className="ins">
+        {agents.map((a) => (
+          <div key={a.id} className="it ro">
+            <span className="tx">{a.name}</span>
+            <button
+              type="button"
+              className="tog"
+              role="switch"
+              aria-checked={on(a.id)}
+              aria-label={`Donner à ${a.name}`}
+              onClick={() => {
+                const next = agents
+                  .map((o) => o.id)
+                  .filter((id) => (id === a.id ? !on(id) : on(id)));
+                onChange(next.length === agents.length ? null : next);
+              }}
+            />
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/** « Outils »: the server is started once to list them, on the first tap. */
+function ToolRows({ server }: { server: McpServerInfo }) {
+  const [open, setOpen] = useState(false);
+  const [tools, setTools] = useState<McpTool[]>();
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  // Each reading counts: one that answers after the server changed is not shown for it.
+  const asked = useRef(0);
+  useEffect(() => {
+    asked.current += 1;
+    setOpen(false);
+    setTools(undefined);
+    setError(undefined);
+    setBusy(false);
+  }, [server.id, server.target]);
+  const load = () => {
+    const mine = ++asked.current;
+    const still = () => mine === asked.current;
+    setBusy(true);
+    setError(undefined);
+    connection
+      .ask({ type: "mcp.tools", requestId: newId(), id: server.id })
+      .then((reply) => still() && setTools(reply.tools))
+      .catch((e: unknown) => still() && setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => still() && setBusy(false));
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className="it"
+        aria-expanded={open}
+        onClick={() => {
+          setOpen(!open);
+          if (!open && !tools && !busy) load();
+        }}
+      >
+        <span className="tx">Outils</span>
+        <span className="rt">
+          {busy ? (
+            <span className="mst">
+              <span className="t2-spin" />
+              Lecture
+            </span>
+          ) : error ? (
+            <span className="mer">Erreur</span>
+          ) : (
+            (tools?.length ?? "")
+          )}
+          <I n={open ? "down" : "right"} s={15} />
+        </span>
+      </button>
+      {open && error && (
+        <div className="it ro">
+          <span className="tx">
+            <small className="erx">{error}</small>
+          </span>
+          <button type="button" className="b2 soft press" onClick={load} disabled={busy}>
+            Réessayer
+          </button>
+        </div>
+      )}
+      {open && tools && (
+        <div className="chips wrap mtl" aria-label={`Outils de ${server.name}`}>
+          {tools.length ? (
+            tools.map((t) => (
+              <span key={t.name} className="ppill mono" title={t.description}>
+                {t.name}
+              </span>
+            ))
+          ) : (
+            <span className="ppill">Aucun outil</span>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
 /** One MCP server: on or off, what starts it, who gets it, and the way to remove it. */
 export function McpServerSheet(props: {
   server: McpServerInfo | undefined;
   projects: Project[];
+  agents: AgentInfo[];
   onClose: () => void;
 }) {
   const { server } = props;
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   // What was just asked for shows at once, until the server says what it kept.
   const [asked, setAsked] = useState<McpScope>();
-  useEffect(() => setAsked(undefined), [server]);
+  const [askedAgents, setAskedAgents] = useState<string[] | null>();
+  useEffect(() => {
+    setAsked(undefined);
+    setAskedAgents(undefined);
+  }, [server]);
   return (
     <>
       <Sheet open={!!server} onClose={props.onClose} title={server?.name ?? ""}>
@@ -141,6 +267,7 @@ export function McpServerSheet(props: {
                   </span>
                 </div>
               )}
+              {server.enabled && <ToolRows server={server} />}
             </div>
             <ScopeRows
               scope={asked ?? scopeOf(server)}
@@ -148,6 +275,15 @@ export function McpServerSheet(props: {
               onChange={(next) => {
                 if (connection.send({ type: "mcp.setScope", id: server.id, ...next })) {
                   setAsked(next);
+                }
+              }}
+            />
+            <AgentRows
+              agents={props.agents}
+              agentIds={askedAgents !== undefined ? askedAgents : (server.agentIds ?? null)}
+              onChange={(agentIds) => {
+                if (connection.send({ type: "mcp.setAgents", id: server.id, agentIds })) {
+                  setAskedAgents(agentIds);
                 }
               }}
             />
@@ -180,7 +316,13 @@ export function McpServerSheet(props: {
 }
 
 /** « Ajouter un serveur »: a command or an address, its secrets, and who gets it. */
-export function McpAddSheet(props: { open: boolean; projects: Project[]; onClose: () => void }) {
+export function McpAddSheet(props: {
+  open: boolean;
+  projects: Project[];
+  agents: AgentInfo[];
+  onClose: () => void;
+}) {
+  const [agentIds, setAgentIds] = useState<string[] | null>(null);
   const [kind, setKind] = useState<"cmd" | "url">("cmd");
   const [name, setName] = useState("");
   const [target, setTarget] = useState("");
@@ -209,8 +351,10 @@ export function McpAddSheet(props: { open: boolean; projects: Project[]; onClose
           ...mcpServerInput(name.trim(), target, secrets),
           ...(scope.projectIds ? { projectIds: scope.projectIds } : {}),
           ...(scope.allRoles ? { allRoles: true } : {}),
+          ...(agentIds ? { agentIds } : {}),
         },
       });
+      setAgentIds(null);
       setName("");
       setTarget("");
       setSecrets("");
@@ -284,6 +428,7 @@ export function McpAddSheet(props: { open: boolean; projects: Project[]; onClose
           onChange={(e) => setSecrets(e.target.value)}
         />
         <ScopeRows scope={scope} projects={props.projects} onChange={setScope} />
+        <AgentRows agents={props.agents} agentIds={agentIds} onChange={setAgentIds} />
         {error && (
           <p className="pcw t-err" role="alert">
             {error}

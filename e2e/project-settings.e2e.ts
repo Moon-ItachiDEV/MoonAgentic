@@ -168,4 +168,37 @@ describe("a project's settings", () => {
     expect(errors).toEqual([]);
     await page.close();
   });
+
+  it("archives the project, out of the list until it is taken back out", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    const menu = page.getByRole("complementary", { name: "Menu" });
+    const row = menu.getByRole("button", { name: /^demo/ });
+    await row.click();
+    await page.getByRole("button", { name: "Réglages du projet" }).click();
+    const dialog = page.getByRole("dialog", { name: "Réglages du projet" });
+    await dialog.getByRole("button", { name: "Archiver le projet" }).click();
+    // Out of the list, folded under « Archivés ».
+    const folded = menu.getByRole("button", { name: /^Archivés/ });
+    await folded.waitFor();
+    expect(await row.count()).toBe(0);
+    expect(await folded.getAttribute("aria-expanded")).toBe("false");
+    await folded.click();
+    await row.waitFor();
+    if (shots) await page.screenshot({ path: path.join(shots, "projet-archive.png") });
+    // Kept by the server: still so in another window.
+    const other = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await other.goto(url);
+    await other
+      .getByRole("complementary", { name: "Menu" })
+      .getByRole("button", { name: /^Archivés/ })
+      .waitFor();
+    await other.close();
+    await row.click();
+    await page.getByRole("button", { name: "Réglages du projet" }).click();
+    await dialog.getByRole("button", { name: "Sortir des archives" }).click();
+    await expect.poll(() => folded.count()).toBe(0);
+    await row.waitFor();
+    await page.close();
+  });
 });

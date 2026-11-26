@@ -1,5 +1,5 @@
 // Who gets an MCP server, as the app says it.
-import type { McpServerInfo, Project } from "@moonagentic/protocol";
+import type { AgentInfo, McpServerInfo, Project } from "@moonagentic/protocol";
 
 /** Who gets a server: which projects (`null` for all of them), and a team's every role or not. */
 export interface McpScope {
@@ -33,4 +33,14 @@ export function mcpScopeLabel(scope: McpScope, projects: Project[]): string {
         ? names.join(", ")
         : `${names.length} projets`;
   return scope.allRoles ? `${where} · toute l'équipe` : where;
+}
+
+/** In a few words, the agents a server is for, when it is not for every one. */
+export function mcpAgentsLabel(agentIds: string[], agents: AgentInfo[]): string {
+  const names = agentIds.flatMap((id) => agents.find((a) => a.id === id)?.name ?? []);
+  return names.length === 0
+    ? "Aucun agent"
+    : names.length <= 2
+      ? names.join(", ")
+      : `${names.length} agents`;
 }

@@ -20,6 +20,7 @@ const WORKING = new Set<TeamLanePhase>([
   "lead",
   "running",
   "reviewing",
+  "judging",
   "testing",
   "merging",
   "solving",
@@ -175,10 +176,26 @@ export function teamRows(
     { key: "review", job: "relit", name: "Relecture" },
     "Après les codeurs",
   );
+  const review2 = checkRow(
+    model.pieces.flatMap((p) => (p.reviewer2 ? [p.reviewer2] : [])),
+    { key: "review2", job: "rev", name: "Relecture 2" },
+    "Après les codeurs",
+  );
+  const judge = checkRow(
+    model.pieces.flatMap((p) => (p.judge ? [p.judge] : [])),
+    { key: "judge", job: "arb", name: "Arbitre" },
+    "Après les relectures",
+  );
+  const testsAfter =
+    team.reviewer && team.judge
+      ? "Après l'arbitre"
+      : team.reviewer
+        ? "Après la relecture"
+        : "Après les codeurs";
   const tests = checkRow(
     model.pieces.flatMap((p) => (p.tester ? [p.tester] : [])),
     { key: "tests", job: "tests", name: "Tests" },
-    team.reviewer ? "Après la relecture" : "Après les codeurs",
+    testsAfter,
   );
   // While the lead plans there is no piece yet: the roles to come are listed all the same.
   const member = (m: { agentId: string; model?: string }) => {
@@ -202,17 +219,15 @@ export function teamRows(
   if (review) rows.push(review);
   else if (team.reviewer)
     rows.push(toCome("review", "relit", "Relecture", member(team.reviewer), "Après les codeurs"));
+  if (review2) rows.push(review2);
+  else if (team.reviewer && team.reviewer2)
+    rows.push(toCome("review2", "rev", "Relecture 2", member(team.reviewer2), "Après les codeurs"));
+  if (judge) rows.push(judge);
+  else if (team.reviewer && team.judge)
+    rows.push(toCome("judge", "arb", "Arbitre", member(team.judge), "Après les relectures"));
   if (tests) rows.push(tests);
   else if (team.tester)
-    rows.push(
-      toCome(
-        "tests",
-        "tests",
-        "Tests",
-        member(team.tester),
-        team.reviewer ? "Après la relecture" : "Après les codeurs",
-      ),
-    );
+    rows.push(toCome("tests", "tests", "Tests", member(team.tester), testsAfter));
   if (model.merger) {
     const row = rowOf(model.merger, { key: "merge", job: "fusion", name: "Fusion" }, "À la fin");
     if (row.state === "ok") row.time = clock(laneTime(team, MERGE_LANE, end));

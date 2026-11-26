@@ -99,7 +99,7 @@ type BridgeScope = { projectId: string; threadId: string; mode: BridgeMode };
 const bridgeModeOf = (thread: Thread): BridgeMode =>
   thread.kind === "coordinator"
     ? "coordinator"
-    : thread.role === "reviewer" || thread.role === "tester" || thread.role === "merger"
+    : thread.role && thread.role !== "lead" && thread.role !== "coder"
       ? "readonly"
       : "thread";
 

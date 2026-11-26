@@ -19,8 +19,13 @@ export interface PullRequests {
   find(repo: string, ref: string): Promise<PullRequestInfo | undefined>;
   /** Merges it if its last commit is still `head`, the way the repository allows. */
   merge(repo: string, number: number, head: string): Promise<void>;
-  /** Its open review remarks: conversations not resolved, and reviews with words of their own. */
+  /**
+   * Its review remarks: conversations, the resolved ones marked `settled`, and reviews with
+   * words of their own.
+   */
   remarks?(repo: string, number: number): Promise<PullRequestRemark[]>;
+  /** Resolves a conversation of a pull request, by GitHub's id for it. */
+  resolveRemark?(threadId: string): Promise<void>;
 }
 
 /** Runs `gh` with these arguments and resolves with what it printed. */
@@ -143,7 +148,7 @@ const nodes = (value: unknown): unknown[] =>
   isRecord(value) && Array.isArray(value.nodes) ? value.nodes : [];
 
 /**
- * Reads what `gh api graphql` printed for {@link REMARKS_QUERY}: the conversations still open,
+ * Reads what `gh api graphql` printed for {@link REMARKS_QUERY}: the conversations (resolved ones marked settled),
  * oldest first, then the reviews that ask for changes or comment with words of their own.
  */
 export function parseRemarks(json: string): PullRequestRemark[] {
@@ -160,7 +165,7 @@ export function parseRemarks(json: string): PullRequestRemark[] {
   if (!isRecord(pull)) return [];
   const remarks: PullRequestRemark[] = [];
   for (const thread of nodes(pull.reviewThreads)) {
-    if (!isRecord(thread) || thread.isResolved === true || !text(thread.id)) continue;
+    if (!isRecord(thread) || !text(thread.id)) continue;
     const comments = nodes(thread.comments).filter(isRecord);
     const first = comments[0];
     if (!first || !text(first.body).trim()) continue;
@@ -179,6 +184,7 @@ export function parseRemarks(json: string): PullRequestRemark[] {
       ...(line ? { line } : {}),
       body: cut([text(first.body).trim(), ...replies].join("\n\n")),
       ...(url ? { url } : {}),
+      ...(thread.isResolved === true ? { settled: true as const } : {}),
     });
   }
   for (const review of nodes(pull.reviews)) {
@@ -247,6 +253,23 @@ export function ghPullRequests(run: GhRun): PullRequests {
         throw new Error(ghError(error), { cause: error });
       }
       return parseRemarks(out);
+    },
+    async resolveRemark(threadId) {
+      try {
+        await run(
+          [
+            "api",
+            "graphql",
+            "-f",
+            "query=mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { isResolved } } }",
+            "-f",
+            `id=${threadId}`,
+          ],
+          ASK_TIMEOUT_MS,
+        );
+      } catch (error) {
+        throw new Error(ghError(error), { cause: error });
+      }
     },
     async merge(repo, number, head) {
       let allowed: Record<string, unknown> = {};

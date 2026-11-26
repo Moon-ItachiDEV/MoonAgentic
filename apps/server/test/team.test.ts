@@ -233,6 +233,134 @@ describe("Teams.planned", () => {
   });
 });
 
+describe("Teams.addMission", () => {
+  function setup(busy?: () => boolean) {
+    const threads = new Map<string, Thread>();
+    const replies = new Map<string, string>();
+    const sent: { threadId: string; text: string }[] = [];
+    let seq = 0;
+    const host = {
+      thread: (id: string) => threads.get(id),
+      threads: () => [...threads.values()],
+      createThread: (input: Parameters<TeamHost["createThread"]>[0]) => {
+        const id = `t${++seq}`;
+        threads.set(id, {
+          id,
+          projectId: input.projectId,
+          title: input.title,
+          agentId: input.agentId,
+          status: "running",
+          permissionMode: input.permissionMode,
+          ...(input.parentId ? { parentId: input.parentId } : {}),
+          role: input.role,
+          ...(input.team ? { team: input.team } : {}),
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        return id;
+      },
+      send: (threadId: string, text: string) => {
+        if (busy?.() && threads.get(threadId)?.role === "lead") throw new Error("occupé");
+        sent.push({ threadId, text });
+      },
+      cancel: async () => undefined,
+      setTeam: (threadId: string, team: Team) => {
+        const existing = threads.get(threadId);
+        if (existing) threads.set(threadId, { ...existing, team });
+      },
+      lastReply: (threadId: string) => replies.get(threadId) ?? "",
+      changes: async () => ({ files: [] }),
+      mergeInto: async () => [],
+      ship: async () => ({ prOpened: false }),
+      unfinishedMerge: async () => undefined,
+      contains: async () => false,
+    } satisfies TeamHost;
+    const teams = new Teams(host);
+    const leadId = teams.start({
+      projectId: "p1",
+      task: "Export CSV",
+      lead: { agentId: "demo" },
+      coder: { agentId: "demo" },
+      coders: 1,
+      permissionMode: "full",
+    });
+    const team = () => threads.get(leadId)!.team!;
+    const plan = (...titles: string[]) =>
+      "```json\n" +
+      JSON.stringify({ tasks: titles.map((title) => ({ title, brief: `Fais ${title}` })) }) +
+      "\n```";
+    return { threads, replies, sent, teams, leadId, team, plan };
+  }
+
+  it("has the lead read a mission added while it plans, then adds its pieces to the plan", () => {
+    const { replies, sent, teams, leadId, team, plan } = setup();
+    teams.addMission(leadId, "Ajoute aussi un bouton dans les rapports");
+    expect(team().missions).toMatchObject([{ status: "waiting" }]);
+    expect(sent).toHaveLength(0);
+
+    replies.set(leadId, plan("Export"));
+    teams.turnEnded(leadId, false);
+    expect(team().phase).toBe("coding");
+    expect(team().missions).toMatchObject([{ status: "reading" }]);
+    expect(team().leadMission).toBe(0);
+    const asked = sent.at(-1)!;
+    expect(asked.threadId).toBe(leadId);
+    expect(asked.text).toContain("Ajoute aussi un bouton dans les rapports");
+    expect(asked.text).toContain("- Export (en cours)");
+
+    replies.set(leadId, plan("Bouton"));
+    teams.turnEnded(leadId, false);
+    expect(team().missions).toMatchObject([{ status: "planned", added: 1 }]);
+    expect(team().leadMission).toBeUndefined();
+    expect(team().tasks.map((t) => [t.title, t.status])).toEqual([
+      ["Export", "running"],
+      ["Bouton", "waiting"],
+    ]);
+
+    // The first coder done, the mission's piece takes its place; both done, they merge.
+    teams.turnEnded(team().tasks[0]!.threadId!, false);
+    expect(team().tasks[1]!.status).toBe("running");
+    teams.turnEnded(team().tasks[1]!.threadId!, false);
+    expect(team().phase).toBe("merging");
+  });
+
+  it("keeps the team at work while a mission waits on a busy lead, and says when it is covered", () => {
+    let busy = false;
+    const { threads, replies, teams, leadId, team, plan } = setup(() => busy);
+    replies.set(leadId, plan("Export"));
+    teams.turnEnded(leadId, false);
+
+    busy = true;
+    teams.addMission(leadId, "Vérifie les accents");
+    expect(team().missions).toMatchObject([{ status: "waiting" }]);
+    // Its only piece done, the team still waits for the mission.
+    teams.turnEnded(team().tasks[0]!.threadId!, false);
+    expect(team().phase).toBe("coding");
+
+    busy = false;
+    replies.set(leadId, "Je réponds à l'utilisateur.");
+    teams.turnEnded(leadId, false);
+    expect(team().missions).toMatchObject([{ status: "reading" }]);
+
+    replies.set(leadId, '```json\n{"tasks": []}\n```');
+    teams.turnEnded(leadId, false);
+    expect(team().missions).toMatchObject([{ status: "planned", added: 0 }]);
+    expect(team().phase).toBe("done");
+    expect(() => teams.addMission(leadId, "Encore")).toThrow("ne travaille plus");
+    expect(threads.get(leadId)?.team?.missions).toHaveLength(1);
+  });
+
+  it("stops the missions left with the team", async () => {
+    const { replies, teams, leadId, team, plan } = setup();
+    replies.set(leadId, plan("Export"));
+    teams.turnEnded(leadId, false);
+    teams.addMission(leadId, "Une de plus");
+    await teams.stop(leadId);
+    expect(team().missions).toMatchObject([{ status: "stopped" }]);
+    expect(team().leadMission).toBeUndefined();
+  });
+});
+
 describe("teamStatus", () => {
   const team: Team = {
     phase: "coding",
@@ -273,5 +401,162 @@ describe("teamStatus", () => {
     const status = teamStatus(team, 0, () => "a".repeat(1000) + " fin");
     expect(status).toContain(`Dernier message du codeur : …${"a".repeat(396)} fin`);
     expect(status).toContain("depuis moins d'une minute");
+  });
+});
+
+describe("Teams with a second review and a judge", () => {
+  function setup(roles: { reviewer2?: boolean; judge?: boolean }) {
+    const threads = new Map<string, Thread>();
+    const replies = new Map<string, string>();
+    const sent: { threadId: string; text: string }[] = [];
+    const cancelled: string[] = [];
+    let seq = 0;
+    const host = {
+      thread: (id: string) => threads.get(id),
+      threads: () => [...threads.values()],
+      createThread: (input: Parameters<TeamHost["createThread"]>[0]) => {
+        const id = `t${++seq}`;
+        threads.set(id, {
+          id,
+          projectId: input.projectId,
+          title: input.title,
+          agentId: input.agentId,
+          status: "running",
+          permissionMode: input.permissionMode,
+          ...(input.parentId ? { parentId: input.parentId } : {}),
+          role: input.role,
+          ...(input.team ? { team: input.team } : {}),
+          createdAt: 1,
+          updatedAt: 1,
+        });
+        sent.push({ threadId: id, text: input.text });
+        return id;
+      },
+      send: (threadId: string, text: string) => void sent.push({ threadId, text }),
+      cancel: async (threadId: string) => void cancelled.push(threadId),
+      setTeam: (threadId: string, team: Team) => {
+        const existing = threads.get(threadId);
+        if (existing) threads.set(threadId, { ...existing, team });
+      },
+      lastReply: (threadId: string) => replies.get(threadId) ?? "",
+      changes: async () => ({ files: [] }),
+      mergeInto: async () => [],
+      ship: async () => ({ prOpened: false }),
+      unfinishedMerge: async () => undefined,
+      contains: async () => false,
+    } satisfies TeamHost;
+    const teams = new Teams(host);
+    const leadId = teams.start({
+      projectId: "p1",
+      task: "Export CSV",
+      lead: { agentId: "lead" },
+      coder: { agentId: "coder" },
+      reviewer: { agentId: "neon" },
+      ...(roles.reviewer2 ? { reviewer2: { agentId: "astra" } } : {}),
+      ...(roles.judge ? { judge: { agentId: "fable" } } : {}),
+      coders: 1,
+      permissionMode: "full",
+    });
+    const team = () => threads.get(leadId)!.team!;
+    const task = () => team().tasks[0]!;
+    replies.set(leadId, '```json\n{"tasks": [{"title": "Export", "brief": "Fais-le"}]}\n```');
+    teams.turnEnded(leadId, false);
+    const byRole = (role: string) => [...threads.values()].find((t) => t.role === role)!;
+    return { threads, replies, sent, cancelled, teams, team, task, byRole };
+  }
+
+  it("asks both reviewers at once, and goes on once both say it is good", async () => {
+    const { replies, teams, task, byRole } = setup({ reviewer2: true, judge: true });
+    teams.turnEnded(task().threadId!, false);
+    await teams.settled();
+    expect(task().status).toBe("reviewing");
+    const [one, two] = [byRole("reviewer"), byRole("reviewer2")];
+    expect(task().reviewThreadId).toBe(one.id);
+    expect(task().review2ThreadId).toBe(two.id);
+    expect(two.agentId).toBe("astra");
+
+    replies.set(one.id, "Bien.\n\nVERDICT : OK");
+    teams.turnEnded(one.id, false);
+    expect(task()).toMatchObject({ status: "reviewing", verdicts: { reviewer: "ok" } });
+    replies.set(two.id, "Bien aussi.\n\nVERDICT : OK");
+    teams.turnEnded(two.id, false);
+    // Nothing to weigh: the judge is not asked.
+    expect(task().status).toBe("done");
+    expect(task().verdicts).toBeUndefined();
+    expect(task().judgeThreadId).toBeUndefined();
+  });
+
+  it("has the judge weigh a remark: dropped, the piece is done; kept, it goes back to its coder", async () => {
+    const { replies, sent, teams, task, byRole } = setup({ reviewer2: true, judge: true });
+    teams.turnEnded(task().threadId!, false);
+    await teams.settled();
+    const [one, two] = [byRole("reviewer"), byRole("reviewer2")];
+    replies.set(one.id, "Il manque un test.\n\nVERDICT : À CORRIGER");
+    teams.turnEnded(one.id, false);
+    replies.set(two.id, "Rien à redire.\n\nVERDICT : OK");
+    teams.turnEnded(two.id, false);
+    await teams.settled();
+    expect(task().status).toBe("judging");
+    const judge = byRole("judge");
+    expect(judge.agentId).toBe("fable");
+    const asked = sent.find((s) => s.threadId === judge.id)!.text;
+    expect(asked).toContain("Il manque un test.");
+    expect(asked).toContain("Rien à redire.");
+
+    replies.set(judge.id, "Le test existe déjà.\n\nVERDICT : À CORRIGER\n\nAjoute le cas vide.");
+    teams.turnEnded(judge.id, false);
+    expect(task()).toMatchObject({ status: "running", tries: 1 });
+    expect(sent.at(-1)!.text).toContain("L'arbitre demande des corrections");
+
+    // Back to review: the same reviewers and judge, from a fresh round.
+    teams.turnEnded(task().threadId!, false);
+    await teams.settled();
+    expect(task()).toMatchObject({ status: "reviewing" });
+    expect(task().verdicts).toBeUndefined();
+    replies.set(one.id, "Corrigé.\n\nVERDICT : À CORRIGER");
+    teams.turnEnded(one.id, false);
+    replies.set(two.id, "VERDICT : OK");
+    teams.turnEnded(two.id, false);
+    await teams.settled();
+    expect(task().status).toBe("judging");
+    replies.set(judge.id, "Ça tient.\n\nVERDICT : OK");
+    teams.turnEnded(judge.id, false);
+    expect(task().status).toBe("done");
+  });
+
+  it("without a judge, sends both reviewers' remarks back to the coder", async () => {
+    const { replies, sent, teams, task, byRole } = setup({ reviewer2: true });
+    teams.turnEnded(task().threadId!, false);
+    await teams.settled();
+    const [one, two] = [byRole("reviewer"), byRole("reviewer2")];
+    replies.set(two.id, "Nom mal choisi.\n\nVERDICT : À CORRIGER");
+    teams.turnEnded(two.id, false);
+    replies.set(one.id, "Il manque un test.\n\nVERDICT : À CORRIGER");
+    teams.turnEnded(one.id, false);
+    expect(task().status).toBe("running");
+    const fix = sent.at(-1)!.text;
+    expect(fix).toContain("Le premier relecteur demande des corrections :\n\nIl manque un test.");
+    expect(fix).toContain("Le second relecteur demande des corrections :\n\nNom mal choisi.");
+  });
+
+  it("stops the other reviewer once one of them blocks the piece", async () => {
+    for (const how of ["error", "no verdict", "stopped"] as const) {
+      const { threads, replies, cancelled, teams, task, byRole } = setup({ reviewer2: true });
+      teams.turnEnded(task().threadId!, false);
+      await teams.settled();
+      const [one, two] = [byRole("reviewer"), byRole("reviewer2")];
+      if (how === "error") {
+        threads.set(one.id, { ...one, status: "error", error: "plus de quota" });
+        teams.turnEnded(one.id, false);
+      } else if (how === "stopped") {
+        teams.turnEnded(one.id, true);
+      } else {
+        replies.set(one.id, "Je ne sais pas.");
+        teams.turnEnded(one.id, false);
+        teams.turnEnded(one.id, false);
+      }
+      expect(task().status, how).not.toBe("reviewing");
+      expect(cancelled, how).toEqual([two.id]);
+    }
   });
 });

@@ -1064,6 +1064,11 @@ export class Quotas {
     });
   }
 
+  /** The figures last read for one agent, if any. */
+  get(agentId: string): AgentQuota | undefined {
+    return this.known.get(agentId);
+  }
+
   /**
    * Reads again the quota of one agent, or of all; `gapMs` skips an agent read more recently
    * than that. Resolves once the new figures are sent.

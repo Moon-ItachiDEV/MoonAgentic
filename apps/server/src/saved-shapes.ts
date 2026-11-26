@@ -45,6 +45,8 @@ export const isTeamPreset = (value: unknown): value is TeamPreset =>
   (value.roles.lead === undefined || isTeamMember(value.roles.lead)) &&
   (value.roles.coder === undefined || isTeamMember(value.roles.coder)) &&
   isMemberOrNone(value.roles.reviewer) &&
+  isMemberOrNone(value.roles.reviewer2) &&
+  isMemberOrNone(value.roles.judge) &&
   isMemberOrNone(value.roles.tester) &&
   isMemberOrNone(value.roles.merger);
 
@@ -56,6 +58,8 @@ const isTeamSetup = (value: unknown): value is TeamSetup =>
   isTeamMember(value.lead) &&
   isTeamMember(value.coder) &&
   (value.reviewer === undefined || isTeamMember(value.reviewer)) &&
+  (value.reviewer2 === undefined || isTeamMember(value.reviewer2)) &&
+  (value.judge === undefined || isTeamMember(value.judge)) &&
   (value.tester === undefined || isTeamMember(value.tester)) &&
   (value.merger === undefined || isTeamMember(value.merger)) &&
   isCount(value.coders, 4) &&

@@ -53,4 +53,9 @@ export interface PullRequestRemark {
   body: string;
   /** Where it is on GitHub. */
   url?: string;
+  /**
+   * « Réglé »: a conversation resolved on GitHub, or a review the user marked settled in
+   * MoonAgentic (GitHub has no such state for a review). Never sent to the agent.
+   */
+  settled?: true;
 }

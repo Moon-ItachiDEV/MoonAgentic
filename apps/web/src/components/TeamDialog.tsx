@@ -17,6 +17,8 @@ const ROLES: { role: TeamRole; label: string; optional?: true }[] = [
   { role: "lead", label: "Chef" },
   { role: "coder", label: "Codeurs" },
   { role: "reviewer", label: "Relecture", optional: true },
+  { role: "reviewer2", label: "Relecture 2", optional: true },
+  { role: "judge", label: "Arbitre", optional: true },
   { role: "tester", label: "Tests", optional: true },
   { role: "merger", label: "Fusion", optional: true },
 ];
@@ -202,6 +204,11 @@ export function TeamDialog({
   const lead = member("lead");
   const coder = member("coder");
   const reviewer = member("reviewer");
+  // A second review and a judge only come with a first review.
+  const reviewer2 = reviewer && member("reviewer2");
+  const judge = reviewer && member("judge");
+  const inTeam = (role: TeamRole) =>
+    role === "reviewer2" ? reviewer2 : role === "judge" ? judge : member(role);
   const tester = member("tester");
   const merger = member("merger");
   const noGit = !!project && !project.git;
@@ -247,6 +254,8 @@ export function TeamDialog({
         lead,
         coder,
         ...(reviewer ? { reviewer } : {}),
+        ...(reviewer2 ? { reviewer2 } : {}),
+        ...(judge ? { judge } : {}),
         ...(tester ? { tester } : {}),
         ...(merger ? { merger } : {}),
         coders,
@@ -305,7 +314,7 @@ export function TeamDialog({
         </div>
         <div className="ins tmrs" key={preset?.id}>
           {ROLES.map(({ role, label, optional }) => (
-            <div key={role} className={`it ro tmrow${member(role) ? "" : " off"}`}>
+            <div key={role} className={`it ro tmrow${inTeam(role) ? "" : " off"}`}>
               <span className="tx">{label}</span>
               {role === "coder" && (
                 <span className="stpr" role="group" aria-label="Codeurs en même temps">
@@ -350,7 +359,15 @@ export function TeamDialog({
               // Kept for every device: the next /equipe and the coordinator start from it.
               connection.send({
                 type: "teamPresets.set",
-                presets: withRoles(presets, preset.id, { lead, coder, reviewer, tester, merger }),
+                presets: withRoles(presets, preset.id, {
+                  lead,
+                  coder,
+                  reviewer,
+                  reviewer2: member("reviewer2"),
+                  judge: member("judge"),
+                  tester,
+                  merger,
+                }),
               });
               setKeptFor(preset.id);
             }}

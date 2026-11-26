@@ -33,18 +33,18 @@ describe("mcpServersFor", () => {
   ];
 
   it("gives a thread the servers of every project and those of its own", () => {
-    expect(names(mcpServersFor(servers, { projectId: "a" }))).toEqual([
+    expect(names(mcpServersFor(servers, { agentId: "claude", projectId: "a" }))).toEqual([
       "partout",
       "projet-a",
       "a-et-b",
       "toute-l-equipe",
     ]);
-    expect(names(mcpServersFor(servers, { projectId: "b" }))).toEqual([
+    expect(names(mcpServersFor(servers, { agentId: "claude", projectId: "b" }))).toEqual([
       "partout",
       "a-et-b",
       "toute-l-equipe",
     ]);
-    expect(names(mcpServersFor(servers, { projectId: "c" }))).toEqual([
+    expect(names(mcpServersFor(servers, { agentId: "claude", projectId: "c" }))).toEqual([
       "partout",
       "toute-l-equipe",
     ]);
@@ -52,7 +52,7 @@ describe("mcpServersFor", () => {
 
   it("gives a team's reviewer, tester and merger only the servers said to be for every role", () => {
     for (const role of ["lead", "coder"] as const) {
-      expect(names(mcpServersFor(servers, { projectId: "a", role }))).toEqual([
+      expect(names(mcpServersFor(servers, { agentId: "claude", projectId: "a", role }))).toEqual([
         "partout",
         "projet-a",
         "a-et-b",
@@ -60,12 +60,29 @@ describe("mcpServersFor", () => {
       ]);
     }
     for (const role of ["reviewer", "tester", "merger"] as const) {
-      expect(names(mcpServersFor(servers, { projectId: "a", role }))).toEqual([
+      expect(names(mcpServersFor(servers, { agentId: "claude", projectId: "a", role }))).toEqual([
         "a-et-b",
         "toute-l-equipe",
       ]);
-      expect(names(mcpServersFor(servers, { projectId: "c", role }))).toEqual(["toute-l-equipe"]);
+      expect(names(mcpServersFor(servers, { agentId: "claude", projectId: "c", role }))).toEqual([
+        "toute-l-equipe",
+      ]);
     }
+  });
+
+  it("gives a server only to the agents it is for", () => {
+    const some = [
+      server("tous"),
+      server("claude-seul", { agentIds: ["claude"] }),
+      server("aucun", { agentIds: [] }),
+    ];
+    expect(names(mcpServersFor(some, { agentId: "claude", projectId: "a" }))).toEqual([
+      "tous",
+      "claude-seul",
+    ]);
+    expect(names(mcpServersFor(some, { agentId: "codex", projectId: "a" }))).toEqual(["tous"]);
+    expect(mcpInfo(some[1]!)).toMatchObject({ agentIds: ["claude"] });
+    expect(mcpInfo(some[0]!)).not.toHaveProperty("agentIds");
   });
 
   it("tells clients who gets a server, and nothing when it is everyone who writes code", () => {

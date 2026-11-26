@@ -2,7 +2,7 @@
 // asks permission before a fake edit, and shares a plan, like a real coding agent would.
 import { execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -325,6 +325,18 @@ const app = acp
     };
 
     if (ask.includes("boom")) throw new Error("Le démo a planté exprès.");
+    // A subscription quota run out, for the models the file lists (« model » or « model|words »):
+    // read at every message, so a test can spend a quota and give it back.
+    const quotaFile = process.env.MOONAGENTIC_DEMO_QUOTA_FILE;
+    if (quotaFile && existsSync(quotaFile)) {
+      const model = models.get(sessionId) ?? "rapide";
+      for (const line of readFileSync(quotaFile, "utf8").split("\n")) {
+        const [spent, words] = line.trim().split("|");
+        if (spent === model) {
+          throw new Error(words || "You've hit your usage limit. Try again in 2 hours.");
+        }
+      }
+    }
 
     // As Hydrogen does out of any project: its tool at work for a while, the image made in its
     // own folder, and an answer that only links to it by its name.
@@ -816,13 +828,17 @@ const app = acp
       return { stopReason: "end_turn" as const };
     };
     if (ask.startsWith("Tu relis le travail d'un codeur")) {
-      if (ask.includes("toujours refuser")) {
+      if (ask.includes("toujours refuser") || ask.includes("à arbitrer")) {
         return answer("Il manque une vérification de answer.\n\nVERDICT : À CORRIGER");
       }
       if (ask.includes("sans verdict")) return answer("Ça me paraît correct.");
       return answer("Le travail est fait, sans oubli.\n\nVERDICT : OK");
     }
     if (ask.startsWith("Je n'ai pas trouvé ton verdict")) return answer("**VERDICT : OK**");
+    // A team's judge weighs the reviews: the remark does not hold.
+    if (ask.startsWith("Tu arbitres les relectures")) {
+      return answer("La vérification demandée existe déjà : rien à corriger.\n\nVERDICT : OK");
+    }
     // A reviewer of « /revue »: findings on the first file changed, a little different from
     // one model to the other, so they are put together as common and single points.
     if (ask.startsWith("Tu relis la pull request #")) {
@@ -903,6 +919,13 @@ const app = acp
       return answer(
         'Nouvelle consigne :\n\n```json\n{"brief": "Passe answer à 42, et rien d\'autre."}\n```',
       );
+    }
+    // As a team lead given a mission on the way, it adds one piece to its plan.
+    if (ask.startsWith("L'utilisateur ajoute une mission")) {
+      const plan = {
+        tasks: [{ title: "Mission ajoutée", brief: "Ajoute une ligne dans MISSION.md." }],
+      };
+      return answer("Je l'ajoute au plan.\n\n```json\n" + JSON.stringify(plan) + "\n```");
     }
     // As a team lead, it splits the work into two pieces, the way MoonAgentic asks.
     if (ask.includes("tu es le chef d'une équipe") || ask.includes("Tu es le chef d'une équipe")) {

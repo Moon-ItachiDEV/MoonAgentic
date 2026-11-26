@@ -18,8 +18,9 @@ const GROUPS: [string, [MascJob, string][]][] = [
     ],
   ],
   [
-    "Revue",
+    "Revue, Relecture 2 et Arbitre",
     [
+      // Also an /equipe's second review and judge.
       ["rev", "Relecteurs"],
       ["arb", "Arbitre"],
     ],

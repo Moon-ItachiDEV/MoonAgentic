@@ -173,6 +173,24 @@ function Body({ project, onBusy }: { project: Project; onBusy: (busy: boolean) =
           </div>
         </>
       )}
+      <div className="ins">
+        <div className="it ro">
+          <span className="tx">Supprimer après la fusion</span>
+          <button
+            className="tog"
+            role="switch"
+            aria-checked={project.deleteMerged !== false}
+            aria-label="Supprimer après la fusion"
+            onClick={() =>
+              connection.send({
+                type: "project.setDeleteMerged",
+                projectId: project.id,
+                on: project.deleteMerged === false,
+              })
+            }
+          />
+        </div>
+      </div>
       {error && (
         <p className="pcw t-err" role="alert">
           {error}

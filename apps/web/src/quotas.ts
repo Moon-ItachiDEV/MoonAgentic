@@ -1,5 +1,6 @@
 // Kept apart from the views, so it is easy to test.
-import type { AgentInfo, AgentQuota, QuotaWindow } from "@moonagentic/protocol";
+import type { AgentInfo, AgentQuota } from "@moonagentic/protocol";
+import { tightest } from "@moonagentic/protocol";
 
 /** From this share used, a window is shown as nearly spent. */
 export const WARN_PERCENT = 80;
@@ -10,50 +11,7 @@ export function quotaLevel(usedPercent: number): QuotaLevel {
   return usedPercent >= 100 ? "full" : usedPercent >= WARN_PERCENT ? "warn" : "ok";
 }
 
-/** Lowercase words of a model's id or name: « claude-fable-5-2 » gives « claude fable 5 2 ». */
-const modelWords = (text: string) =>
-  text
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
-
-/**
- * Whether a window limits the model in use. A window of one model (« Opus », « Fable 5.2 »)
- * counts only when the model's id or name holds all its words, in order: « Fable 5.2 » is not
- * « Fable 5.3 », and a leading « Claude » names no model on its own. A window of a group of
- * models counts for each of them.
- */
-export function limitsModel(window: QuotaWindow, model?: (string | undefined)[]): boolean {
-  if (!window.model && !window.models?.length) return true;
-  const names = window.models?.length ? window.models : [window.model!];
-  return names.some((name) => {
-    const words = modelWords(name);
-    if (words[0] === "claude") words.shift();
-    if (!words.length) return false;
-    const wanted = ` ${words.join(" ")} `;
-    return !!model?.some((m) => !!m && ` ${modelWords(m).join(" ")} `.includes(wanted));
-  });
-}
-
-/**
- * The window closest to its limit, the one that stops the agent first. A window of one model
- * counts only for that model: without one, only the agent's own windows count. An agent whose
- * every window is a model's (Antigravity) has no window of its own: where no model is in use,
- * its fullest one stands for it.
- */
-export function tightest(
-  quota: AgentQuota | undefined,
-  model?: (string | undefined)[],
-): QuotaWindow | undefined {
-  if (!quota || quota.state !== "ok") return undefined;
-  const any = model === undefined && quota.windows.every((w) => !limitsModel(w));
-  let worst: QuotaWindow | undefined;
-  for (const w of quota.windows) {
-    if (!any && !limitsModel(w, model)) continue;
-    if (!worst || w.usedPercent > worst.usedPercent) worst = w;
-  }
-  return worst;
-}
+export { limitsModel, tightest } from "@moonagentic/protocol";
 
 export function formatPercent(value: number): string {
   return `${Math.min(999, Math.round(value))} %`;

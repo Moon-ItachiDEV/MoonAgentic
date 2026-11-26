@@ -54,6 +54,7 @@ import { waits } from "./decision.ts";
 import { focusItem } from "./focus.ts";
 import { askUnlock, lockProject } from "./lock.ts";
 import { AppLock, lockApp } from "./components/AppLock.tsx";
+import { startProject } from "./project-pick.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { tightest } from "./quotas.ts";
 import { navigate, useRoute } from "./router.ts";
@@ -130,7 +131,10 @@ export function App() {
     return () => clearTimeout(timer);
   }, [threadMenuOut]);
   /** The thread being renamed from its « … » menu, and the name typed so far. */
-  const [renaming, setRenaming] = useState<{ id: string; title: string } | null>(null);
+  /** The conversation being renamed; `loose` for one outside any project (« Discussions »). */
+  const [renaming, setRenaming] = useState<{ id: string; title: string; loose: boolean } | null>(
+    null,
+  );
   // Escape closes the menu open above the page, as a click beside it does.
   useEffect(() => {
     if (!threadMenu && !tabPop) return;
@@ -267,15 +271,17 @@ export function App() {
   const openProjects = state.projects.filter((p) => !p.locked);
   const looseHome = loose && route.name === "home";
   const discussions = openProjects.find(isDiscussionsProject);
-  const codeProjects = openProjects.filter((p) => !isDiscussionsProject(p));
+  // An archived project is not offered for new work.
+  const codeProjects = openProjects.filter((p) => !isDiscussionsProject(p) && !p.archived);
   // Outside a project, the conversation goes to « Discussions », made on the first message.
   const project =
     routeProject ??
-    (looseHome
-      ? discussions
-      : (openProjects.find((p) => p.id === (thread?.projectId ?? pickedProjectId)) ??
-        codeProjects[0] ??
-        discussions));
+    startProject({
+      projects: state.projects,
+      looseHome,
+      threadProjectId: thread?.projectId,
+      pickedProjectId,
+    });
   // On the home screen, starting without a code project (or in « Discussions ») starts on Hydrogen.
   const looseConversation = isLooseHome({ routeName: route.name, loose, project });
 
@@ -388,6 +394,12 @@ export function App() {
   };
   const setArchived = (id: string, archived: boolean) =>
     connection.send({ type: "thread.setArchived", threadId: id, archived });
+  const renameThread = (t: Thread) =>
+    setRenaming({
+      id: t.id,
+      title: t.title,
+      loose: isDiscussionsProject(state.projects.find((p) => p.id === t.projectId)),
+    });
   const askDeleteThread = (t: Thread) => {
     // A team goes whole: its lead's thread takes the members' with it.
     const members = state.threads.filter((m) => m.parentId === t.id).length;
@@ -434,7 +446,7 @@ export function App() {
         {
           label: "Renommer",
           icon: "edit",
-          run: () => setRenaming({ id: thread.id, title: thread.title }),
+          run: () => renameThread(thread),
         },
         {
           label: thread.pinned ? "Désépingler" : "Épingler",
@@ -634,6 +646,7 @@ export function App() {
     onTogglePin: togglePin,
     onSetArchived: setArchived,
     onDeleteThread: askDeleteThread,
+    onRenameThread: renameThread,
   });
 
   /** Under the coordinator's conversation: what its project's threads wait for, then its composer. */
@@ -788,7 +801,8 @@ export function App() {
           className="gb glass press"
           aria-label="Retour"
           onClick={() =>
-            thread && codeProjects.some((p) => p.id === thread.projectId)
+            thread &&
+            openProjects.some((p) => p.id === thread.projectId && !isDiscussionsProject(p))
               ? go({ name: "project", projectId: thread.projectId })
               : go({ name: "home" })
           }
@@ -905,6 +919,10 @@ export function App() {
           onDeleteThread={(t) => {
             setDrawer(false);
             askDeleteThread(t);
+          }}
+          onRenameThread={(t) => {
+            setDrawer(false);
+            renameThread(t);
           }}
           onOpenSettings={openSettings}
         />
@@ -1351,7 +1369,7 @@ export function App() {
       />
       <ScheduleDialog
         open={scheduling !== null}
-        projects={openProjects}
+        projects={openProjects.filter((p) => !p.archived)}
         projectId={project?.id}
         agents={state.agents}
         favorites={state.favorites}
@@ -1375,7 +1393,11 @@ export function App() {
       />
       <LockSheet />
       <AppUpdateHostOnDemand />
-      <Sheet open={!!renaming} onClose={() => setRenaming(null)} title="Renommer la discussion">
+      <Sheet
+        open={!!renaming}
+        onClose={() => setRenaming(null)}
+        title={renaming?.loose ? "Renommer la discussion" : "Renommer le fil"}
+      >
         {renaming && (
           <form
             className="sbody"
@@ -1389,7 +1411,7 @@ export function App() {
             <div className="rnb">
               <input
                 className="rni"
-                aria-label="Nom de la discussion"
+                aria-label={renaming.loose ? "Nom de la discussion" : "Nom du fil"}
                 value={renaming.title}
                 maxLength={200}
                 autoComplete="off"

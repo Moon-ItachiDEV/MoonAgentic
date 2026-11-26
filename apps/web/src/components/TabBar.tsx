@@ -1,23 +1,14 @@
-import type { Artifact, Project, Thread } from "@moonagentic/protocol";
+import type { Artifact, Project } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
 import { fileName, KIND_LABEL } from "../artifacts.ts";
 import { connection, newId } from "../connection.ts";
-import { isDiscussionsProject } from "../default-models.ts";
-import { pinnedFirst, waitingCount } from "../project-threads.ts";
+import { codeThreads, tabProjects } from "../project-pick.ts";
+import { waitingCount } from "../project-threads.ts";
 import { seenAgo } from "../remote.ts";
 import { lineStatus } from "../sidebar-tree.ts";
 import type { State } from "../state.ts";
 import { Glyph, I } from "../v2/I.tsx";
 import { ProjectIcon } from "./ProjectIcon.tsx";
-
-/** The conversations with a branch of their own, the latest first, yours before a team member's. */
-export function codeThreads(state: Pick<State, "threads">): Thread[] {
-  const withCode = state.threads
-    .filter((t) => t.workspace && !t.archived && t.kind !== "coordinator")
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-  const own = withCode.filter((t) => !t.parentId);
-  return own.length ? own : withCode;
-}
 
 export type TabPop = "projects" | "code" | "artifacts" | null;
 const POS = { projects: 1, code: 2, artifacts: 3 } as const;
@@ -75,7 +66,7 @@ export function TabPopover(props: {
   onOpenArtifacts: () => void;
 }) {
   const { state, pop } = props;
-  const projects = pinnedFirst(state.projects.filter((p) => !isDiscussionsProject(p)));
+  const projects = tabProjects(state.projects);
   const live = state.threads.filter((t) => !t.archived);
   return (
     <div

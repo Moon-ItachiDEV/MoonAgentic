@@ -272,6 +272,7 @@ export function reduce(state: State, message: ServerMessage): State {
     case "localClones":
     case "pullRequest":
     case "prRemarks":
+    case "mcpTools":
     case "forecast":
     case "worktreeFiles":
     case "worktreeFile":

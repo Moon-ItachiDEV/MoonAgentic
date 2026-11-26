@@ -114,6 +114,8 @@ describe("the user's teams", () => {
       lead: { agentId: "claude", model: "claude opus 5.5" },
       coder: { agentId: "claude", model: "claude sonnet 5.5" },
       reviewer: null,
+      reviewer2: null,
+      judge: null,
       tester: null,
       merger: null,
     });

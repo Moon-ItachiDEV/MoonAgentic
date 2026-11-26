@@ -60,6 +60,8 @@ export interface TreeNode {
 export interface TreePiece {
   coder: TreeNode;
   reviewer?: TreeNode;
+  reviewer2?: TreeNode;
+  judge?: TreeNode;
   tester?: TreeNode;
 }
 
@@ -84,6 +86,8 @@ export const PR = "pr";
 export const coderKey = (i: number) => `c${i}`;
 export const reviewerKey = (i: number) => `r${i}`;
 export const testerKey = (i: number) => `t${i}`;
+export const reviewer2Key = (i: number) => `s${i}`;
+export const judgeKey = (i: number) => `j${i}`;
 
 const MERGE_LANE = -2;
 
@@ -163,9 +167,11 @@ export function teamRelays(team: Team): Relay[] {
   const holder = (i: number, phase: TeamLanePhase | undefined) =>
     phase === "reviewing" && team.reviewer
       ? reviewerKey(i)
-      : phase === "testing" && team.tester
-        ? testerKey(i)
-        : coderKey(i);
+      : phase === "judging" && team.judge
+        ? judgeKey(i)
+        : phase === "testing" && team.tester
+          ? testerKey(i)
+          : coderKey(i);
   for (const event of team.timeline ?? []) {
     const before = last.get(event.lane);
     last.set(event.lane, event.phase);
@@ -181,7 +187,7 @@ export function teamRelays(team: Team): Relay[] {
     if (!task) continue;
     const title = task.title;
     if (phase === "running") {
-      if (before === "reviewing" || before === "testing") {
+      if (before === "reviewing" || before === "judging" || before === "testing") {
         relays.push({
           at,
           from: holder(lane, before),
@@ -206,8 +212,16 @@ export function teamRelays(team: Team): Relay[] {
         tone: "work",
         text: "Changements à relire",
       });
+    } else if (phase === "judging" && team.judge) {
+      relays.push({
+        at,
+        from: reviewerKey(lane),
+        to: judgeKey(lane),
+        tone: "warn",
+        text: "Relectures à arbitrer",
+      });
     } else if (phase === "testing" && team.tester) {
-      const relu = before === "reviewing" && !!team.reviewer;
+      const relu = (before === "reviewing" || before === "judging") && !!team.reviewer;
       relays.push({
         at,
         from: holder(lane, before),
@@ -358,7 +372,9 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
     const note = firstLine(task.note ?? "");
     const from = cameFrom(i);
     // Sent back to its coder: by whoever held it just before.
-    const sentBack = task.status === "running" && (from === "reviewing" || from === "testing");
+    const sentBack =
+      task.status === "running" &&
+      (from === "reviewing" || from === "judging" || from === "testing");
     const coderRest = (): Pick<TreeNode, "tone" | "label" | "action"> => {
       switch (task.status) {
         case "reviewing":
@@ -367,6 +383,8 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
             label: "En relecture",
             action: "Attend le verdict de la relecture",
           };
+        case "judging":
+          return { tone: "idle", label: "En arbitrage", action: "Attend le verdict de l'arbitre" };
         case "testing":
           return { tone: "idle", label: "En test", action: "Attend le résultat des tests" };
         case "lead":
@@ -391,9 +409,17 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
     };
     /** A checker at rest: what its verdict was, as far as the piece's state tells. */
     const checkRest = (
-      mine: "reviewing" | "testing",
+      mine: "reviewing" | "judging" | "testing",
       passed: boolean,
     ): Pick<TreeNode, "tone" | "label" | "action"> => {
+      // The reviews are in: the judge weighs them.
+      if (mine === "reviewing" && task.status === "judging") {
+        return { tone: "ok", label: "Relu", action: "Chez l'arbitre" };
+      }
+      // Nothing was found to weigh: the judge was never asked.
+      if (mine === "judging" && finished && !task.judgeThreadId) {
+        return { tone: "idle", label: "Pas appelé", action: "Rien à peser" };
+      }
       if (passed) return { tone: "ok", label: "Validé", action: "Rien à corriger" };
       if (sentBack && from === mine) {
         return {
@@ -407,7 +433,11 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
       }
       return { tone: "idle", label: "En attente", action: "Attend la sous-tâche" };
     };
-    const reviewed = task.status === "done" || (task.status === "testing" && !!team.tester);
+    const tested = task.status === "testing" && !!team.tester;
+    const finished = task.status === "done" || tested;
+    const reviewed = finished;
+    // Weighed by the judge, once it was asked to.
+    const judged = finished && !!task.judgeThreadId;
     return {
       coder: node(
         {
@@ -433,6 +463,36 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
               team.reviewer,
               byId(task.reviewThreadId),
               checkRest("reviewing", reviewed),
+            ),
+          }
+        : {}),
+      ...(team.reviewer && team.reviewer2
+        ? {
+            reviewer2: node(
+              {
+                key: reviewer2Key(i),
+                role: "reviewer2",
+                name: "Relecture 2",
+                mission: `Relit aussi les changements de « ${task.title} », de son côté.`,
+              },
+              team.reviewer2,
+              byId(task.review2ThreadId),
+              checkRest("reviewing", reviewed),
+            ),
+          }
+        : {}),
+      ...(team.reviewer && team.judge
+        ? {
+            judge: node(
+              {
+                key: judgeKey(i),
+                role: "judge",
+                name: "Arbitre",
+                mission: `Pèse les relectures de « ${task.title} » et garde ce qui est vraiment à corriger.`,
+              },
+              team.judge,
+              byId(task.judgeThreadId),
+              checkRest("judging", judged),
             ),
           }
         : {}),
@@ -503,6 +563,8 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
   for (const p of pieces) {
     nodes[p.coder.key] = p.coder;
     if (p.reviewer) nodes[p.reviewer.key] = p.reviewer;
+    if (p.reviewer2) nodes[p.reviewer2.key] = p.reviewer2;
+    if (p.judge) nodes[p.judge.key] = p.judge;
     if (p.tester) nodes[p.tester.key] = p.tester;
   }
   if (merger) nodes[MERGE] = merger;
@@ -537,6 +599,12 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
 
 /** The members' threads the tree reads: every one but the lead's. */
 export function memberThreadIds(team: Team): string[] {
-  const ids = team.tasks.flatMap((t) => [t.threadId, t.reviewThreadId, t.testThreadId]);
+  const ids = team.tasks.flatMap((t) => [
+    t.threadId,
+    t.reviewThreadId,
+    t.review2ThreadId,
+    t.judgeThreadId,
+    t.testThreadId,
+  ]);
   return [...ids, team.mergeThreadId].filter((id): id is string => !!id);
 }

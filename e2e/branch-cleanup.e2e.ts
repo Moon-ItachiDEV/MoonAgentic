@@ -116,6 +116,13 @@ describe("cleaning a project's branches", () => {
     await dialog.getByText("moon/en-cours-bbbbbb").waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "branches-fait.png") });
     expect(branches()).toEqual(["main", "moon/en-cours-bbbbbb"]);
+
+    // Merged branches go by themselves, unless the project keeps them.
+    const auto = dialog.getByRole("switch", { name: "Supprimer après la fusion" });
+    expect(await auto.getAttribute("aria-checked")).toBe("true");
+    await auto.click();
+    await expect.poll(() => auto.getAttribute("aria-checked")).toBe("false");
+    if (shots) await page.screenshot({ path: path.join(shots, "branches-garder.png") });
     expect(errors).toEqual([]);
     await page.close();
   });
