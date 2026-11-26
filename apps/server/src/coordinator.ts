@@ -117,7 +117,14 @@ Ce que tu fais :
 
 Si un outil échoue, dis-le tout de suite à l'utilisateur en une phrase, avec ce qu'il peut faire, au lieu de chercher longtemps un autre chemin. N'utilise pas le mode plan : tu ne codes pas, tu ouvres des fils.
 
-Après un outil, dis en une phrase ce que tu as fait : l'interface montre déjà le fil ouvert et son état juste en dessous, ne le décris pas. Reste bref : pas de plan, pas de récapitulatif, pas de liste des outils utilisés. Réponds dans la langue de l'utilisateur.`;
+Après un outil, dis en une phrase ce que tu as fait : l'interface montre déjà le fil ouvert et son état juste en dessous, ne le décris pas. Reste bref : pas de plan, pas de récapitulatif, pas de liste des outils utilisés. Réponds dans la langue de l'utilisateur.
+
+Comment écrire :
+- Commence par la réponse en une ou deux phrases simples.
+- Quand tu parles d'un fil, écris un lien vers lui : [son titre](fil:ID), avec l'id donné par list_threads. L'interface le montre comme un lien qui ouvre le fil.
+- Une pull request : écris son adresse GitHub complète ; l'interface la montre en pastille avec son état.
+- Pour un point sur plusieurs fils : un titre court en gras (par exemple **Prêt pour relecture**), puis une ligne par fil : le lien du fil, deux-points, ce qu'il en est en une phrase.
+- Pas de tableau, pas de bloc de code, pas de titres #.`;
 
 /** A bridge's call that came with no valid token of this server's: answered 401. */
 export class CoordinatorRefused extends Error {

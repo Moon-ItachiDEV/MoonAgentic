@@ -536,3 +536,51 @@ describe("a thread's summary", () => {
     expect(leadOf("Fait : v0.1.10 publiée. Rien d'autre.", 1)).toBe("Fait : v0.1.10 publiée.");
   });
 });
+
+describe("pull requests turned green", () => {
+  const green = (n: number) => ({
+    ...OPEN,
+    number: n,
+    url: `https://github.com/moon/demo/pull/${n}`,
+    checks: [{ name: "ci", state: "passed" as const }],
+  });
+
+  it("are told to the coordinator once at least two wait only on a review", async () => {
+    const { hub, store, github, threadId: coordinator } = await threadOnGithub();
+    const projectId = store.getThread(coordinator)!.projectId;
+    const open = async (text: string) => {
+      const id = hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        isolated: true,
+        text,
+        openedBy: coordinator,
+      });
+      await hub.whenIdle(id);
+      return id;
+    };
+    const first = await open("Ajoute le suivi");
+    const second = await open("Corrige le menu");
+    const told = () =>
+      store.listItems(coordinator).filter((i) => i.kind === "agent" && i.id.startsWith("green:"));
+
+    github.pr = green(1);
+    await hub.pullRequest(first);
+    expect(told()).toEqual([]);
+
+    github.pr = green(2);
+    await hub.pullRequest(second);
+    expect(told()).toHaveLength(1);
+    const text = (told()[0] as { text: string }).text;
+    expect(text).toContain("Les 2 PR sont vertes");
+    expect(text).toContain(`](fil:${first})`);
+    expect(text).toContain("https://github.com/moon/demo/pull/2");
+
+    // Asked again, the same green pull requests are not told twice.
+    await hub.pullRequest(second);
+    github.pr = green(1);
+    await hub.pullRequest(first);
+    expect(told()).toHaveLength(1);
+  });
+});

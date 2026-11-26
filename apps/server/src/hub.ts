@@ -269,6 +269,8 @@ const OWN_THREAD_TOOL = new RegExp(
 
 /** A known, open pull request is asked about again this often. */
 const PR_WATCH_MS = 60_000;
+/** Pull requests turned green at once before the coordinator's conversation says so. */
+const GREEN_AT_ONCE = 2;
 /** The setting that keeps the mascot of each role the user changed. */
 const ROLE_MASCOTS = "roleMascots";
 /** Characters kept of what an agent last said, for lists of threads. */
@@ -397,6 +399,10 @@ export class Hub {
       grant?: { key: string; optionId: string };
     }
   >();
+  /** Green pull requests not yet told to their coordinator, by coordinator then thread. */
+  private readonly greenWaiting = new Map<string, Map<string, string>>();
+  /** The pull request each thread's green state was last told for. */
+  private readonly greenTold = new Map<string, string>();
   /** What « Autoriser pour ce fil » allowed, by thread: similar calls then pass without asking. */
   private readonly threadGrants = new Map<string, Set<string>>();
   /**
@@ -3096,6 +3102,7 @@ export class Hub {
       pr?.state === "merged" &&
       (thread.pr ? thread.pr.state !== "merged" : !!thread.workspace?.prOpened);
     this.updateThread(threadId, { pr: pr ?? null });
+    this.noteGreen(thread, pr);
     if (!merged || !info) return;
     // A member that is not its team's branch is never resolved on its own.
     if (thread.parentId && !lead) return;
@@ -3108,6 +3115,49 @@ export class Hub {
     await this.setArchived(target.id, true).catch((error) =>
       console.error("Résolution après merge :", error),
     );
+  }
+
+  /**
+   * Tells the coordinator's conversation, once at least `GREEN_AT_ONCE` pull requests of the
+   * threads it opened have turned green and wait only on a review: one short message with a
+   * link to each thread and its pull request. Nothing runs for it: the server writes it.
+   */
+  private noteGreen(thread: Thread, pr: Thread["pr"] | undefined) {
+    const coordinatorId = thread.openedBy;
+    if (!coordinatorId || !this.store.getThread(coordinatorId)) return;
+    const green =
+      !!pr &&
+      (pr.state === "open" || pr.state === "draft") &&
+      pr.checks === "passed" &&
+      !pr.conflicts;
+    const waiting = this.greenWaiting.get(coordinatorId) ?? new Map<string, string>();
+    if (!green || !pr) {
+      waiting.delete(thread.id);
+      this.greenWaiting.set(coordinatorId, waiting);
+      return;
+    }
+    // Already told for this pull request at this state.
+    const key = `${pr.url}`;
+    if (this.greenTold.get(thread.id) === key) return;
+    waiting.set(thread.id, key);
+    this.greenWaiting.set(coordinatorId, waiting);
+    if (waiting.size < GREEN_AT_ONCE) return;
+    const lines = [...waiting.keys()].flatMap((id) => {
+      const t = this.store.getThread(id);
+      if (!t?.pr) return [];
+      this.greenTold.set(id, t.pr.url);
+      return [
+        `- [${t.title.replace(/[[\]]/g, "")}](fil:${t.id}) : sa PR ${t.pr.url} passe toutes ses vérifications.`,
+      ];
+    });
+    this.greenWaiting.set(coordinatorId, new Map());
+    if (lines.length < GREEN_AT_ONCE) return;
+    this.putItem(coordinatorId, {
+      id: `green:${randomUUID()}`,
+      kind: "agent",
+      text: `Les ${lines.length} PR sont vertes. Chacune attend seulement ta relecture.\n\n**Prêt pour relecture**\n\n${lines.join("\n")}`,
+      at: Date.now(),
+    });
   }
 
   /**

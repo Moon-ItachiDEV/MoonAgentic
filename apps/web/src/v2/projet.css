@@ -887,3 +887,64 @@ html:not([data-dev="desk"]) .scr.roomy .dtop .gb:active {
     animation: none;
   }
 }
+
+/* Lien du coordinateur vers un fil : il ouvre le fil, à côté sur grand écran */
+.md a.thlink {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: text-decoration-color 150ms ease;
+}
+.md a.thlink::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 5px;
+  vertical-align: -2px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 7.5a5 5 0 0 1 5-5h1a5 5 0 0 1 0 10H6l-3 2v-3a5 5 0 0 1-.5-4z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M2.5 7.5a5 5 0 0 1 5-5h1a5 5 0 0 1 0 10H6l-3 2v-3a5 5 0 0 1-.5-4z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+@media (hover: hover) and (pointer: fine) {
+  .md a.thlink:hover {
+    text-decoration-color: currentColor;
+  }
+}
+.fcount {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* « Nouveau »: a thin wavy line on each side, above what arrived since the user last wrote. */
+.nsep {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 4px 0 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--accent);
+}
+.nsep > i {
+  flex: 1;
+  height: 6px;
+  background: currentColor;
+  opacity: 0.55;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6'%3E%3Cpath d='M0 3q3-3 6 0t6 0' fill='none' stroke='black' stroke-width='1'/%3E%3C/svg%3E")
+    repeat-x left center / 12px 6px;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='6'%3E%3Cpath d='M0 3q3-3 6 0t6 0' fill='none' stroke='black' stroke-width='1'/%3E%3C/svg%3E")
+    repeat-x left center / 12px 6px;
+}
+.nsep.past {
+  color: var(--muted);
+}
