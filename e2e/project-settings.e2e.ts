@@ -82,12 +82,25 @@ describe("a project's settings", () => {
     await page.getByRole("button", { name: "Réglages du projet" }).click();
     const dialog = page.getByRole("dialog", { name: "Réglages du projet" });
     await dialog.getByRole("button", { name: /^Icône/ }).click();
-    await dialog.getByRole("button", { name: "Icône 🚀", exact: true }).click();
-    await dialog.getByRole("radio", { name: "Menthe" }).click();
+    const icons = page.getByRole("dialog", { name: "Icône" });
+    expect(await icons.getByRole("radiogroup", { name: "Icône" }).getByRole("radio").count()).toBe(
+      121,
+    );
+    await icons.getByLabel("Chercher une icône").fill("fusee");
+    await icons.getByRole("radio", { name: "Fusée", exact: true }).click();
+    await icons.getByRole("radio", { name: "Menthe" }).click();
     // Every window sees it, the sidebar first.
-    const icon = menu.getByRole("button", { name: /^demo/ }).locator(".pj-ico.pc-mint");
-    await expect.poll(() => icon.textContent(), { timeout: 30_000 }).toBe("🚀");
+    const icon = menu.getByRole("button", { name: /^demo/ }).locator(".pj-fold.pc-mint use");
+    await expect
+      .poll(() => icon.getAttribute("href").catch(() => null), { timeout: 30_000 })
+      .toBe("#pi-rocket");
+    await expect
+      .poll(() =>
+        icons.getByRole("radio", { name: "Fusée", exact: true }).getAttribute("aria-checked"),
+      )
+      .toBe("true");
     if (shots) await page.screenshot({ path: path.join(shots, "projet-apparence.png") });
+    await icons.getByRole("button", { name: "Retour", exact: true }).click();
 
     await dialog.getByLabel("Contenu de AGENTS.md").fill("## Projet\n- Lance les tests.\n");
     await dialog.getByRole("button", { name: "Enregistrer" }).click();

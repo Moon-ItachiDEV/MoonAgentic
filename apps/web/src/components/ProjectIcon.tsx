@@ -1,17 +1,25 @@
 import type { Project } from "@moonagentic/protocol";
+import { projectIconName } from "../project-icons.ts";
 import { I } from "../v2/I.tsx";
 
 /**
- * A project's icon: the emoji or letters set in its settings, on its tint, or its folder in
- * its tint while none is set.
+ * A project's icon: one of the project icons drawn in its tint, the emoji or letters set in
+ * its settings on its tint, or its folder in its tint while none is set.
  */
 export function ProjectIcon(props: { project: Pick<Project, "icon" | "color">; size?: number }) {
   const size = props.size ?? 16;
   const tint = props.project.color ? ` pc-${props.project.color}` : "";
-  if (!props.project.icon) {
+  const drawn = projectIconName(props.project.icon);
+  if (!props.project.icon || drawn) {
     return (
       <span className={`pj-fold${tint}`} aria-hidden>
-        <I n="folder" s={size} />
+        {drawn ? (
+          <svg width={size} height={size} aria-hidden="true">
+            <use href={`#pi-${drawn}`} />
+          </svg>
+        ) : (
+          <I n="folder" s={size} />
+        )}
       </span>
     );
   }

@@ -1,24 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { MAX_SETUP_FILE, type ProjectSkill } from "@moonagentic/protocol";
-import {
-  claudeAction,
-  commandProblem,
-  fits,
-  iconProblem,
-  oneLine,
-  skillProblem,
-} from "./project-setup.ts";
+import { claudeAction, commandProblem, fits, oneLine, skillProblem } from "./project-setup.ts";
 
 describe("project settings checks", () => {
-  it("keeps an emoji or letters as an icon, never spaces or a long text", () => {
-    expect(iconProblem("")).toBeUndefined();
-    expect(iconProblem("🛠️")).toBeUndefined();
-    expect(iconProblem("👩🏽‍💻")).toBeUndefined();
-    expect(iconProblem("AB")).toBeUndefined();
-    expect(iconProblem("A B")).toBe("Sans espace.");
-    expect(iconProblem("x".repeat(17))).toMatch(/suffisent/);
-  });
-
   it("names a command as a file, once", () => {
     const commands = [{ name: "deploy", description: "", template: "x" }];
     expect(commandProblem("", commands, undefined)).toMatch(/nom/);
