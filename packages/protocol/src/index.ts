@@ -935,6 +935,11 @@ export type Item =
       relayed?: true;
       /** The thread's files just before this message, for threads with their own branch. */
       checkpoint?: string;
+      /**
+       * Sent before the conversation moved into a project: going back to it puts the
+       * project's files back as they were at the move (`checkpoint`).
+       */
+      beforeMove?: true;
       at: number;
     }
   | { id: string; kind: "agent"; text: string; at: number }
@@ -999,7 +1004,9 @@ export type Item =
       at: number;
     }
   /** The thread went from one agent to another; agent items before it are `from`'s. */
-  | { id: string; kind: "handoff"; from: AgentId; to: AgentId; at: number };
+  | { id: string; kind: "handoff"; from: AgentId; to: AgentId; at: number }
+  /** The conversation, started outside any project, moved into this one. */
+  | { id: string; kind: "moved"; projectId: string; name: string; at: number };
 
 export type ItemKind = Item["kind"];
 

@@ -8,6 +8,7 @@ import {
 } from "@moonagentic/protocol";
 import { onThreadLink } from "./components/Markdown.tsx";
 import { wholeThread } from "./whole-thread.ts";
+import { renameKey, sendRename } from "./rename.ts";
 import {
   Fragment,
   lazy,
@@ -251,6 +252,11 @@ export function App() {
     [],
   );
   // Every hook is above: an early return before one of them breaks the page when the state changes.
+  // Before any early return, as every hook. Leaving the thread drops a rename left open there, unsaved.
+  const routeThreadId = route.name === "thread" ? route.threadId : undefined;
+  useEffect(() => {
+    setRenaming((was) => (was && was.id !== routeThreadId ? null : was));
+  }, [routeThreadId]);
   if (state.status === "unauthorized") return <PairGate />;
 
   const thread: Thread | undefined =
@@ -394,12 +400,24 @@ export function App() {
   };
   const setArchived = (id: string, archived: boolean) =>
     connection.send({ type: "thread.setArchived", threadId: id, archived });
-  const renameThread = (t: Thread) =>
+  // The title in the thread's header becomes the field: from elsewhere, the thread opens first.
+  const renameThread = (t: Thread) => {
+    if (route.name !== "thread" || route.threadId !== t.id) go({ name: "thread", threadId: t.id });
     setRenaming({
       id: t.id,
       title: t.title,
       loose: isDiscussionsProject(state.projects.find((p) => p.id === t.projectId)),
     });
+  };
+  const finishRename = (save: boolean, title: string) => {
+    const was = renaming;
+    setRenaming(null);
+    if (!was || !save) return;
+    const clean = title.replace(/\s+/g, " ").trim();
+    const current = state.threads.find((t) => t.id === was.id);
+    if (!clean || !current || clean === current.title) return;
+    sendRename(connection, was.id, clean, was.loose);
+  };
   const askDeleteThread = (t: Thread) => {
     // A team goes whole: its lead's thread takes the members' with it.
     const members = state.threads.filter((m) => m.parentId === t.id).length;
@@ -810,21 +828,44 @@ export function App() {
           <I n="back" />
         </button>
         <div className="ctr">
-          {thread && (
-            <div className="ttl glass">
-              <b>
-                {thread.pinned && (
-                  <i className="tpn" role="img" aria-label="Épinglé">
-                    <I n="star" s={12} />
-                  </i>
-                )}
-                {thread.title}
-              </b>
-              <span>{thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}</span>
-            </div>
+          {thread && renaming?.id === thread.id ? (
+            <HeaderRename
+              key={thread.id}
+              initial={renaming.title}
+              label={renaming.loose ? "Nom de la discussion" : "Nom du fil"}
+              sub={thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}
+              onDone={finishRename}
+            />
+          ) : (
+            thread && (
+              <div className="ttl glass">
+                <b>
+                  {thread.pinned && (
+                    <i className="tpn" role="img" aria-label="Épinglé">
+                      <I n="star" s={12} />
+                    </i>
+                  )}
+                  {thread.title}
+                </b>
+                <span>{thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}</span>
+              </div>
+            )
           )}
         </div>
-        {thread ? (
+        {thread && renaming?.id === thread.id ? (
+          <button
+            className="gb glass press tok"
+            aria-label="Valider le nom"
+            // The field keeps its focus: its own blur would save it a second time.
+            onPointerDown={(e) => e.preventDefault()}
+            onClick={() => {
+              const field = document.getElementById("tren") as HTMLInputElement | null;
+              finishRename(true, field?.value ?? renaming.title);
+            }}
+          >
+            <I n="check" s={20} />
+          </button>
+        ) : thread ? (
           <div className="gcap glass">
             {thread.workspace && !thread.archived && !looseThread && (
               <button
@@ -1394,41 +1435,6 @@ export function App() {
       />
       <LockSheet />
       <AppUpdateHostOnDemand />
-      <Sheet
-        open={!!renaming}
-        onClose={() => setRenaming(null)}
-        title={renaming?.loose ? "Renommer la discussion" : "Renommer le fil"}
-      >
-        {renaming && (
-          <form
-            className="sbody"
-            onSubmit={(event) => {
-              event.preventDefault();
-              const title = renaming.title.trim();
-              if (title) connection.send({ type: "thread.rename", threadId: renaming.id, title });
-              setRenaming(null);
-            }}
-          >
-            <div className="rnb">
-              <input
-                className="rni"
-                aria-label={renaming.loose ? "Nom de la discussion" : "Nom du fil"}
-                value={renaming.title}
-                maxLength={200}
-                autoComplete="off"
-                autoFocus
-                onFocus={(e) => e.currentTarget.select()}
-                onChange={(e) => setRenaming({ ...renaming, title: e.target.value })}
-              />
-            </div>
-            <div className="mga">
-              <button className="b2 ink press" type="submit" disabled={!renaming.title.trim()}>
-                Renommer
-              </button>
-            </div>
-          </form>
-        )}
-      </Sheet>
       <Presence show={!!confirm}>
         {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
       </Presence>
@@ -1528,5 +1534,52 @@ function HomeCapsule(props: {
         </button>
       )}
     </div>
+  );
+}
+
+/** The thread's title, become a field in the header: Enter or leaving it saves, Esc cancels. */
+function HeaderRename({
+  initial,
+  label,
+  sub,
+  onDone,
+}: {
+  initial: string;
+  label: string;
+  sub: string;
+  onDone: (save: boolean, title: string) => void;
+}) {
+  const field = useRef<HTMLInputElement>(null);
+  const done = useRef(false);
+  const finish = (save: boolean) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(save, field.current?.value ?? initial);
+  };
+  useEffect(() => {
+    field.current?.focus();
+    field.current?.select();
+  }, []);
+  return (
+    <label className="ttl glass ren">
+      <input
+        id="tren"
+        ref={field}
+        defaultValue={initial}
+        aria-label={label}
+        maxLength={200}
+        autoComplete="off"
+        spellCheck={false}
+        enterKeyHint="done"
+        onKeyDown={(e) => {
+          const does = renameKey({ key: e.key, isComposing: e.nativeEvent.isComposing });
+          if (!does) return;
+          e.preventDefault();
+          finish(does === "save");
+        }}
+        onBlur={() => finish(true)}
+      />
+      <span>{sub}</span>
+    </label>
   );
 }

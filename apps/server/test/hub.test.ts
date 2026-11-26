@@ -1673,6 +1673,7 @@ describe("Composer: files, skills, commands, pins and search", () => {
       text: "Une question",
     });
     await hub.whenIdle(threadId);
+    client.openThreadIds = new Set([threadId]);
     // Only into a real project.
     await expect(
       hub.handle(client, { type: "thread.move", threadId, projectId: discussions }),
@@ -1680,7 +1681,16 @@ describe("Composer: files, skills, commands, pins and search", () => {
     await hub.handle(client, { type: "thread.move", threadId, projectId });
     expect(store.getThread(threadId)).toMatchObject({ projectId, status: "idle" });
     expect(store.getSessionId(threadId)).toBeNull();
-    expect(client.messages.at(-1)).toMatchObject({ type: "thread", thread: { projectId } });
+    // Outside git, it works in the project's folder: no step back, but the move is told.
+    expect(store.getThread(threadId)?.workspace).toBeUndefined();
+    expect(store.listItems(threadId).filter((i) => i.kind === "user" && i.checkpoint)).toEqual([]);
+    expect(store.listItems(threadId).at(-1)).toMatchObject({ kind: "moved", projectId });
+    // Neon's review of PR #176: screens open on it get the move with the rest, in one go.
+    const sent = client.messages.filter((m) => m.type === "items" && m.threadId === threadId);
+    expect(sent.at(-1)).toMatchObject({
+      items: expect.arrayContaining([expect.objectContaining({ kind: "moved" })]),
+    });
+    expect(client.messages.filter((m) => m.type === "item" && m.item.kind === "moved")).toEqual([]);
     // A thread of a project stays in it.
     await expect(
       hub.handle(client, { type: "thread.move", threadId, projectId: discussions }),

@@ -44,6 +44,9 @@ export function threadMarkdown(thread: Thread, items: Item[], agents: AgentInfo[
       case "handoff":
         lines.push(`*${name(item.from)} passe le relais à ${name(item.to)}.*`, "");
         return;
+      case "moved":
+        lines.push(`*Déplacée dans ${item.name}.*`, "");
+        return;
       case "opened":
         lines.push(`> Fil ouvert : ${item.title}`, "");
         return;

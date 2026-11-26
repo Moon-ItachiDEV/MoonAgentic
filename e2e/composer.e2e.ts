@@ -1407,10 +1407,47 @@ describe("composer", () => {
     await page.getByRole("menuitem", { name: "Renommer" }).hover();
     await shot(page, "c23b-menu-hors-projet");
     await page.getByRole("menuitem", { name: "Renommer" }).click();
+    // The title in the header becomes the field, its text selected; Esc leaves it as it was.
     const name = page.getByRole("textbox", { name: "Nom de la discussion" });
+    await expect.poll(() => name.evaluate((e) => e === document.activeElement)).toBe(true);
+    expect(await name.evaluate((e: HTMLInputElement) => e.selectionEnd! - e.selectionStart!)).toBe(
+      "Une question hors projet".length,
+    );
+    await page.keyboard.type("Sans suite");
+    await name.press("Escape");
+    await page.locator(".ttl b", { hasText: "Une question hors projet" }).waitFor();
+    await page.getByRole("button", { name: "Actions du fil" }).click();
+    await page.getByRole("menuitem", { name: "Renommer" }).click();
     await name.fill("Nouveautés IA");
+    const ok = page.getByRole("button", { name: "Valider le nom" });
+    await ok.waitFor();
+    // Neon's review of PR #176: pressed on an iPad, ✓ kept its ink, not the grey of a press.
+    const ink = await ok.evaluate((e) => getComputedStyle(e).backgroundColor);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("DOM.enable");
+    await cdp.send("CSS.enable");
+    const { root: doc } = await cdp.send("DOM.getDocument");
+    const { nodeId } = await cdp.send("DOM.querySelector", {
+      nodeId: doc.nodeId,
+      selector: ".gb.tok",
+    });
+    const dev = await page.evaluate(() => document.documentElement.dataset.dev);
+    await page.evaluate(() => (document.documentElement.dataset.dev = "touch"));
+    await cdp.send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: ["active"] });
+    // Past its colour's transition.
+    await page.waitForTimeout(400);
+    expect(await ok.evaluate((e) => getComputedStyle(e).backgroundColor)).toBe(ink);
+    await cdp.send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: [] });
+    await page.evaluate((d) => {
+      if (d) document.documentElement.dataset.dev = d;
+      else delete document.documentElement.dataset.dev;
+    }, dev);
+    await cdp.detach();
+    await page.waitForTimeout(400);
     await shot(page, "c23c-renommer");
-    await name.press("Enter");
+    // ✓ saves, its own press leaving the field focused: saved once.
+    await ok.click();
+    await page.getByRole("status").getByText("Discussion renommée").waitFor();
     await side
       .getByRole("button", { name: /^Nouveautés IA/ })
       .first()
@@ -1420,7 +1457,12 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Actions du fil" }).click();
     await page.getByRole("menuitem", { name: "Renommer" }).waitFor();
     await shot(page, "c23d-menu-telephone");
-    await page.keyboard.press("Escape");
+    await page.getByRole("menuitem", { name: "Renommer" }).click();
+    await page.getByRole("button", { name: "Valider le nom" }).waitFor();
+    await page.waitForTimeout(400);
+    await shot(page, "c23e-renommer-telephone");
+    await page.getByRole("textbox", { name: "Nom de la discussion" }).press("Escape");
+    await page.locator(".ttl b", { hasText: "Nouveautés IA" }).waitFor();
     await page.setViewportSize({ width: 1280, height: 820 });
 
     // Resolved, it has no project to sit under: « Résolus » below « Récents » keeps it.
@@ -1445,6 +1487,13 @@ describe("composer", () => {
     const side = menu(page);
     const dest = path.join(dir, "destination");
     write(dest, { "README.md": "# Destination\n" });
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: dest, stdio: "pipe" });
+    git("init", "-q", "-b", "main");
+    git("config", "user.email", "e2e@example.com");
+    git("config", "user.name", "E2E");
+    git("config", "commit.gpgsign", "false");
+    git("add", "-A");
+    git("commit", "-q", "-m", "init");
     await addProject(page, dest, false);
     await side.getByRole("button", { name: "Nouvelle discussion" }).click();
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
@@ -1489,9 +1538,35 @@ describe("composer", () => {
     await page.getByText("Une question à déplacer").first().waitFor();
     await page.goBack();
     // It goes on in the project.
+    await page.locator(".mvd", { hasText: "Déplacée dans destination" }).waitFor();
     await composer(page).fill("Et dans le projet ?");
     await composer(page).press("Enter");
-    await page.getByText("Et dans le projet ?").first().waitFor();
+    await page.locator(".u", { hasText: "Et dans le projet ?" }).waitFor();
+    await page.getByRole("button", { name: "Arrêter", exact: true }).click();
+    await expect
+      .poll(() => page.getByRole("button", { name: "Arrêter", exact: true }).count())
+      .toBe(0);
+
+    // Its message from before the move goes back to the project's files as at the move.
+    const first = page.locator(".uw", { hasText: "Une question à déplacer" });
+    await first.hover();
+    await first.getByRole("button", { name: "Revenir ici" }).click();
+    const back = page.getByRole("group", { name: "Revenir à ce message" });
+    await back
+      .getByText("Fichiers du projet remis comme au déplacement, suite du fil effacée")
+      .waitFor();
+    await page.waitForTimeout(300);
+    await shot(page, "c24b-revenir-avant-deplacement");
+    await back.getByRole("button", { name: "Revenir ici" }).click();
+    await expect.poll(() => composer(page).inputValue()).toBe("Une question à déplacer");
+    await expect.poll(() => page.locator(".u", { hasText: "Et dans le projet ?" }).count()).toBe(0);
+    await page.locator(".mvd", { hasText: "Déplacée dans destination" }).waitFor();
+    await composer(page).press("Enter");
+    await page.locator(".u", { hasText: "Une question à déplacer" }).waitFor();
+    await page.getByRole("button", { name: "Arrêter", exact: true }).click();
+    await expect
+      .poll(() => page.getByRole("button", { name: "Arrêter", exact: true }).count())
+      .toBe(0);
 
     // A thread of a project is renamed from its line too: a right click in the sidebar.
     await side
@@ -1499,11 +1574,11 @@ describe("composer", () => {
       .first()
       .click({ button: "right" });
     await page.getByRole("menuitem", { name: "Renommer" }).click();
-    await page.getByRole("dialog", { name: "Renommer le fil" }).waitFor();
     const name = page.getByRole("textbox", { name: "Nom du fil" });
     await name.fill("Question du projet");
     await shot(page, "c25-renommer-fil");
-    await name.press("Enter");
+    // Leaving the field saves it too.
+    await name.press("Tab");
     await side
       .getByRole("button", { name: /^Question du projet/ })
       .first()

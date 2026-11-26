@@ -32,6 +32,7 @@ describe("thread export", () => {
         { id: "5", kind: "agent", text: "Fait.", at: 1 },
         { id: "6", kind: "handoff", from: "a", to: "b", at: 1 },
         { id: "7", kind: "agent", text: "Je reprends.", at: 1 },
+        { id: "8", kind: "moved", projectId: "p", name: "Démo", at: 1 },
       ],
       [
         { id: "a", name: "Agent A", short: "A", available: true },
@@ -61,6 +62,8 @@ describe("thread export", () => {
         "## Agent B",
         "",
         "Je reprends.",
+        "",
+        "*Déplacée dans Démo.*",
         "",
       ].join("\n"),
     );
