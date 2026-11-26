@@ -135,7 +135,7 @@ export const COORDINATOR_TOOLS: CoordinatorTool[] = [
         brief: {
           type: "string",
           description:
-            "La consigne complète pour l'agent du fil : ce qui est demandé, le contexte utile, le résultat attendu. Il ne voit pas cette conversation.",
+            "La consigne pour l'agent du fil, en français, deux à quatre phrases claires : ce qui est demandé, le contexte utile, le résultat attendu. Elle s'affiche dans le fil : pas de commandes, de titres ni de notes internes. Il ne voit pas cette conversation.",
         },
         kind: {
           type: "string",

@@ -165,7 +165,7 @@ describe("browser notifications", () => {
     await page.getByRole("button", { name: "Réglages" }).first().click();
     await toggle.waitFor();
     await page.goBack();
-    const allow = page.getByRole("button", { name: "Autoriser" });
+    const allow = page.getByRole("button", { name: "Autoriser cette fois" });
     await allow.waitFor();
     expect(await shownCount(page)).toBe(1);
     expect(await waiting(page)).toEqual([]);
@@ -184,7 +184,7 @@ describe("browser notifications", () => {
     expect(await waiting(page)).toMatchObject([{ body: "Corrige encore" }]);
 
     // Answered in the app, the notification about it goes away by itself.
-    await page.getByRole("button", { name: "Autoriser" }).click();
+    await page.getByRole("button", { name: "Autoriser cette fois" }).click();
     await expect.poll(() => waiting(page)).toEqual([]);
 
     // A second tab in front of the user keeps the first, in the background, quiet.
@@ -195,7 +195,7 @@ describe("browser notifications", () => {
     await page.waitForURL((u) => !u.pathname.includes("/t/"));
     await composer.fill("Corrige une troisième fois");
     await composer.press("Enter");
-    await page.getByRole("button", { name: "Autoriser" }).waitFor();
+    await page.getByRole("button", { name: "Autoriser cette fois" }).waitFor();
     // Longer than a background tab waits for the answer of one in front.
     await page.waitForTimeout(600);
     expect(await shownCount(page)).toBe(2);

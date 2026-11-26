@@ -8,7 +8,7 @@ const ASK_TIMEOUT_MS = 30_000;
 const MERGE_TIMEOUT_MS = 2 * 60_000;
 
 const FIELDS =
-  "number,url,title,state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup";
+  "number,url,title,state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup,author,createdAt,additions,deletions,changedFiles";
 
 /**
  * Where pull requests are read and merged. Today the user's own `gh`; a client holding a
@@ -107,6 +107,13 @@ export function parsePullRequest(json: string, repo: string): PullRequestInfo | 
       raw.mergeable === "CONFLICTING" ? true : raw.mergeable === "MERGEABLE" ? false : null,
     blocked: raw.mergeStateStatus === "BLOCKED",
     checks: [...latest.values()].map(({ key: _key, at: _at, ...check }) => check),
+    ...(isRecord(raw.author) && text(raw.author.login) ? { author: text(raw.author.login) } : {}),
+    ...(text(raw.createdAt) && !Number.isNaN(Date.parse(text(raw.createdAt)))
+      ? { createdAt: Date.parse(text(raw.createdAt)) }
+      : {}),
+    ...(typeof raw.additions === "number" ? { additions: raw.additions } : {}),
+    ...(typeof raw.deletions === "number" ? { deletions: raw.deletions } : {}),
+    ...(typeof raw.changedFiles === "number" ? { files: raw.changedFiles } : {}),
   };
 }
 

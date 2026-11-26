@@ -1,7 +1,11 @@
+import { splitVerdict } from "../review-verdict.ts";
+import { VerdictCard } from "./VerdictCard.tsx";
+import { NEW_FOR, newMarkLabel } from "../new-mark.ts";
 import {
   AGENT_SILENCE_STOP_MS,
   AGENT_STOPPED,
   agentStopped,
+  briefOf,
   threadGroup,
   type AgentInfo,
   type Item,
@@ -16,6 +20,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -30,6 +35,8 @@ import type { Held } from "../state.ts";
 import { AgentPlan } from "./AgentPlan.tsx";
 import { Glyph, I } from "../v2/I.tsx";
 import { GROUP_LABEL, threadLine } from "../project-threads.ts";
+import { prParts } from "../pr-links.ts";
+import { PrChip } from "./PrChip.tsx";
 import { Clamp } from "./Clamp.tsx";
 import { ErrorBoundary } from "./ErrorBoundary.tsx";
 import { Markdown } from "./Markdown.tsx";
@@ -304,7 +311,21 @@ function Conversation({
   const working = thread.status === "running" || thread.status === "waiting";
   // What the threads brought back since the user last wrote: the first of it is marked.
   const lastOwn = items?.findLastIndex((i) => i.kind === "user" && i.from !== "coordinator") ?? -1;
-  const firstNew = items?.findIndex((i, n) => n > lastOwn && i.kind === "result") ?? -1;
+  // ...and so is a message the server wrote on its own, such as pull requests turned green.
+  const firstNew =
+    items?.findIndex((i, n) => n > lastOwn && (i.kind === "result" || i.id.startsWith("green:"))) ??
+    -1;
+  // « Nouveau » for an hour, then when it came: redrawn once the hour is over.
+  const newAt = firstNew >= 0 ? (items![firstNew] as { at?: number }).at : undefined;
+  const [, retell] = useState(0);
+  useEffect(() => {
+    if (newAt === undefined) return;
+    const left = newAt + NEW_FOR - Date.now();
+    if (left <= 0) return;
+    const timer = setTimeout(() => retell((n) => n + 1), left + 1000);
+    return () => clearTimeout(timer);
+  }, [newAt]);
+  const newLabel = newAt === undefined ? "Nouveau" : newMarkLabel(newAt);
 
   const team = isTeamThread(thread);
   const blocks = items ? (team ? teamFeed(thread, items, earlier > 0) : activityFeed(items)) : [];
@@ -318,8 +339,10 @@ function Conversation({
     return (
       <div key={item.id} className="item" data-item={item.id}>
         {i === firstNew && (
-          <div className="sec" role="separator">
-            Nouveau
+          <div className={`nsep${newLabel === "Nouveau" ? "" : " past"}`} role="separator">
+            <i />
+            <span>{newLabel}</span>
+            <i />
           </div>
         )}
         <FeedItem
@@ -426,6 +449,7 @@ function Conversation({
                   onFold={() => setReveal(undefined)}
                   render={renderItem}
                   mascot={mascot && agent ? { mascot, name: agent.name } : undefined}
+                  quiet={thread.kind === "coordinator"}
                 />
                 {drafting && <ImageDraft since={drafting.at} />}
                 {made.length > 0 && (
@@ -684,6 +708,7 @@ const FeedItem = memo(function FeedItem({
       return (
         <div className="a">
           {showBy && <Who agent={agent} thread={thread} />}
+          {thread.kind === "coordinator" && <ThreadCount text={item.text} />}
           {/* The team card shows the plan; its raw JSON is for the server only. */}
           {clamp ? (
             <Clamp>
@@ -720,6 +745,18 @@ const FeedItem = memo(function FeedItem({
   }
 });
 
+/** Over a coordinator's answer that links threads: how many it speaks of. */
+function ThreadCount({ text }: { text: string }) {
+  const n = new Set([...text.matchAll(/\]\(fil:([\w-]{1,80})\)/g)].map((m) => m[1])).size;
+  if (n < 2) return null;
+  return (
+    <div className="fcount">
+      <I n="hook" s={14} />
+      {n} fils de discussion
+    </div>
+  );
+}
+
 /** Who answers: the agent, then the model it runs when that says more. */
 function Who({ agent, thread }: { agent: AgentInfo | undefined; thread: Thread }) {
   const speaker = speakerName(agent, thread);
@@ -731,9 +768,19 @@ function Who({ agent, thread }: { agent: AgentInfo | undefined; thread: Thread }
   );
 }
 
-/** An answer: while it is being written, its Markdown is worked out a few times a second. */
+/**
+ * An answer: while it is being written, its Markdown is worked out a few times a second.
+ * A review it ends with is shown as a card under it.
+ */
 function Answer({ text, live, threadId }: { text: string; live: boolean; threadId: string }) {
-  return <Markdown text={useLiveText(text, live)} threadId={threadId} />;
+  const shown = useLiveText(text, live);
+  const { text: body, verdict } = useMemo(() => splitVerdict(shown), [shown]);
+  return (
+    <>
+      <Markdown text={body} threadId={threadId} />
+      {verdict && <VerdictCard verdict={verdict} />}
+    </>
+  );
 }
 
 /**
@@ -748,6 +795,7 @@ function ActivityDetail({
   onFold,
   render,
   mascot,
+  quiet,
 }: {
   items: Item[];
   indices: number[];
@@ -758,8 +806,22 @@ function ActivityDetail({
   render: (index: number) => ReactNode;
   /** The agent's moon, which stands in for the picture while the stretch is at work. */
   mascot?: { mascot: MascotChoice; name: string };
+  /**
+   * The coordinator's conversation: its steps are not shown, only one plain « Réfléchit »
+   * line while it works, gone once it answers.
+   */
+  quiet?: boolean;
 }) {
   const [opened, setOpened] = useState(false);
+  if (quiet)
+    return live ? (
+      <div className="det quiet" role="status">
+        <span className="think">
+          <Glyph />
+          <span className="nm shimmer">Réfléchit</span>
+        </span>
+      </div>
+    ) : null;
   const open = opened || revealed;
   const { steps, failed } = activitySteps(items, indices);
   const last = items[indices.at(-1)!];
@@ -838,15 +900,18 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
       )}
       {!!item.images?.length && <MessageImages threadId={thread.id} images={item.images} />}
       {item.text && (
-        <div className="u">
-          {messageTokens(item.text).map((part, i) =>
-            part.kind ? (
-              <span key={i} className={`tok ${part.kind}`}>
-                {part.text}
-              </span>
-            ) : (
-              part.text
-            ),
+        <div className={`u${item.from === "coordinator" ? " brief" : ""}`}>
+          {messageTokens(item.from === "coordinator" ? briefOf(item.text) : item.text).map(
+            (part, i) =>
+              part.kind ? (
+                <span key={i} className={`tok ${part.kind}`}>
+                  {part.text}
+                </span>
+              ) : (
+                prParts(part.text).map((bit, j) =>
+                  "link" in bit ? <PrChip key={`${i}-${j}`} link={bit.link} /> : bit.text,
+                )
+              ),
           )}
         </div>
       )}

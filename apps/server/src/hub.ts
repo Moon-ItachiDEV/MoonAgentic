@@ -1,3 +1,4 @@
+import { grantKeys, readOnlyCall, THREAD_GRANT_OPTION } from "./permission-rules.ts";
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import type { AgentProcessRef, DiagnosticsMonitor } from "./diagnostics.ts";
@@ -31,6 +32,7 @@ import {
 } from "@moonagentic/protocol";
 import type {
   CustomAgentInput,
+  RoleMascots,
   FavoriteRef,
   Defaults,
   AgentSetting,
@@ -267,6 +269,10 @@ const OWN_THREAD_TOOL = new RegExp(
 
 /** A known, open pull request is asked about again this often. */
 const PR_WATCH_MS = 60_000;
+/** Pull requests turned green at once before the coordinator's conversation says so. */
+const GREEN_AT_ONCE = 2;
+/** The setting that keeps the mascot of each role the user changed. */
+const ROLE_MASCOTS = "roleMascots";
 /** Characters kept of what an agent last said, for lists of threads. */
 const SUMMARY_LIMIT = 160;
 
@@ -279,6 +285,14 @@ export function summaryOf(reply: string, limit = SUMMARY_LIMIT): string {
     .replace(/\s+/g, " ")
     .trim();
   return flat.length > limit ? `${flat.slice(0, limit - 1).trimEnd()}…` : flat;
+}
+
+/** A reply's first sentences, as one short line: a thread's result read at a glance. */
+export function leadOf(reply: string, sentences = 2, limit = SUMMARY_LIMIT): string {
+  // Titles say what a part is about, not the result.
+  const flat = summaryOf(reply.replace(/^\s{0,3}#{1,6}\s.*$/gm, ""), Number.MAX_SAFE_INTEGER);
+  const parts = flat.split(/(?<=[.!?…])\s+(?=[A-ZÀ-ÖØ-Þ«"(0-9])/);
+  return summaryOf(parts.slice(0, sentences).join(" "), limit);
 }
 
 const settingValues = (settings: AgentSetting[]) =>
@@ -383,8 +397,20 @@ export class Hub {
   private readonly turnIds = new Map<string, string>();
   private readonly pendingPermissions = new Map<
     string,
-    { threadId: string; resolve: (r: acp.RequestPermissionResponse) => void }
+    {
+      threadId: string;
+      resolve: (r: acp.RequestPermissionResponse) => void;
+      /** « Autoriser pour ce fil »: what it remembers, and the agent's own option it answers. */
+      grant?: { key: string; optionId: string };
+    }
   >();
+  /**
+   * The green pull requests already told to each coordinator, as `thread url`. Read back from
+   * its conversation the first time: a server started again tells none of them twice.
+   */
+  private readonly greenTold = new Map<string, Set<string>>();
+  /** What « Autoriser pour ce fil » allowed, by thread: similar calls then pass without asking. */
+  private readonly threadGrants = new Map<string, Set<string>>();
   /**
    * Questions an agent holds its turn on, by item: each also waits in `pendingPermissions`,
    * so whatever cancels a permission request (a stop, the agent ending) cancels it too.
@@ -833,6 +859,7 @@ export class Hub {
       ...(pairedDevice ? { pairedDevice: true } : {}),
       ...(defaults ? { defaults } : {}),
       ...(presets ? { teamPresets: presets } : {}),
+      roleMascots: this.store.getSetting<RoleMascots>(ROLE_MASCOTS, {}, "object"),
       app: this.app.info(),
       ...(this.storageDown ? { storageError: this.storageNotice()! } : {}),
     };
@@ -1315,6 +1342,14 @@ export class Hub {
         };
         this.store.setSetting(DEFAULTS, defaults);
         this.broadcast({ type: "defaults", defaults });
+        return;
+      }
+      case "roleMascots.set": {
+        const current = this.store.getSetting<RoleMascots>(ROLE_MASCOTS, {}, "object");
+        const { [message.job]: _old, ...rest } = current;
+        const mascots: RoleMascots = message.look ? { ...rest, [message.job]: message.look } : rest;
+        this.store.setSetting(ROLE_MASCOTS, mascots);
+        this.broadcast({ type: "roleMascots", mascots });
         return;
       }
       case "teamPresets.set":
@@ -2766,7 +2801,7 @@ export class Hub {
     if (asked?.kind !== "user" || asked.from !== "coordinator") return;
     // Its conclusion: what it said last, after its tools, not how it set out.
     const last = turn.findLast((i) => i.kind === "agent" || i.kind === "user");
-    const summary = last?.kind === "agent" ? summaryOf(last.text, RESULT_LIMIT) : "";
+    const summary = last?.kind === "agent" ? leadOf(last.text, 2, RESULT_LIMIT) : "";
     if (!summary) return;
     const changed = await this.review(threadId).catch(() => undefined);
     // Meanwhile the thread may have started again, or gone with its coordinator.
@@ -3110,6 +3145,7 @@ export class Hub {
       pr?.state === "merged" &&
       (thread.pr ? thread.pr.state !== "merged" : !!thread.workspace?.prOpened);
     this.updateThread(threadId, { pr: pr ?? null });
+    this.noteGreen(thread, pr);
     if (!merged || !info) return;
     // A member that is not its team's branch is never resolved on its own.
     if (thread.parentId && !lead) return;
@@ -3122,6 +3158,50 @@ export class Hub {
     await this.setArchived(target.id, true).catch((error) =>
       console.error("Résolution après merge :", error),
     );
+  }
+
+  /**
+   * Tells the coordinator's conversation, once at least `GREEN_AT_ONCE` pull requests of the
+   * threads it opened have turned green and wait only on a review: one short message with a
+   * link to each thread and its pull request. Nothing runs for it: the server writes it.
+   */
+  private noteGreen(thread: Thread, pr: Thread["pr"] | undefined) {
+    const coordinatorId = thread.openedBy;
+    if (!coordinatorId || !this.store.getThread(coordinatorId)) return;
+    const green = (p: Thread["pr"] | undefined): p is NonNullable<Thread["pr"]> =>
+      !!p && (p.state === "open" || p.state === "draft") && p.checks === "passed" && !p.conflicts;
+    if (!green(pr)) return;
+    let told = this.greenTold.get(coordinatorId);
+    if (!told) {
+      told = new Set<string>();
+      for (const item of this.store.listItems(coordinatorId)) {
+        if (item.kind !== "agent" || !item.id.startsWith("green:")) continue;
+        for (const m of item.text.matchAll(/\]\(fil:([\w-]+)\) : sa PR (\S+) /g))
+          told.add(`${m[1]} ${m[2]}`);
+      }
+      this.greenTold.set(coordinatorId, told);
+    }
+    // Counted from the threads as they are kept, not from what this run saw turn green: one
+    // that turned green before the server started again waits as much as the others.
+    const urls = new Set<string>();
+    const waiting = this.store.listThreads().filter((t) => {
+      if (t.openedBy !== coordinatorId || !green(t.pr)) return false;
+      // A team's lead shows its merge thread's pull request: it counts once.
+      if (told.has(`${t.id} ${t.pr.url}`) || urls.has(t.pr.url)) return false;
+      urls.add(t.pr.url);
+      return true;
+    });
+    if (waiting.length < GREEN_AT_ONCE) return;
+    const lines = waiting.map((t) => {
+      told.add(`${t.id} ${t.pr!.url}`);
+      return `- [${t.title.replace(/[[\]]/g, "")}](fil:${t.id}) : sa PR ${t.pr!.url} passe toutes ses vérifications.`;
+    });
+    this.putItem(coordinatorId, {
+      id: `green:${randomUUID()}`,
+      kind: "agent",
+      text: `Les ${lines.length} PR sont vertes. Chacune attend seulement ta relecture.\n\n**Prêt pour relecture**\n\n${lines.join("\n")}`,
+      at: Date.now(),
+    });
   }
 
   /**
@@ -3421,6 +3501,8 @@ export class Hub {
         while (this.store.deleteSomeItems(threadId, DELETE_BATCH)) await nextTurn();
         this.setPendingRestore(threadId, undefined);
         this.logs.delete(threadId);
+        this.threadGrants.delete(threadId);
+        this.greenTold.delete(threadId);
         this.coordinators.forget(threadId);
         this.attachments.forget(threadId);
         this.store.deleteThread(threadId);
@@ -3623,6 +3705,11 @@ export class Hub {
     }
     if (!item.options.some((o) => o.optionId === optionId)) throw new Error("Choix inconnu.");
     this.pendingPermissions.delete(itemId);
+    if (optionId === THREAD_GRANT_OPTION && pending.grant) {
+      const grants = this.threadGrants.get(threadId) ?? new Set<string>();
+      grants.add(pending.grant.key);
+      this.threadGrants.set(threadId, grants);
+    }
     if (followUp?.trim() && this.turns.has(threadId)) this.followUps.set(threadId, followUp.trim());
     // The answer is given: the agent gets it even when the database refuses to write it,
     // which is then kept to be written later. A turn never waits on a lost answer.
@@ -3631,7 +3718,9 @@ export class Hub {
     if (![...this.pendingPermissions.values()].some((p) => p.threadId === threadId)) {
       this.wrote(() => this.updateThread(threadId, { status: "running" }));
     }
-    pending.resolve({ outcome: { outcome: "selected", optionId } });
+    const answer =
+      optionId === THREAD_GRANT_OPTION && pending.grant ? pending.grant.optionId : optionId;
+    pending.resolve({ outcome: { outcome: "selected", optionId: answer } });
   }
 
   /** Answers a question the agent holds its turn on; the turn goes on with it. */
@@ -4635,13 +4724,26 @@ export class Hub {
         ? ownPattern.test(named)
         : ownPattern.test(request.toolCall.title ?? "") &&
           (!request.toolCall.kind || request.toolCall.kind === "other"));
-    if ((thread.permissionMode === "full" && !readOnlyDenied) || own) {
-      const allow =
-        request.options.find((o) => o.kind === "allow_once") ??
-        request.options.find((o) => o.kind === "allow_always");
+    const allow =
+      request.options.find((o) => o.kind === "allow_once") ??
+      request.options.find((o) => o.kind === "allow_always");
+    // In « Demande d'abord », a call that only reads passes (a review reads thirty files),
+    // and so does one like a call the user allowed « pour ce fil ». A coordinator runs no
+    // command, even one that reads.
+    const keys = grantKeys(request.toolCall, named);
+    const reads = readOnlyCall(request.toolCall) && !readOnlyDenied;
+    const grants = this.threadGrants.get(threadId);
+    const granted = !readOnlyDenied && !!keys?.length && keys.every((k) => grants?.has(k));
+    if ((thread.permissionMode === "full" && !readOnlyDenied) || own || reads || granted) {
       if (allow)
         return Promise.resolve({ outcome: { outcome: "selected", optionId: allow.optionId } });
     }
+    // Only offer « Autoriser pour ce fil » for a single non-read-only action so a chained
+    // command (`npm test && rm -rf dist`) cannot silently grant multiple programs at once.
+    const grant =
+      allow && keys?.length === 1 && !readOnlyDenied
+        ? { key: keys[0]!, optionId: allow.optionId }
+        : undefined;
     const id = `permission:${randomUUID()}`;
     this.putItem(
       threadId,
@@ -4650,11 +4752,22 @@ export class Hub {
         kind: "permission",
         // What the user decides by reads as it is written: no character in it reorders or hides.
         title: plainLabel(request.toolCall.title ?? "") || "L'agent demande une autorisation",
-        options: request.options.map((o) => ({
-          optionId: o.optionId,
-          name: plainLabel(o.name),
-          kind: o.kind,
-        })),
+        options: [
+          ...(grant
+            ? [
+                {
+                  optionId: THREAD_GRANT_OPTION,
+                  name: "Autoriser pour ce fil",
+                  kind: "allow_always" as const,
+                },
+              ]
+            : []),
+          ...request.options.map((o) => ({
+            optionId: o.optionId,
+            name: plainLabel(o.name),
+            kind: o.kind,
+          })),
+        ],
         outcome: null,
         at: Date.now(),
       },
@@ -4666,7 +4779,11 @@ export class Hub {
     // Waiting for the user takes no place: the next turn in line may start.
     this.admit();
     return new Promise((resolve) => {
-      this.pendingPermissions.set(id, { threadId, resolve });
+      this.pendingPermissions.set(id, {
+        threadId,
+        resolve,
+        ...(grant ? { grant } : {}),
+      });
       this.broadcastRequests();
       signal.addEventListener("abort", () => this.settlePermission(id), { once: true });
     });

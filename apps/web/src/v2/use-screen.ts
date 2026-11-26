@@ -3,21 +3,32 @@ import { useSyncExternalStore } from "react";
 /**
  * The layout follows the window's real width, as in the mockup: `roomy` centres the content
  * and turns the bottom sheets into windows, `wide` pins the menu as a side bar and drops the
- * bottom tabs, `xl` leaves room for a second panel.
+ * bottom tabs, `sp` splits a project's page in two (iPad across, computer), `xl` gives the
+ * second panel more room.
  */
 export interface Screen {
   roomy: boolean;
   wide: boolean;
+  sp: boolean;
   xl: boolean;
 }
 
 const ROOMY = 600;
 const WIDE = 900;
+const SPLIT = 1100;
 const XL = 1240;
 
 const measure = (): string => {
   const width = typeof innerWidth === "number" ? innerWidth : 1280;
-  return width >= XL ? "xl" : width >= WIDE ? "wide" : width >= ROOMY ? "roomy" : "phone";
+  return width >= XL
+    ? "xl"
+    : width >= SPLIT
+      ? "sp"
+      : width >= WIDE
+        ? "wide"
+        : width >= ROOMY
+          ? "roomy"
+          : "phone";
 };
 
 let size = measure();
@@ -32,10 +43,11 @@ if (typeof addEventListener === "function") {
 }
 
 const SCREENS: Record<string, Screen> = {
-  phone: { roomy: false, wide: false, xl: false },
-  roomy: { roomy: true, wide: false, xl: false },
-  wide: { roomy: true, wide: true, xl: false },
-  xl: { roomy: true, wide: true, xl: true },
+  phone: { roomy: false, wide: false, sp: false, xl: false },
+  roomy: { roomy: true, wide: false, sp: false, xl: false },
+  wide: { roomy: true, wide: true, sp: false, xl: false },
+  sp: { roomy: true, wide: true, sp: true, xl: false },
+  xl: { roomy: true, wide: true, sp: true, xl: true },
 };
 
 export function useScreen(): Screen {
@@ -51,7 +63,7 @@ export function useScreen(): Screen {
 
 /** The classes the screen's root carries for its width. */
 export const screenClasses = (s: Screen): string =>
-  `${s.roomy ? " roomy" : ""}${s.wide ? " wide" : ""}${s.xl ? " xl" : ""}`;
+  `${s.roomy ? " roomy" : ""}${s.wide ? " wide" : ""}${s.sp ? " sp" : ""}${s.xl ? " xl" : ""}`;
 
 /**
  * Says on the page whether a mouse drives it: the side bar and the lists are then denser, and

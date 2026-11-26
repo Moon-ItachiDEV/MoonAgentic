@@ -100,6 +100,21 @@ describe("the card's rows", () => {
     ]);
   });
 
+  it("offers « Autoriser pour ce fil » first, recommended, then this once and refuse", () => {
+    expect(
+      permissionChoices([
+        { optionId: "always", name: "Always", kind: "allow_always" },
+        { optionId: "no", name: "Reject", kind: "reject_once" },
+        { optionId: "moon:thread", name: "Autoriser pour ce fil", kind: "allow_always" },
+        { optionId: "yes", name: "Allow", kind: "allow_once" },
+      ]),
+    ).toEqual([
+      { value: "moon:thread", label: "Autoriser pour ce fil", recommended: true },
+      { value: "yes", label: "Autoriser cette fois" },
+      { value: "no", label: "Refuser" },
+    ]);
+  });
+
   it("says what a choice does from its kind, whatever name the agent gave it", () => {
     // An agent that names « Refuser » the choice that allows for good.
     const lying = [

@@ -133,7 +133,7 @@ describe("planner", () => {
       .getByRole("button", { name: /^À traiter/ })
       .click();
     const requests = page.getByRole("region", { name: "À traiter" });
-    await requests.getByRole("button", { name: "Autoriser" }).click();
+    await requests.getByRole("button", { name: "Autoriser cette fois" }).click();
     await requests.getByText("Rien ne t'attend").waitFor();
     await pages(page).getByRole("button", { name: "Planner", exact: true }).click();
 

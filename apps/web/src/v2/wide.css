@@ -308,49 +308,6 @@ html[data-dev="desk"] .scr.wide .drawer .dtop {
   grid-column: 1/-1;
 }
 
-/* Très large (ordinateur) : sur la page projet, les fils restent visibles à côté du coordinateur */
-.rpan {
-  display: none;
-}
-.scr.xl[data-s="project"] .rpan {
-  display: block;
-  position: absolute;
-  z-index: 15;
-  top: calc(var(--st) + 60px);
-  right: 14px;
-  bottom: 14px;
-  width: 316px;
-  overflow-y: auto;
-  scrollbar-width: none;
-  padding: 6px 10px 10px;
-  border-radius: 24px;
-  background: var(--side);
-  box-shadow: 0 0 0 0.5px var(--glass-ring);
-}
-.rpan .rph {
-  height: 40px;
-  display: flex;
-  align-items: center;
-  padding: 0 6px;
-  font-size: 15px;
-  font-weight: 600;
-}
-.rpan .sbody {
-  padding: 0;
-}
-.scr.xl[data-s="project"] .view {
-  padding-right: 350px;
-  padding-left: max(24px, calc((100% - 350px) / 2 - 340px));
-}
-.scr.xl[data-s="project"] .bottom {
-  padding-right: 350px;
-  padding-left: max(16px, calc((100% - 350px) / 2 - 348px));
-}
-.scr.xl[data-s="project"] .sugm {
-  right: 350px;
-  left: max(16px, calc((100% - 350px) / 2 - 348px));
-}
-
 /* Fenêtres : un peu d'air en haut et en bas, surtout sur iPad */
 .scr.roomy .sheet {
   max-height: min(760px, calc(100% - 96px));
@@ -388,11 +345,6 @@ html[data-dev="desk"] .scr.wide .drawer .dtop {
   margin-bottom: auto;
 }
 
-/* Très large : quand la feuille « Fils » est ouverte, le panneau de droite s'efface */
-.scr.xl.sh[data-s="project"] .rpan {
-  display: none;
-}
-
 /* Ordinateur : sur l'accueil vide, la zone de saisie est au centre, sous la phrase d'accueil */
 html[data-dev="desk"] .scr.wide[data-s="home"] .bottom {
   bottom: auto;
@@ -422,19 +374,6 @@ html[data-dev="desk"] .scr.wide[data-s="home"] .greet.priv {
   right: 0;
   bottom: calc(50% - 6px);
   padding-bottom: 0;
-}
-.rpan .newth {
-  height: 42px;
-  border-radius: 21px;
-  font-size: 14.5px;
-  margin-top: 12px;
-}
-.rpan .it {
-  min-height: 46px;
-  font-size: 14.5px;
-}
-.rpan .gl2 {
-  margin-top: 10px;
 }
 
 /* Ordinateur : barre latérale et listes plus denses (souris) */

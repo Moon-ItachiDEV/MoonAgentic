@@ -1,10 +1,10 @@
 import type { PendingRequest, Project, Thread } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
+import { permissionChoices } from "../decision.ts";
 import { connection } from "../connection.ts";
 import { I } from "../v2/I.tsx";
 
 /** Where an answer sits in its row: what refuses first, what allows once last. */
-const rank = (kind: string) => (kind === "allow_once" ? 2 : kind.startsWith("allow") ? 1 : 0);
 
 const ago = (at: number, now: number) => {
   const minutes = Math.floor((now - at) / 60_000);
@@ -57,25 +57,25 @@ export function RequestsDialog(props: {
               <span className="mono">{r.title}</span>
             </div>
             <div className="rqa">
-              {[...r.options]
-                // The refusals first, the go-ahead last, under the thumb.
-                .sort((a, b) => rank(a.kind) - rank(b.kind))
-                .map((o) => (
+              {/* The refusals first, the go-ahead last, under the thumb. */}
+              {permissionChoices(r.options)
+                .reverse()
+                .map((c, i, all) => (
                   <button
-                    key={o.optionId}
-                    className={`b2 press ${o.kind === "allow_once" ? "ink" : "soft"}`}
+                    key={c.value}
+                    className={`b2 press ${i === all.length - 1 ? "ink" : "soft"}`}
                     disabled={answered.has(r.itemId)}
                     onClick={() => {
                       const sent = connection.send({
                         type: "permission.respond",
                         threadId: r.threadId,
                         itemId: r.itemId,
-                        optionId: o.optionId,
+                        optionId: c.value,
                       });
                       if (sent) setAnswered((a) => new Set(a).add(r.itemId));
                     }}
                   >
-                    {o.name}
+                    {c.label}
                   </button>
                 ))}
             </div>

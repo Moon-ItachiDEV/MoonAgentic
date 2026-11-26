@@ -150,6 +150,18 @@ describe("/lock", () => {
     await shut.waitFor();
     await page.keyboard.type("123456");
     await expect.poll(() => shut.count()).toBe(0);
+    // Typed before the server is reached again, on a slow network, the code still opens it.
+    await page.keyboard.press("Control+Shift+L");
+    await shut.waitFor();
+    await page.route("**/api/ws-ticket", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await route.continue();
+    });
+    await page.reload();
+    await shut.waitFor();
+    await page.keyboard.type("123456");
+    await expect.poll(() => shut.count()).toBe(0);
+    await page.unroute("**/api/ws-ticket");
     expect(errors).toEqual([]);
     await other.close();
     await page.close();
