@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renameImports } from "../scripts/strip.ts";
 import {
   MAX_RESTART_DELAY_MS,
@@ -14,6 +14,23 @@ import {
 import { DEFAULTS, readSettings, writeSettings } from "../src/settings.ts";
 import { mergePaths, pathFromShell } from "../src/shell-path.ts";
 import { stateLabel, statusPage } from "../src/status-page.ts";
+
+/** For one test: the parent reads a child's error output only a while after the child's exit. */
+const held = vi.hoisted(() => ({ ms: 0 }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const spawn = ((...call: Parameters<typeof actual.spawn>) => {
+    const child = actual.spawn(...call);
+    const ms = held.ms;
+    if (ms > 0 && child.stderr) {
+      // Paused before anything listens: what the child wrote waits in the pipe.
+      child.stderr.pause();
+      child.once("exit", () => setTimeout(() => child.stderr?.resume(), ms));
+    }
+    return child;
+  }) as typeof actual.spawn;
+  return { ...actual, default: { ...actual, spawn }, spawn };
+});
 
 const fake = fileURLToPath(new URL("./fake-launcher.ts", import.meta.url));
 
@@ -132,7 +149,7 @@ describe("ServerProcess", () => {
 });
 
 describe("ServerProcess, when things go wrong (N4, N37)", () => {
-  const run = (mode: string, command = process.execPath, outputLimitMs?: number) => {
+  const run = (mode: string, command = process.execPath) => {
     const states: ServerState[] = [];
     const server = new ServerProcess({
       command,
@@ -140,7 +157,6 @@ describe("ServerProcess, when things go wrong (N4, N37)", () => {
       args: ["--port", "4999"],
       env: () => ({ ...process.env, FAKE_MODE: mode }),
       onState: (state) => states.push(state),
-      ...(outputLimitMs ? { outputLimitMs } : {}),
     });
     return { server, states };
   };
@@ -170,19 +186,23 @@ describe("ServerProcess, when things go wrong (N4, N37)", () => {
   });
 
   it("still says why, and that it cannot start, when the reason is read after the launcher's exit", async () => {
-    const { server, states } = run("cannot-late", process.execPath, 20_000);
-    server.start();
-    // Ends once the late line's writer closes the output, however long it takes to start.
-    for (let i = 0; i < 400 && !states.some((s) => s.kind === "failed"); i++) await wait(50);
-    await wait(500);
-    expect(states.filter((s) => s.kind === "starting")).toHaveLength(1);
-    // Never « it starts again » once it has ended for good: nothing would start it.
-    expect(server.state).toEqual({
-      kind: "failed",
-      reason: expect.stringMatching(/abîmée.*remplace x par la sauvegarde y/),
-    });
-    await server.stop();
-  }, 30_000);
+    held.ms = 300;
+    try {
+      const { server, states } = run("cannot");
+      server.start();
+      for (let i = 0; i < 200 && !states.some((s) => s.kind === "failed"); i++) await wait(50);
+      await wait(500);
+      expect(states.filter((s) => s.kind === "starting")).toHaveLength(1);
+      // Never « it starts again » once it has ended for good: nothing would start it.
+      expect(server.state).toEqual({
+        kind: "failed",
+        reason: expect.stringMatching(/abîmée.*remplace x par la sauvegarde y/),
+      });
+      await server.stop();
+    } finally {
+      held.ms = 0;
+    }
+  });
 
   it("reads a last line that has no end of line", async () => {
     const { server } = run("cannot-unended");

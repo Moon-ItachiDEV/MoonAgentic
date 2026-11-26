@@ -23,6 +23,23 @@ import {
 } from "../src/supervisor.ts";
 import { Store } from "../src/store.ts";
 
+/** For one test: the parent reads a child's error output only a while after the child's exit. */
+const held = vi.hoisted(() => ({ ms: 0 }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const spawn = ((...call: Parameters<typeof actual.spawn>) => {
+    const child = actual.spawn(...call);
+    const ms = held.ms;
+    if (ms > 0 && child.stderr) {
+      // Paused before anything listens: what the child wrote waits in the pipe.
+      child.stderr.pause();
+      child.once("exit", () => setTimeout(() => child.stderr?.resume(), ms));
+    }
+    return child;
+  }) as typeof actual.spawn;
+  return { ...actual, default: { ...actual, spawn }, spawn };
+});
+
 const dirs: string[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5 });
@@ -309,31 +326,31 @@ describe("supervisor", () => {
   it("passes on why it cannot start, though that line is read after the server's exit (N4)", async () => {
     const dir = tempDir();
     const script = path.join(dir, "late.mjs");
-    // Something the server started still holds its error output, and writes the reason
-    // after the server is gone: as when its output is read after its exit.
     writeFileSync(
       script,
-      `import { spawn } from "node:child_process";
-      spawn(process.execPath, ["-e", "setTimeout(() => process.stderr.write('MoonAgentic ne peut pas démarrer : raison tardive\\n'), 300)"], { stdio: ["ignore", "ignore", "inherit"] });
+      `process.stderr.write("MoonAgentic ne peut pas démarrer : raison tardive\\n");
       process.exit(${CANNOT_START});`,
     );
     let said = "";
-    const code = await new Promise<number>((resolve) => {
-      supervise({
-        script,
-        args: [],
-        logDir: path.join(dir, "logs"),
-        exit: resolve,
-        stdout: { write: () => undefined },
-        stderr: { write: (chunk: string | Buffer) => void (said += chunk.toString()) },
-        // Long enough for the late writer to start, on a slow Windows runner too: what is
-        // shown is that the output is read to its end, not how long that may take.
-        outputLimitMs: 20_000,
+    held.ms = 300;
+    try {
+      // What was said when it ends, as the launcher's own exit ends everything at once.
+      const ended = await new Promise<{ code: number; said: string }>((resolve) => {
+        supervise({
+          script,
+          args: [],
+          logDir: path.join(dir, "logs"),
+          exit: (code) => resolve({ code, said }),
+          stdout: { write: () => undefined },
+          stderr: { write: (chunk: string | Buffer) => void (said += chunk.toString()) },
+        });
       });
-    });
-    expect(code).toBe(CANNOT_START);
-    expect(said).toContain("MoonAgentic ne peut pas démarrer : raison tardive");
-  }, 30_000);
+      expect(ended.code).toBe(CANNOT_START);
+      expect(ended.said).toContain("MoonAgentic ne peut pas démarrer : raison tardive");
+    } finally {
+      held.ms = 0;
+    }
+  });
 
   it("redacts split-chunk secrets in both DailyLog and forwarded stdout when redactOutput is enabled", async () => {
     const dir = tempDir();

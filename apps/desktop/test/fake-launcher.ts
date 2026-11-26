@@ -12,18 +12,6 @@ if (process.env.FAKE_MODE === "cannot") {
   console.error(CANNOT);
   process.exit(4);
 }
-if (process.env.FAKE_MODE === "cannot-late") {
-  // The launcher is gone before its line is read: something else still holds its output and
-  // writes the line a moment later, as a pipe read after the exit would bring it.
-  spawn(
-    process.execPath,
-    ["-e", `setTimeout(() => console.error(${JSON.stringify(CANNOT)}), 300)`],
-    {
-      stdio: ["ignore", "ignore", "inherit"],
-    },
-  );
-  process.exit(4);
-}
 if (process.env.FAKE_MODE === "cannot-unended") {
   // The line without its end of line: the stream's end is what completes it.
   process.stderr.write(CANNOT, () => process.exit(4));
