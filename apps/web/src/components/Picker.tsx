@@ -22,7 +22,6 @@ import { useQuotas } from "../use-quotas.ts";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
 import { useScreen } from "../v2/use-screen.ts";
-import { useScrFlag } from "../v2/scr.ts";
 
 type View = "model" | "all" | "effort" | "options";
 
@@ -145,7 +144,11 @@ export function Picker(props: {
   const favoritesView = (
     <div className={`mv${sliding && effort ? " eff" : ""}`} role="menu" aria-label="Modèle">
       {/* With a mouse, a list: a wheel is for a finger. */}
-      {pop && desk ? <FavoriteList {...wheel} /> : <Wheel {...wheel} />}
+      {pop && desk ? (
+        <FavoriteList {...wheel} asleep={sliding && !!effort} />
+      ) : (
+        <Wheel {...wheel} />
+      )}
       {effort && effortValue !== undefined && (
         <EffortSlide
           shown={sliding}
@@ -168,7 +171,13 @@ export function Picker(props: {
       <ModelPop open={open} onClose={props.onClose} wide={all}>
         <div className="mph">
           <b>{all ? "Tous les modèles" : "Favoris"}</b>
-          <button className="mpt" onClick={() => setAll((a) => !a)}>
+          <button
+            className="mpt"
+            onClick={() => {
+              setSliding(false);
+              setAll((a) => !a);
+            }}
+          >
             {all ? "Favoris" : "Tous les modèles"}
           </button>
         </div>
@@ -467,7 +476,8 @@ function useMouse(): boolean {
       q.addEventListener("change", l);
       return () => q.removeEventListener("change", l);
     },
-    () => document.documentElement.dataset.dev === "desk",
+    () =>
+      typeof matchMedia === "function" && matchMedia("(hover: hover) and (pointer: fine)").matches,
   );
 }
 
@@ -487,6 +497,7 @@ function ModelPop(props: {
 }) {
   const { open, onClose } = props;
   const [out, setOut] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
   const was = useRef(open);
   useEffect(() => {
     if (open) {
@@ -500,13 +511,15 @@ function ModelPop(props: {
     const timer = setTimeout(() => setOut(false), POP_OUT_MS);
     return () => clearTimeout(timer);
   }, [open]);
-  useScrFlag("mp", open);
   useEffect(() => {
     if (!open) return;
     const close = (event: PointerEvent) => {
-      const at = event.target as Element;
-      // Its own button toggles it; a sheet it opened stays above it.
-      if (at.closest?.(".mpop, .cmp .mdl, .sheet, .sscrim")) return;
+      const at = event.target as Node;
+      // Its own button toggles it (not another composer's, beside it); a sheet it opened stays
+      // above it.
+      const own = box.current?.parentElement?.querySelector(".cmp .mdl");
+      if (box.current?.contains(at) || own?.contains(at)) return;
+      if ((at as Element).closest?.(".sheet, .sscrim")) return;
       onClose();
     };
     const escape = (event: KeyboardEvent) => {
@@ -522,13 +535,24 @@ function ModelPop(props: {
       document.removeEventListener("keydown", escape);
     };
   }, [open, onClose]);
-  // As tall as the room above the composer allows, under the top bar.
-  const box = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => {
+  // As tall as the room above the composer allows, under the top bar, also once the window or
+  // the iPad's keyboard changes that room.
+  const fit = () => {
     const el = box.current;
     const above = el?.parentElement?.getBoundingClientRect().top;
     if (!el || above === undefined) return;
-    el.style.maxHeight = `${Math.max(220, Math.min(props.wide ? 560 : 420, above - 76))}px`;
+    const top = visualViewport?.offsetTop ?? 0;
+    el.style.maxHeight = `${Math.max(220, Math.min(props.wide ? 560 : 420, above - top - 76))}px`;
+  };
+  useLayoutEffect(fit);
+  useEffect(() => {
+    if (!open) return;
+    addEventListener("resize", fit);
+    visualViewport?.addEventListener("resize", fit);
+    return () => {
+      removeEventListener("resize", fit);
+      visualViewport?.removeEventListener("resize", fit);
+    };
   });
   if (!open && !out) return null;
   return (
@@ -545,14 +569,21 @@ function ModelPop(props: {
 }
 
 /** With a mouse, the favorites as a plain list: a click picks, the arrows and Enter too. */
-function FavoriteList(props: WheelProps) {
+function FavoriteList(props: WheelProps & { asleep: boolean }) {
   const entries = useStableEntries(props.entries);
   const current = entries.findIndex(
     (e) => e.agent.id === props.agent?.id && e.model === props.model,
   );
   const [active, setActive] = useState(Math.max(0, current));
   const list = useRef<HTMLDivElement>(null);
-  useEffect(() => list.current?.focus({ preventScroll: true }), []);
+  // Keys go to the list, but not while the effort's slider is over it: then they go to the slider.
+  useEffect(() => {
+    if (props.asleep)
+      list.current?.parentElement
+        ?.querySelector<HTMLElement>(".eslide [role=slider]")
+        ?.focus({ preventScroll: true });
+    else list.current?.focus({ preventScroll: true });
+  }, [props.asleep]);
   useEffect(() => {
     list.current?.querySelector(`#fv-${active}`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
@@ -562,6 +593,7 @@ function FavoriteList(props: WheelProps) {
       className="mpl"
       role="listbox"
       aria-label="Modèles favoris"
+      inert={props.asleep}
       aria-activedescendant={`fv-${active}`}
       tabIndex={0}
       onKeyDown={(e) => {
@@ -634,6 +666,11 @@ function AllModels(props: {
   const [unfolded, setUnfolded] = useState<Record<string, boolean>>({});
   const [opened, setOpened] = useState<string | null>(null);
   const search = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  /** The models shown, in order: the arrows go from one to the next. */
+  const rows = () => [
+    ...(list.current?.querySelectorAll<HTMLElement>("[role=menuitemradio]") ?? []),
+  ];
   useEffect(() => {
     if (props.focus) search.current?.focus({ preventScroll: true });
   }, [props.focus]);
@@ -743,9 +780,39 @@ function AllModels(props: {
           autoComplete="off"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            // Down goes into the list; Enter takes the first model found.
+            const first = rows()[0];
+            if (e.key === "ArrowDown" && first) {
+              e.preventDefault();
+              first.focus();
+            } else if (e.key === "Enter" && q && first) {
+              e.preventDefault();
+              first.click();
+            }
+          }}
         />
       </label>
-      <div className="mpl" role="menu" aria-label="Tous les modèles">
+      <div
+        ref={list}
+        className="mpl"
+        role="menu"
+        aria-label="Tous les modèles"
+        onKeyDown={(e) => {
+          const all = rows();
+          const at = all.indexOf(e.target as HTMLElement);
+          if (at < 0) return;
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            const next = at + (e.key === "ArrowDown" ? 1 : -1);
+            if (next < 0) search.current?.focus();
+            else all[Math.min(next, all.length - 1)]?.focus();
+          } else if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            all[at]?.click();
+          }
+        }}
+      >
         {groups}
         {q && found === 0 && <p className="mpe">Aucun modèle</p>}
       </div>

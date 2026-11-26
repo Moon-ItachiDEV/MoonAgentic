@@ -372,6 +372,28 @@ describe("composer", () => {
     await composer(page).click();
     await expect.poll(() => pill(page).getAttribute("aria-label")).toContain("Démo précis");
 
+    // With the keyboard: a search, down into the list, Enter.
+    await pill(page).click();
+    await menu.getByRole("button", { name: "Tous les modèles", exact: true }).click();
+    await search.fill("rapide");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await all.waitFor({ state: "hidden" });
+    await composer(page).click();
+    await expect.poll(() => pill(page).getAttribute("aria-label")).toContain("Démo rapide");
+
+    // The effort's slider takes the keys while it is over the list: the model stays.
+    await pill(page).click();
+    await menu.getByRole("button", { name: /^Effort : / }).click();
+    const slider = menu.getByRole("slider", { name: /^Effort de / });
+    await expect.poll(() => slider.evaluate((el) => el === document.activeElement)).toBe(true);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Escape");
+    await menu.waitFor({ state: "hidden" });
+    await composer(page).click();
+    await expect.poll(() => pill(page).getAttribute("aria-label")).toContain("Démo rapide");
+
     // Escape and a click elsewhere close it too.
     await pill(page).click();
     await list.waitFor();
