@@ -3599,7 +3599,8 @@ export class Hub {
     await dropCheckpoints(
       workspace.path,
       removed.flatMap((i) =>
-        i.kind === "user" && i.checkpoint ? [checkpointRef(threadId, i.id)] : [],
+        // Those from before a move share the move's ref, which stays for the others.
+        i.kind === "user" && i.checkpoint && !i.beforeMove ? [checkpointRef(threadId, i.id)] : [],
       ),
     ).catch(() => undefined);
   }
@@ -4223,15 +4224,16 @@ export class Hub {
             tree ? { ...rest, checkpoint: tree, beforeMove: true } : rest,
           );
         }
+        // With the rest: a stop in between leaves both or neither, and screens get one timeline.
+        this.store.putItem(threadId, {
+          id: `moved:${randomUUID()}`,
+          kind: "moved",
+          projectId,
+          name: plainLabel(project.name),
+          at: Date.now(),
+        });
       });
       this.timelineCut(threadId);
-      this.putItem(threadId, {
-        id: `moved:${randomUUID()}`,
-        kind: "moved",
-        projectId,
-        name: plainLabel(project.name),
-        at: Date.now(),
-      });
     });
   }
 

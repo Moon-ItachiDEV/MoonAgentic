@@ -31,6 +31,8 @@ const rigged = vi.hoisted(() => ({
   failing: undefined as { match: string; how: "error" | "no answer"; done: boolean } | undefined,
   /** What the next thread ids start with, in place of their first eight characters. */
   idStart: undefined as string | undefined,
+  /** The arguments of every git command run, when set. */
+  gitCalls: undefined as string[][] | undefined,
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -39,6 +41,7 @@ vi.mock("node:child_process", async (importOriginal) => {
     const [file, args] = call;
     const failing = rigged.failing;
     const done = call.at(-1);
+    if (file === "git" && Array.isArray(args)) rigged.gitCalls?.push(args.map(String));
     if (
       file === "git" &&
       Array.isArray(args) &&
@@ -75,6 +78,7 @@ const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   rigged.failing = undefined;
   rigged.idStart = undefined;
+  rigged.gitCalls = undefined;
   for (const cleanup of cleanups.splice(0)) await cleanup();
 });
 
@@ -438,7 +442,12 @@ describe("resolving a thread and stepping back", () => {
     hub.send(id, "Après");
     await hub.whenIdle(id);
     leaveWork(dir);
+    rigged.gitCalls = [];
     await hub.restore(id, before.id);
+    // Neon's review of PR #176: a message from before the move has no ref of its own to drop.
+    expect(
+      rigged.gitCalls.filter((a) => a.join(" ").includes(`/${before.id.replace(/^user:/, "")}`)),
+    ).toEqual([]);
     // The project's files as at the move, the thread still in the project, the move told.
     expect(workIn(dir)).toEqual({ readme: "# Demo\nune ligne\n", notes: undefined });
     expect(store.listItems(id).map((i) => i.kind)).toEqual(["moved"]);

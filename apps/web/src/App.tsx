@@ -8,6 +8,7 @@ import {
 } from "@moonagentic/protocol";
 import { onThreadLink } from "./components/Markdown.tsx";
 import { wholeThread } from "./whole-thread.ts";
+import { renameKey, sendRename } from "./rename.ts";
 import {
   Fragment,
   lazy,
@@ -415,8 +416,7 @@ export function App() {
     const clean = title.replace(/\s+/g, " ").trim();
     const current = state.threads.find((t) => t.id === was.id);
     if (!clean || !current || clean === current.title) return;
-    connection.send({ type: "thread.rename", threadId: was.id, title: clean });
-    connection.notify(was.loose ? "Discussion renommée" : "Fil renommé");
+    sendRename(connection, was.id, clean, was.loose);
   };
   const askDeleteThread = (t: Thread) => {
     // A team goes whole: its lead's thread takes the members' with it.
@@ -1571,13 +1571,10 @@ function HeaderRename({
         spellCheck={false}
         enterKeyHint="done"
         onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            finish(true);
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            finish(false);
-          }
+          const does = renameKey({ key: e.key, isComposing: e.nativeEvent.isComposing });
+          if (!does) return;
+          e.preventDefault();
+          finish(does === "save");
         }}
         onBlur={() => finish(true)}
       />

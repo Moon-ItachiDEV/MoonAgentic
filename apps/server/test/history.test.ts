@@ -5,6 +5,17 @@ import { historyBefore, projectMemoryContext } from "../src/history.ts";
 const name = (id: string) => id;
 
 describe("historyBefore", () => {
+  it("tells the agent the conversation moved into a project", () => {
+    const items: Item[] = [
+      { id: "u0", kind: "user", text: "Une question", at: 1 },
+      { id: "m", kind: "moved", projectId: "p", name: "MoonAgentic", at: 2 },
+      { id: "u1", kind: "user", text: "Suite", at: 3 },
+    ];
+    expect(historyBefore(items, "u1", name, undefined, { threadId: "t" })).toContain(
+      "(La conversation a été déplacée dans le projet MoonAgentic.)",
+    );
+  });
+
   it("keeps the full short conversation without duplication or omission markers", () => {
     const items: Item[] = [
       { id: "u0", kind: "user", text: "Demande initiale", at: 1 },

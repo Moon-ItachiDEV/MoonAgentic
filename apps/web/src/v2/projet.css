@@ -956,7 +956,8 @@ html:not([data-dev="desk"]) .scr.roomy .dtop .gb:active {
   box-shadow: 0 0 0 1.5px var(--accent);
 }
 .scr.roomy .mtop .gb.tok,
-.scr.roomy .mtop .gb.tok:hover {
+.scr.roomy .mtop .gb.tok:hover,
+html:not([data-dev="desk"]) .scr.roomy .mtop .gb.tok:active {
   background: var(--ink);
   color: var(--on-ink);
 }

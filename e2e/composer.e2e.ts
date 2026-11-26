@@ -1385,10 +1385,34 @@ describe("composer", () => {
     await page.getByRole("button", { name: "Actions du fil" }).click();
     await page.getByRole("menuitem", { name: "Renommer" }).click();
     await name.fill("Nouveautés IA");
-    await page.getByRole("button", { name: "Valider le nom" }).waitFor();
+    const ok = page.getByRole("button", { name: "Valider le nom" });
+    await ok.waitFor();
+    // Neon's review of PR #176: pressed on an iPad, ✓ kept its ink, not the grey of a press.
+    const ink = await ok.evaluate((e) => getComputedStyle(e).backgroundColor);
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("DOM.enable");
+    await cdp.send("CSS.enable");
+    const { root: doc } = await cdp.send("DOM.getDocument");
+    const { nodeId } = await cdp.send("DOM.querySelector", {
+      nodeId: doc.nodeId,
+      selector: ".gb.tok",
+    });
+    const dev = await page.evaluate(() => document.documentElement.dataset.dev);
+    await page.evaluate(() => (document.documentElement.dataset.dev = "touch"));
+    await cdp.send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: ["active"] });
+    // Past its colour's transition.
+    await page.waitForTimeout(400);
+    expect(await ok.evaluate((e) => getComputedStyle(e).backgroundColor)).toBe(ink);
+    await cdp.send("CSS.forcePseudoState", { nodeId, forcedPseudoClasses: [] });
+    await page.evaluate((d) => {
+      if (d) document.documentElement.dataset.dev = d;
+      else delete document.documentElement.dataset.dev;
+    }, dev);
+    await cdp.detach();
     await page.waitForTimeout(400);
     await shot(page, "c23c-renommer");
-    await name.press("Enter");
+    // ✓ saves, its own press leaving the field focused: saved once.
+    await ok.click();
     await page.getByRole("status").getByText("Discussion renommée").waitFor();
     await side
       .getByRole("button", { name: /^Nouveautés IA/ })
