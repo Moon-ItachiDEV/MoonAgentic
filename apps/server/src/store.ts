@@ -407,6 +407,21 @@ const INDEX_BATCH = 100;
 const SEARCH_INDEX_MS = 30;
 /** The fewest letters searched for: the index cuts text in groups of three. */
 export const MIN_SEARCH_CHARS = 3;
+/** FTS5 `MATCH` query intersecting unique 3-char trigrams so `*`, `?`, `[` still use the index. */
+function trigramMatch(text: string): string | undefined {
+  if (text.includes("\0")) return undefined;
+  const chars = [...text];
+  if (chars.length < MIN_SEARCH_CHARS) return undefined;
+  const grams: string[] = [];
+  const seen = new Set<string>();
+  for (let i = 0; i <= chars.length - MIN_SEARCH_CHARS && grams.length < 32; i++) {
+    const g = chars.slice(i, i + MIN_SEARCH_CHARS).join("");
+    if (seen.has(g)) continue;
+    seen.add(g);
+    grams.push(`"${g.replace(/"/g, '""')}"`);
+  }
+  return grams.join(" AND ");
+}
 
 /**
  * Brings the database up to the schema this version knows, one step at a time, each in a
@@ -1187,35 +1202,38 @@ export class Store {
    * push visible hits out of the result set.
    */
   searchItems(query: string, limit = 30, hidden: string[] = []): SearchHit[] {
-    // Shorter, the index names nothing and every message would be read.
-    if ([...fold(query)].length < MIN_SEARCH_CHARS) return [];
+    const folded = fold(query);
+    // Shorter than 3 chars, the index names nothing and every message would be read.
+    const match = trigramMatch(folded);
+    if (!match) return [];
     // What was written since the index was last filled is found too.
     this.indexSearchIfWritable();
-    // The folded text is looked for as it is, `*`, `?` and `[` included. From three letters
-    // the index names the few messages to look in; shorter, the folded texts are read, the
-    // latest first, until enough are found. No message is opened either way but those shown.
-    const pattern = `*${fold(query).replace(/[*?[]/g, (c) => `[${c}]`)}*`;
+    // Every character is taken literally, `*`, `?` and `[` included: the trigram index
+    // narrows candidates in descending order, and `instr` verifies the exact substring.
     const rows = (
       hidden.length
         ? this.sql(
             `SELECT i.thread_id, i.id, i.data
-               FROM search_fts f
-               JOIN search_docs d ON d.n = f.rowid
+               FROM search_fts
+               JOIN search_docs d ON d.n = search_fts.rowid
                JOIN threads t ON t.id = d.thread_id
                JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
-              WHERE f.text GLOB ?
+              WHERE search_fts MATCH ?
+                AND instr(search_fts.text, ?) > 0
                 AND t.project_id NOT IN (${hidden.map(() => "?").join(", ")})
-              ORDER BY f.rowid DESC
+              ORDER BY search_fts.rowid DESC
               LIMIT ?`,
-          ).all(pattern, ...hidden, limit)
+          ).all(match, folded, ...hidden, limit)
         : this.sql(
             `SELECT i.thread_id, i.id, i.data FROM (
-               SELECT rowid AS n FROM search_fts WHERE text GLOB ? ORDER BY rowid DESC LIMIT ?
+               SELECT rowid AS n FROM search_fts
+                WHERE search_fts MATCH ? AND instr(text, ?) > 0
+                ORDER BY rowid DESC LIMIT ?
              ) hit
              JOIN search_docs d ON d.n = hit.n
              JOIN items i ON i.thread_id = d.thread_id AND i.id = d.item_id
              ORDER BY hit.n DESC`,
-          ).all(pattern, limit)
+          ).all(match, folded, limit)
     ) as { thread_id: string; id: string; data: string }[];
     return rows.flatMap((row): SearchHit[] => {
       const item = this.readItem(row.data);
@@ -1246,18 +1264,18 @@ export class Store {
   ): SearchHit[] {
     const terms = [...new Set(fold(query).trim().split(/\s+/).filter(Boolean))].slice(0, 6);
     if (!terms.length) return [];
-    this.indexSearchIfWritable();
     // Drive the trigram index with the longest term (most selective), then require every other term.
-    const ordered = [...terms].sort((a, b) => b.length - a.length);
+    const ordered = [...terms].sort((a, b) => [...b].length - [...a].length);
     const primary = ordered[0]!;
-    // Shorter, the index names nothing and every message would be read.
-    if ([...primary].length < MIN_SEARCH_CHARS) return [];
+    const match = trigramMatch(primary);
+    if (!match) return [];
     const rest = ordered.slice(1);
-    const pattern = `*${primary.replace(/[*?[]/g, (c) => `[${c}]`)}*`;
-    const extraClauses = rest.map(() => `AND instr(f.text, ?) > 0`).join("\n            ");
+    this.indexSearchIfWritable();
+    const extraClauses = rest.map(() => `AND instr(search_fts.text, ?) > 0`).join("\n            ");
     const excludeClause = excludeThreadId ? `AND t.id != ?` : "";
     const params: (string | number)[] = [
-      pattern,
+      match,
+      primary,
       ...rest,
       projectId,
       ...(excludeThreadId ? [excludeThreadId] : []),
@@ -1269,13 +1287,14 @@ export class Store {
     const rows = this.sql(
       `SELECT i.thread_id, i.id, i.data
          FROM (
-           SELECT d.thread_id AS thread_id, d.item_id AS item_id, f.rowid AS n,
-                  ROW_NUMBER() OVER (PARTITION BY d.thread_id ORDER BY f.rowid DESC) AS nth,
-                  MAX(f.rowid) OVER (PARTITION BY d.thread_id) AS latest
-             FROM search_fts f
-             JOIN search_docs d ON d.n = f.rowid
+           SELECT d.thread_id AS thread_id, d.item_id AS item_id, search_fts.rowid AS n,
+                  ROW_NUMBER() OVER (PARTITION BY d.thread_id ORDER BY search_fts.rowid DESC) AS nth,
+                  MAX(search_fts.rowid) OVER (PARTITION BY d.thread_id) AS latest
+             FROM search_fts
+             JOIN search_docs d ON d.n = search_fts.rowid
              JOIN threads t ON t.id = d.thread_id
-            WHERE f.text GLOB ?
+            WHERE search_fts MATCH ?
+              AND instr(search_fts.text, ?) > 0
             ${extraClauses}
               AND t.project_id = ?
               ${excludeClause}

@@ -158,6 +158,16 @@ describe("searching a big database (N23)", { timeout: 120_000 }, () => {
     expect(reply).toMatchObject({ type: "searched" });
     expect(reply?.type === "searched" && reply.hits.map((h) => h.itemId)).toEqual(["dernier"]);
   });
+
+  it("uses the trigram index even for GLOB metacharacters like ???", async () => {
+    const { hub } = seeded(300, 0, 50);
+    const screen = new Screen();
+    const { stall } = await longestStall(() =>
+      hub.handle(screen, { type: "search", requestId: "r", query: "???" }),
+    );
+    expect(screen.messages.at(-1)).toMatchObject({ type: "searched", hits: [] });
+    expect(stall).toBeLessThan(50);
+  });
 });
 
 const git = (cwd: string, ...args: string[]) =>
@@ -207,5 +217,41 @@ describe("reviewing a very big text file (N6)", { timeout: 120_000 }, () => {
       ["data.csv", true],
       ["petit.txt", false],
     ]);
+  });
+
+  it("marks single-line minified files as truncated and bounds wide multi-line patches in bytes", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-widefile-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const repo = path.join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    writeFileSync(path.join(repo, "bundle.min.js"), "a\n");
+    writeFileSync(path.join(repo, "wide.jsonl"), "a\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "init");
+    const base = git(repo, "rev-parse", "HEAD");
+    // Place an astral emoji across the 100 000 code-unit clip boundary (+prefix is 1 char).
+    writeFileSync(path.join(repo, "bundle.min.js"), `${"a".repeat(99_998)}🚀${"b".repeat(50_000)}`);
+    // 40 lines of 80 KB (~3.2 MB) followed by a short trailing line: must stop cleanly at 2 MiB.
+    const wideLines = Array.from(
+      { length: 40 },
+      (_, i) => `{"i":${i},"v":"${"z".repeat(80_000)}"}`,
+    );
+    wideLines.push('{"tail":"must-not-jump-gap"}');
+    writeFileSync(path.join(repo, "wide.jsonl"), `${wideLines.join("\n")}\n`);
+
+    const result = await reviewChanges(repo, base);
+    const minified = result.files.find((f) => f.path === "bundle.min.js")!;
+    expect(minified.truncated).toBe(true);
+    const addedLine = minified.patch.split("\n").find((l) => l.startsWith("+"))!;
+    expect(addedLine.length).toBeLessThanOrEqual(100_000);
+    // Must not end with an unpaired UTF-16 high surrogate.
+    const lastCode = addedLine.charCodeAt(addedLine.length - 1);
+    expect(lastCode < 0xd800 || lastCode > 0xdbff).toBe(true);
+
+    const wide = result.files.find((f) => f.path === "wide.jsonl")!;
+    expect(wide.truncated).toBe(true);
+    expect(wide.patch.length).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(wide.patch).not.toContain("must-not-jump-gap");
   });
 });

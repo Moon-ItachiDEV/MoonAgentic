@@ -65,4 +65,16 @@ describe("copying the write-ahead log", () => {
     expect(again.listItems("t")).toHaveLength(6000);
     again.close();
   });
+
+  it("shrinks an overgrown write-ahead log back down once copied", async () => {
+    const { store: s, file } = store();
+    write(s, 10);
+    expect(statSync(`${file}-wal`).size).toBeGreaterThan(8 * 1024 * 1024);
+    const until = Date.now() + 10_000;
+    while (statSync(`${file}-wal`).size > 8 * 1024 * 1024 && Date.now() < until)
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(statSync(`${file}-wal`).size).toBeLessThanOrEqual(8 * 1024 * 1024);
+    expect(s.listItems("t")).toHaveLength(10_000);
+    s.close();
+  });
 });

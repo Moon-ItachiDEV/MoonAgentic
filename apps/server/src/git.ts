@@ -90,6 +90,9 @@ export function git(
   });
 }
 
+/** Grace period after SIGTERM before SIGKILL and forced settlement in `gitStream`. */
+const STREAM_KILL_MS = 2_000;
+
 /**
  * Runs git and hands `take` what it writes as it comes, a piece at a time: an output of
  * hundreds of megabytes is never held whole, and the server answers between two pieces.
@@ -112,27 +115,41 @@ function gitStream(
     let failed: Error | undefined;
     let stderr = "";
     let settled = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
     const settle = (error?: Error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(killTimer);
       const elapsed = Date.now() - startedAt;
       if (elapsed >= SLOW_GIT_MS) slowGitListener?.(gitSubcommand(args), elapsed);
       if (error) reject(error);
       else resolve();
     };
-    const timer = setTimeout(() => {
-      failed ??= new Error(NO_ANSWER);
+    const abort = (error: Error) => {
+      failed ??= error;
       child.kill();
-    }, timeout);
+      if (killTimer) return;
+      killTimer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          // already gone
+        }
+        child.stdout.destroy();
+        child.stderr.destroy();
+        settle(failed);
+      }, STREAM_KILL_MS);
+      killTimer.unref();
+    };
+    const timer = setTimeout(() => abort(new Error(NO_ANSWER)), timeout);
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (text: string) => {
       if (failed) return;
       try {
         take(text);
       } catch (error) {
-        failed = error instanceof Error ? error : new Error(String(error));
-        child.kill();
+        abort(error instanceof Error ? error : new Error(String(error)));
       }
     });
     child.stderr.setEncoding("utf8");
@@ -140,10 +157,12 @@ function gitStream(
       if (stderr.length < 64_000) stderr += text;
     });
     child.on("error", (error) => settle(failed ?? error));
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       if (failed) settle(failed);
-      else if (code !== 0) settle(new Error(stderr.trim() || `git a échoué (code ${code}).`));
-      else settle();
+      else if (code !== 0) {
+        const why = code !== null ? `code ${code}` : `signal ${signal ?? "inconnu"}`;
+        settle(new Error(stderr.trim() || `git a échoué (${why}).`));
+      } else settle();
     });
   });
 }
@@ -502,29 +521,25 @@ export function reviewChanges(
         git(dir, ["--literal-pathspecs", "add", "--intent-to-add", ...pathspecArgs(file)], env),
       );
     }
-    const numstat = await git(dir, ["diff", "--numstat", "-z", "-M", base], env);
+    const numstat = await git(
+      dir,
+      ["diff", "--numstat", "-z", "-M", "--submodule=short", base],
+      env,
+    );
     // An external diff tool from the user's config would replace the unified diff, and a
     // text converter named by the repository would be run on each file shown. Read as it
     // comes: a file of 300 MB made more than git's output may hold.
-    const patch = new PatchReader(MAX_REVIEW_LINES);
+    const patch = new PatchReader(MAX_REVIEW_LINES, MAX_REVIEW_CHARS, MAX_REVIEW_FILES);
     await gitStream(
       dir,
-      ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", base],
+      ["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-M", "--submodule=short", base],
       env,
       (text) => patch.take(text),
     );
     patch.end();
-    const files = filesOf(numstat, patch.parts);
-    let lines = 0;
-    const shown = files.slice(0, MAX_REVIEW_FILES).map((file) => {
-      if (lines >= MAX_REVIEW_LINES && file.patch) {
-        return { ...file, patch: "", truncated: true };
-      }
-      lines += file.patch ? file.patch.split("\n").length : 0;
-      return file;
-    });
-    const omitted = files.length - shown.length;
-    return omitted > 0 ? { files: shown, omitted } : { files: shown };
+    const { files, total } = filesOf(numstat, patch.sections, MAX_REVIEW_FILES);
+    const omitted = total - files.length;
+    return omitted > 0 ? { files, omitted } : { files };
   });
 }
 
@@ -637,60 +652,110 @@ export async function dropCheckpoints(dir: string, refs: string[]): Promise<void
 /** One file's section of a patch: its header lines, then the start of its hunks. */
 interface PatchPart {
   head: string[];
-  /** Its first hunk lines, at most `MAX_PATCH_LINES`. */
+  /** Its first hunk lines, bounded by line and character budgets. */
   body: string[];
   /** How many hunk lines it has in all. */
   lines: number;
+  /** True when any line was clipped or dropped by a line/character budget. */
+  cut: boolean;
 }
 
 /** Past this, a patch line is cut: a minified file may be one line of megabytes. */
 const MAX_PATCH_LINE_CHARS = 100_000;
+/** Most characters kept for a single file's patch, so wide lines cannot blow up memory. */
+const MAX_PATCH_CHARS = 2 * 1024 * 1024;
+/** Most characters kept across a whole review, preventing JSON.stringify stalls or OOM. */
+const MAX_REVIEW_CHARS = 8 * 1024 * 1024;
 /** Header lines kept for one file's section; a header has a handful. */
 const MAX_HEAD_LINES = 50;
+
+/** Drops a trailing UTF-16 high surrogate left behind when a line was cut mid-character. */
+function trimLoneSurrogate(text: string): string {
+  if (!text.length) return text;
+  const code = text.charCodeAt(text.length - 1);
+  return code >= 0xd800 && code <= 0xdbff ? text.slice(0, -1) : text;
+}
 
 /**
  * Reads a patch as git writes it, a piece at a time: each file's header and the start of
  * its hunks are kept, the rest only counted. A patch of hundreds of megabytes is never held
- * whole, nor gone through in one go. Past `budget` hunk lines kept in all, the next files'
- * hunks are only counted.
+ * whole, nor gone through in one go. Past `budget` lines or `maxChars` kept in all, the
+ * next files' hunks are only counted; files past `maxFiles` are ignored without allocation.
  */
 class PatchReader {
-  readonly parts: PatchPart[] = [];
+  readonly sections: PatchPart[][] = [];
   private rest = "";
+  private lineCut = false;
   private kept = 0;
+  private keptChars = 0;
   private inBody = false;
+  private currentFile: PatchPart[] | undefined;
+  private fileKeptLines = 0;
+  private fileKeptChars = 0;
+  private fileStopped = false;
 
   private readonly budget: number;
+  private readonly maxChars: number;
+  private readonly maxFiles: number;
 
-  constructor(budget = Infinity) {
+  constructor(budget = Infinity, maxChars = Infinity, maxFiles = Infinity) {
     this.budget = budget;
+    this.maxChars = maxChars;
+    this.maxFiles = maxFiles;
   }
 
   take(text: string): void {
     let from = 0;
     for (let end = text.indexOf("\n"); end !== -1; end = text.indexOf("\n", from)) {
-      const line = this.rest + text.slice(from, Math.min(end, from + MAX_PATCH_LINE_CHARS));
+      const space = MAX_PATCH_LINE_CHARS - this.rest.length;
+      const sliceLen = end - from;
+      const cut = this.lineCut || sliceLen > space;
+      const line =
+        space > 0 ? this.rest + text.slice(from, from + Math.min(sliceLen, space)) : this.rest;
       this.rest = "";
-      this.line(line.length > MAX_PATCH_LINE_CHARS ? line.slice(0, MAX_PATCH_LINE_CHARS) : line);
+      this.lineCut = false;
+      this.line(cut ? trimLoneSurrogate(line) : line, cut);
       from = end + 1;
     }
-    if (this.rest.length < MAX_PATCH_LINE_CHARS) {
-      this.rest += text.slice(from, from + MAX_PATCH_LINE_CHARS - this.rest.length);
+    const rem = text.length - from;
+    if (rem > 0) {
+      const space = MAX_PATCH_LINE_CHARS - this.rest.length;
+      if (rem > space) this.lineCut = true;
+      if (space > 0) this.rest += text.slice(from, from + Math.min(rem, space));
     }
   }
 
   end(): void {
-    if (this.rest) this.line(this.rest);
+    if (this.rest || this.lineCut) {
+      this.line(this.lineCut ? trimLoneSurrogate(this.rest) : this.rest, this.lineCut);
+    }
     this.rest = "";
+    this.lineCut = false;
   }
 
-  private line(line: string): void {
+  private line(line: string, cut: boolean): void {
     if (line.startsWith("diff --git ")) {
-      this.parts.push({ head: [line], body: [], lines: 0 });
+      const part: PatchPart = { head: [line], body: [], lines: 0, cut: false };
+      // A file whose type changed (file replaced by a symlink) comes as two sections under
+      // the same header, a deletion then a creation, sharing one file's budget.
+      const last = this.sections.at(-1);
+      const first = last?.[0];
+      if (last?.length === 1 && first && first.head[0] === line && isDeletion(first)) {
+        last.push(part);
+        this.currentFile = last;
+      } else if (this.sections.length < this.maxFiles) {
+        this.currentFile = [part];
+        this.sections.push(this.currentFile);
+        this.fileKeptLines = 0;
+        this.fileKeptChars = 0;
+        this.fileStopped = false;
+      } else {
+        this.currentFile = undefined;
+      }
       this.inBody = false;
       return;
     }
-    const part = this.parts.at(-1);
+    const part = this.currentFile?.at(-1);
     if (!part) return;
     if (!this.inBody && !line.startsWith("@@")) {
       if (part.head.length < MAX_HEAD_LINES) part.head.push(line);
@@ -698,9 +763,23 @@ class PatchReader {
     }
     this.inBody = true;
     part.lines += 1;
-    if (part.body.length < MAX_PATCH_LINES && (part.body.length || this.kept < this.budget)) {
+    const addedChars = line.length + (this.fileKeptLines ? 1 : 0);
+    const withinFile =
+      this.fileKeptLines < MAX_PATCH_LINES && this.fileKeptChars + addedChars <= MAX_PATCH_CHARS;
+    const withinTotal =
+      this.fileKeptLines > 0
+        ? this.keptChars + addedChars <= this.maxChars
+        : this.kept < this.budget && this.keptChars + line.length <= this.maxChars;
+    if (!this.fileStopped && withinFile && withinTotal) {
       part.body.push(line);
+      if (cut) part.cut = true;
+      this.fileKeptLines += 1;
+      this.fileKeptChars += addedChars;
       this.kept += 1;
+      this.keptChars += addedChars;
+    } else {
+      this.fileStopped = true;
+      part.cut = true;
     }
   }
 }
@@ -710,10 +789,14 @@ export function parseDiff(numstat: string, patch: string): ReviewFile[] {
   const reader = new PatchReader();
   reader.take(patch);
   reader.end();
-  return filesOf(numstat, reader.parts);
+  return filesOf(numstat, reader.sections).files;
 }
 
-function filesOf(numstat: string, patchParts: PatchPart[]): ReviewFile[] {
+function filesOf(
+  numstat: string,
+  sections: PatchPart[][],
+  maxFiles = Infinity,
+): { files: ReviewFile[]; total: number } {
   const counts: {
     path: string;
     from?: string;
@@ -734,19 +817,7 @@ function filesOf(numstat: string, patchParts: PatchPart[]): ReviewFile[] {
       removed: removed === "-" ? null : Number(removed),
     });
   }
-  // A file whose type changed (a file replaced by a symbolic link, say) comes as two
-  // sections under the same header, a deletion then a creation, but one count.
-  const sections: PatchPart[][] = [];
-  for (const part of patchParts) {
-    const last = sections.at(-1);
-    const first = last?.[0];
-    if (last?.length === 1 && first && first.head[0] === part.head[0] && isDeletion(first)) {
-      last.push(part);
-    } else {
-      sections.push([part]);
-    }
-  }
-  return counts.map((count, i) => {
+  const files = counts.slice(0, maxFiles).map((count, i) => {
     const parts = sections[i] ?? [];
     const head = (parts[0]?.head ?? []).join("\n");
     const status: ReviewFile["status"] =
@@ -762,6 +833,8 @@ function filesOf(numstat: string, patchParts: PatchPart[]): ReviewFile[] {
     // Each part's hunks, without the header lines before them.
     const body = parts.flatMap((part) => part.body);
     const lines = parts.reduce((sum, part) => sum + part.lines, 0);
+    const truncated =
+      lines > Math.min(body.length, MAX_PATCH_LINES) || parts.some((part) => part.cut);
     return {
       path: count.path,
       ...(count.from ? { from: count.from } : {}),
@@ -769,9 +842,10 @@ function filesOf(numstat: string, patchParts: PatchPart[]): ReviewFile[] {
       added: count.added,
       removed: count.removed,
       patch: body.slice(0, MAX_PATCH_LINES).join("\n"),
-      ...(lines > Math.min(body.length, MAX_PATCH_LINES) ? { truncated: true } : {}),
+      ...(truncated ? { truncated: true } : {}),
     };
   });
+  return { files, total: counts.length };
 }
 
 /** True for a diff section whose header block says the file was deleted. */

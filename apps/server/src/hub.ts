@@ -437,6 +437,8 @@ export class Hub {
   private readonly gitProjects = new Map<string, boolean>();
   /** Projects being removed, which take no new thread meanwhile. */
   private readonly removingProjects = new Set<string>();
+  /** Threads whose items are being deleted in batches: exports/pages fail instead of returning a half-deleted timeline. */
+  private readonly deletingThreads = new Set<string>();
   /** The text each thread's agent is streaming, ahead of what is written down. */
   /** Names this run of the server: a screen's mark from another run means nothing here. */
   private readonly epoch = randomUUID();
@@ -1159,7 +1161,10 @@ export class Hub {
         );
         return;
       case "thread.page": {
-        this.requireThread(message.threadId);
+        const thread = this.requireThread(message.threadId);
+        if (this.deletingThreads.has(thread.id) || this.removingProjects.has(thread.projectId)) {
+          throw new Error("Ce fil est en cours de suppression.");
+        }
         // Bigger pages only for a use that is not shown: an export reads all of a long
         // thread by them, where one answer of all of it held the server for 0.7 s.
         const page = this.store.pageItems(
@@ -3367,30 +3372,37 @@ export class Hub {
   private async deleteOneThread(threadId: string, threads?: ThreadPlace[]): Promise<void> {
     const thread = this.requireThread(threadId);
     await this.exclusive(threadId, "Attends la fin de la suppression.", async () => {
-      await this.releaseFolder(threadId, threads);
-      await this.forgetSession(threadId);
-      this.settlePermissions(threadId);
-      const project = this.store.getProject(thread.projectId);
-      const workspace = thread.workspace;
-      if (workspace && project) {
-        if (this.ownFolder(threadId, workspace.path, threads))
-          await removeWorktree(project.path, workspace.path);
-        await dropRefs(project.path, `refs/moonagentic/${threadId}/`).catch(() => undefined);
+      this.deletingThreads.add(threadId);
+      try {
+        await this.releaseFolder(threadId, threads);
+        await this.forgetSession(threadId);
+        this.settlePermissions(threadId);
+        const project = this.store.getProject(thread.projectId);
+        const workspace = thread.workspace;
+        if (workspace && project) {
+          if (this.ownFolder(threadId, workspace.path, threads))
+            await removeWorktree(project.path, workspace.path);
+          await dropRefs(project.path, `refs/moonagentic/${threadId}/`).catch(() => undefined);
+        }
+        // Drop pending drafts and held writes before yielding across deletion batches so
+        // neither flushAll() nor storage recovery writes items back into a deleted thread.
+        clearTimeout(this.drafts.get(threadId)?.timer);
+        this.drafts.delete(threadId);
+        this.dropHeld(threadId);
+        // A long timeline goes a stretch at a time, the latest first, so screens are answered
+        // meanwhile: in one go, 20 000 messages held the server half a second.
+        while (this.store.deleteSomeItems(threadId, DELETE_BATCH)) await nextTurn();
+        this.setPendingRestore(threadId, undefined);
+        this.logs.delete(threadId);
+        this.coordinators.forget(threadId);
+        this.attachments.forget(threadId);
+        this.store.deleteThread(threadId);
+        this.broadcast({ type: "threadRemoved", threadId });
+        this.planner.threadDeleted(threadId);
+        this.scheduler.threadDeleted(threadId);
+      } finally {
+        this.deletingThreads.delete(threadId);
       }
-      // A long timeline goes a stretch at a time, the latest first, so screens are answered
-      // meanwhile: in one go, 20 000 messages held the server half a second.
-      while (this.store.deleteSomeItems(threadId, DELETE_BATCH)) await nextTurn();
-      this.setPendingRestore(threadId, undefined);
-      clearTimeout(this.drafts.get(threadId)?.timer);
-      this.drafts.delete(threadId);
-      this.logs.delete(threadId);
-      this.coordinators.forget(threadId);
-      this.attachments.forget(threadId);
-      this.store.deleteThread(threadId);
-      this.dropHeld(threadId);
-      this.broadcast({ type: "threadRemoved", threadId });
-      this.planner.threadDeleted(threadId);
-      this.scheduler.threadDeleted(threadId);
     });
   }
 

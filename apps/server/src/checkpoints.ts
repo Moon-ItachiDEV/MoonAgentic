@@ -18,23 +18,50 @@ const { parentPort, workerData } = require("node:worker_threads");
 const { DatabaseSync } = require("node:sqlite");
 const closed = new Int32Array(workerData.closed);
 let db;
-try {
+const open = () => {
+  if (db) return db;
   db = new DatabaseSync(workerData.file);
-  db.exec("PRAGMA busy_timeout = 5000");
-} catch {}
+  db.exec("PRAGMA busy_timeout = 1000; PRAGMA journal_size_limit = " + workerData.sizeLimit);
+  return db;
+};
+const notifyClosed = () => {
+  Atomics.store(closed, 0, 1);
+  Atomics.notify(closed, 0);
+};
+process.once("exit", notifyClosed);
 parentPort.on("message", (message) => {
-  if (message === "checkpoint") {
+  if (message === "checkpoint" || message === "truncate") {
+    let ok = false;
+    let busy = 1;
     try {
-      db?.exec("PRAGMA wal_checkpoint(PASSIVE)");
-    } catch {}
-    parentPort.postMessage("done");
+      const conn = open();
+      const row = conn.prepare("PRAGMA wal_checkpoint(PASSIVE)").get();
+      busy = Number(row?.busy ?? 0);
+      if (busy === 0 && message === "truncate") {
+        // Shrink an overgrown WAL file without waiting on active readers.
+        conn.exec("PRAGMA busy_timeout = 0");
+        try {
+          const shrunk = conn.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+          busy = Number(shrunk?.busy ?? 0);
+        } finally {
+          conn.exec("PRAGMA busy_timeout = 1000");
+        }
+      }
+      ok = true;
+    } catch {
+      try {
+        db?.close();
+      } catch {}
+      db = undefined;
+    }
+    parentPort.postMessage({ ok, busy });
     return;
   }
   try {
     db?.close();
   } catch {}
-  Atomics.store(closed, 0, 1);
-  Atomics.notify(closed, 0);
+  db = undefined;
+  notifyClosed();
   parentPort.close();
 });
 `;
@@ -72,28 +99,32 @@ export class Checkpoints {
   look(): void {
     if (this.busy) return;
     let changed: number;
+    let size: number;
     try {
       const stat = statSync(this.wal);
       if (stat.size < CHECKPOINT_BYTES || stat.mtimeMs === this.copied) return;
       changed = stat.mtimeMs;
+      size = stat.size;
     } catch {
       return;
     }
+    const mode = size > CHECKPOINT_BYTES * 2 ? "truncate" : "checkpoint";
     const worker = this.thread();
     if (!worker) {
       // Without a thread of its own, as SQLite would have done: the log must not grow forever.
       try {
-        this.db.exec("PRAGMA wal_checkpoint(PASSIVE)");
-        this.copied = changed;
+        const row = this.db.prepare("PRAGMA wal_checkpoint(PASSIVE)").get() as
+          { busy?: number } | undefined;
+        if (!row?.busy) this.copied = changed;
       } catch {}
       return;
     }
     this.busy = true;
-    worker.once("message", () => {
+    worker.once("message", (reply: { ok?: boolean; busy?: number }) => {
       this.busy = false;
-      this.copied = changed;
+      if (reply?.ok && !reply.busy) this.copied = changed;
     });
-    worker.postMessage("checkpoint");
+    worker.postMessage(mode);
   }
 
   private thread(): Worker | undefined {
@@ -101,7 +132,11 @@ export class Checkpoints {
     try {
       const worker = new Worker(WORKER, {
         eval: true,
-        workerData: { file: this.file, closed: this.closed },
+        workerData: {
+          file: this.file,
+          closed: this.closed,
+          sizeLimit: CHECKPOINT_BYTES * 2,
+        },
       });
       worker.unref();
       const gone = () => {
@@ -128,6 +163,8 @@ export class Checkpoints {
     worker.on("error", () => undefined);
     worker.postMessage("close");
     // The database's folder may be removed right after: on Windows, an open file stops it.
-    Atomics.wait(new Int32Array(this.closed), 0, 0, CLOSE_WAIT_MS);
+    if (Atomics.wait(new Int32Array(this.closed), 0, 0, CLOSE_WAIT_MS) === "timed-out") {
+      void worker.terminate();
+    }
   }
 }

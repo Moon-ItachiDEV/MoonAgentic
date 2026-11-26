@@ -300,4 +300,14 @@ describe("searching messages", () => {
       "m17",
     ]);
   });
+
+  it("skips indexing on short searchProjectItems queries and ignores NUL bytes safely", () => {
+    const store = withThreads();
+    store.putItem("t1", user("u1", "Un message tout frais sur le projet"));
+    expect(stale(store)).toBe(1);
+    expect(store.searchProjectItems("p", "le")).toEqual([]);
+    expect(stale(store)).toBe(1);
+    expect(store.searchItems("a\0b")).toEqual([]);
+    expect(store.searchProjectItems("p", "a\0b")).toEqual([]);
+  });
 });

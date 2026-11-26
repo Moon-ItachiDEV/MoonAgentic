@@ -305,4 +305,21 @@ describe("a long thread on a screen", () => {
     });
     expect(client.last("changes")).toMatchObject({ items: [], rev: cut.rev });
   });
+
+  it("rejects thread.page while the thread is being deleted in batches", async () => {
+    const { hub, client } = setup(2500);
+    const deleting = hub.deleteThread("t");
+    // Delete runs synchronously up to the first `await nextTurn()` after batch 1.
+    await expect(
+      hub.handle(client, {
+        type: "thread.page",
+        requestId: "r-del",
+        threadId: "t",
+        before: 2501,
+        size: 1000,
+        apart: true,
+      }),
+    ).rejects.toThrow("en cours de suppression");
+    await deleting;
+  });
 });
