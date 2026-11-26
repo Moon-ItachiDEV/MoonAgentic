@@ -1726,6 +1726,16 @@ export class Hub {
         this.requireThread(message.threadId);
         this.updateThread(message.threadId, { pinned: message.pinned });
         return;
+      case "thread.move":
+        await this.moveThread(message.threadId, message.projectId);
+        return;
+      case "thread.rename": {
+        this.requireThread(message.threadId);
+        // One line: a name pasted with its line breaks would break the lists of threads.
+        const title = plainLabel(message.title.replace(/\s+/g, " ")).trim();
+        if (title) this.updateThread(message.threadId, { title });
+        return;
+      }
       case "files.search": {
         const dir = this.folderOf(message.projectId, message.threadId);
         const files = searchFiles(await listFiles(dir), message.query, message.limit);
@@ -3604,6 +3614,64 @@ export class Hub {
           at: Date.now(),
         });
       }
+    });
+  }
+
+  /**
+   * Takes a conversation started outside any project (« Discussions ») into a project, between
+   * two turns. Its agent starts again there, in that project's folder, with the conversation so
+   * far and the project's memory. A copy of work it had in « Discussions » is kept in git first.
+   */
+  async moveThread(threadId: string, projectId: string): Promise<void> {
+    const thread = this.requireLiveThread(threadId);
+    if (thread.projectId === projectId) return;
+    if (!this.isDiscussions(thread.projectId)) {
+      throw new Error("Seule une discussion hors projet se déplace dans un projet.");
+    }
+    const from = this.store.getProject(thread.projectId);
+    // Asked again after each wait: the project can be removed or locked meanwhile.
+    const checkTarget = () => {
+      if (!this.store.getProject(projectId) || this.removingProjects.has(projectId)) {
+        throw new Error("Projet introuvable.");
+      }
+      if (this.isDiscussions(projectId)) throw new Error("Choisis un projet.");
+      if (this.locks.isLocked(projectId)) throw new Error("Ce projet est verrouillé.");
+    };
+    checkTarget();
+    await this.exclusive(threadId, "Attends la fin du déplacement.", async () => {
+      await this.releaseFolder(threadId);
+      await this.forgetSession(threadId);
+      checkTarget();
+      const workspace = this.store.getThread(threadId)?.workspace;
+      if (
+        workspace?.base &&
+        from &&
+        this.ownFolder(threadId, workspace.path) &&
+        existsSync(workspace.path)
+      ) {
+        // Written down before the folder goes, as for a resolved thread: should the project
+        // go away meanwhile, the conversation stays where it was and gets its files back.
+        const kept =
+          workspace.archivedTree ??
+          (await saveCheckpoint(workspace.path, archiveRef(threadId), true));
+        this.updateThread(threadId, { workspace: { ...workspace, archivedTree: kept } });
+        await removeWorktree(from.path, workspace.path);
+      }
+      // Nothing waits between this last look and the move itself.
+      checkTarget();
+      this.store.moveThread(threadId, projectId);
+      // What was allowed « pour ce fil » outside any project is asked again in the project.
+      this.threadGrants.delete(threadId);
+      // In its new project the thread works in the project's folder, like any thread
+      // started there without a branch of its own.
+      this.updateThread(threadId, {
+        workspace: undefined,
+        usage: undefined,
+        canCompact: undefined,
+        commands: undefined,
+        status: "idle",
+        error: null,
+      });
     });
   }
 

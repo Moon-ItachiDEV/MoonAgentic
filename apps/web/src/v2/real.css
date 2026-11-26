@@ -721,42 +721,73 @@ button.ico-pick {
 .ico-pick > svg {
   color: var(--faint);
 }
-.icp {
+/* The project icons: a search, then every icon in the project's tint. */
+.ipv {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  padding: 4px 12px 12px;
+  gap: 14px;
+  padding: 6px 16px 18px;
 }
-.icp input {
-  width: 96px;
-  height: 36px;
-  padding: 0 10px;
-  border: 0;
-  outline: 0;
-  border-radius: 12px;
-  background: var(--card);
-  font: 400 15px var(--sans);
-  color: var(--fg);
+.ipv .pv {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: color-mix(in srgb, var(--pc, var(--pc-moon)) 14%, transparent);
 }
-.icp button {
-  min-width: 36px;
-  height: 36px;
-  padding: 0 6px;
-  border-radius: 12px;
-  font-size: 18px;
+.ipv .tx {
+  min-width: 0;
 }
-.icp button[aria-pressed="true"] {
-  background: var(--card);
+.ipv b {
+  display: block;
+  font-size: 17px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.icp button.icd {
-  font-size: 14px;
-  color: var(--accent);
-  padding: 0 10px;
-}
-.icp small {
-  flex-basis: 100%;
+.ipv small {
   font-size: 13px;
+  color: var(--muted);
+}
+.fld.ipq {
+  margin-bottom: 14px;
+}
+.fld.ipq > svg {
+  flex: none;
+  color: var(--faint);
+}
+.ipk {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(34px, 1fr));
+  gap: 2px;
+  padding: 8px 6px;
+}
+.ipk button {
+  width: 100%;
+  max-width: 46px;
+  aspect-ratio: 1;
+  justify-self: center;
+  display: grid;
+  place-items: center;
+  border-radius: 13px;
+  color: var(--pc, var(--pc-moon));
+  transition:
+    background-color 180ms var(--out),
+    transform 180ms var(--out);
+}
+.ipk button:active {
+  transform: scale(0.92);
+}
+@media (hover: hover) and (pointer: fine) {
+  .ipk button:hover {
+    background: var(--card);
+  }
+}
+.ipk button[aria-checked="true"] {
+  background: color-mix(in srgb, var(--pc, var(--pc-moon)) 14%, transparent);
 }
 .fld .mono {
   font-family: var(--mono);

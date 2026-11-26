@@ -1024,6 +1024,14 @@ export class Store {
     return this.getThread(id)!;
   }
 
+  /** Puts the thread in another project: it then works in that project's folder. */
+  moveThread(id: string, projectId: string): Thread {
+    this.sql(`UPDATE threads SET project_id = ? WHERE id = ?`).run(projectId, id);
+    const moved = this.getThread(id);
+    if (!moved) throw new Error(`Unknown thread ${id}`);
+    return moved;
+  }
+
   getSessionId(threadId: string): string | null {
     const row = this.sql(`SELECT acp_session_id FROM threads WHERE id = ?`).get(threadId) as
       { acp_session_id: string | null } | undefined;

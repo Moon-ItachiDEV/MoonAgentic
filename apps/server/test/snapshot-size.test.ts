@@ -3,7 +3,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { type ServerMessage, type Thread, unpackSnapshot } from "@moonagentic/protocol";
+import {
+  packSnapshot,
+  type ServerMessage,
+  type Snapshot,
+  type Thread,
+  unpackSnapshot,
+} from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { Hub } from "../src/hub.ts";
@@ -67,5 +73,36 @@ describe("the state sent at each connection (N7)", () => {
     expect(unpackSnapshot(JSON.parse(JSON.stringify(message.snapshot))).threads).toEqual(
       JSON.parse(JSON.stringify(whole.threads)),
     );
+  });
+
+  it("keeps an empty list as it is, and gives no thread a list its place does not name", () => {
+    const thread = (id: string, extra: Partial<Thread>) =>
+      ({ id, projectId: "p", title: id, agentId: "demo", status: "idle", ...extra }) as Thread;
+    const listed = [{ name: "compact", description: "Résume la conversation" }];
+    const snapshot = {
+      threads: [
+        thread("vide", { commands: [] }),
+        thread("liste", { commands: listed }),
+        thread("rien", {}),
+      ],
+    } as unknown as Snapshot;
+    // The agent said it has no command: not the same as a thread that has not heard yet.
+    expect(unpackSnapshot(JSON.parse(JSON.stringify(packSnapshot(snapshot)))).threads).toEqual(
+      snapshot.threads,
+    );
+    // Places a server of another version could send: none of them is read as a list.
+    const odd = {
+      threads: [
+        thread("hors", { commandList: 5 }),
+        thread("negatif", { commandList: -1 }),
+        thread("demi", { commandList: 0.5 }),
+        thread("texte", { commandList: 1 }),
+      ],
+      commandLists: [listed, "pas une liste"],
+    } as unknown as Snapshot;
+    for (const t of unpackSnapshot(odd).threads) {
+      expect(t.commands, t.id).toBeUndefined();
+      expect("commandList" in t, t.id).toBe(false);
+    }
   });
 });

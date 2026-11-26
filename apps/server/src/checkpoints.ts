@@ -81,6 +81,8 @@ export class Checkpoints {
   private failed = false;
   /** When the log last changed, as seen before the last copy. */
   private copied = 0;
+  /** How many rows the server had changed at the last look. */
+  private seen = -1;
 
   private readonly file: string;
   private readonly db: DatabaseSync;
@@ -95,20 +97,34 @@ export class Checkpoints {
     this.timer.unref();
   }
 
-  /** Copies the log when it is long and changed since the last copy. */
+  /**
+   * Copies the log when it is long and changed since the last copy. An overgrown log is cut back
+   * only once nothing has written to it since the last look: cutting it waits for every write,
+   * and on a Windows disk a write waited longer than the server's patience, and failed.
+   */
   look(): void {
     if (this.busy) return;
     let changed: number;
+    let quiet: boolean;
     let size: number;
     try {
       const stat = statSync(this.wal);
-      if (stat.size < CHECKPOINT_BYTES || stat.mtimeMs === this.copied) return;
-      changed = stat.mtimeMs;
+      // Every write is the server's, on this connection: the count of rows it changed says if
+      // it wrote, where a file's time can lag behind its writes.
+      const writes = Number(
+        (this.db.prepare("SELECT total_changes() AS n").get() as { n: number }).n,
+      );
+      quiet = writes === this.seen;
+      this.seen = writes;
       size = stat.size;
+      changed = stat.mtimeMs;
     } catch {
       return;
     }
-    const mode = size > CHECKPOINT_BYTES * 2 ? "truncate" : "checkpoint";
+    if (size < CHECKPOINT_BYTES) return;
+    const cut = quiet && size > CHECKPOINT_BYTES * 2;
+    if (changed === this.copied && !cut) return;
+    const mode = cut ? "truncate" : "checkpoint";
     const worker = this.thread();
     if (!worker) {
       // Without a thread of its own, as SQLite would have done: the log must not grow forever.

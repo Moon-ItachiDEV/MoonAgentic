@@ -1,7 +1,6 @@
 // What the project settings check before they send, the same rules as the server's, so a
 // mistake shows under the field rather than as a refusal.
 import {
-  MAX_PROJECT_ICON,
   MAX_PROJECT_MEMORY,
   MAX_SETUP_FILE,
   type ProjectCommand,
@@ -9,18 +8,6 @@ import {
   type ProjectSkill,
   utf8Bytes,
 } from "@moonagentic/protocol";
-
-/** A few icons to pick from at once; any emoji or letters can be typed too. */
-export const ICON_PICKS = ["🌙", "🚀", "🛠️", "📦", "🎨", "🧪", "📚", "⚡"];
-
-/** Why this icon cannot be kept, or nothing when it can (empty puts the folder back). */
-export function iconProblem(icon: string): string | undefined {
-  const value = icon.trim();
-  if (!value) return undefined;
-  if (value.length > MAX_PROJECT_ICON) return "Un emoji ou deux lettres suffisent.";
-  if (!/^[^\s\p{Cc}]+$/u.test(value)) return "Sans espace.";
-  return undefined;
-}
 
 const NAME = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
