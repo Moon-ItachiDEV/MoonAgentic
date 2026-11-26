@@ -132,7 +132,7 @@ describe("ServerProcess", () => {
 });
 
 describe("ServerProcess, when things go wrong (N4, N37)", () => {
-  const run = (mode: string, command = process.execPath) => {
+  const run = (mode: string, command = process.execPath, outputLimitMs?: number) => {
     const states: ServerState[] = [];
     const server = new ServerProcess({
       command,
@@ -140,6 +140,7 @@ describe("ServerProcess, when things go wrong (N4, N37)", () => {
       args: ["--port", "4999"],
       env: () => ({ ...process.env, FAKE_MODE: mode }),
       onState: (state) => states.push(state),
+      ...(outputLimitMs ? { outputLimitMs } : {}),
     });
     return { server, states };
   };
@@ -169,9 +170,11 @@ describe("ServerProcess, when things go wrong (N4, N37)", () => {
   });
 
   it("still says why, and that it cannot start, when the reason is read after the launcher's exit", async () => {
-    const { server, states } = run("cannot-late");
+    const { server, states } = run("cannot-late", process.execPath, 20_000);
     server.start();
-    await wait(2_500);
+    // Ends once the late line's writer closes the output, however long it takes to start.
+    for (let i = 0; i < 400 && !states.some((s) => s.kind === "failed"); i++) await wait(50);
+    await wait(500);
     expect(states.filter((s) => s.kind === "starting")).toHaveLength(1);
     // Never « it starts again » once it has ended for good: nothing would start it.
     expect(server.state).toEqual({
@@ -179,7 +182,7 @@ describe("ServerProcess, when things go wrong (N4, N37)", () => {
       reason: expect.stringMatching(/abîmée.*remplace x par la sauvegarde y/),
     });
     await server.stop();
-  });
+  }, 30_000);
 
   it("reads a last line that has no end of line", async () => {
     const { server } = run("cannot-unended");

@@ -326,11 +326,14 @@ describe("supervisor", () => {
         exit: resolve,
         stdout: { write: () => undefined },
         stderr: { write: (chunk: string | Buffer) => void (said += chunk.toString()) },
+        // Long enough for the late writer to start, on a slow Windows runner too: what is
+        // shown is that the output is read to its end, not how long that may take.
+        outputLimitMs: 20_000,
       });
     });
     expect(code).toBe(CANNOT_START);
     expect(said).toContain("MoonAgentic ne peut pas démarrer : raison tardive");
-  });
+  }, 30_000);
 
   it("redacts split-chunk secrets in both DailyLog and forwarded stdout when redactOutput is enabled", async () => {
     const dir = tempDir();

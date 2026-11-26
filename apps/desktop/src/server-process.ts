@@ -79,6 +79,8 @@ export interface ServerProcessOptions {
   /** What the server says to the shell: the version it found, an install to run. */
   onMessage?: (message: unknown) => void;
   platform?: NodeJS.Platform;
+  /** How long its output may stay open after its exit; OUTPUT_LIMIT_MS when left out. */
+  outputLimitMs?: number;
 }
 
 /**
@@ -231,7 +233,7 @@ export class ServerProcess {
     // may be read after the exit, and would otherwise be taken for a restart under way. The
     // wait has a limit: an output something else keeps open does not hold the restart back.
     child.once("exit", (code) => {
-      const limit = setTimeout(() => end(code), OUTPUT_LIMIT_MS);
+      const limit = setTimeout(() => end(code), this.options.outputLimitMs ?? OUTPUT_LIMIT_MS);
       child.once("close", () => {
         clearTimeout(limit);
         end(code);

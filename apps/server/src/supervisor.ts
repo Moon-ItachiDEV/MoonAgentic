@@ -212,6 +212,8 @@ export interface SuperviseOptions {
   stderr?: { write(chunk: string | Buffer): unknown };
   /** For tests: how long a server that is ready may stay silent. */
   heartbeatLimitMs?: number;
+  /** How long a server's output may stay open after its exit; OUTPUT_LIMIT_MS when left out. */
+  outputLimitMs?: number;
 }
 
 /**
@@ -317,7 +319,7 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
         clearTimeout(limit);
         ended(code, signal);
       };
-      const limit = setTimeout(finish, OUTPUT_LIMIT_MS);
+      const limit = setTimeout(finish, options.outputLimitMs ?? OUTPUT_LIMIT_MS);
       for (const stream of open) stream?.once("end", () => --left === 0 && finish());
     });
     const ended = (code: number | null, signal: NodeJS.Signals | null) => {
