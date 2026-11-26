@@ -113,6 +113,20 @@ describe("activityLabel", () => {
     expect(activityLabel(tool("x", { title: "grep foo", toolKind: "search" }))).toBe(
       "Cherche dans le code…",
     );
+    for (const title of [
+      "search_web",
+      "WebSearch",
+      "Search web: nouveautés IA décembre",
+      "Searching the web",
+      "Google Search",
+      "https://example.com",
+    ]) {
+      expect(activityLabel(tool("x", { title, toolKind: "search" }))).toBe("Cherche sur le web…");
+      expect(activityGlyph(tool("x", { title, toolKind: "search" }))).toBe("web");
+    }
+    expect(activityLabel(tool("x", { title: "grep web apps/web/src", toolKind: "search" }))).toBe(
+      "Cherche dans le code…",
+    );
     expect(activityLabel(thought("t"))).toBe("Réfléchit…");
     expect(activityLabel(agent("a"))).toBe("Écrit…");
     expect(activityLabel(undefined)).toBe("Travaille…");
