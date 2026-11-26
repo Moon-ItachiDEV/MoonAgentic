@@ -12,7 +12,7 @@ export const THREAD_GRANT_OPTION = "moon:thread";
 /** Kinds of tool call that only read. */
 const READ_KINDS = new Set(["read", "search", "think"]);
 
-/** Programs that only read, whatever their arguments (those that can write are below). */
+/** Programs that only read, whatever their arguments (those with write/exec flags are below). */
 const READ_PROGRAMS = new Set([
   "cat",
   "head",
@@ -22,21 +22,16 @@ const READ_PROGRAMS = new Set([
   "grep",
   "egrep",
   "fgrep",
-  "rg",
   "pwd",
   "echo",
   "printf",
-  "sort",
-  "uniq",
   "cut",
   "tr",
   "nl",
-  "file",
   "stat",
   "du",
   "df",
   "which",
-  "tree",
   "jq",
   "diff",
   "basename",
@@ -65,6 +60,26 @@ const READ_PROGRAMS = new Set([
   "findstr",
 ]);
 
+/** Shell wrappers or privilege/exec launchers that are never blanket-granted « pour ce fil ». */
+const UNGRANTABLE_PROGRAMS = new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "dash",
+  "fish",
+  "ksh",
+  "cmd",
+  "powershell",
+  "pwsh",
+  "env",
+  "xargs",
+  "eval",
+  "exec",
+  "sudo",
+  "su",
+  "doas",
+]);
+
 /** Git subcommands that only read. */
 const GIT_READ = new Set([
   "show",
@@ -86,11 +101,15 @@ const GIT_READ = new Set([
   "tag",
 ]);
 
-/** Shell features that can write, run something else, or hide what runs. */
-const UNSAFE = /[>`]|\$\(|<\(|\n|\r|(^|[^&])&([^&]|$)/;
+/** Safe git global flags accepted before the subcommand. */
+const GIT_SAFE_GLOBAL = new Set(["--no-pager", "-P", "--no-optional-locks", "--literal-pathspecs"]);
 
-/** Redirects that only silence or merge output. */
-const QUIET = /\s+2>&1|\s+2?>\s*\/dev\/null|\s+2?>\s*\$null|\s+2?>\s*NUL\b/gi;
+/** Redirects that only silence or merge stderr/null output, at a token boundary. */
+const QUIET_REDIRECT =
+  /^(?:2>&1|2?>\s*\/dev\/null|2?>\s*(?:\$[nN][uU][lL]|[nN][uU][lL]))(?=$|[\s;|&])/;
+
+/** Characters or expansions that can run arbitrary code or hide commands even inside quotes. */
+const ALWAYS_UNSAFE = /[\n\r\0`]|[$][({]/;
 
 /** The command a tool call runs, as the agent sent it. */
 export function commandOf(call: acp.ToolCallUpdate | acp.ToolCall): string | undefined {
@@ -99,52 +118,135 @@ export function commandOf(call: acp.ToolCallUpdate | acp.ToolCall): string | und
   if (typeof command === "string") return unwrap(command);
   if (Array.isArray(command) && command.every((c) => typeof c === "string")) {
     const parts = command as string[];
-    // ["bash", "-lc", "git diff"]: the shell's script is the command.
-    const shell = parts.findIndex((p) => /^-(l?c|Command)$/i.test(p));
-    if (shell >= 0 && parts[shell + 1] !== undefined)
-      return unwrap(parts.slice(shell + 1).join(" "));
+    // ["bash", "-lc", "git diff"]: the shell's script is the command (only when it is the sole arg).
+    const first = program(parts[0]);
+    if (
+      first === "bash" ||
+      first === "sh" ||
+      first === "zsh" ||
+      first === "powershell" ||
+      first === "pwsh"
+    ) {
+      const shell = parts.findIndex((p) => /^-(l?c|Command)$/i.test(p));
+      if (shell >= 0 && parts.length === shell + 2) return parts[shell + 1]!.trim();
+    }
     return unwrap(parts.join(" "));
   }
   return call.title ? unwrap(call.title) : undefined;
 }
 
-/** `bash -lc 'git diff'` or `powershell -Command "Get-Content x"` → the script inside. */
+/**
+ * `bash -lc 'git diff'` or `powershell -Command "Get-Content x"` → the script inside.
+ * Never matches across an embedded quote of the same kind, so trailing chained commands
+ * (`bash -lc 'git status' && rm -rf / && echo 'x'`) cannot be unwrapped into a single string.
+ */
 function unwrap(command: string): string {
   const m =
-    /^\s*(?:\S*[\\/])?(?:ba|z)?sh(?:\.exe)?\s+-l?c\s+(['"])([\s\S]*)\1\s*$/.exec(command) ??
-    /^\s*(?:\S*[\\/])?(?:powershell|pwsh)(?:\.exe)?\s+(?:-\w+\s+)*?-Command\s+(['"])([\s\S]*)\1\s*$/i.exec(
+    /^\s*(?:\S*[\\/])?(?:ba|z)?sh(?:\.exe)?\s+-l?c\s+(?:'([^']*)'|"([^"\\]*)")\s*$/.exec(command) ??
+    /^\s*(?:\S*[\\/])?(?:powershell|pwsh)(?:\.exe)?\s+(?:-\w+\s+)*?-Command\s+(?:'([^']*)'|"([^"\\]*)")\s*$/i.exec(
       command,
     );
-  return (m ? m[2]! : command).trim();
+  return (m ? (m[1] ?? m[2]!) : command).trim();
 }
 
-/** Splits on `&&`, `||`, `;` and `|`, outside quotes. */
-function parts(command: string): string[] | undefined {
-  const out: string[] = [];
+/**
+ * Single-pass shell tokenizer and splitter on `&&`, `||`, `;` and `|`.
+ * Rejects unclosed quotes, ambiguous `\"` escapes inside double quotes, unsafe shell
+ * metacharacters outside quotes (`>`, `<`, `(`, `)`, single `&`, `|&`), and expansions
+ * (`$(`, `${`, backticks, newlines) anywhere in the command.
+ */
+function tokenize(command: string): string[][] | undefined {
+  if (!command.trim() || ALWAYS_UNSAFE.test(command)) return undefined;
+  const segments: string[][] = [];
+  let seg: string[] = [];
   let cur = "";
-  let quote: string | null = null;
+  let inWord = false;
+  let quote: "'" | '"' | null = null;
+  let needSegment = false;
+
+  const finishWord = () => {
+    if (!inWord) return;
+    seg.push(cur);
+    cur = "";
+    inWord = false;
+  };
+
   for (let i = 0; i < command.length; i++) {
     const c = command[i]!;
     if (quote) {
-      if (c === quote) quote = null;
-      cur += c;
-    } else if (c === "'" || c === '"') {
-      quote = c;
-      cur += c;
-    } else if (c === ";" || c === "|" || (c === "&" && command[i + 1] === "&")) {
-      if (command[i + 1] === c) i++;
-      out.push(cur);
-      cur = "";
-    } else cur += c;
-  }
-  if (quote) return undefined;
-  out.push(cur);
-  return out.map((p) => p.trim()).filter(Boolean);
-}
+      // `\"` closes a double-quoted string in PowerShell while escaping `"` in bash: reject.
+      if (quote === '"' && c === "\\" && command[i + 1] === '"') return undefined;
+      if (c === quote) {
+        quote = null;
+      } else {
+        cur += c;
+      }
+      continue;
+    }
 
-/** Words of one command, quotes removed. */
-function words(part: string): string[] {
-  return [...part.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2] ?? m[3]!);
+    // Safe quiet redirects (`2>&1`, `2>/dev/null`, `2>$null`, `2>NUL`) at a token boundary.
+    if (!inWord && (c === "2" || c === ">")) {
+      const quiet = QUIET_REDIRECT.exec(command.slice(i));
+      if (quiet) {
+        i += quiet[0].length - 1;
+        continue;
+      }
+    }
+
+    if (c === "'" || c === '"') {
+      quote = c;
+      inWord = true;
+      continue;
+    }
+
+    if (c === ">" || c === "<" || c === "(" || c === ")") return undefined;
+
+    if (c === "&") {
+      if (command[i + 1] !== "&" || command[i + 2] === "&") return undefined;
+      finishWord();
+      if (!seg.length) return undefined;
+      segments.push(seg);
+      seg = [];
+      needSegment = true;
+      i++;
+      continue;
+    }
+
+    if (c === "|") {
+      if (command[i + 1] === "&") return undefined;
+      if (command[i + 1] === "|") i++;
+      finishWord();
+      if (!seg.length) return undefined;
+      segments.push(seg);
+      seg = [];
+      needSegment = true;
+      continue;
+    }
+
+    if (c === ";") {
+      finishWord();
+      if (seg.length) {
+        segments.push(seg);
+        seg = [];
+      }
+      needSegment = false;
+      continue;
+    }
+
+    if (/\s/.test(c)) {
+      finishWord();
+      continue;
+    }
+
+    cur += c;
+    inWord = true;
+  }
+
+  if (quote) return undefined;
+  finishWord();
+  if (needSegment && !seg.length) return undefined;
+  if (seg.length) segments.push(seg);
+  return segments.length ? segments : undefined;
 }
 
 /** The program a command starts with, bare and lowercased (`/usr/bin/git` → `git`). */
@@ -155,61 +257,171 @@ function program(word: string | undefined): string {
     .toLowerCase();
 }
 
+/** True when one tokenized command segment only reads. */
+function readOnlySegment(w: string[]): boolean {
+  const head = w[0];
+  // Never strip leading `VAR=val` assignments (`GIT_PAGER=sh`, `LD_PRELOAD=...`).
+  if (!head || head.includes("=")) return false;
+  const prog = program(head);
+  const args = w.slice(1);
+  if (prog === "cd") return true;
+  if (prog === "git") return readOnlyGit(args);
+  if (prog === "sed") {
+    // Only `sed -n '1,80p' file...`: no `-i`, `-e`, `-f` or other flags (even after positional
+    // args, since GNU sed permutes flags), printing lines only.
+    let seenN = false;
+    let endOfFlags = false;
+    let script: string | undefined;
+    for (const a of args) {
+      if (!endOfFlags && a === "--") {
+        endOfFlags = true;
+      } else if (!endOfFlags && a === "-n") {
+        seenN = true;
+      } else if (!endOfFlags && a.startsWith("-")) {
+        return false;
+      } else if (script === undefined) {
+        script = a;
+      }
+    }
+    return seenN && !!script && /^(\s*(\d+|\$)(,(\d+|\$))?p\s*;?)+$/.test(script);
+  }
+  if (prog === "find") {
+    return !args.some((a) =>
+      /^-(exec|execdir|ok|okdir|delete|fprint|fprint0|fprintf|fls)/i.test(a),
+    );
+  }
+  if (prog === "rg") {
+    return !args.some(
+      (a) =>
+        a === "--pre" ||
+        a.startsWith("--pre=") ||
+        a === "--pre-glob" ||
+        a.startsWith("--pre-glob="),
+    );
+  }
+  if (prog === "gh") {
+    const [noun, verb] = args;
+    return (
+      (noun === "pr" || noun === "issue" || noun === "run" || noun === "repo") &&
+      ["view", "diff", "list", "checks", "status"].includes(verb ?? "")
+    );
+  }
+  if (prog === "sort") {
+    return !args.some(
+      (a) =>
+        /^-[^-]*o|^--output/.test(a) ||
+        a === "--compress-program" ||
+        a.startsWith("--compress-program="),
+    );
+  }
+  if (prog === "tree") return !args.some((a) => /^-[^-]*o/.test(a));
+  if (prog === "uniq") {
+    // `uniq in out` overwrites `out`: allow at most one positional file argument.
+    let positional = 0;
+    let endOfFlags = false;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]!;
+      if (!endOfFlags && a === "--") {
+        endOfFlags = true;
+      } else if (!endOfFlags && (a === "-f" || a === "-s" || a === "-w")) {
+        i++;
+      } else if (!endOfFlags && a.startsWith("-") && a.length > 1) {
+        continue;
+      } else {
+        positional++;
+      }
+    }
+    return positional <= 1;
+  }
+  if (prog === "file") {
+    return !args.some((a) => /^-[^-]*C/.test(a) || a === "--compile");
+  }
+  return READ_PROGRAMS.has(prog);
+}
+
 /** True when every part of the command only reads. */
 export function readOnlyCommand(command: string | undefined): boolean {
-  if (!command?.trim()) return false;
-  // Only the quoted text may hold these characters: a pattern to search, never a redirect.
-  command = command.replace(QUIET, "");
-  const bare = command.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
-  if (UNSAFE.test(bare) || /\$\(|`/.test(command)) return false;
-  const list = parts(command);
+  if (!command) return false;
+  const list = tokenize(command);
   if (!list?.length) return false;
-  return list.every((part) => {
-    const w = words(part).filter((x, i) => i > 0 || !/^\w+=/.test(x));
-    const prog = program(w[0]);
-    const args = w.slice(1);
-    if (prog === "cd") return true;
-    if (prog === "git") return readOnlyGit(args);
-    if (prog === "sed") {
-      // Only `sed -n '1,80p' file`: printing lines, never writing them.
-      const script = args.find((a) => !a.startsWith("-"));
-      return args.includes("-n") && !!script && /^(\s*(\d+|\$)(,(\d+|\$))?p\s*;?)+$/.test(script);
+  return list.every(readOnlySegment);
+}
+
+/** Extracts git's subcommand and its arguments after safe global flags, or undefined if unsafe. */
+function gitSubcommand(args: string[]): { sub: string; opts: string[] } | undefined {
+  let i = 0;
+  while (i < args.length) {
+    const a = args[i]!;
+    if (a === "-C") {
+      if (i + 1 >= args.length) return undefined;
+      i += 2;
+    } else if (GIT_SAFE_GLOBAL.has(a)) {
+      i += 1;
+    } else if (a.startsWith("-")) {
+      // Any other global flag (`-c`, `--exec-path`, `--git-dir`, `--work-tree`, `--config-env`…)
+      return undefined;
+    } else {
+      return { sub: a, opts: args.slice(i + 1) };
     }
-    if (prog === "find")
-      return !args.some((a) => /^-(exec|execdir|ok|okdir|delete|fprint|fprintf|fls)/.test(a));
-    if (prog === "gh") {
-      const [noun, verb] = args;
-      return (
-        (noun === "pr" || noun === "issue" || noun === "run" || noun === "repo") &&
-        ["view", "diff", "list", "checks", "status"].includes(verb ?? "")
-      );
+  }
+  return undefined;
+}
+
+const BRANCH_LIST_FLAG =
+  /^(-a|-r|-v|-vv|-l|--list|--all|--remotes|--verbose|--show-current|--merged|--no-merged|--contains|--no-contains|--points-at|--sort=\S+|--format=\S+|--abbrev=\d+|--color(?:=\S+)?|--no-color)$/;
+const TAG_LIST_FLAG =
+  /^(-l|--list|-n\d*|--merged|--no-merged|--contains|--no-contains|--points-at|--sort=\S+|--format=\S+|--color(?:=\S+)?|--no-color)$/;
+const TAKES_COMMIT_ARG = new Set([
+  "--merged",
+  "--no-merged",
+  "--contains",
+  "--no-contains",
+  "--points-at",
+]);
+
+function readOnlyGitList(opts: string[], allowedFlag: RegExp): boolean {
+  const hasListFlag = opts.some((a) => a === "-l" || a === "--list");
+  for (let i = 0; i < opts.length; i++) {
+    const a = opts[i]!;
+    if (a.startsWith("-")) {
+      if (!allowedFlag.test(a)) return false;
+      if (TAKES_COMMIT_ARG.has(a) && opts[i + 1] && !opts[i + 1]!.startsWith("-")) i++;
+    } else if (!hasListFlag) {
+      // Without `-l`/`--list`, a positional argument creates a branch or tag.
+      return false;
     }
-    if (prog === "sort") return !args.some((a) => /^-o|^--output/.test(a));
-    if (prog === "tree") return !args.some((a) => a === "-o");
-    return READ_PROGRAMS.has(prog);
-  });
+  }
+  return true;
 }
 
 function readOnlyGit(args: string[]): boolean {
-  const rest: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]!;
-    if (a === "-C") i++;
-    else if (a === "-c" || a.startsWith("--exec-path") || a.startsWith("--git-dir")) return false;
-    else if (a === "--no-pager" || a === "-P") continue;
-    else rest.push(a);
+  const parsed = gitSubcommand(args);
+  if (!parsed || !GIT_READ.has(parsed.sub)) return false;
+  const { sub, opts } = parsed;
+  if (
+    opts.some(
+      (a) =>
+        a === "--output" || a.startsWith("--output=") || a === "--ext-diff" || a === "--textconv",
+    )
+  ) {
+    return false;
   }
-  const sub = rest[0];
-  if (!sub || !GIT_READ.has(sub)) return false;
-  const opts = rest.slice(1);
-  if (opts.some((a) => a.startsWith("--output") || a === "--ext-diff")) return false;
-  if (sub === "branch" || sub === "tag" || sub === "remote") {
-    const LIST =
-      /^(-a|-r|-v|-vv|-l|--list|--all|--show-current|--merged|--no-merged|--contains|--sort=\S+|--format=\S+)$/;
-    return opts.every(
-      (a) => LIST.test(a) || (sub !== "remote" && opts.some((o) => o === "-l" || o === "--list")),
-    );
+  if (
+    sub === "grep" &&
+    opts.some((a) => /^-[^-]*O/.test(a) || a.startsWith("--open-files-in-pager"))
+  ) {
+    return false;
   }
+  if (sub === "remote") {
+    if (opts.length === 0) return true;
+    if (opts.every((a) => a === "-v" || a === "--verbose")) return true;
+    if (opts[0] === "show") return opts.slice(1).every((a) => a === "-n" || !a.startsWith("-"));
+    if (opts[0] === "get-url")
+      return opts.slice(1).every((a) => a === "--all" || a === "--push" || !a.startsWith("-"));
+    return false;
+  }
+  if (sub === "branch") return readOnlyGitList(opts, BRANCH_LIST_FLAG);
+  if (sub === "tag") return readOnlyGitList(opts, TAG_LIST_FLAG);
   return true;
 }
 
@@ -219,23 +431,83 @@ export function readOnlyCall(call: acp.ToolCallUpdate | acp.ToolCall): boolean {
   return call.kind === "execute" && readOnlyCommand(commandOf(call));
 }
 
+/** Key for a single non-read-only command segment, or undefined if it must not be blanket-granted. */
+function segmentGrantKey(w: string[]): string | undefined {
+  const head = w[0];
+  if (!head || head.includes("=")) return undefined;
+  const prog = program(head);
+  if (!prog || UNGRANTABLE_PROGRAMS.has(prog)) return undefined;
+  const args = w.slice(1);
+  if (prog === "git") {
+    const parsed = gitSubcommand(args);
+    return parsed ? `execute:git ${parsed.sub}` : undefined;
+  }
+  if (prog === "npm" || prog === "pnpm" || prog === "yarn" || prog === "gh") {
+    // Skip flags (and flags taking a value like `-C dir` / `--filter pkg`) to find the subcommand.
+    let sub: string | undefined;
+    let subIndex = -1;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]!;
+      if (a === "-C" || a === "--dir" || a === "--prefix" || a === "-F" || a === "--filter") {
+        i++;
+      } else if (a.startsWith("-")) {
+        continue;
+      } else {
+        sub = a;
+        subIndex = i;
+        break;
+      }
+    }
+    if (!sub) return `execute:${prog}`;
+    if (
+      (prog === "npm" || prog === "pnpm" || prog === "yarn") &&
+      (sub === "run" || sub === "exec")
+    ) {
+      const script = args.slice(subIndex + 1).find((a) => !a.startsWith("-"));
+      return script ? `execute:${prog} ${sub} ${script}` : undefined;
+    }
+    return `execute:${prog} ${sub}`;
+  }
+  return `execute:${prog}`;
+}
+
 /**
- * What « Autoriser pour ce fil » remembers for a call: its kind, and for a command the program
- * it runs (`execute:npm`), so `npm test` then `npm run lint` pass but not `rm`.
+ * Every grant key a call requires to pass under « Autoriser pour ce fil », or undefined when
+ * the call contains unsafe shell constructs (redirections, substitutions, env overrides, raw
+ * shell wrappers) and must always be confirmed once at a time.
+ * Read-only segments (`cd`, `head`, `git status`…) need no grant of their own, while every
+ * remaining segment in a chained command must be covered (`npm test && rm -rf /` requires
+ * both `execute:npm test` and `execute:rm`).
  */
-export function grantKey(call: acp.ToolCallUpdate | acp.ToolCall, toolName?: string): string {
+export function grantKeys(
+  call: acp.ToolCallUpdate | acp.ToolCall,
+  toolName?: string,
+): string[] | undefined {
   const kind = call.kind ?? "other";
   if (kind === "execute") {
-    const first = parts(commandOf(call) ?? "")?.[0];
-    const w = words(first ?? "");
-    const prog = program(w[0]);
-    if (!prog) return "execute:?";
-    if (prog === "git" || prog === "npm" || prog === "pnpm" || prog === "yarn" || prog === "gh") {
-      const sub = w.slice(1).find((a) => !a.startsWith("-"));
-      return `execute:${prog}${sub ? ` ${sub}` : ""}`;
+    const list = tokenize(commandOf(call) ?? "");
+    if (!list?.length) return undefined;
+    const keys: string[] = [];
+    for (const seg of list) {
+      if (readOnlySegment(seg)) continue;
+      const key = segmentGrantKey(seg);
+      if (!key) return undefined;
+      if (!keys.includes(key)) keys.push(key);
     }
-    return `execute:${prog}`;
+    return keys.length ? keys : undefined;
   }
-  if (kind === "other") return `other:${toolName ?? call.title ?? "?"}`;
-  return kind;
+  if (kind === "other") return [`other:${toolName ?? call.title ?? "?"}`];
+  return [kind];
+}
+
+/**
+ * Single grant key for a simple call, or undefined for compound/unsafe commands.
+ * Kept for convenience alongside `grantKeys`.
+ */
+export function grantKey(
+  call: acp.ToolCallUpdate | acp.ToolCall,
+  toolName?: string,
+): string | undefined {
+  const keys = grantKeys(call, toolName);
+  return keys?.length === 1 ? keys[0] : undefined;
 }

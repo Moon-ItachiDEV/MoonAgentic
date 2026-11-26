@@ -50,11 +50,14 @@ export function Masc({
   job,
   state,
   phase,
+  preview,
 }: {
   job: MascJob;
   state: FrostMoonState;
   /** Another shape than the job's own, to tell three reviewers apart. */
   phase?: FrostMoonPhase;
+  /** True in Réglages › Mascottes to show each candidate shape even after customizing `job`. */
+  preview?: boolean;
 }) {
   const look = useMascLook(job);
   return (
@@ -62,7 +65,7 @@ export function Masc({
       <Suspense fallback={null}>
         <FrostMoon
           // Three reviewers keep three shapes, until the user picks one for them.
-          phase={look.own ? (phase ?? look.phase) : look.phase}
+          phase={preview || look.own ? (phase ?? look.phase) : look.phase}
           color={look.color}
           state={state}
           size="100%"

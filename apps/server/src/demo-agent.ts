@@ -741,6 +741,18 @@ const app = acp
           rawInput: { command: "npm test -- --run" },
         },
         {
+          toolCallId: "p-chained",
+          title: "npm test && rm -rf dist",
+          kind: "execute" as const,
+          rawInput: { command: "npm test && rm -rf dist" },
+        },
+        {
+          toolCallId: "p-redirect",
+          title: "npm test > out.txt",
+          kind: "execute" as const,
+          rawInput: { command: "npm test > out.txt" },
+        },
+        {
           toolCallId: "p-rm",
           title: "rm -rf dist",
           kind: "execute" as const,

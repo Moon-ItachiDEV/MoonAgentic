@@ -342,17 +342,34 @@ describe("Hub with the demo agent", () => {
     if (first.type !== "item" || first.item.kind !== "permission") throw new Error("unreachable");
     expect(first.item.title).toBe("npm test");
     hub.respondToPermission(threadId, first.item.id, "moon:thread");
-    // `npm test -- --run` is like it and passes; `rm` asks.
+    // `npm test -- --run` is like it and passes; a chained `rm` still asks and never offers
+    // « Autoriser pour ce fil » for multiple programs at once.
+    await expect
+      .poll(() => open().map((i) => i.kind === "permission" && i.title))
+      .toEqual(["npm test && rm -rf dist"]);
+    const chainedReq = open()[0]!;
+    if (chainedReq.kind !== "permission") throw new Error("unreachable");
+    expect(chainedReq.options.some((o) => o.optionId === "moon:thread")).toBe(false);
+    hub.respondToPermission(threadId, chainedReq.id, "reject");
+    // A redirection still asks and never offers « Autoriser pour ce fil ».
+    await expect
+      .poll(() => open().map((i) => i.kind === "permission" && i.title))
+      .toEqual(["npm test > out.txt"]);
+    const redirectReq = open()[0]!;
+    if (redirectReq.kind !== "permission") throw new Error("unreachable");
+    expect(redirectReq.options.some((o) => o.optionId === "moon:thread")).toBe(false);
+    hub.respondToPermission(threadId, redirectReq.id, "reject");
+    // Bare `rm` asks too.
     await expect
       .poll(() => open().map((i) => i.kind === "permission" && i.title))
       .toEqual(["rm -rf dist"]);
     hub.respondToPermission(threadId, open()[0]!.id, "reject");
     await hub.whenIdle(threadId);
     expect(lastTurnSaid(store.listItems(threadId))).toContain(
-      "Réponses : allow, allow, allow, allow, reject.",
+      "Réponses : allow, allow, allow, allow, reject, reject, reject.",
     );
-    // Only two questions were asked in the thread.
-    expect(store.listItems(threadId).filter((i) => i.kind === "permission")).toHaveLength(2);
+    // Four questions were asked in the thread (`npm test`, chained `rm`, redirect, bare `rm`).
+    expect(store.listItems(threadId).filter((i) => i.kind === "permission")).toHaveLength(4);
   });
 
   it("keeps the mascot the user picked for a role, for every device, until put back", async () => {

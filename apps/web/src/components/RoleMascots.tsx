@@ -169,7 +169,7 @@ function RoleSheetBody({
               onClick={() => set({ phase, color: look.color })}
             >
               <span>
-                <Masc job={job} state="travaille" phase={phase} />
+                <Masc job={job} state="travaille" phase={phase} preview />
               </span>
               {PHASE_NAME[phase]}
             </button>

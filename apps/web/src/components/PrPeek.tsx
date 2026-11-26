@@ -38,7 +38,9 @@ function usePr(url: string, open: boolean) {
     connection.ask({ type: "github.pr", requestId: newId(), url }).then(
       (reply) => {
         if (reply.type !== "pullRequest" || !reply.pr) return;
+        seen.delete(url);
         seen.set(url, { at: Date.now(), pr: reply.pr });
+        if (seen.size > 100) seen.delete(seen.keys().next().value!);
         prStates.learn(reply.pr.url, reply.pr.state);
         if (live) setPr(reply.pr);
       },

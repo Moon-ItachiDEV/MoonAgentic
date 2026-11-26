@@ -1,4 +1,4 @@
-import { grantKey, readOnlyCall, THREAD_GRANT_OPTION } from "./permission-rules.ts";
+import { grantKeys, readOnlyCall, THREAD_GRANT_OPTION } from "./permission-rules.ts";
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
 import type { AgentProcessRef, DiagnosticsMonitor } from "./diagnostics.ts";
@@ -3499,6 +3499,10 @@ export class Hub {
         while (this.store.deleteSomeItems(threadId, DELETE_BATCH)) await nextTurn();
         this.setPendingRestore(threadId, undefined);
         this.logs.delete(threadId);
+        this.threadGrants.delete(threadId);
+        this.greenTold.delete(threadId);
+        this.greenWaiting.delete(threadId);
+        for (const waiting of this.greenWaiting.values()) waiting.delete(threadId);
         this.coordinators.forget(threadId);
         this.attachments.forget(threadId);
         this.store.deleteThread(threadId);
@@ -4726,13 +4730,20 @@ export class Hub {
     // In « Demande d'abord », a call that only reads passes (a review reads thirty files),
     // and so does one like a call the user allowed « pour ce fil ». A coordinator runs no
     // command, even one that reads.
-    const key = grantKey(request.toolCall, named);
+    const keys = grantKeys(request.toolCall, named);
     const reads = readOnlyCall(request.toolCall) && !readOnlyDenied;
-    const granted = this.threadGrants.get(threadId)?.has(key) ?? false;
+    const grants = this.threadGrants.get(threadId);
+    const granted = !readOnlyDenied && !!keys?.length && keys.every((k) => grants?.has(k));
     if ((thread.permissionMode === "full" && !readOnlyDenied) || own || reads || granted) {
       if (allow)
         return Promise.resolve({ outcome: { outcome: "selected", optionId: allow.optionId } });
     }
+    // Only offer « Autoriser pour ce fil » for a single non-read-only action so a chained
+    // command (`npm test && rm -rf dist`) cannot silently grant multiple programs at once.
+    const grant =
+      allow && keys?.length === 1 && !readOnlyDenied
+        ? { key: keys[0]!, optionId: allow.optionId }
+        : undefined;
     const id = `permission:${randomUUID()}`;
     this.putItem(
       threadId,
@@ -4742,7 +4753,7 @@ export class Hub {
         // What the user decides by reads as it is written: no character in it reorders or hides.
         title: plainLabel(request.toolCall.title ?? "") || "L'agent demande une autorisation",
         options: [
-          ...(allow
+          ...(grant
             ? [
                 {
                   optionId: THREAD_GRANT_OPTION,
@@ -4771,7 +4782,7 @@ export class Hub {
       this.pendingPermissions.set(id, {
         threadId,
         resolve,
-        ...(allow ? { grant: { key, optionId: allow.optionId } } : {}),
+        ...(grant ? { grant } : {}),
       });
       this.broadcastRequests();
       signal.addEventListener("abort", () => this.settlePermission(id), { once: true });

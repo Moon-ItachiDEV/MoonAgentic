@@ -255,7 +255,7 @@ describe("pull requests", () => {
       });
       await page.goto(url);
       await page
-        .getByText(/^Regarde et dis-moi/)
+        .getByText(/^Regarde https/)
         .first()
         .click();
       const pr = page.getByRole("region", { name: "Pull request" });
@@ -377,7 +377,7 @@ describe("pull requests", () => {
       );
       await page.goto(url);
       await page
-        .getByText(/^Regarde et dis-moi/)
+        .getByText(/^Regarde https/)
         .first()
         .click();
       const pr = page.getByRole("region", { name: "Pull request" });

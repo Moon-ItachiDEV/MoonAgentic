@@ -134,14 +134,17 @@ export function Composer(props: {
   onSchedule: (task: string) => void;
 }) {
   const { agents, thread, project } = props;
-  // What was typed in this thread and not sent comes back with it.
-  const [text, setText] = useState(() => (thread ? readDraft(thread.id) : ""));
+  // What was typed in this thread and not sent comes back with it, PR chips included.
+  const [initialDraft] = useState(() =>
+    thread ? takePrLinks(readDraft(thread.id)) : { text: "", links: [] },
+  );
+  const [text, setText] = useState(initialDraft.text);
+  /** Pull request links pasted: shown as chips, sent in full. */
+  const [prs, setPrs] = useState<PrLink[]>(initialDraft.links);
   const draftOf = thread?.id;
   useEffect(() => {
-    if (draftOf) writeDraft(draftOf, text);
-  }, [draftOf, text]);
-  /** Pull request links typed or pasted: shown as chips, sent in full. */
-  const [prs, setPrs] = useState<PrLink[]>([]);
+    if (draftOf) writeDraft(draftOf, withPrLinks(text, prs));
+  }, [draftOf, text, prs]);
   const [menu, setMenu] = useState(false);
   const [plusOpen, setPlusOpenNow] = useState(false);
   /** The sheet open from the « + » menu: the rest of what it offers, or where to work. */
@@ -704,6 +707,7 @@ export function Composer(props: {
         : { kind: "send" as const, text: goal };
     if (submission.kind === "action") {
       putText(submission.rest, submission.rest.length);
+      setPrs([]);
       runAction(submission.action, submission.rest);
       return;
     }
@@ -1166,15 +1170,6 @@ export function Composer(props: {
               suggesting && suggestions.length ? `sg-${highlighted}` : undefined
             }
             onChange={(e) => {
-              const taken = takePrLinks(e.target.value);
-              if (taken.links.length) {
-                setText(taken.text);
-                setPrs((had) => [
-                  ...had,
-                  ...taken.links.filter((l) => !had.some((h) => prKey(h) === prKey(l))),
-                ]);
-                return;
-              }
               setText(e.target.value);
               setCaret(e.target.selectionStart);
               setActive(0);
@@ -1184,9 +1179,29 @@ export function Composer(props: {
             onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
             onPaste={(e) => {
               const files = pastedImages(e.clipboardData);
-              if (!files.length) return;
+              if (files.length) {
+                e.preventDefault();
+                images.add(files);
+                return;
+              }
+              const pasted = e.clipboardData.getData("text/plain");
+              if (!pasted) return;
+              const taken = takePrLinks(pasted);
+              if (!taken.links.length) return;
               e.preventDefault();
-              images.add(files);
+              setPrs((had) => [
+                ...had,
+                ...taken.links.filter((l) => !had.some((h) => prKey(h) === prKey(l))),
+              ]);
+              const el = e.currentTarget;
+              const start = el.selectionStart;
+              const end = el.selectionEnd;
+              const next = text.slice(0, start) + taken.text + text.slice(end);
+              const nextCaret = start + taken.text.length;
+              setText(next);
+              setCaret(nextCaret);
+              setActive(0);
+              requestAnimationFrame(() => el.setSelectionRange(nextCaret, nextCaret));
             }}
             onFocus={() => {
               // With no project yet, « Discussions » is made as soon as the user comes to write,

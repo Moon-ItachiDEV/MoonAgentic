@@ -2,7 +2,14 @@
 // instead of jumping. Drawn by the row's ::before from two variables set here, so React's
 // own elements are never touched beyond a style property.
 
+const watched = new WeakSet<HTMLElement>();
+let resizeObserver: ResizeObserver | undefined;
+
 function place(row: HTMLElement): void {
+  if (resizeObserver && !watched.has(row)) {
+    watched.add(row);
+    resizeObserver.observe(row);
+  }
   const on = row.querySelector<HTMLElement>(':scope > [aria-selected="true"]');
   if (!on) {
     row.style.removeProperty("--tw");
@@ -27,10 +34,37 @@ const soon = () => {
   requestAnimationFrame(placeAll);
 };
 
+function touchesTabs(records: MutationRecord[]): boolean {
+  for (const record of records) {
+    const target = record.target instanceof Element ? record.target : null;
+    if (record.type === "attributes") {
+      if (target?.closest(".ovtabs")) return true;
+      continue;
+    }
+    // Streaming replies mutate inside `.md`: never trigger layout work for them.
+    if (target?.closest(".md")) continue;
+    if (target?.closest(".ovtabs")) return true;
+    for (const node of record.addedNodes) {
+      if (!(node instanceof Element)) continue;
+      if (node.matches(".ovtabs") || node.querySelector(".ovtabs")) return true;
+    }
+  }
+  return false;
+}
+
 /** Watches the page for rows of tabs and keeps their pill under the tab picked. */
 export function watchTabs(): void {
   if (typeof MutationObserver !== "function" || typeof document === "undefined") return;
-  new MutationObserver(soon).observe(document.body, {
+  if (typeof ResizeObserver === "function") {
+    resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.target instanceof HTMLElement && entry.target.isConnected) place(entry.target);
+      }
+    });
+  }
+  new MutationObserver((records) => {
+    if (touchesTabs(records)) soon();
+  }).observe(document.body, {
     subtree: true,
     childList: true,
     attributes: true,
