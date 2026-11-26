@@ -125,14 +125,14 @@ describe("a quota that runs out", () => {
 
     const bar = page.locator(".fbc");
     await bar.getByText("Démo rapide prend le relais").waitFor({ timeout: 30_000 });
-    await bar.getByText(/Quota Démo précis fini · retour (?:demain )?à \d\d:\d\d/).waitFor();
+    await bar.getByText(/Quota Démo précis fini · retour à \d\d:\d\d/).waitFor();
     // The agent goes on where it stopped, on the fallback model.
     await page.getByText("Tu as été interrompu : reprends là où tu t'es arrêté.").waitFor();
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor({ timeout: 20_000 });
     if (shots) await page.screenshot({ path: path.join(shots, "secours-fil.png") });
 
     await bar.getByRole("button", { name: "Attendre" }).click();
-    await bar.getByText(/^Reprend (?:demain )?à \d\d:\d\d/).waitFor({ timeout: 20_000 });
+    await bar.getByText(/^Reprend à \d\d:\d\d/).waitFor({ timeout: 20_000 });
     await bar.getByText("Quota Démo précis fini").waitFor();
     if (shots) await page.screenshot({ path: path.join(shots, "secours-attente.png") });
     await bar.getByRole("button", { name: "Annuler" }).click();
