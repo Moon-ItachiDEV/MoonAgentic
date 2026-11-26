@@ -1,4 +1,5 @@
-import { chmodSync } from "node:fs";
+import { chmodSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import path from "node:path";
 import { Checkpoints } from "./checkpoints.ts";
 import { backup, DatabaseSync, type StatementSync } from "node:sqlite";
 import {
@@ -457,6 +458,7 @@ export function migrate(
     db.exec(`VACUUM INTO '${backup.replaceAll("'", "''")}'`);
     // Only its owner reads a database backup.
     if (process.platform !== "win32") chmodSync(backup, 0o600);
+    dropOlderCopies(file, backup);
   }
   for (let step = version; step < migrations.length; step++) {
     db.exec("BEGIN IMMEDIATE");
@@ -470,6 +472,64 @@ export function migrate(
       if (db.isTransaction) db.exec("ROLLBACK");
       throw error;
     }
+  }
+}
+
+/**
+ * Removes the copies earlier migrations left next to the database: each is a whole copy of
+ * it, one more at each update of the schema. Only `kept`, the one just made, or else the
+ * latest, stays.
+ */
+export function dropOlderCopies(file: string, kept?: string): void {
+  const dir = path.dirname(file);
+  const name = path.basename(file);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  const copies = entries.flatMap((entry) => {
+    const found = /^\.v\d+-(\d+)\.bak$/.exec(entry.slice(name.length));
+    if (!entry.startsWith(`${name}.v`) || !found) return [];
+    const copy = path.join(dir, entry);
+    try {
+      return statSync(copy).isFile() ? [{ copy, at: Number(found[1]) }] : [];
+    } catch {
+      return [];
+    }
+  });
+  // Without one just made, the latest stays: copies left by an earlier version go too.
+  const keep = kept ?? copies.sort((a, b) => b.at - a.at)[0]?.copy;
+  for (const { copy } of copies) {
+    if (copy === keep) continue;
+    try {
+      unlinkSync(copy);
+    } catch {
+      // Held by another program for a moment: it goes at the next start.
+    }
+  }
+}
+
+/** How many pages of the database hold nothing. */
+export function freePages(db: DatabaseSync): number {
+  return (db.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count;
+}
+
+/**
+ * Turns a database made before free pages could be given back into one where they can.
+ * Done once, at the first start of this version: the whole file is written again. A disk
+ * too full for that, or a file held by another program, leaves it as it was, for next time.
+ */
+function makeShrinkable(db: DatabaseSync): void {
+  const mode = (db.prepare("PRAGMA auto_vacuum").get() as { auto_vacuum: number }).auto_vacuum;
+  if (mode === 2) return;
+  try {
+    db.exec("PRAGMA auto_vacuum = INCREMENTAL; VACUUM");
+    // VACUUM wrote the whole database to the log: it goes into the file at once.
+    db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  } catch (error) {
+    console.error("La base n'a pas pu être compactée, ce sera fait au prochain démarrage :", error);
   }
 }
 
@@ -537,6 +597,8 @@ export class Store {
     // Another program that holds the file for a moment (a copy, a look with an SQLite tool)
     // is waited for, instead of failing the write at once.
     this.db.exec(`PRAGMA busy_timeout = ${BUSY_TIMEOUT_MS}`);
+    // Free pages can be given back to the disk: a new database takes it before WAL does.
+    this.db.exec("PRAGMA auto_vacuum = INCREMENTAL");
     // Turning WAL on needs the file to itself, and SQLite does not wait for it there: a
     // database still in its older mode, held for a moment, is asked again for as long.
     const until = Date.now() + BUSY_TIMEOUT_MS;
@@ -555,7 +617,26 @@ export class Store {
     // the database.
     this.db.exec(`PRAGMA synchronous = NORMAL; PRAGMA foreign_keys = ON;`);
     migrate(this.db, file);
-    if (file !== ":memory:") this.checkpoints = new Checkpoints(file, this.db);
+    if (file !== ":memory:") {
+      dropOlderCopies(file);
+      makeShrinkable(this.db);
+      this.checkpoints = new Checkpoints(file, this.db);
+    }
+  }
+
+  /**
+   * Gives up to `pages` free pages back to the disk, all of them without a number; true
+   * while some remain. Its copies, made page by page, shrink with it.
+   */
+  shrink(pages?: number): boolean {
+    if (this.db.isTransaction) return false;
+    try {
+      this.db.exec(`PRAGMA incremental_vacuum${pages === undefined ? "" : `(${pages})`}`);
+      return freePages(this.db) > 0;
+    } catch {
+      // Held by another program, or a full disk: it is given back with the next removal.
+      return false;
+    }
   }
 
   /**
@@ -1462,9 +1543,10 @@ export class Store {
     this.sql(`DELETE FROM schedules WHERE id = ?`).run(id);
   }
 
-  /** Deletes the thread and its timeline. */
+  /** Deletes the thread and its timeline, and gives the room they took back to the disk. */
   deleteThread(id: string): void {
     this.sql(`DELETE FROM threads WHERE id = ?`).run(id);
+    this.shrink();
   }
 
   /** Deletes up to `limit` of the thread's messages, the latest first; true while some remain. */
@@ -1477,10 +1559,14 @@ export class Store {
     return Number(changes) >= limit;
   }
 
-  /** Deletes the project, its threads, their timelines, and its shared memory. */
+  /**
+   * Deletes the project, its threads, their timelines, and its shared memory, and gives the
+   * room they took back to the disk.
+   */
   deleteProject(id: string): void {
     this.deleteSetting(`${PROJECT_MEMORY_PREFIX}${id}`);
     this.sql(`DELETE FROM projects WHERE id = ?`).run(id);
+    this.shrink();
   }
 
   /** Removes the item and every item after it; returns what was removed. */

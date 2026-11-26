@@ -135,9 +135,10 @@ import { type QuotaReader, Quotas } from "./quotas.ts";
 import { formContent, formQuestions, toolQuestions, type FormQuestions } from "./questions.ts";
 import { AgentSession, describe, needsSignIn, SettingTimeout } from "./session.ts";
 import { AgentPool } from "./sessions.ts";
+import { SHRINK_PAGES } from "./checkpoints.ts";
 import { light, TimelineLog } from "./timeline.ts";
 import { TurnLine } from "./turn-line.ts";
-import { sweepWorktrees } from "./worktree-sweep.ts";
+import { dropOldOrphans, sweepWorktrees } from "./worktree-sweep.ts";
 import { AppUpdates, type GitSource, type ShellChannel } from "./app-update.ts";
 import { backupBeforeUpdate } from "./backups.ts";
 import { redact } from "./redact.ts";
@@ -511,6 +512,8 @@ export class Hub {
   private readonly epoch = randomUUID();
   /** What changed in each timeline since the server started. */
   private readonly logs = new Map<string, TimelineLog>();
+  /** Above every change number a forgotten log gave: where a new log starts. */
+  private logsFrom = 0;
   private readonly drafts = new Map<
     string,
     { item: TextItem; dirty: boolean; timer?: NodeJS.Timeout }
@@ -794,9 +797,10 @@ export class Hub {
     const sweep = () => {
       if (this.closed) return;
       const step = sweepWorktrees(this.worktreesDir, () => this.heldWorktrees())
-        .then((removed) => {
+        .then(async (removed) => {
           if (removed.length)
             console.log(`Copies de travail sans fil retirées : ${removed.join(", ")}`);
+          await this.dropOldOrphans();
         })
         .catch((error: unknown) => console.error("Nettoyage des copies de travail :", error));
       this.steps.add(step);
@@ -805,6 +809,27 @@ export class Hub {
     sweep();
     this.sweepTimer = setInterval(sweep, SWEEP_EVERY_MS);
     this.sweepTimer.unref();
+  }
+
+  /** In each project's repository, the files of orphan folders kept for too long go. */
+  private async dropOldOrphans(): Promise<void> {
+    // The database may be closed meanwhile: the server stopped during the sweep.
+    if (this.closed) return;
+    // Only git repositories hold them: no git command for a project known to be none
+    // (Discussions). Not asked here when unknown: asking waits for git, holding the server.
+    const repos = new Set(
+      this.store
+        .listProjects()
+        .filter((p) => this.gitProjects.get(p.id) !== false)
+        .map((p) => p.path),
+    );
+    for (const repo of repos) {
+      if (this.closed) return;
+      if (!existsSync(repo)) continue;
+      const dropped = await dropOldOrphans(repo).catch((): string[] => []);
+      if (dropped.length)
+        console.log(`Copies orphelines anciennes oubliées dans ${repo} : ${dropped.length}`);
+    }
   }
 
   /** The folders of the worktrees folder that a thread holds, archived ones included. */
@@ -3849,6 +3874,7 @@ export class Hub {
         }
       }
       this.updateThread(threadId, { archived: true, status: "idle" });
+      this.dropLog(threadId);
     });
   }
 
@@ -3896,9 +3922,15 @@ export class Hub {
         this.dropHeld(threadId);
         // A long timeline goes a stretch at a time, the latest first, so screens are answered
         // meanwhile: in one go, 20 000 messages held the server half a second.
-        while (this.store.deleteSomeItems(threadId, DELETE_BATCH)) await nextTurn();
+        // Their room goes back to the disk a stretch at a time too.
+        for (;;) {
+          const more = this.store.deleteSomeItems(threadId, DELETE_BATCH);
+          while (this.store.shrink(SHRINK_PAGES)) await nextTurn();
+          if (!more) break;
+          await nextTurn();
+        }
         this.setPendingRestore(threadId, undefined);
-        this.logs.delete(threadId);
+        this.dropLog(threadId);
         this.threadGrants.delete(threadId);
         this.greenTold.delete(threadId);
         this.quotaThreads.delete(threadId);
@@ -5376,8 +5408,19 @@ export class Hub {
 
   private log(threadId: string): TimelineLog {
     let log = this.logs.get(threadId);
-    if (!log) this.logs.set(threadId, (log = new TimelineLog()));
+    if (!log) this.logs.set(threadId, (log = new TimelineLog(this.logsFrom)));
     return log;
+  }
+
+  /**
+   * Forgets the thread's log of changes: a thread put away, or deleted, keeps none in
+   * memory. Its next one starts above every number this one gave.
+   */
+  private dropLog(threadId: string): void {
+    const log = this.logs.get(threadId);
+    if (!log) return;
+    this.logsFrom = Math.max(this.logsFrom, log.rev + 1);
+    this.logs.delete(threadId);
   }
 
   /**
@@ -5396,7 +5439,8 @@ export class Hub {
       first: page.first,
       earlier: page.earlier,
       epoch: this.epoch,
-      rev: this.log(threadId).rev,
+      // Not a log made for it: a thread put away and only read keeps none in memory.
+      rev: this.logs.get(threadId)?.rev ?? this.logsFrom,
     };
   }
 

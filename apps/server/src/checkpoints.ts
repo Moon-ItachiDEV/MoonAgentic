@@ -6,6 +6,11 @@ import { Worker } from "node:worker_threads";
 const LOOK_EVERY_MS = 1000;
 /** From this size, the log is copied into the database: SQLite's own threshold. */
 const CHECKPOINT_BYTES = 4 * 1024 * 1024;
+/**
+ * From this many free pages, a look gives as many back to the disk: a few milliseconds of
+ * work each time, where all of a large removal at once would hold the server.
+ */
+export const SHRINK_PAGES = 1024;
 /** The longest a closing database waits for the copy under way. */
 const CLOSE_WAIT_MS = 10_000;
 
@@ -103,7 +108,10 @@ export class Checkpoints {
    * and on a Windows disk a write waited longer than the server's patience, and failed.
    */
   look(): void {
+    // Never while the thread copies: both would want to write, and the server would wait.
     if (this.busy) return;
+    // Giving pages back writes to the log, without counting as rows changed.
+    const shrunk = this.shrink();
     let changed: number;
     let quiet: boolean;
     let size: number;
@@ -114,7 +122,7 @@ export class Checkpoints {
       const writes = Number(
         (this.db.prepare("SELECT total_changes() AS n").get() as { n: number }).n,
       );
-      quiet = writes === this.seen;
+      quiet = writes === this.seen && !shrunk;
       this.seen = writes;
       size = stat.size;
       changed = stat.mtimeMs;
@@ -141,6 +149,22 @@ export class Checkpoints {
       if (reply?.ok && !reply.busy) this.copied = changed;
     });
     worker.postMessage(mode);
+  }
+
+  /** Gives free pages back to the disk, a stretch at a time, when many are left; true if so. */
+  private shrink(): boolean {
+    if (this.db.isTransaction) return false;
+    try {
+      const { freelist_count: free } = this.db.prepare("PRAGMA freelist_count").get() as {
+        freelist_count: number;
+      };
+      if (free < SHRINK_PAGES) return false;
+      this.db.exec(`PRAGMA incremental_vacuum(${SHRINK_PAGES})`);
+      return true;
+    } catch {
+      // Held by another program, or a full disk: tried again at the next look.
+      return false;
+    }
   }
 
   private thread(): Worker | undefined {

@@ -545,6 +545,11 @@ export function reviewChanges(
 
 /** An ignored file heavier than this is not kept with a folder about to go. */
 const MAX_KEPT_IGNORED_BYTES = 50 * 1024 * 1024;
+/**
+ * All the ignored files kept with one folder weigh this at most, the lightest first: keys and
+ * local settings are small, and each copy stays in the repository's objects.
+ */
+export const MAX_KEPT_IGNORED_TOTAL = 100 * 1024 * 1024;
 
 /**
  * The files an ignore rule names one by one (`.env.local`, `*.log`): local settings, keys,
@@ -557,15 +562,27 @@ async function ignoredFiles(dir: string, env: NodeJS.ProcessEnv): Promise<string
     ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"],
     env,
   );
-  return listed.split("\0").filter((entry) => {
-    if (!entry || entry.endsWith("/")) return false;
+  const files = listed.split("\0").flatMap((entry) => {
+    if (!entry || entry.endsWith("/")) return [];
     try {
       const found = lstatSync(path.join(dir, entry));
-      return (found.isFile() || found.isSymbolicLink()) && found.size <= MAX_KEPT_IGNORED_BYTES;
+      return (found.isFile() || found.isSymbolicLink()) && found.size <= MAX_KEPT_IGNORED_BYTES
+        ? [{ entry, size: found.size }]
+        : [];
     } catch {
-      return false;
+      return [];
     }
   });
+  // The same files always give the same choice: a checkpoint is compared with the folder.
+  files.sort((a, b) => a.size - b.size || (a.entry < b.entry ? -1 : a.entry > b.entry ? 1 : 0));
+  const kept: string[] = [];
+  let total = 0;
+  for (const { entry, size } of files) {
+    if (total + size > MAX_KEPT_IGNORED_TOTAL) break;
+    total += size;
+    kept.push(entry);
+  }
+  return kept;
 }
 
 /**
