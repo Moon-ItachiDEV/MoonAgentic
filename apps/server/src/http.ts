@@ -213,6 +213,33 @@ export interface RateLimitOptions {
  * another site whose name was pointed at 127.0.0.1 (DNS rebinding) is the same origin for
  * the browser: it could send anything, and lock the computer out of its own quotas (N8).
  */
+/** What a local network adds to a machine's name: never a public domain. */
+const LOCAL_SUFFIXES = [".local", ".lan", ".home", ".home.arpa", ".internal"];
+
+/** What `sendOrCut` needs of a WebSocket. */
+export interface HeldSocket {
+  readonly readyState: number;
+  readonly OPEN: number;
+  readonly bufferedAmount: number;
+  send(data: string): void;
+  terminate(): void;
+}
+
+/**
+ * Sends to a connection, or cuts it when it holds more than `limit` bytes it did not read: it
+ * reads no more, and it comes back. Checked after the message too, since that message alone can
+ * be what leaves it over the limit.
+ */
+export function sendOrCut(ws: HeldSocket, data: string, limit: number): void {
+  if (ws.readyState !== ws.OPEN) return;
+  if (ws.bufferedAmount > limit) {
+    ws.terminate();
+    return;
+  }
+  ws.send(data);
+  if (ws.bufferedAmount > limit) ws.terminate();
+}
+
 export function allowedHost(
   hostHeader: string | undefined,
   machine = os.hostname(),
@@ -222,15 +249,32 @@ export function allowedHost(
   if (hostHeader === undefined) return true;
   let name: string;
   try {
-    name = new URL(`http://${hostHeader}`).hostname.toLowerCase();
+    const target = new URL(`http://${hostHeader}`);
+    // A name and a port, nothing more: `evil.com@localhost` or `localhost/evil` is no Host.
+    if (
+      target.username ||
+      target.password ||
+      target.pathname !== "/" ||
+      target.search ||
+      target.hash ||
+      hostHeader.includes("/") ||
+      hostHeader.includes("?") ||
+      hostHeader.includes("#")
+    )
+      return false;
+    name = target.hostname.toLowerCase();
   } catch {
     return false;
   }
   if (name.startsWith("[") || isIP(name)) return true;
   if (name === "localhost" || name.endsWith(".localhost")) return true;
   if (name.endsWith(".ts.net")) return true;
+  // The machine's name, alone or under a suffix only a local network gives: under any other
+  // domain, whoever owns it could point it at this machine. A Mac's name ends in .local.
   const own = machine.toLowerCase();
-  if (own && (name === own || name.startsWith(`${own}.`))) return true;
+  const label = own.split(".")[0];
+  if (own && name === own) return true;
+  if (label && LOCAL_SUFFIXES.some((suffix) => name === `${label}${suffix}`)) return true;
   return extra
     .split(",")
     .map((h) => h.trim().toLowerCase())
@@ -1191,6 +1235,8 @@ export function createHttpServer(options: {
         if (settled) return;
         settled = true;
         count(upgrading, -1);
+        socket.off("close", finishUpgrade);
+        socket.off("error", finishUpgrade);
       };
       socket.once("close", finishUpgrade);
       socket.once("error", finishUpgrade);
@@ -1199,15 +1245,7 @@ export function createHttpServer(options: {
         count(open, 1);
         ws.once("close", () => count(open, -1));
         const client: Client = {
-          send: (message: ServerMessage) => {
-            if (ws.readyState !== ws.OPEN) return;
-            // Still holding that much it did not read: it reads no more. Cut, it comes back.
-            if (ws.bufferedAmount > maxBuffered) {
-              ws.terminate();
-              return;
-            }
-            ws.send(JSON.stringify(message));
-          },
+          send: (message: ServerMessage) => sendOrCut(ws, JSON.stringify(message), maxBuffered),
           ...(who.owner ? {} : { deviceId: who.deviceId }),
         };
         const disconnect = hub.connect(client);

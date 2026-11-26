@@ -345,20 +345,8 @@ html[data-dev="desk"] .scr.wide .drawer .dtop {
   margin-bottom: auto;
 }
 
-/* Ordinateur : sur l'accueil vide, la zone de saisie est au centre, sous la phrase d'accueil */
-html[data-dev="desk"] .scr.wide[data-s="home"] .bottom {
-  bottom: auto;
-  top: calc(50% + 26px);
-  padding-bottom: 0;
-}
-html[data-dev="desk"] .scr.wide[data-s="home"] .bfade {
-  display: none;
-}
-html[data-dev="desk"] .scr.wide[data-s="home"].ph .bottom {
-  top: auto;
-  bottom: 0;
-  padding-bottom: calc(var(--sb) + 4px);
-}
+/* Ordinateur : sur l'accueil vide, la phrase d'accueil au centre ; la zone de saisie reste en bas,
+   à la hauteur de « Nouvelle discussion » */
 html[data-dev="desk"] .scr.wide[data-s="home"].ph .gstack {
   position: static;
   margin: auto 0;

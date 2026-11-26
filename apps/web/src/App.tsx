@@ -97,7 +97,12 @@ export function App() {
   const [threadMenuOut, setThreadMenuOut] = useState(false);
   const setThreadMenu = (on: boolean) => {
     if (!on && threadMenu) setThreadMenuOut(true);
-    if (on) setThreadPage({ page: "main" });
+    // Opened again while it was still closing: the closing is over, or it would be cut short
+    // the next time it closes.
+    if (on) {
+      setThreadMenuOut(false);
+      setThreadPage({ page: "main" });
+    }
     setThreadMenuNow(on);
   };
   /**
@@ -1173,7 +1178,7 @@ export function App() {
                         });
                       }}
                     >
-                      <I n="folder" s={20} />
+                      <ProjectIcon project={p} size={20} />
                       <span className="nm">{p.name}</span>
                     </button>
                   ))}

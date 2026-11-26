@@ -6,7 +6,14 @@ import {
   type Favorites,
   type ModelChoice,
 } from "@moonagentic/protocol";
-import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { connection } from "../connection.ts";
 import { entryKey, keepLines, type WheelEntry, wheelEntries } from "../wheel.ts";
 import { modelLabel, modelNameOf } from "../model-label.ts";
@@ -14,6 +21,7 @@ import { formatPercent, quotaLevel, tightest } from "../quotas.ts";
 import { useQuotas } from "../use-quotas.ts";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
+import { useScreen } from "../v2/use-screen.ts";
 
 type View = "model" | "all" | "effort" | "options";
 
@@ -61,6 +69,9 @@ export function Picker(props: {
   // The wheel's order, set in Réglages › Modèles.
   const order = useSyncExternalStore(connection.subscribe, connection.getState).favoriteOrder;
   const quotas = useQuotas();
+  // From the iPad's width up, a menu above the model's button, like the « + » one.
+  const pop = useScreen().roomy;
+  const desk = useMouse();
   const [all, setAll] = useState(false);
   const [sliding, setSliding] = useState(false);
   // Each opening starts on the page asked for.
@@ -111,6 +122,94 @@ export function Picker(props: {
   };
   useEffect(() => () => clearTimeout(closing.current), []);
 
+  const wheel: WheelProps = {
+    entries: wheelEntries(props.agents, favorites, { agent, model: props.model }, order),
+    agent,
+    model: props.model,
+    inThread: props.inThread,
+    effort:
+      effort && effortValue !== undefined ? { setting: effort, value: effortValue } : undefined,
+    onEffort: () => {
+      holdSlider();
+      setSliding(true);
+    },
+    onPick: (entry, settle) => {
+      if (entry.agent.id === agent?.id) {
+        // Scrolling the wheel picks as it goes and keeps it open; a click closes it.
+        if (entry.model && entry.model !== props.model) props.onPickModel(entry.model, settle);
+        else if (!settle) props.onClose();
+      } else props.onPickAgentModel(entry.agent.id, entry.model, settle);
+    },
+  };
+  const favoritesView = (
+    <div className={`mv${sliding && effort ? " eff" : ""}`} role="menu" aria-label="Modèle">
+      {/* With a mouse, a list: a wheel is for a finger. */}
+      {pop && desk ? (
+        <FavoriteList {...wheel} asleep={sliding && !!effort} />
+      ) : (
+        <Wheel {...wheel} />
+      )}
+      {effort && effortValue !== undefined && (
+        <EffortSlide
+          shown={sliding}
+          setting={effort}
+          model={modelName}
+          value={effortValue}
+          onPick={(value) => props.onPickSetting(effort.id, value)}
+          onHold={holdSlider}
+          onRelease={releaseSlider}
+          onBack={() => setSliding(false)}
+        />
+      )}
+    </div>
+  );
+  const pickIn = (a: AgentInfo, id: string) =>
+    a.id === agent?.id ? props.onPickModel(id) : props.onPickAgentModel(a.id, id);
+
+  if (pop)
+    return (
+      <ModelPop open={open} onClose={props.onClose} wide={all}>
+        <div className="mph">
+          <b>{all ? "Tous les modèles" : "Favoris"}</b>
+          <button
+            className="mpt"
+            onClick={() => {
+              setSliding(false);
+              setAll((a) => !a);
+            }}
+          >
+            {all ? "Favoris" : "Tous les modèles"}
+          </button>
+        </div>
+        <div key={all ? "all" : "fav"} className="mpb">
+          {all ? (
+            <AllModels
+              agents={props.agents}
+              agent={agent}
+              model={props.model}
+              favorites={favorites}
+              quotas={quotas}
+              canDiscover={!!props.projectId}
+              asking={(a) => a.id === agent?.id && asking(a)}
+              onDiscover={discover}
+              onStar={toggleStar}
+              onPick={pickIn}
+              agentsTitle={props.agentsTitle}
+              onPickAgent={props.onPickAgent}
+              settings={otherSettings.map((setting) => ({
+                setting,
+                value: props.settings[setting.id] ?? setting.current,
+              }))}
+              onPickSetting={props.onPickSetting}
+              focus={desk}
+            />
+          ) : (
+            favoritesView
+          )}
+        </div>
+      </ModelPop>
+    );
+
   return (
     <Sheet
       open={open}
@@ -137,9 +236,7 @@ export function Picker(props: {
               asking={a.id === agent?.id && asking(a)}
               onDiscover={() => discover(a)}
               onStar={(id) => toggleStar(a, id)}
-              onPick={(id) =>
-                a.id === agent?.id ? props.onPickModel(id) : props.onPickAgentModel(a.id, id)
-              }
+              onPick={(id) => pickIn(a, id)}
             />
           ))}
           <div className="gl2">{props.agentsTitle}</div>
@@ -172,43 +269,7 @@ export function Picker(props: {
           ))}
         </div>
       ) : (
-        <div className={`mv${sliding && effort ? " eff" : ""}`} role="menu" aria-label="Modèle">
-          <Wheel
-            entries={wheelEntries(props.agents, favorites, { agent, model: props.model }, order)}
-            agent={agent}
-            model={props.model}
-            inThread={props.inThread}
-            effort={
-              effort && effortValue !== undefined
-                ? { setting: effort, value: effortValue }
-                : undefined
-            }
-            onEffort={() => {
-              holdSlider();
-              setSliding(true);
-            }}
-            onPick={(entry, settle) => {
-              if (entry.agent.id === agent?.id) {
-                // Scrolling the wheel picks as it goes and keeps it open; a click closes it.
-                if (entry.model && entry.model !== props.model)
-                  props.onPickModel(entry.model, settle);
-                else if (!settle) props.onClose();
-              } else props.onPickAgentModel(entry.agent.id, entry.model, settle);
-            }}
-          />
-          {effort && effortValue !== undefined && (
-            <EffortSlide
-              shown={sliding}
-              setting={effort}
-              model={modelName}
-              value={effortValue}
-              onPick={(value) => props.onPickSetting(effort.id, value)}
-              onHold={holdSlider}
-              onRelease={releaseSlider}
-              onBack={() => setSliding(false)}
-            />
-          )}
-        </div>
+        favoritesView
       )}
     </Sheet>
   );
@@ -221,11 +282,8 @@ const lineStyle = (line: HTMLElement, d: number) => {
   line.style.transform = `scale(${(1 - Math.min(far, 2) * 0.05).toFixed(3)})`;
 };
 
-/**
- * The favorites on a wheel: scrolling settles on the middle line, a click picks a line.
- * In a thread, landing on another agent only says so; a click hands the thread over.
- */
-function Wheel(props: {
+/** What the favorites are drawn from, on the wheel or in the list. */
+interface WheelProps {
   entries: WheelEntry[];
   agent: AgentInfo | undefined;
   model: string | undefined;
@@ -234,7 +292,13 @@ function Wheel(props: {
   effort: { setting: AgentSetting; value: string } | undefined;
   onEffort: () => void;
   onPick: (entry: WheelEntry, settle: boolean) => void;
-}) {
+}
+
+/**
+ * The favorites on a wheel: scrolling settles on the middle line, a click picks a line.
+ * In a thread, landing on another agent only says so; a click hands the thread over.
+ */
+function Wheel(props: WheelProps) {
   const entries = useStableEntries(props.entries);
   const currentIndex = Math.max(
     0,
@@ -303,13 +367,6 @@ function Wheel(props: {
           .join(" · ")
     : "";
   const effort = props.effort;
-  const level = effort
-    ? Math.max(
-        0,
-        effort.setting.choices.findIndex((c) => c.id === effort.value),
-      )
-    : 0;
-  const levels = effort?.setting.choices.length ?? 0;
 
   return (
     <>
@@ -349,31 +406,7 @@ function Wheel(props: {
               >
                 <span className="wn">{entry.name}</span>
                 {effort && i === centered && i === currentIndex && (
-                  <button
-                    className="eg"
-                    aria-label={`Effort : ${effortName(effort.setting, level)}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      props.onEffort();
-                    }}
-                  >
-                    <span
-                      className="mg"
-                      style={
-                        {
-                          "--mp": `${levels > 1 ? Math.round((level / (levels - 1)) * 100) : 0}%`,
-                        } as React.CSSProperties
-                      }
-                    >
-                      {effort.setting.choices.map((c, k) => (
-                        <i key={c.id} className={k === level ? "t" : undefined} />
-                      ))}
-                    </span>
-                    <span className={`el${levels > 1 && level === levels - 1 ? " gx" : ""}`}>
-                      {effortName(effort.setting, level)}
-                    </span>
-                    <I n="right" s={13} />
-                  </button>
+                  <EffortPill effort={effort} onEffort={props.onEffort} />
                 )}
               </div>
             ))}
@@ -392,6 +425,465 @@ function useStableEntries(live: WheelEntry[]): WheelEntry[] {
   const kept = useRef(live);
   kept.current = keepLines(kept.current, live);
   return kept.current;
+}
+
+/** The current model's effort on its line: the levels as marks, the way to its slider. */
+function EffortPill(props: {
+  effort: { setting: AgentSetting; value: string };
+  onEffort: () => void;
+}) {
+  const { setting, value } = props.effort;
+  const level = Math.max(
+    0,
+    setting.choices.findIndex((c) => c.id === value),
+  );
+  const levels = setting.choices.length;
+  return (
+    <button
+      className="eg"
+      aria-label={`Effort : ${effortName(setting, level)}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        props.onEffort();
+      }}
+    >
+      <span
+        className="mg"
+        style={
+          {
+            "--mp": `${levels > 1 ? Math.round((level / (levels - 1)) * 100) : 0}%`,
+          } as React.CSSProperties
+        }
+      >
+        {setting.choices.map((c, k) => (
+          <i key={c.id} className={k === level ? "t" : undefined} />
+        ))}
+      </span>
+      <span className={`el${levels > 1 && level === levels - 1 ? " gx" : ""}`}>
+        {effortName(setting, level)}
+      </span>
+      <I n="right" s={13} />
+    </button>
+  );
+}
+
+/** Whether a mouse drives the page (`data-dev="desk"`, set by `watchDevice`). */
+function useMouse(): boolean {
+  return useSyncExternalStore(
+    (l) => {
+      if (typeof matchMedia !== "function") return () => {};
+      const q = matchMedia("(hover: hover) and (pointer: fine)");
+      q.addEventListener("change", l);
+      return () => q.removeEventListener("change", l);
+    },
+    () =>
+      typeof matchMedia === "function" && matchMedia("(hover: hover) and (pointer: fine)").matches,
+  );
+}
+
+/** How long the menu takes to shrink back into its button. */
+const POP_OUT_MS = 230;
+
+/**
+ * From the iPad's width up, the model's menu opens above its button, like the « + » one, and
+ * shrinks back into it. A press anywhere else, or Escape, closes it.
+ */
+function ModelPop(props: {
+  open: boolean;
+  onClose: () => void;
+  /** « Tous les modèles »: wider and taller. */
+  wide: boolean;
+  children: React.ReactNode;
+}) {
+  const { open, onClose } = props;
+  const [out, setOut] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  // Closing is known in the same render: the menu stays drawn, without a frame where it is gone
+  // and then mounted again (which gave the search the focus back, and the user's typing with it).
+  const [was, setWas] = useState(open);
+  if (was !== open) {
+    setWas(open);
+    setOut(!open);
+  }
+  useEffect(() => {
+    if (!out) return;
+    const timer = setTimeout(() => setOut(false), POP_OUT_MS);
+    return () => clearTimeout(timer);
+  }, [out]);
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: PointerEvent) => {
+      const at = event.target as Node;
+      // Its own button toggles it (not another composer's, beside it); a sheet it opened stays
+      // above it.
+      const own = box.current?.parentElement?.querySelector(".cmp .mdl");
+      if (box.current?.contains(at) || own?.contains(at)) return;
+      if ((at as Element).closest?.(".sheet, .sscrim")) return;
+      onClose();
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector(".sheet.on")) return;
+      event.preventDefault();
+      onClose();
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open, onClose]);
+  // As tall as the room above the composer allows, under the top bar, also once the window or
+  // the iPad's keyboard changes that room.
+  const fit = () => {
+    const el = box.current;
+    const above = el?.parentElement?.getBoundingClientRect().top;
+    if (!el || above === undefined) return;
+    const top = visualViewport?.offsetTop ?? 0;
+    el.style.maxHeight = `${Math.max(220, Math.min(props.wide ? 560 : 420, above - top - 76))}px`;
+  };
+  useLayoutEffect(fit);
+  useEffect(() => {
+    if (!open) return;
+    addEventListener("resize", fit);
+    visualViewport?.addEventListener("resize", fit);
+    return () => {
+      removeEventListener("resize", fit);
+      visualViewport?.removeEventListener("resize", fit);
+    };
+  });
+  if (!open && !out) return null;
+  return (
+    <div
+      ref={box}
+      className={`mpop${props.wide ? " all" : ""}${open ? "" : " out"}`}
+      role="dialog"
+      aria-label={props.wide ? "Tous les modèles" : "Modèle"}
+      aria-hidden={!open || undefined}
+      inert={!open}
+    >
+      {props.children}
+    </div>
+  );
+}
+
+/** With a mouse, the favorites as a plain list: a click picks, the arrows and Enter too. */
+function FavoriteList(props: WheelProps & { asleep: boolean }) {
+  const entries = useStableEntries(props.entries);
+  const current = entries.findIndex(
+    (e) => e.agent.id === props.agent?.id && e.model === props.model,
+  );
+  const [active, setActive] = useState(Math.max(0, current));
+  const list = useRef<HTMLDivElement>(null);
+  // Keys go to the list, but not while the effort's slider is over it: then they go to the slider.
+  useEffect(() => {
+    if (props.asleep)
+      list.current?.parentElement
+        ?.querySelector<HTMLElement>(".eslide [role=slider]")
+        ?.focus({ preventScroll: true });
+    else list.current?.focus({ preventScroll: true });
+  }, [props.asleep]);
+  useEffect(() => {
+    list.current?.querySelector(`#fv-${active}`)?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+  return (
+    <div
+      ref={list}
+      className="mpl"
+      role="listbox"
+      aria-label="Modèles favoris"
+      inert={props.asleep}
+      aria-activedescendant={`fv-${active}`}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+          e.preventDefault();
+          const next = active + (e.key === "ArrowDown" ? 1 : -1);
+          if (next >= 0 && next < entries.length) setActive(next);
+        } else if (e.key === "Enter" && entries[active]) {
+          e.preventDefault();
+          props.onPick(entries[active], false);
+        }
+      }}
+    >
+      {entries.length === 0 && <p className="mpe">Aucun favori</p>}
+      {entries.map((entry, i) => {
+        // Two agents can offer models of the same name: the agent tells them apart.
+        const twin = entries.some((e, k) => k !== i && e.name === entry.name);
+        const on = i === current;
+        const other = props.inThread && entry.agent.id !== props.agent?.id;
+        return (
+          <div
+            key={entryKey(entry)}
+            id={`fv-${i}`}
+            className={`mpr${on ? " c" : ""}${i === active ? " kf" : ""}`}
+            role="option"
+            aria-selected={on}
+            title={other ? `Passe la main à ${entry.agent.name}` : undefined}
+            onClick={() => props.onPick(entry, false)}
+            onPointerMove={() => i !== active && setActive(i)}
+          >
+            <span className="nm">
+              {entry.name}
+              {twin && <small> · {entry.agent.name}</small>}
+            </span>
+            {on && props.effort && <EffortPill effort={props.effort} onEffort={props.onEffort} />}
+            <span className="ck">{on && <I n="check" s={17} />}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Agents not in use show this many models until « N autres ». */
+const FOLDED = 3;
+
+/**
+ * « Tous les modèles » in the menu: a search, the agent in use first, the others folded to
+ * their first models; a full star is a favorite. Then the agent itself and its other settings.
+ */
+function AllModels(props: {
+  agents: AgentInfo[];
+  agent: AgentInfo | undefined;
+  model: string | undefined;
+  favorites: Favorites;
+  quotas: AgentQuota[];
+  canDiscover: boolean;
+  asking: (a: AgentInfo) => boolean;
+  onDiscover: (a: AgentInfo) => void;
+  onStar: (a: AgentInfo, id: string) => void;
+  onPick: (a: AgentInfo, id: string) => void;
+  agentsTitle: string;
+  onPickAgent: (id: string) => void;
+  settings: { setting: AgentSetting; value: string }[];
+  onPickSetting: (settingId: string, value: string) => void;
+  /** Typing goes to the search at once (with a keyboard). */
+  focus: boolean;
+}) {
+  const [query, setQuery] = useState("");
+  const [unfolded, setUnfolded] = useState<Record<string, boolean>>({});
+  const [opened, setOpened] = useState<string | null>(null);
+  const search = useRef<HTMLInputElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  /** The models shown, in order: the arrows go from one to the next. */
+  const rows = () => [
+    ...(list.current?.querySelectorAll<HTMLElement>("[role=menuitemradio]") ?? []),
+  ];
+  useEffect(() => {
+    if (props.focus) search.current?.focus({ preventScroll: true });
+  }, [props.focus]);
+  const q = query.trim().toLowerCase();
+  const agents = [
+    ...props.agents.filter((a) => a.id === props.agent?.id),
+    ...props.agents.filter((a) => a.id !== props.agent?.id),
+  ];
+  let found = 0;
+  const groups = agents.map((a) => {
+    const current = a.id === props.agent?.id;
+    const models = a.available ? (a.models ?? []) : [];
+    const matching = q
+      ? models.filter((m) => `${modelLabel(m)} ${a.name}`.toLowerCase().includes(q))
+      : models;
+    found += matching.length;
+    const open = q || current || unfolded[a.id];
+    const shown = open ? matching : matching.slice(0, FOLDED);
+    const starred = props.favorites[a.id] ?? [];
+    const note = !a.available
+      ? a.hint
+      : !a.models && !props.canDiscover
+        ? "Crée d'abord un projet"
+        : !a.models && props.asking(a)
+          ? "Lecture des modèles…"
+          : a.models?.length === 0
+            ? "Pas de choix de modèle"
+            : undefined;
+    if (q && matching.length === 0) return null;
+    return (
+      <div key={a.id} className="mpgw" role="group" aria-label={a.name}>
+        <div className="mpg">
+          <span className="an">{a.name}</span>
+          {a.available && <AgentQuotaTag quota={props.quotas.find((x) => x.agentId === a.id)} />}
+        </div>
+        {note && !q && <p className="mpn">{note}</p>}
+        {!q && a.available && !a.models && a.modelsError && (
+          <div className="mpr ro">
+            <span className="nm erx" title={a.modelsError}>
+              Modèles illisibles
+            </span>
+            {props.canDiscover && (
+              <button className="mpm in" onClick={() => props.onDiscover(a)}>
+                Réessayer
+              </button>
+            )}
+          </div>
+        )}
+        {!q &&
+          a.available &&
+          !a.models &&
+          !props.asking(a) &&
+          !a.modelsError &&
+          props.canDiscover && (
+            <button className="mpm" onClick={() => props.onDiscover(a)}>
+              Voir ses modèles
+            </button>
+          )}
+        {shown.map((m) => {
+          const on = current && m.id === props.model;
+          const star = starred.includes(m.id);
+          return (
+            <div
+              key={m.id}
+              className={`mpr${on ? " c" : ""}`}
+              role="menuitemradio"
+              aria-checked={on}
+              tabIndex={-1}
+              title={m.description}
+              onClick={() => props.onPick(a, m.id)}
+            >
+              <span className="nm">{modelLabel(m)}</span>
+              <span className="ck">{on && <I n="check" s={17} />}</span>
+              <button
+                className={`st${star ? " on" : ""}`}
+                aria-label={star ? "Retirer des favoris" : "Ajouter aux favoris"}
+                aria-pressed={star}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  props.onStar(a, m.id);
+                }}
+              >
+                <I n={star ? "starf" : "star"} s={16} />
+              </button>
+            </div>
+          );
+        })}
+        {shown.length < matching.length && (
+          <button className="mpm" onClick={() => setUnfolded((u) => ({ ...u, [a.id]: true }))}>
+            {matching.length - shown.length}{" "}
+            {matching.length - shown.length > 1 ? "autres" : "autre"}
+          </button>
+        )}
+      </div>
+    );
+  });
+  const agentName = props.agent?.name ?? "Aucun";
+  return (
+    <>
+      <label className="mps">
+        <I n="search" s={16} />
+        <input
+          ref={search}
+          type="search"
+          placeholder="Rechercher un modèle"
+          aria-label="Rechercher un modèle"
+          autoComplete="off"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            // Down goes into the list; Enter takes the first model found.
+            const first = rows()[0];
+            if (e.key === "ArrowDown" && first) {
+              e.preventDefault();
+              first.focus();
+            } else if (e.key === "Enter" && q && first) {
+              e.preventDefault();
+              first.click();
+            }
+          }}
+        />
+      </label>
+      <div
+        ref={list}
+        className="mpl"
+        role="menu"
+        aria-label="Tous les modèles"
+        onKeyDown={(e) => {
+          const all = rows();
+          const at = all.indexOf(e.target as HTMLElement);
+          if (at < 0) return;
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            const next = at + (e.key === "ArrowDown" ? 1 : -1);
+            if (next < 0) search.current?.focus();
+            else all[Math.min(next, all.length - 1)]?.focus();
+          } else if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            all[at]?.click();
+          }
+        }}
+      >
+        {groups}
+        {q && found === 0 && <p className="mpe">Aucun modèle</p>}
+      </div>
+      <div className="mpf">
+        <button
+          className="mpr"
+          aria-expanded={opened === "agent"}
+          onClick={() => setOpened((o) => (o === "agent" ? null : "agent"))}
+        >
+          <span className="nm">{props.agentsTitle}</span>
+          <span className="rt">
+            {agentName}
+            <I n={opened === "agent" ? "down" : "right"} s={13} />
+          </span>
+        </button>
+        {opened === "agent" && (
+          <div className="mpsub" role="menu" aria-label={props.agentsTitle}>
+            {props.agents.map((a) => (
+              <button
+                key={a.id}
+                className={`mpr${a.id === props.agent?.id ? " c" : ""}`}
+                role="menuitemradio"
+                aria-checked={a.id === props.agent?.id}
+                disabled={!a.available}
+                title={!a.available ? a.hint : undefined}
+                onClick={() => props.onPickAgent(a.id)}
+              >
+                <span className="nm">{a.name}</span>
+                <span className="ck">{a.id === props.agent?.id && <I n="check" s={17} />}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {props.settings.map(({ setting, value }) => {
+          const label = SETTING_LABELS[setting.kind];
+          const name = setting.choices.find((c) => c.id === value)?.name ?? value;
+          return (
+            <Fragment key={setting.id}>
+              <button
+                className="mpr"
+                aria-expanded={opened === setting.id}
+                onClick={() => setOpened((o) => (o === setting.id ? null : setting.id))}
+              >
+                <span className="nm">{label}</span>
+                <span className="rt">
+                  {name}
+                  <I n={opened === setting.id ? "down" : "right"} s={13} />
+                </span>
+              </button>
+              {opened === setting.id && (
+                <div className="seg mseg" role="radiogroup" aria-label={label}>
+                  {setting.choices.map((c) => (
+                    <button
+                      key={c.id}
+                      role="radio"
+                      aria-checked={c.id === value}
+                      aria-pressed={c.id === value}
+                      title={c.description}
+                      onClick={() => props.onPickSetting(setting.id, c.id)}
+                    >
+                      {c.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </Fragment>
+          );
+        })}
+      </div>
+    </>
+  );
 }
 
 /** Every model of one agent, with its star; an agent not set up says what to do. */
