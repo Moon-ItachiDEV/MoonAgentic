@@ -192,9 +192,7 @@ describe("decision card", () => {
       .poll(() => page.getByRole("button", { name: /Rouvrir la demande/ }).count())
       .toBe(0);
     await say(page, "Corrige la réponse");
-    await card(page)
-      .getByRole("button", { name: "Autoriser cette fois" })
-      .click();
+    await card(page).getByRole("button", { name: "Autoriser cette fois" }).click();
     await page.getByText("C'est fait, la réponse vaut 42.").last().waitFor();
     expect(await card(page).count()).toBe(0);
     await page.close();

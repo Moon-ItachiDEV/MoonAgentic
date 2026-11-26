@@ -1099,7 +1099,9 @@ export function App() {
                   threads={state.threads}
                   onOpenThread={openThread}
                 />
-                <div className="pbt">{composerFor(paneThread, "Orienter ce fil", "Orienter ce fil")}</div>
+                <div className="pbt">
+                  {composerFor(paneThread, "Orienter ce fil", "Orienter ce fil")}
+                </div>
               </div>
             ) : (
               <ProjectOverview
