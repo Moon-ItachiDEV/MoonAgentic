@@ -4,7 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
-import { removeWorktree, saveCheckpoint, worktreeRepo } from "./git.ts";
+import { git, removeWorktree, saveCheckpoint, worktreeRepo } from "./git.ts";
 
 /**
  * A folder this recent is left alone: a thread may be making it right now, before it is
@@ -14,6 +14,33 @@ export const SWEEP_MIN_AGE_MS = 60 * 60_000;
 
 /** The ref an orphan folder's files are kept under before it goes, in its repository. */
 export const orphanRef = (name: string, now: number) => `refs/moonagentic/orphans/${name}-${now}`;
+
+/** How long an orphan folder's files stay kept in its repository, once it went. */
+export const ORPHAN_KEEP_MS = 30 * 24 * 60 * 60_000;
+
+/**
+ * Drops the refs that kept orphan folders' files in the repository for longer than `keep`:
+ * each holds a whole copy of the folder's files, its ignored ones too. Gives those dropped.
+ */
+export async function dropOldOrphans(
+  repo: string,
+  now = Date.now(),
+  keep = ORPHAN_KEEP_MS,
+): Promise<string[]> {
+  const refs = (
+    await git(repo, ["for-each-ref", "--format=%(refname)", "refs/moonagentic/orphans/"])
+  )
+    .split("\n")
+    .filter(Boolean);
+  const dropped: string[] = [];
+  for (const ref of refs) {
+    const at = Number(/-(\d+)$/.exec(ref)?.[1]);
+    if (!Number.isFinite(at) || now - at < keep) continue;
+    await git(repo, ["update-ref", "-d", ref]);
+    dropped.push(ref);
+  }
+  return dropped;
+}
 
 /** True when the folder's `.git` file points at a repository still on disk. */
 function repositoryLeft(folder: string): boolean {

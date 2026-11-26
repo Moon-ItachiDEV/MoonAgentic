@@ -29,9 +29,18 @@ const CHANGES_KEPT = 300;
  */
 export class TimelineLog {
   /** The number of the last change. */
-  rev = 0;
+  rev: number;
   /** A screen that last saw an older change than this one is sent the timeline again. */
-  private floor = 0;
+  private floor: number;
+
+  /**
+   * `start` is above every number an earlier log of the same thread gave: a screen that
+   * holds one of them is sent the timeline again, never told it misses nothing.
+   */
+  constructor(start = 0) {
+    this.rev = start;
+    this.floor = start;
+  }
   /** The last change of each item, the oldest first. */
   private readonly changed = new Map<string, number>();
 

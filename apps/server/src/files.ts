@@ -27,16 +27,62 @@ const SKIPPED = new Set([
 ]);
 const MAX_DEPTH = 12;
 
-const listings = new Map<string, { at: number; files: Promise<string[]> }>();
+/** How many folders' listings are kept at most: each can hold thousands of paths. */
+export const LISTINGS_KEPT = 16;
+
+/**
+ * Folder listings kept a few seconds, for a few folders: the screens of one thread ask for
+ * the same one again and again, while a server on for weeks sees hundreds of folders.
+ */
+export class Listings {
+  private readonly kept = new Map<
+    string,
+    { at: number; files: Promise<string[]>; timer: NodeJS.Timeout }
+  >();
+
+  private readonly ttl: number;
+
+  constructor(ttl: number) {
+    this.ttl = ttl;
+  }
+
+  /** The folder's listing, younger than `maxAge` if one was made, or `list`'s. */
+  get(dir: string, maxAge: number, list: () => Promise<string[]>): Promise<string[]> {
+    const cached = this.kept.get(dir);
+    if (cached && Date.now() - cached.at < maxAge) return cached.files;
+    this.drop(dir);
+    const files = list();
+    const timer = setTimeout(() => this.drop(dir, files), this.ttl);
+    timer.unref();
+    this.kept.set(dir, { at: Date.now(), files, timer });
+    // The oldest goes first.
+    for (const old of this.kept.keys()) {
+      if (this.kept.size <= LISTINGS_KEPT) break;
+      this.drop(old);
+    }
+    files.catch(() => this.drop(dir, files));
+    return files;
+  }
+
+  /** How many listings are kept now. */
+  get size(): number {
+    return this.kept.size;
+  }
+
+  /** Forgets the folder's listing: `files` only, when given, not one made since. */
+  private drop(dir: string, files?: Promise<string[]>): void {
+    const cached = this.kept.get(dir);
+    if (!cached || (files && cached.files !== files)) return;
+    clearTimeout(cached.timer);
+    this.kept.delete(dir);
+  }
+}
+
+export const listings = new Listings(LISTING_TTL_MS);
 
 /** The folder's files, relative and with `/` separators, ignored ones left out. */
 export function listFiles(dir: string): Promise<string[]> {
-  const cached = listings.get(dir);
-  if (cached && Date.now() - cached.at < LISTING_TTL_MS) return cached.files;
-  const files = gitFiles(dir).catch(() => walk(dir));
-  listings.set(dir, { at: Date.now(), files });
-  files.catch(() => listings.delete(dir));
-  return files;
+  return listings.get(dir, LISTING_TTL_MS, () => gitFiles(dir).catch(() => walk(dir)));
 }
 
 /** Runs `git ls-files` with these options, and gives the paths it lists. */
