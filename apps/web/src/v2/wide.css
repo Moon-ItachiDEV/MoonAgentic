@@ -504,6 +504,25 @@ html[data-dev="desk"] .scr.roomy .pmenu .pi2 .rt {
 html[data-dev="desk"] .scr.roomy .pmenu .psep {
   margin: 4px 10px;
 }
-.scr.roomy .pmenu .pi2 svg :is(path, circle, rect, line, polyline, ellipse) {
-  stroke-width: 1.5px;
+.scr.roomy .pmenu,
+html[data-dev="desk"] .pmenu.rowm {
+  --icon-k: 0.88;
+}
+/* A project's icon in a menu (« Déplacer vers ») follows the size of the other icons. */
+.scr.roomy .pmenu .pi2 > .pj-fold svg {
+  width: 19px;
+  height: 19px;
+}
+html[data-dev="desk"] .scr.roomy .pmenu .pi2 > .pj-fold svg {
+  width: 18px;
+  height: 18px;
+}
+.scr.roomy .pmenu .pi2 > .pj-ico {
+  width: 21px !important;
+  height: 21px !important;
+  font-size: 13px !important;
+}
+html[data-dev="desk"] .scr.roomy .pmenu .pi2 > .pj-ico {
+  width: 20px !important;
+  height: 20px !important;
 }

@@ -254,6 +254,23 @@ export const ICONS = {
 
 export type IconName = keyof typeof ICONS;
 
+/**
+ * A stroke's width, scaled by `--icon-k` set on a part of the page (the menu, the popups draw
+ * finer lines). A CSS selector cannot reach the lines inside `<use>`, a custom property can.
+ * The rings in the page's own colour (`var(--surface)`) that cut a badge out keep their width.
+ */
+export const thinnable = (body: string): string =>
+  body.replace(/<[a-z]+\b[^>]*>/g, (tag) =>
+    tag.includes('stroke="var(--surface)"')
+      ? tag
+      : tag.replace(
+          /stroke-width="([\d.]+)"/,
+          (_, w: string) => `style="stroke-width:calc(${w}px * var(--icon-k, 1))"`,
+        ),
+  );
+
 export const SPRITE = Object.entries(ICONS)
-  .map(([name, [box, body]]) => `<symbol id="i-${name}" viewBox="${box}">${body}</symbol>`)
+  .map(
+    ([name, [box, body]]) => `<symbol id="i-${name}" viewBox="${box}">${thinnable(body)}</symbol>`,
+  )
   .join("");
