@@ -89,7 +89,7 @@ describe("installable app", () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 800 } });
     await page.goto(url);
     expect(await page.getAttribute('link[rel="apple-touch-icon"]', "href")).toBe(
-      "/apple-touch-icon.png?v=2",
+      "/apple-touch-icon.png?v=3",
     );
     expect(await page.getAttribute('meta[name="apple-mobile-web-app-capable"]', "content")).toBe(
       "yes",
