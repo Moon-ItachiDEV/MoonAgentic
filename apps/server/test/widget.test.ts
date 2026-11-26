@@ -380,6 +380,14 @@ describe("GET /api/widget", () => {
     expect(res.headers.get("content-type")).toBe("image/jpeg");
   });
 
+  it("serves the script as UTF-8, so that Safari shows its accents", async () => {
+    const { url, webDir } = await serve();
+    writeFileSync(path.join(webDir, "widget-iphone.js"), 'const mot = "Relié";\n');
+    const res = await fetch(url.replace(WIDGET_PATH, "/widget-iphone.js"));
+    expect(res.headers.get("content-type")).toBe("text/javascript; charset=utf-8");
+    expect(await res.text()).toContain("Relié");
+  });
+
   it("only reads, and never for a page of another site", async () => {
     const { url } = await serve();
     const headers = { authorization: "Bearer jeton-du-proprietaire" };

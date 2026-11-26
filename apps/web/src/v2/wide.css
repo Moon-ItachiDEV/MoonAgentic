@@ -386,27 +386,30 @@ html[data-dev="desk"] .scr.wide .dtop .gb {
 }
 html[data-dev="desk"] .scr.wide .ni,
 html[data-dev="desk"] .scr.wide .pj {
-  height: 38px;
-  font-size: 14.5px;
-  gap: 11px;
-  border-radius: 11px;
+  height: 34px;
+  font-size: 14px;
+  gap: 10px;
+  border-radius: 10px;
   padding: 0 10px;
 }
 html[data-dev="desk"] .scr.wide .ni svg,
 html[data-dev="desk"] .scr.wide .pj svg {
-  width: 19px;
-  height: 19px;
+  width: 18px;
+  height: 18px;
 }
 html[data-dev="desk"] .scr.wide .rc {
-  height: 34px;
+  height: 32px;
   font-size: 14px;
-  border-radius: 11px;
+  border-radius: 10px;
   padding: 0 10px;
 }
 html[data-dev="desk"] .scr.wide .dsec {
-  height: 30px;
-  font-size: 12.5px;
+  height: 28px;
+  font-size: 12px;
   padding: 0 10px;
+}
+html[data-dev="desk"] .scr.wide .nav {
+  gap: 1px;
 }
 html[data-dev="desk"] .scr.wide .nav,
 html[data-dev="desk"] .scr.wide .coll {
@@ -448,3 +451,59 @@ html[data-dev="desk"] .scr.wide #sroot .lt {
 
 /* Sur un vrai iPad (écran tactile) : pas de cadre, la maquette prend l'écran sous la barre */
 /* Sur un téléphone : toujours plein écran, mise en page téléphone */
+
+/* iPad : barre latérale entre le téléphone et l'ordinateur, même écriture légère */
+html:not([data-dev="desk"]) .scr.wide .ni,
+html:not([data-dev="desk"]) .scr.wide .pj {
+  height: 42px;
+  font-size: 15.5px;
+  gap: 12px;
+  border-radius: 12px;
+}
+html:not([data-dev="desk"]) .scr.wide .ni svg,
+html:not([data-dev="desk"]) .scr.wide .pj svg {
+  width: 20px;
+  height: 20px;
+}
+html:not([data-dev="desk"]) .scr.wide .rc {
+  height: 38px;
+  font-size: 15px;
+  border-radius: 12px;
+}
+html:not([data-dev="desk"]) .scr.wide .dsec {
+  height: 30px;
+  font-size: 12.5px;
+}
+
+/* Menus flottants sur iPad et ordinateur : lignes plus fines, comme sur le téléphone en plus petit */
+.scr.roomy .pmenu .pi2 {
+  min-height: 38px;
+  font-size: 15px;
+  border-radius: 14px;
+}
+.scr.roomy .pmenu .pi2 > svg {
+  width: 19px;
+  height: 19px;
+}
+html[data-dev="desk"] .scr.roomy .pmenu .pi2,
+html[data-dev="desk"] .pmenu.rowm .pi2 {
+  min-height: 32px;
+  padding: 4px 10px;
+  gap: 10px;
+  font-size: 14px;
+  border-radius: 10px;
+}
+html[data-dev="desk"] .scr.roomy .pmenu .pi2 > svg,
+html[data-dev="desk"] .pmenu.rowm .pi2 > svg {
+  width: 18px;
+  height: 18px;
+}
+html[data-dev="desk"] .scr.roomy .pmenu .pi2 .rt {
+  font-size: 13px;
+}
+html[data-dev="desk"] .scr.roomy .pmenu .psep {
+  margin: 4px 10px;
+}
+.scr.roomy .pmenu .pi2 svg :is(path, circle, rect, line, polyline, ellipse) {
+  stroke-width: 1.5px;
+}

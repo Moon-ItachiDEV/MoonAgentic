@@ -81,8 +81,9 @@
   --pc-violet: #7a4fd6;
   --pc-slate: #5b6170;
   --tab-on: rgba(58, 85, 214, 0.1);
-  --sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --sans:
+    "Geist Variable", "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   --serif: "Newsreader Variable", "Newsreader", "Iowan Old Style", Georgia, serif;
   --spring: cubic-bezier(0.32, 0.72, 0, 1);
   --out: cubic-bezier(0.23, 1, 0.32, 1);

@@ -71,16 +71,17 @@ type Who = { owner: true } | { owner: false; deviceId: string };
 
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript",
-  ".css": "text/css",
+  // The charset is said: Safari shows a script opened as a page in Latin-1 otherwise.
+  ".js": "text/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
   ".svg": "image/svg+xml",
   ".ico": "image/x-icon",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".woff2": "font/woff2",
-  ".json": "application/json",
-  ".webmanifest": "application/manifest+json",
+  ".json": "application/json; charset=utf-8",
+  ".webmanifest": "application/manifest+json; charset=utf-8",
 };
 
 /** Where the images sent with messages are received and read back. */
