@@ -327,6 +327,8 @@ const checkpointRef = (threadId: string, itemId: string) =>
   `refs/moonagentic/${threadId}/${itemId.replace(/^user:/, "")}`;
 /** Keeps the files of an archived thread, uncommitted ones included, until it comes back. */
 const archiveRef = (threadId: string) => `refs/moonagentic/${threadId}/archive`;
+/** Keeps the files a conversation found in the project it moved into, to go back to. */
+const movedRef = (threadId: string) => `refs/moonagentic/${threadId}/moved`;
 /** Where the files a step back takes away are kept, one ref for each step back. */
 const undoneRef = (threadId: string, at: number) => `refs/moonagentic/${threadId}/undone-${at}`;
 
@@ -3560,6 +3562,9 @@ export class Hub {
     // The messages, the thread and the note of the step back change together, or not at all.
     const { removed, thread } = this.store.transaction(() => {
       const removed = this.store.removeItemsFrom(threadId, itemId);
+      // Going back to before a move keeps the thread in its project: the move stays told.
+      const moved = removed.find((i) => i.kind === "moved");
+      if (moved) this.store.putItem(threadId, moved);
       // Going back before a hand-off goes back to the agent of that time, on its defaults.
       const handoff = removed.find((i) => i.kind === "handoff");
       const thread = this.store.updateThread(threadId, {
@@ -4182,15 +4187,50 @@ export class Hub {
       this.store.moveThread(threadId, projectId);
       // What was allowed « pour ce fil » outside any project is asked again in the project.
       this.threadGrants.delete(threadId);
-      // In its new project the thread works in the project's folder, like any thread
-      // started there without a branch of its own.
+      // In a git project the thread gets a branch of its own, like a thread started there:
+      // its messages from before can then go back to the files as they were at the move.
+      // Elsewhere it works in the project's folder, with no step back, as threads there do.
+      const project = this.store.getProject(projectId)!;
+      const own = this.withGit(project).git
+        ? this.ownWorkspace(this.requireThread(threadId).title, threadId)
+        : undefined;
       this.updateThread(threadId, {
-        workspace: undefined,
+        workspace: own,
         usage: undefined,
         canCompact: undefined,
         commands: undefined,
         status: "idle",
         error: null,
+      });
+      let tree: string | undefined;
+      if (own) {
+        try {
+          await this.prepareWorkspace(threadId, project);
+          const made = this.store.getThread(threadId)?.workspace;
+          if (made) tree = await saveCheckpoint(made.path, movedRef(threadId));
+        } catch {
+          // Its folder is made at its next message instead; what came before has no way back.
+        }
+      }
+      this.flushText(threadId);
+      this.store.transaction(() => {
+        for (const item of this.store.listItems(threadId)) {
+          if (item.kind !== "user") continue;
+          // The checkpoints of before were trees of the other folder's repository.
+          const { checkpoint: _other, beforeMove: _was, ...rest } = item;
+          this.store.putItem(
+            threadId,
+            tree ? { ...rest, checkpoint: tree, beforeMove: true } : rest,
+          );
+        }
+      });
+      this.timelineCut(threadId);
+      this.putItem(threadId, {
+        id: `moved:${randomUUID()}`,
+        kind: "moved",
+        projectId,
+        name: plainLabel(project.name),
+        at: Date.now(),
       });
     });
   }

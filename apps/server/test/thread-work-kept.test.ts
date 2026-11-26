@@ -414,6 +414,48 @@ describe("resolving a thread and stepping back", () => {
     expect(refs(repo, "refs/moonagentic/")).toEqual([]);
   });
 
+  it("steps back to the files of the move from a message sent before it", async () => {
+    const { root, repo, store, hub } = server();
+    const projectId = store.listProjects().find((p) => p.name === "demo")!.id;
+    mkdirSync(path.join(root, "Discussions"));
+    const discussions = hub.createProject("Discussions", path.join(root, "Discussions"));
+    const id = hub.createThread({
+      projectId: discussions,
+      agentId: "demo",
+      permissionMode: "full",
+      text: "Avant",
+    });
+    await hub.whenIdle(id);
+    await hub.moveThread(id, projectId);
+    // A branch of its own in the project, made from where the project was.
+    const { path: dir, base } = store.getThread(id)!.workspace!;
+    expect(base).toBe(git(repo, "rev-parse", "HEAD"));
+    expect(workIn(dir)).toEqual({ readme: "# Demo\nune ligne\n", notes: undefined });
+    const before = store.listItems(id).find((i) => i.kind === "user")!;
+    expect(before).toMatchObject({ beforeMove: true, checkpoint: expect.any(String) });
+    expect(store.listItems(id).at(-1)).toMatchObject({ kind: "moved", projectId, name: "demo" });
+
+    hub.send(id, "Après");
+    await hub.whenIdle(id);
+    leaveWork(dir);
+    await hub.restore(id, before.id);
+    // The project's files as at the move, the thread still in the project, the move told.
+    expect(workIn(dir)).toEqual({ readme: "# Demo\nune ligne\n", notes: undefined });
+    expect(store.listItems(id).map((i) => i.kind)).toEqual(["moved"]);
+    expect(store.getThread(id)).toMatchObject({ projectId, workspace: { path: dir } });
+    // It goes on from there, and its ref goes with it.
+    hub.send(id, "Encore");
+    await hub.whenIdle(id);
+    expect(
+      store
+        .listItems(id)
+        .map((i) => i.kind)
+        .slice(0, 2),
+    ).toEqual(["moved", "user"]);
+    await hub.deleteThread(id);
+    expect(refs(repo, "refs/moonagentic/")).toEqual([]);
+  });
+
   it("does not step back when the files there now cannot be kept first", async () => {
     const { store, hub, thread } = server();
     const { id, path: dir } = await thread();

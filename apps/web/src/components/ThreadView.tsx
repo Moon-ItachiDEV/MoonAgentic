@@ -696,6 +696,13 @@ const FeedItem = memo(function FeedItem({
         </div>
       );
     }
+    case "moved":
+      return (
+        <div className="mvd">
+          <I n="folder" s={13} />
+          Déplacée dans {item.name}
+        </div>
+      );
     case "handoff": {
       const name = (id: string) => agents.find((a) => a.id === id)?.name ?? "Agent retiré";
       return (
@@ -918,7 +925,11 @@ function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; 
       {canRestore &&
         (confirming ? (
           <div className="ucf" role="group" aria-label="Revenir à ce message">
-            <span className="ppill">Fichiers remis comme avant, suite du fil effacée</span>
+            <span className="ppill">
+              {item.beforeMove
+                ? "Fichiers du projet remis comme au déplacement, suite du fil effacée"
+                : "Fichiers remis comme avant, suite du fil effacée"}
+            </span>
             <button className="b2 soft press" disabled={busy} onClick={() => setConfirming(false)}>
               Annuler
             </button>

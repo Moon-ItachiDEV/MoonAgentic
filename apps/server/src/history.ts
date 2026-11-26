@@ -66,6 +66,10 @@ export function historyBefore(
             text: `(${agentName(item.from)} passe le relais à ${agentName(item.to)}.)`,
           },
         ];
+      case "moved":
+        return [
+          { isUser: false, text: `(La conversation a été déplacée dans le projet ${item.name}.)` },
+        ];
       default:
         return [];
     }

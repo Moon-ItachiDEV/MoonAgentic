@@ -948,3 +948,15 @@ html:not([data-dev="desk"]) .scr.roomy .dtop .gb:active {
 .nsep.past {
   color: var(--muted);
 }
+
+/* Ordinateur et iPad : le titre en cours de renommage garde son anneau, et ✓ son encre */
+.scr.roomy .mtop .ttl.ren {
+  height: 40px;
+  background: var(--card);
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+.scr.roomy .mtop .gb.tok,
+.scr.roomy .mtop .gb.tok:hover {
+  background: var(--ink);
+  color: var(--on-ink);
+}

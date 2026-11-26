@@ -6966,3 +6966,44 @@
 .it.ro .stpr + .tmm {
   margin-left: 8px;
 }
+
+/* Renaming a thread: its title in the header becomes the field, an ink ✓ in place of « … ». */
+.ttl.ren {
+  cursor: text;
+  padding: 0 16px;
+  min-width: min(260px, 62vw);
+  box-shadow:
+    var(--float),
+    0 0 0 1.5px var(--accent);
+  animation: trin 320ms var(--spring) both;
+}
+.ttl.ren input {
+  all: unset;
+  width: 100%;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--fg);
+  caret-color: var(--accent);
+}
+.ttl.ren input::selection {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.gb.tok {
+  background: var(--ink);
+  color: var(--on-ink);
+  animation: trin 320ms var(--spring) both;
+}
+@keyframes trin {
+  from {
+    transform: scale(0.94);
+    opacity: 0.6;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ttl.ren,
+  .gb.tok {
+    animation: none;
+  }
+}
