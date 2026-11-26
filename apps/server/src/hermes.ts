@@ -71,7 +71,10 @@ export interface HermesHost {
   setSetting(key: string, value: unknown): void;
   projects(): Project[];
   threads(): Thread[];
+  thread(threadId: string): Thread | undefined;
   items(threadId: string): Item[];
+  /** Marks Hermes's message whose answer went back to Discord. */
+  markRelayed(threadId: string, itemId: string): void;
   running(threadId: string): boolean;
   whenIdle(threadId: string): Promise<void>;
   /** Sends a message as the user's, from Discord; queued when the agent is at work. */
@@ -126,7 +129,12 @@ export function discordWebhook(address: string): boolean {
 }
 
 const hash = (token: string) => createHash("sha256").update(token).digest();
-const fold = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+const fold = (s: string) =>
+  s
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .trim();
 const clip = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 
 /** A thread's state in a word, as the user reads it in the app. */
@@ -142,11 +150,22 @@ export function stateOf(thread: Thread): string {
   return "en pause";
 }
 
+/** True when `at` falls on the year, month and day written, none of them overflowing. */
+function sameDay(at: number, m: RegExpExecArray): boolean {
+  if (Number.isNaN(at)) return false;
+  const d = new Date(at);
+  return (
+    d.getFullYear() === Number(m[1]) &&
+    d.getMonth() === Number(m[2]) - 1 &&
+    d.getDate() === Number(m[3])
+  );
+}
+
 /** A day written AAAA-MM-JJ, at midnight on this computer. */
 export function dayOf(text: string, key: string): number {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text.trim());
   const at = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() : NaN;
-  if (!m || Number.isNaN(at) || new Date(at).getDate() !== Number(m[3])) {
+  if (!m || !sameDay(at, m)) {
     throw new Error(`« ${key} » doit être un jour AAAA-MM-JJ.`);
   }
   return at;
@@ -158,7 +177,7 @@ export function timeOf(text: string, key: string): number {
   const at = m
     ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5])).getTime()
     : NaN;
-  if (!m || Number.isNaN(at) || Number(m[4]) > 23 || Number(m[5]) > 59) {
+  if (!m || !sameDay(at, m) || Number(m[4]) > 23 || Number(m[5]) > 59) {
     throw new Error(`« ${key} » doit être une date et une heure AAAA-MM-JJTHH:MM.`);
   }
   return at;
@@ -432,8 +451,10 @@ export class Hermes {
         );
     const threadOf = () => {
       const id = need("thread_id", 200);
-      const thread = this.host.threads().find((t) => t.id === id);
-      if (!thread || this.host.closed(thread.projectId)) throw new Error("Ce fil n'existe pas.");
+      const thread = this.host.thread(id);
+      if (!thread || !open().some((p) => p.id === thread.projectId)) {
+        throw new Error("Ce fil n'existe pas.");
+      }
       return thread;
     };
     const projectNamed = (id: string) => this.host.projects().find((p) => p.id === id);
@@ -519,6 +540,12 @@ export class Hermes {
       case "message_thread": {
         may("threads", "écrire dans un fil");
         const thread = threadOf();
+        // A coordinator is written to only as « Écrire aux coordinateurs » allows, and a
+        // team's piece only by its lead.
+        if (thread.kind === "coordinator") may("coordinators", "écrire aux coordinateurs");
+        if (thread.parentId) {
+          throw new Error("Ce fil fait partie d'une équipe : écris à son fil principal.");
+        }
         if (thread.archived) throw new Error("Ce fil est résolu : rouvre-le dans MoonAgentic.");
         const how = this.host.sendFromHermes(thread.id, need("message", 20_000));
         this.record(`Message au fil · ${thread.title}`, projectNamed(thread.projectId));
@@ -627,7 +654,9 @@ export class Hermes {
             "Donne « option_id » pour une autorisation, ou « answers » pour une question.",
           );
         }
-        const asked = this.host.pendingQuestions().find((q) => q.itemId === itemId);
+        const asked = this.host
+          .pendingQuestions()
+          .find((q) => q.itemId === itemId && q.threadId === thread.id);
         if (!asked) throw new Error("Cette question n'attend plus de réponse.");
         const answers: QuestionAnswer[] = asked.questions.map((q, i) => {
           const said = (raw[i] as string | undefined)?.trim() ?? "";
@@ -645,7 +674,8 @@ export class Hermes {
 
   /**
    * Waits for the coordinator to answer the message Hermes sent at `asked`, and gives back
-   * what it said and the threads it opened. Past {@link ASK_WAIT_MS}, says it still works.
+   * what it said and the threads it opened. Comes back at once when the coordinator waits for
+   * the user, or ended on an error; past {@link ASK_WAIT_MS}, says it still works.
    */
   private async answerOf(
     threadId: string,
@@ -655,45 +685,76 @@ export class Hermes {
     signal?: AbortSignal,
   ): Promise<unknown> {
     const deadline = asked + ASK_WAIT_MS;
+    /** Hermes's message and what came after it, up to the next message to the agent. */
     const mine = () => {
       const items = this.host.items(threadId);
       const index = items.findLastIndex(
         (i) => i.kind === "user" && i.from === "hermes" && i.text === text && i.at >= asked - 1000,
       );
-      return index < 0 ? undefined : items.slice(index + 1);
+      if (index < 0) return undefined;
+      const rest = items.slice(index + 1);
+      const next = rest.findIndex((i) => i.kind === "user");
+      return { message: items[index]!, after: next < 0 ? rest : rest.slice(0, next) };
     };
     const pause = (ms: number) =>
       new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, ms);
-        signal?.addEventListener("abort", () => {
+        const done = () => {
           clearTimeout(timer);
+          signal?.removeEventListener("abort", done);
           resolve();
-        });
+        };
+        const timer = setTimeout(done, ms);
+        signal?.addEventListener("abort", done, { once: true });
       });
+    const queuedNote = how === "queued" ? { waited_for_previous_turn: true } : {};
     for (;;) {
       if (signal?.aborted) return { stopped: true };
-      const after = mine();
-      if (after && !this.host.running(threadId)) {
-        const answer = after
-          .filter((i): i is Extract<Item, { kind: "agent" }> => i.kind === "agent")
-          .map((i) => i.text)
-          .join("\n\n")
-          .trim();
-        const opened = after.flatMap((i) =>
-          i.kind === "opened" ? [{ thread_id: i.threadId, title: i.title }] : [],
-        );
-        return {
-          answer: clip(answer || "(pas de réponse écrite)", ANSWER_CLIP),
-          ...(opened.length ? { opened_threads: opened } : {}),
-          ...(how === "queued" ? { waited_for_previous_turn: true } : {}),
-        };
-      }
-      // Waiting for the user (a permission, a question): Hermes says so instead of waiting.
-      if (after && this.host.threads().find((t) => t.id === threadId)?.status === "waiting") {
+      const thread = this.host.thread(threadId);
+      if (!thread) throw new Error("Le coordinateur a été supprimé.");
+      if (thread.status === "waiting") {
         return {
           waiting_for_user: true,
+          ...(thread.queue?.some((m) => m.from === "hermes" && m.text === text)
+            ? { message_queued: true }
+            : {}),
           note: "Le coordinateur attend une autorisation ou une réponse : voir list_requests, ou MoonAgentic.",
         };
+      }
+      // The timeline is read only once the coordinator stops: not each second of its turn.
+      if (!this.host.running(threadId)) {
+        const found = mine();
+        if (found) {
+          if (thread.status === "error") {
+            throw new Error(
+              `Le coordinateur s'est arrêté sur une erreur : ${thread.error ?? "sans détail"}`,
+            );
+          }
+          const answer = found.after
+            .filter((i): i is Extract<Item, { kind: "agent" }> => i.kind === "agent")
+            .map((i) => i.text)
+            .join("\n\n")
+            .trim();
+          const opened = found.after.flatMap((i) =>
+            i.kind === "opened" ? [{ thread_id: i.threadId, title: i.title }] : [],
+          );
+          this.host.markRelayed(threadId, found.message.id);
+          return {
+            answer: clip(answer || "(pas de réponse écrite)", ANSWER_CLIP),
+            ...(opened.length ? { opened_threads: opened } : {}),
+            ...queuedNote,
+          };
+        }
+        // Still in the queue with the coordinator stopped: the turn before ended on an error
+        // or was stopped, and the user looks at it before what waits goes on.
+        if (thread.queue?.some((m) => m.from === "hermes" && m.text === text)) {
+          return {
+            message_queued: true,
+            note:
+              thread.status === "error"
+                ? `Le tour précédent du coordinateur s'est arrêté sur une erreur (${thread.error ?? "sans détail"}) : le message partira quand l'utilisateur l'aura regardée dans MoonAgentic.`
+                : "Le message attend dans la file du coordinateur : il partira depuis MoonAgentic.",
+          };
+        }
       }
       if (Date.now() >= deadline) {
         return {
@@ -701,13 +762,7 @@ export class Hermes {
           note: "Le coordinateur travaille encore : redemande avec project_status ou read_thread dans un moment.",
         };
       }
-      if (after && this.host.running(threadId)) {
-        await Promise.race([
-          this.host.whenIdle(threadId),
-          // Looked at each second: a turn that stops on a permission never goes idle.
-          pause(Math.min(1000, Math.max(0, deadline - Date.now()))),
-        ]);
-      } else await pause(1000);
+      await pause(Math.min(1000, Math.max(0, deadline - Date.now())));
     }
   }
 }

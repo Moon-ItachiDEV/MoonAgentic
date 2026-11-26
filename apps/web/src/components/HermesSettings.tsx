@@ -1,7 +1,7 @@
 import type { HermesAllow, HermesNotify, HermesStatus } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
 import { connection, newId } from "../connection.ts";
-import { HERMES_AVATAR } from "../hermes.ts";
+import { HERMES_AVATAR, useHermesState } from "../hermes.ts";
 import { seenAgo } from "../remote.ts";
 import { I } from "../v2/I.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
@@ -63,19 +63,22 @@ export function HermesSettings({ hermes }: { hermes: HermesStatus | null }) {
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
+  useHermesState();
   useEffect(() => {
-    connection.send({ type: "hermes.get" });
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, []);
 
-  const run = async (work: () => Promise<unknown>) => {
+  /** Runs `work`, showing its error; true when it went through. */
+  const run = async (work: () => Promise<unknown>): Promise<boolean> => {
     setError(null);
     setBusy(true);
     try {
       await work();
+      return true;
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -169,7 +172,7 @@ export function HermesSettings({ hermes }: { hermes: HermesStatus | null }) {
               <button
                 className="b2 soft press"
                 disabled={busy}
-                onClick={() => void set({ webhook: null })}
+                onClick={() => void set({ webhook: null }).then((ok) => ok && setTested(false))}
               >
                 Retirer
               </button>
@@ -189,7 +192,15 @@ export function HermesSettings({ hermes }: { hermes: HermesStatus | null }) {
             <button
               className="b2 ink press"
               disabled={busy || !webhook.trim()}
-              onClick={() => void set({ webhook: webhook.trim() }).then(() => setWebhook(""))}
+              onClick={() =>
+                void set({ webhook: webhook.trim() }).then((ok) => {
+                  // A refused address stays in the field, to be corrected.
+                  if (ok) {
+                    setWebhook("");
+                    setTested(false);
+                  }
+                })
+              }
             >
               Enregistrer
             </button>

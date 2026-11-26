@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { getEventListeners } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { ServerMessage } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
-import { discordNotices, discordWebhook } from "../src/hermes.ts";
+import { dayOf, discordNotices, discordWebhook, timeOf } from "../src/hermes.ts";
 import { HERMES_PATH, HERMES_TOOLS } from "../src/hermes-tools.ts";
 import { createHttpServer } from "../src/http.ts";
 import { type Client, Hub } from "../src/hub.ts";
@@ -290,6 +290,174 @@ describe("Hermes · outils", () => {
   });
 });
 
+describe("Hermes · relecture de Neon", () => {
+  it("1. n'écrit pas au coordinateur par message_thread quand c'est coupé, ni dans un sous-fil", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.handle(h.client, {
+      type: "hermes.set",
+      requestId: "r2",
+      allow: { coordinators: false, threads: true },
+    });
+    const sent = await h.result("message_thread", {
+      thread_id: h.coordinatorId,
+      message: "Passe par la porte de côté",
+    });
+    expect(sent.status).toBe(400);
+    expect(h.store.listItems(h.coordinatorId).some((i) => i.kind === "user")).toBe(false);
+
+    const parent = h.store.getThread(h.coordinatorId)!;
+    h.store.addThread({
+      ...parent,
+      id: "sous-fil",
+      kind: undefined,
+      parentId: "fil-parent",
+      title: "Morceau d'équipe",
+    } as never);
+    const member = await h.result("message_thread", { thread_id: "sous-fil", message: "Salut" });
+    expect(member.status).toBe(400);
+  });
+
+  it("2. isole une tâche planifiée sur sa branche, et ne voit pas un projet archivé", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.result("schedule_task", {
+      project: "Site vitrine",
+      message: "Vérifie les liens",
+      when: "2030-01-02T09:30",
+      repeat: "once",
+    });
+    expect(h.hub.scheduler.list()[0]).toMatchObject({ isolated: true });
+
+    await h.hub.handle(h.client, {
+      type: "project.setArchived",
+      requestId: "a1",
+      projectId: h.projectId,
+      archived: true,
+    } as never);
+    expect((await h.result("list_projects")).result).toEqual([]);
+    const status = await h.result("project_status", { project: "Site vitrine" });
+    expect(status.status).toBe(400);
+    const read = await h.result("read_thread", { thread_id: h.coordinatorId });
+    expect(read.status).toBe(400);
+  });
+
+  it("3a. n'empile pas un écouteur d'arrêt par seconde d'attente", async () => {
+    const h = await withHermes();
+    h.hub.hermes.connect();
+    const token = h.token();
+    const stop = new AbortController();
+    // A long turn: the demo agent takes several seconds « en 5 étapes ».
+    const asked = h.hub.hermes.call(
+      token,
+      "ask_coordinator",
+      { project: "Site vitrine", message: "/ouvre Logo en 5 étapes" },
+      stop.signal,
+    );
+    await new Promise((r) => setTimeout(r, 4500));
+    expect(getEventListeners(stop.signal, "abort").length).toBeLessThanOrEqual(1);
+    stop.abort();
+    await asked;
+  }, 20_000);
+
+  it("3b. rend la main quand le message reste en file après un tour en erreur", async () => {
+    const h = await withHermes();
+    h.hub.hermes.connect();
+    // The coordinator waits for a permission: its turn is under way.
+    await h.hub.handle(h.client, {
+      type: "thread.send",
+      threadId: h.coordinatorId,
+      text: "Regarde",
+    });
+    await soon(() => h.store.getThread(h.coordinatorId)!.status).toBe("waiting");
+    const started = Date.now();
+    const asked = h.hub.hermes.call(h.token(), "ask_coordinator", {
+      project: "Site vitrine",
+      message: "/fils",
+    });
+    // Whatever comes back, it must not be the 13 minutes' wait.
+    const result = (await Promise.race([
+      asked,
+      new Promise((r) => setTimeout(() => r("toujours en attente"), 6000)),
+    ])) as Record<string, unknown> | string;
+    expect(result).not.toBe("toujours en attente");
+    expect(Date.now() - started).toBeLessThan(6000);
+    expect(result).toMatchObject({ waiting_for_user: true });
+  }, 20_000);
+
+  it("3c. remonte l'erreur du coordinateur au lieu d'une réponse vide", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    const asked = await h.result("ask_coordinator", { project: "Site vitrine", message: "boom" });
+    expect(asked.status).toBe(400);
+    expect(asked.error).toContain("planté");
+  });
+
+  it("3d. ne prend pas la réponse au message suivant pour la sienne", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    const asked = await h.result("ask_coordinator", {
+      project: "Site vitrine",
+      message: "/ouvre Refaire le logo",
+    });
+    expect(asked.result).toMatchObject({ answer: "J'ai ouvert le fil « Refaire le logo »." });
+    // The answer sent to Discord is marked on the message, for the app's « Envoyé sur Discord ».
+    const mine = h.store
+      .listItems(h.coordinatorId)
+      .find((i) => i.kind === "user" && i.from === "hermes");
+    expect(mine).toMatchObject({ relayed: true });
+  });
+
+  it("4. ne marque rien comme envoyé sur Discord pour message_thread", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.result("message_thread", { thread_id: h.coordinatorId, message: "/fils" });
+    await h.hub.whenIdle(h.coordinatorId);
+    const mine = h.store
+      .listItems(h.coordinatorId)
+      .find((i) => i.kind === "user" && i.from === "hermes");
+    expect(mine).toBeDefined();
+    expect(mine).not.toHaveProperty("relayed");
+  });
+
+  it("6. refuse les dates impossibles", () => {
+    expect(() => timeOf("2026-02-31T09:30", "when")).toThrow();
+    expect(() => timeOf("2026-13-01T09:30", "when")).toThrow();
+    expect(() => dayOf("2026-13-01", "due")).toThrow();
+    expect(() => dayOf("2026-00-01", "due")).toThrow();
+    expect(dayOf("2028-02-29", "due")).toBe(new Date(2028, 1, 29).getTime());
+    expect(timeOf("2026-12-31T23:59", "when")).toBe(new Date(2026, 11, 31, 23, 59).getTime());
+  });
+
+  it("mineur : ne répond pas à la question d'un autre fil", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.handle(h.client, {
+      type: "hermes.set",
+      requestId: "r2",
+      allow: { requests: true },
+    });
+    const hub = h.hub as unknown as {
+      pendingQuestions: () => unknown[];
+      respondToQuestion: (...args: unknown[]) => void;
+    };
+    // A question of another thread, maybe of a locked project.
+    hub.pendingQuestions = () => [
+      { threadId: "ailleurs", itemId: "q1", questions: [{ question: "?", options: ["a"] }] },
+    ];
+    const answered: unknown[] = [];
+    hub.respondToQuestion = (...args) => void answered.push(args);
+    const answer = await h.result("answer_request", {
+      thread_id: h.coordinatorId,
+      request_id: "q1",
+      answers: ["a"],
+    });
+    expect(answer.status).toBe(400);
+    expect(answer.error).toContain("n'attend plus");
+    expect(answered).toEqual([]);
+  });
+});
+
 describe("Hermes · Discord", () => {
   it("n'accepte qu'une adresse de webhook Discord", () => {
     expect(discordWebhook(WEBHOOK)).toBe(true);
@@ -430,5 +598,24 @@ describe("Hermes · pont MCP", () => {
       .result as { content: { text: string }[]; isError?: boolean };
     expect(refused.isError).toBe(true);
     expect(refused.content[0]!.text).toContain("Connecter Hermes");
+  });
+
+  it("mineur : dit le refus du serveur quand sa réponse n'est pas du JSON", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    // The bridge pointed at a path answering 404 with an empty body.
+    const bridge = spawn(process.execPath, [BRIDGE, `${h.origin}/rien`, h.tokenFile], {
+      stdio: ["pipe", "pipe", "inherit"],
+    });
+    cleanups.push(() => void bridge.kill());
+    let out = "";
+    bridge.stdout.on("data", (chunk: Buffer) => (out += chunk.toString("utf8")));
+    bridge.stdin.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_projects", arguments: {} } })}\n`,
+    );
+    await soon(() => out.includes("\n")).toBe(true);
+    const reply = JSON.parse(out) as { result: { content: { text: string }[] } };
+    expect(reply.result.content[0]!.text).not.toContain("JSON");
+    expect(reply.result.content[0]!.text).toMatch(/\d{3}/);
   });
 });

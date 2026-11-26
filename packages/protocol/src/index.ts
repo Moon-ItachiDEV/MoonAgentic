@@ -931,6 +931,8 @@ export type Item =
        * with the review remarks the user picked on GitHub.
        */
       from?: "coordinator" | "goal" | "pr" | "remarks" | "hermes";
+      /** Sent by Hermes, and its answer went back to Discord. */
+      relayed?: true;
       /** The thread's files just before this message, for threads with their own branch. */
       checkpoint?: string;
       at: number;

@@ -46,8 +46,15 @@ async function call(tool: string, args: unknown, cancelled: AbortSignal) {
         AbortSignal.timeout(tool === "ask_coordinator" ? ASK_WAIT_MS + 60_000 : 60_000),
       ]),
     });
-    const body = (await response.json()) as { result?: unknown; error?: string };
-    if (!response.ok || body.error) return text(body.error ?? `Refusé (${response.status}).`, true);
+    // A refusal before MoonAgentic reads the call (403, 405, 429) may have no JSON body.
+    const body = (await response.json().catch(() => ({}))) as {
+      result?: unknown;
+      error?: string;
+      message?: string;
+    };
+    if (!response.ok || body.error) {
+      return text(body.error ?? body.message ?? `MoonAgentic a refusé (${response.status}).`, true);
+    }
     return text(JSON.stringify(body.result, null, 2));
   } catch (error) {
     return text(

@@ -596,9 +596,17 @@ export class Hub {
       {
         getSetting: (key, fallback) => store.getSetting(key, fallback),
         setSetting: (key, value) => store.setSetting(key, value),
-        projects: () => store.listProjects(),
+        // As the app sees them: archived, a git repository.
+        projects: () => store.listProjects().map((p) => this.withGit(p)),
         threads: () => store.listThreads(),
+        thread: (id) => store.getThread(id),
         items: (id) => this.items(id),
+        markRelayed: (threadId, itemId) => {
+          const item = this.store.getItem(threadId, itemId);
+          if (item?.kind === "user" && !item.relayed) {
+            this.putItem(threadId, { ...item, relayed: true });
+          }
+        },
         running: (id) => this.turns.has(id),
         whenIdle: (id) => this.whenIdle(id),
         sendFromHermes: (id, text) => this.sendFromHermes(id, text),
@@ -2626,8 +2634,9 @@ export class Hub {
     at: number;
     repeat: ScheduleRepeat;
   }): Schedule {
-    const project = this.store.getProject(input.projectId);
-    if (!project) throw new Error("Projet introuvable.");
+    const found = this.store.getProject(input.projectId);
+    if (!found) throw new Error("Projet introuvable.");
+    const project = this.withGit(found);
     const route = this.coordinators.coordinatorSettings().routes.default;
     const coordinator = this.store
       .listThreads()

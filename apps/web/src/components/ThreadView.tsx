@@ -327,7 +327,7 @@ function Conversation({
     return () => clearTimeout(timer);
   }, [newAt]);
   const newLabel = newAt === undefined ? "Nouveau" : newMarkLabel(newAt);
-  const relayed = items ? relayedAnswers(items, working) : new Set<number>();
+  const relayed = items ? relayedAnswers(items) : new Set<number>();
 
   const team = isTeamThread(thread);
   const blocks = items ? (team ? teamFeed(thread, items, earlier > 0) : activityFeed(items)) : [];
@@ -612,13 +612,13 @@ function QuietNotice({ since, name, threadId }: { since: number; name: string; t
  * The answers Hermes took back to Discord: after a message written there, the last answer
  * before the next message, once the agent is done with it.
  */
-export function relayedAnswers(items: Item[], working: boolean): Set<number> {
+export function relayedAnswers(items: Item[]): Set<number> {
   const relayed = new Set<number>();
   items.forEach((item, u) => {
-    if (item.kind !== "user" || item.from !== "hermes") return;
+    // Only what the server marked as sent back to Discord.
+    if (item.kind !== "user" || item.from !== "hermes" || !item.relayed) return;
     const next = items.findIndex((it, n) => n > u && it.kind === "user");
     const end = next < 0 ? items.length : next;
-    if (next < 0 && working) return;
     for (let a = end - 1; a > u; a--) {
       if (items[a]?.kind === "agent") {
         relayed.add(a);

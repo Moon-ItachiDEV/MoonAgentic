@@ -53,6 +53,7 @@ import { RemoteAccess } from "./RemoteAccess.tsx";
 import { HermesSettings } from "./HermesSettings.tsx";
 import { Subscriptions } from "./Subscriptions.tsx";
 import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
+import { useHermesState } from "../hermes.ts";
 import { TeamPresets } from "./TeamPresets.tsx";
 import {
   AgentAddSheet,
@@ -856,8 +857,8 @@ export function SettingsLayer(
   const sub = useScrolled();
   // The layer slides in once it is there.
   const [on, setOn] = useState(false);
-  // Hermes's state is asked once: its line says whether it is connected.
-  useEffect(() => void connection.send({ type: "hermes.get" }), []);
+  // Hermes's state, for its line saying whether it is connected.
+  useHermesState();
   useEffect(() => {
     const frame = requestAnimationFrame(() => setOn(true));
     return () => cancelAnimationFrame(frame);
