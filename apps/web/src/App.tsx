@@ -265,7 +265,8 @@ export function App() {
   const openProjects = state.projects.filter((p) => !p.locked);
   const looseHome = loose && route.name === "home";
   const discussions = openProjects.find(isDiscussionsProject);
-  const codeProjects = openProjects.filter((p) => !isDiscussionsProject(p));
+  // An archived project is not offered for new work.
+  const codeProjects = openProjects.filter((p) => !isDiscussionsProject(p) && !p.archived);
   // Outside a project, the conversation goes to « Discussions », made on the first message.
   const project =
     routeProject ??
@@ -793,7 +794,8 @@ export function App() {
           className="gb glass press"
           aria-label="Retour"
           onClick={() =>
-            thread && codeProjects.some((p) => p.id === thread.projectId)
+            thread &&
+            openProjects.some((p) => p.id === thread.projectId && !isDiscussionsProject(p))
               ? go({ name: "project", projectId: thread.projectId })
               : go({ name: "home" })
           }
@@ -1360,7 +1362,7 @@ export function App() {
       />
       <ScheduleDialog
         open={scheduling !== null}
-        projects={openProjects}
+        projects={openProjects.filter((p) => !p.archived)}
         projectId={project?.id}
         agents={state.agents}
         favorites={state.favorites}

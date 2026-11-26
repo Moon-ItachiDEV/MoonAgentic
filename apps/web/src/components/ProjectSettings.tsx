@@ -17,6 +17,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { connection, newId } from "../connection.ts";
+import { isDiscussionsProject } from "../default-models.ts";
 import { modelLabel } from "../model-label.ts";
 import { COLOR_NAME } from "../project-colors.ts";
 import {
@@ -437,6 +438,25 @@ export function ProjectSettings(props: {
           </button>
         </div>
         <div className="ins">
+          {!isDiscussionsProject(project) && (
+            <button
+              className="it"
+              onClick={leave(() =>
+                connection.send({
+                  type: "project.setArchived",
+                  projectId: project.id,
+                  archived: !project.archived,
+                }),
+              )}
+            >
+              <span className="ic">
+                <I n="folder" s={17} />
+              </span>
+              <span className="tx">
+                {project.archived ? "Sortir des archives" : "Archiver le projet"}
+              </span>
+            </button>
+          )}
           <button className="it" onClick={leave(props.onLock)}>
             <span className="ic">
               <I n="lock" s={17} />

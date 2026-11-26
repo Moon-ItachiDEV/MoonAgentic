@@ -260,6 +260,8 @@ export interface HubOptions {
 
 /** The setting that lists the projects kept at the top. */
 const PINNED_PROJECTS = "pinnedProjects";
+/** The projects the user put away. */
+const ARCHIVED_PROJECTS = "archivedProjects";
 /** The user's defaults for a new thread, the same on every device. */
 const DEFAULTS = "defaults";
 /** Each project's icon and tint, as set in its settings. */
@@ -1398,6 +1400,20 @@ export class Hub {
           // Projects removed since are dropped on the way.
           .filter((p) => p !== project.id && this.store.getProject(p));
         this.store.setSetting(PINNED_PROJECTS, message.pinned ? [...others, project.id] : others);
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
+      case "project.setArchived": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        if (this.isDiscussions(project.id)) throw new Error("Discussions ne s'archive pas.");
+        const others = this.store
+          .getSetting<string[]>(ARCHIVED_PROJECTS, [])
+          .filter((p) => p !== project.id && this.store.getProject(p));
+        this.store.setSetting(
+          ARCHIVED_PROJECTS,
+          message.archived ? [...others, project.id] : others,
+        );
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
@@ -4664,7 +4680,8 @@ export class Hub {
     const look = this.store.getSetting<Record<string, ProjectLook>>(PROJECT_LOOKS, {})[project.id];
     const quota = this.quotaRules(project.id);
     const keep = this.store.getSetting<string[]>(KEEP_MERGED_BRANCHES, []).includes(project.id);
-    return git || pinned || locked || look || quota || keep
+    const archived = this.store.getSetting<string[]>(ARCHIVED_PROJECTS, []).includes(project.id);
+    return git || pinned || locked || look || quota || keep || archived
       ? {
           ...project,
           ...(git ? { git } : {}),
@@ -4674,6 +4691,7 @@ export class Hub {
           ...(look?.color ? { color: look.color } : {}),
           ...(quota ? { quota } : {}),
           ...(keep ? { deleteMerged: false as const } : {}),
+          ...(archived ? { archived } : {}),
         }
       : project;
   }

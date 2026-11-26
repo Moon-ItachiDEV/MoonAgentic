@@ -97,8 +97,11 @@ export function Sidebar(props: {
     .flat()
     .sort((a, b) => b.updatedAt - a.updatedAt);
   const discussions = state.projects.find(isDiscussionsProject);
-  const codeProjects = state.projects.filter((p) => p.id !== discussions?.id);
-  const locked = new Set(state.projects.filter((p) => p.locked).map((p) => p.id));
+  const allCode = state.projects.filter((p) => p.id !== discussions?.id);
+  // An archived project is folded away under « Archivés », its threads out of the lists.
+  const codeProjects = allCode.filter((p) => !p.archived);
+  const archived = allCode.filter((p) => p.archived);
+  const locked = new Set(state.projects.filter((p) => p.locked || p.archived).map((p) => p.id));
   const shown = lines.filter((t) => !locked.has(t.projectId));
   const pinned = shown.filter((t) => t.pinned);
   // « Code » : the conversations with a branch of their own. « Récents » : the others.
@@ -277,6 +280,30 @@ export function Sidebar(props: {
                 onPick={() => props.onPickProject(p.id)}
               />
             ))}
+            {archived.length > 0 && (
+              <button
+                className="pj press add parc"
+                aria-expanded={unfolded.has("archived")}
+                tabIndex={projectsOpen ? undefined : -1}
+                onClick={() => toggle("archived")}
+              >
+                <I n="folder" />
+                <span className="nm">Archivés</span>
+                <span className="cnt">{archived.length}</span>
+                <I n={unfolded.has("archived") ? "down" : "right"} s={14} />
+              </button>
+            )}
+            {unfolded.has("archived") &&
+              archived.map((p) => (
+                <ProjectRow
+                  key={p.id}
+                  project={p}
+                  on={p.id === props.activeProjectId}
+                  waiting={0}
+                  shut={!projectsOpen}
+                  onPick={() => props.onPickProject(p.id)}
+                />
+              ))}
             <button
               className={`pj press add${codeProjects.length ? " wo" : ""}`}
               tabIndex={projectsOpen ? undefined : -1}

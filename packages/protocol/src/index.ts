@@ -247,6 +247,8 @@ export interface Project {
   git?: boolean;
   /** Kept at the top of the list of projects. */
   pinned?: boolean;
+  /** Put away: out of the lists and the pickers, its threads kept as they are. */
+  archived?: boolean;
   /**
    * Locked with /lock: nothing of it is sent, its threads, cards, plans and requests, until
    * the code is given. Its agents keep working.
@@ -2044,6 +2046,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     name: z.string().trim().min(1).max(120),
   }),
   z.object({ type: z.literal("project.setPinned"), projectId: id, pinned: z.boolean() }),
+  z.object({ type: z.literal("project.setArchived"), projectId: id, archived: z.boolean() }),
   /** Changes the defaults of every device: those not given stay. */
   z.object({
     type: z.literal("defaults.set"),
