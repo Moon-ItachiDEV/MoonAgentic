@@ -829,7 +829,7 @@ describe("saved values the server did not write itself", () => {
     await hub.recovered;
 
     expect(store.listThreads().map((t) => t.id)).toEqual(["sain"]);
-    expect(store.getThread("sain")?.status).toBe("idle");
+    expect(store.getThread("sain")?.status).toBe("error");
     expect(store.getThread("abime")).toBeUndefined();
     expect(hub.snapshot().threads.map((t) => t.id)).toEqual(["sain"]);
     // The row itself is left as it is, for whoever repairs the file.

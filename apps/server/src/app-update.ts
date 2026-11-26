@@ -62,6 +62,12 @@ const NOTIFIED = "app.notified";
 const TICK_MS = 5_000;
 /** A look asked of the desktop app that never came back is asked again after this. */
 const ASK_AGAIN_MS = 10 * 60_000;
+/**
+ * The longest the desktop app may take to act on « install » before the server takes it for
+ * failed and starts work again: a message lost, or a shell busy elsewhere, held every
+ * thread for good (N39). Its own stop and the copy of the server take well under it.
+ */
+export const INSTALL_LIMIT_MS = 2 * 60_000;
 
 const text = (value: unknown, max: number): string | undefined =>
   typeof value === "string" && value.length > 0 ? value.slice(0, max) : undefined;
@@ -212,6 +218,8 @@ export class AppUpdates {
   private install: AppUpdate["install"];
   private working: number | undefined;
   private phase: AppUpdate["phase"];
+  /** When « install » was sent to the desktop app. */
+  private installingSince: number | undefined;
   private readonly timer: NodeJS.Timeout;
   private closed = false;
 
@@ -298,6 +306,11 @@ export class AppUpdates {
       throw new Error("Aucune version n'est prête à installer.");
     }
     if (this.phase) throw new Error("L'installation a déjà commencé.");
+    // Why the try before did not go is no longer what the screens should say of this one.
+    if (this.desktop.update.error !== undefined) {
+      const { error: _before, ...update } = this.desktop.update;
+      this.desktop = { ...this.desktop, update };
+    }
     this.install = { when, at: this.now(), by };
     this.working = this.options.working();
     this.changed();
@@ -379,6 +392,16 @@ export class AppUpdates {
   /** A look found due, and an install that waits looked at again. */
   private tick(): void {
     if (this.closed) return;
+    if (
+      this.phase === "installing" &&
+      this.installingSince !== undefined &&
+      this.now() - this.installingSince >= INSTALL_LIMIT_MS
+    ) {
+      this.abort();
+      this.failDesktop(
+        `L'app de bureau n'a pas lancé l'installation en ${INSTALL_LIMIT_MS / 60_000} min : le travail reprend. Réessaie plus tard.`,
+      );
+    }
     void this.evaluate();
     if (!this.settings().checks || this.phase) return;
     const kind = this.kind();
@@ -417,20 +440,12 @@ export class AppUpdates {
       // Without a fresh copy of the database, nothing is replaced.
       console.error("Copie de la base avant la mise à jour :", error);
       this.abort();
-      if (this.desktop) {
-        this.desktop = {
-          ...this.desktop,
-          update: {
-            ...this.desktop.update,
-            error: `La copie de la base a échoué : ${describe(error)}`,
-          },
-        };
-      }
-      this.changed();
+      this.failDesktop(`La copie de la base a échoué : ${describe(error)}`);
       return;
     }
     if (this.closed) return;
     this.phase = "installing";
+    this.installingSince = this.now();
     this.changed();
     this.options.shell?.send({ moon: "install" });
   }
@@ -438,9 +453,18 @@ export class AppUpdates {
   /** The app is not replaced after all: work starts again as before. */
   private abort(): void {
     this.phase = undefined;
+    this.installingSince = undefined;
     this.install = undefined;
     this.working = undefined;
     this.options.resume?.();
+  }
+
+  /** Says on every device why the install did not go. */
+  private failDesktop(error: string): void {
+    if (this.desktop) {
+      this.desktop = { ...this.desktop, update: { ...this.desktop.update, error } };
+    }
+    this.changed();
   }
 
   /** Every device learns of it; a version newly ready is told once, if wished. */
