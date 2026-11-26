@@ -54,6 +54,7 @@ import { waits } from "./decision.ts";
 import { focusItem } from "./focus.ts";
 import { askUnlock, lockProject } from "./lock.ts";
 import { AppLock, lockApp } from "./components/AppLock.tsx";
+import { startProject } from "./project-pick.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { tightest } from "./quotas.ts";
 import { navigate, useRoute } from "./router.ts";
@@ -275,11 +276,12 @@ export function App() {
   // Outside a project, the conversation goes to « Discussions », made on the first message.
   const project =
     routeProject ??
-    (looseHome
-      ? discussions
-      : (openProjects.find((p) => p.id === (thread?.projectId ?? pickedProjectId)) ??
-        codeProjects[0] ??
-        discussions));
+    startProject({
+      projects: state.projects,
+      looseHome,
+      threadProjectId: thread?.projectId,
+      pickedProjectId,
+    });
   // On the home screen, starting without a code project (or in « Discussions ») starts on Hydrogen.
   const looseConversation = isLooseHome({ routeName: route.name, loose, project });
 
