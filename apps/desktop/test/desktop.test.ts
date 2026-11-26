@@ -28,9 +28,18 @@ describe("readLine", () => {
     expect(readLine("Error: listen EADDRINUSE: address already in use 127.0.0.1:4747")).toEqual({
       failed: expect.stringContaining("port est déjà pris"),
     });
+    // Its supervisor's line says it starts again: less than a reason given before it.
     expect(
       readLine("Le serveur s'est arrêté sur une erreur (code 1) : il redémarre dans 1 s."),
-    ).toEqual({ failed: expect.stringContaining("redémarre") });
+    ).toEqual({ restarting: expect.stringContaining("redémarre") });
+    expect(
+      readLine("Le serveur ne répond plus depuis 60 s : il est arrêté, puis relancé."),
+    ).toEqual({ restarting: expect.stringContaining("ne répondait plus") });
+    expect(
+      readLine(
+        "MoonAgentic ne peut pas démarrer : Cette base de données vient d'une version plus récente de MoonAgentic. Mets MoonAgentic à jour pour l'ouvrir.",
+      ),
+    ).toEqual({ failed: expect.stringMatching(/version plus récente.*Mets MoonAgentic à jour/) });
     expect(
       readLine("MoonAgentic tourne déjà sur ce dossier de données (/home/moi/.moonagentic)."),
     ).toEqual({ failed: expect.stringContaining("tourne déjà") });
@@ -119,6 +128,72 @@ describe("ServerProcess", () => {
       kind: "restarting",
       reason: expect.stringMatching(/tourne déjà.*Nouvel essai : il repart dans 1 s\./),
     });
+  });
+});
+
+describe("ServerProcess, when things go wrong (N4, N37)", () => {
+  const run = (mode: string, command = process.execPath) => {
+    const states: ServerState[] = [];
+    const server = new ServerProcess({
+      command,
+      script: fake,
+      args: ["--port", "4999"],
+      env: () => ({ ...process.env, FAKE_MODE: mode }),
+      onState: (state) => states.push(state),
+    });
+    return { server, states };
+  };
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("reads a line cut in the middle of a character, and one ended by \\r\\n", async () => {
+    const { server, states } = run("split");
+    server.start();
+    await wait(1_000);
+    expect(states.map((s) => s.kind)).toEqual(["starting", "ready"]);
+    expect(server.state).toEqual({ kind: "ready", url: "http://127.0.0.1:4999/#token=abc" });
+    await server.stop();
+  });
+
+  it("does not start again a server that cannot open its database, and says why", async () => {
+    const { server, states } = run("cannot");
+    server.start();
+    await wait(2_500);
+    expect(states.filter((s) => s.kind === "starting")).toHaveLength(1);
+    expect(server.state).toEqual({
+      kind: "failed",
+      reason: expect.stringMatching(/abîmée.*remplace x par la sauvegarde y/),
+    });
+    expect(stateLabel(server.state, 4747)).toBe("Ne peut pas démarrer");
+    expect(statusPage(server.state, "/logs")).toContain("MoonAgentic ne peut pas démarrer");
+    await server.stop();
+  });
+
+  it("keeps the server's own reason when its supervisor then says it starts again", async () => {
+    const { server } = run("port");
+    server.start();
+    await wait(800);
+    expect(server.state).toEqual({
+      kind: "restarting",
+      reason: expect.stringContaining("port est déjà pris"),
+    });
+    await server.stop();
+  });
+
+  it("tries again when the program itself cannot be started, and stops at once", async () => {
+    const missing = path.join(os.tmpdir(), "moonagentic-introuvable", "electron");
+    const { server, states } = run("steady", missing);
+    server.start();
+    await wait(3_000);
+    expect(states.filter((s) => s.kind === "starting").length).toBeGreaterThanOrEqual(2);
+    expect(
+      states.some(
+        (s) => s.kind === "restarting" && s.reason.includes("Impossible de lancer le serveur"),
+      ),
+    ).toBe(true);
+    const before = Date.now();
+    await server.stop();
+    expect(Date.now() - before).toBeLessThan(1_000);
+    expect(server.state.kind).toBe("stopped");
   });
 });
 

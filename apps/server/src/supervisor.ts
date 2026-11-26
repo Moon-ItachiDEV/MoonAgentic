@@ -2,6 +2,7 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { appendFileSync, fstatSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
+import { CANNOT_START } from "./cannot-start.ts";
 import { ALREADY_RUNNING } from "./instance.ts";
 import { redact } from "./redact.ts";
 
@@ -19,6 +20,22 @@ const CRASH_WINDOW_MS = 10 * 60_000;
 export const MAX_RESTART_DELAY_MS = 60_000;
 /** How long the server may take to stop when asked, before it is ended. */
 const STOP_LIMIT_MS = 20_000;
+/** How often a server that is ready tells its supervisor it still answers. */
+export const HEARTBEAT_MS = 10_000;
+/**
+ * Silent this long once ready, the server is taken for stuck (a loop, a stopped process) and
+ * ended, then started again: long enough for a slow disk or a long copy, not for a night.
+ */
+export const HEARTBEAT_LIMIT_MS = 60_000;
+/** The start of the line said then, which the desktop app looks for. */
+export const UNRESPONSIVE_LINE = "Le serveur ne répond plus";
+
+/** A message from the server that says it still answers. */
+const isHeartbeat = (message: unknown): boolean =>
+  !!message &&
+  typeof message === "object" &&
+  typeof (message as { heartbeat?: unknown }).heartbeat === "number";
+
 /** Caps an unterminated line held in memory so a broken stream cannot grow forever. */
 const MAX_LINE_BUFFER = 64 * 1024;
 
@@ -191,6 +208,8 @@ export interface SuperviseOptions {
   redactOutput?: boolean;
   stdout?: { write(chunk: string | Buffer): unknown };
   stderr?: { write(chunk: string | Buffer): unknown };
+  /** For tests: how long a server that is ready may stay silent. */
+  heartbeatLimitMs?: number;
 }
 
 /**
@@ -214,6 +233,7 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
   let stopping = false;
   let crashes: number[] = [];
   let restartTimer: NodeJS.Timeout | undefined;
+  const limit = options.heartbeatLimitMs ?? HEARTBEAT_LIMIT_MS;
 
   const start = () => {
     restartTimer = undefined;
@@ -228,8 +248,27 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
       },
     );
     child = started;
+    // Watched from its first beat on: a start that takes long (a migration) is not a hang.
+    let lastBeat: number | undefined;
+    const watch = setInterval(
+      () => {
+        if (lastBeat === undefined || Date.now() - lastBeat < limit) return;
+        clearInterval(watch);
+        say(
+          `${UNRESPONSIVE_LINE} depuis ${Math.round(limit / 1000)} s : il est arrêté, puis relancé. Journal : ${log.file()}`,
+          true,
+        );
+        started.kill("SIGKILL");
+      },
+      Math.min(HEARTBEAT_MS, limit / 4),
+    );
+    watch.unref();
     // What the server says to the desktop app goes on up, when the app started this one.
     started.on("message", (message) => {
+      if (isHeartbeat(message)) {
+        lastBeat = Date.now();
+        return;
+      }
       if (options.relay && isShellMessage(message) && process.send && process.connected) {
         process.send(message, undefined, undefined, () => undefined);
       }
@@ -255,6 +294,7 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
       say(`Impossible de lancer le serveur : ${error.message}`, true),
     );
     started.once("exit", (code, signal) => {
+      clearInterval(watch);
       outBuf.flush();
       errBuf.flush();
       child = undefined;
@@ -262,6 +302,8 @@ export function supervise(options: SuperviseOptions): { stop(): void } {
       if (code === 0) return exit(0);
       // Another MoonAgentic holds the data folder: starting again would change nothing.
       if (code === ALREADY_RUNNING) return exit(ALREADY_RUNNING);
+      // Nor on a database it cannot open: the server said why, and what to do.
+      if (code === CANNOT_START) return exit(CANNOT_START);
       const now = Date.now();
       crashes = [...crashes.filter((t) => now - t < CRASH_WINDOW_MS), now];
       const delay = restartDelay(crashes.length);

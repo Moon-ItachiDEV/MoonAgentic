@@ -397,34 +397,65 @@ export class Updater {
       if (!res.ok || !res.body) throw new Error(`Téléchargement refusé (${res.status}).`);
       const hash = createHash("sha256");
       const out = createWriteStream(partial);
+      // A disk full, or a file that cannot be opened (an antivirus holding it): the stream
+      // says so as an event, which nothing heard. It took the app down, or the download
+      // waited for ever for room to write.
+      let broken: Error | undefined;
+      out.on("error", (error) => {
+        broken ??= new Error(`Écriture de l'installeur impossible : ${error.message}`);
+        controller.abort();
+      });
+      const room = () =>
+        new Promise<void>((resolve) => {
+          if (broken) return resolve();
+          const done = () => {
+            out.off("drain", done);
+            out.off("error", done);
+            resolve();
+          };
+          out.once("drain", done);
+          out.once("error", done);
+        });
       let got = 0;
       let shown = 0;
       try {
         for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+          if (broken) throw broken;
           clearTimeout(stall);
           stall = setTimeout(() => controller.abort(), STALL_MS);
           got += chunk.length;
           if (got > installer.size) throw new Error("L'installeur reçu est plus gros que prévu.");
           hash.update(chunk);
-          if (!out.write(chunk)) await new Promise<void>((r) => out.once("drain", () => r()));
+          if (!out.write(chunk)) await room();
+          if (broken) throw broken;
           const progress = installer.size ? got / installer.size : 0;
           if (!keepReady && progress - shown >= 0.02) {
             shown = progress;
             this.set({ ...base, state: "downloading", progress });
           }
         }
+      } catch (error) {
+        // The download stopped because the disk did: that is the reason to show.
+        throw broken ?? error;
       } finally {
-        await new Promise<void>((resolve, reject) =>
-          out.end((error?: Error | null) => (error ? reject(error) : resolve())),
-        );
+        if (broken) out.destroy();
+        else
+          await new Promise<void>((resolve, reject) =>
+            out.end((error?: Error | null) => (error ? reject(error) : resolve())),
+          );
       }
+      if (broken) throw broken;
       if (got !== installer.size) throw new Error("Le téléchargement s'est arrêté avant la fin.");
       if (hash.digest("hex") !== expected) {
         throw new Error("L'empreinte de l'installeur ne correspond pas : il n'est pas gardé.");
       }
       renameSync(partial, file);
     } catch (error) {
-      rmSync(partial, { force: true });
+      try {
+        rmSync(partial, { force: true });
+      } catch {
+        // Something else than a file in its place: left as it is, the error says why.
+      }
       throw error;
     } finally {
       clearTimeout(stall);

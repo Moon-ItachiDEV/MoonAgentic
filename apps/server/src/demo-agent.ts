@@ -953,3 +953,6 @@ const connection = app.connect(
   ),
 );
 await connection.closed;
+// The server gone, however it went (a kill leaves nobody to stop it), the agent goes too: its
+// MCP servers would keep it alive, and live on with it, holding the server's address.
+process.exit(0);

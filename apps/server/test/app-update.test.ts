@@ -10,6 +10,7 @@ import {
   type DesktopReport,
   gitNotes,
   gitSource,
+  INSTALL_LIMIT_MS,
   readReport,
   type ToShell,
 } from "../src/app-update.ts";
@@ -274,6 +275,26 @@ describe("AppUpdates", () => {
       state: "failed",
       error: "L'installeur n'a pas démarré.",
     });
+  });
+
+  it("starts work again when the desktop app never acts on « install » (N39)", async () => {
+    const t = setup();
+    t.report(ready());
+    t.app.requestInstall("now", "x");
+    await flush();
+    await flush();
+    expect(t.toShell.at(-1)).toEqual({ moon: "install" });
+    t.advance(INSTALL_LIMIT_MS - 1_000);
+    t.tick();
+    expect(t.app.switching).toBe(true);
+    t.advance(1_000);
+    t.tick();
+    expect(t.app.switching).toBe(false);
+    expect(t.resumed()).toBe(1);
+    expect(t.app.info().update.error).toMatch(/n'a pas lancé l'installation en 2 min/);
+    // Nothing is asked again of its own: the user chooses when.
+    await flush();
+    expect(t.toShell.filter((m) => m.moon === "install")).toHaveLength(1);
   });
 
   it("asks for a look when one is due, not more often", () => {

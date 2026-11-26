@@ -137,4 +137,9 @@ lines.on("line", (line) => {
       refuse(id, -32601, `Méthode inconnue : ${message.method}`);
   }
 });
-lines.on("close", () => void Promise.allSettled(pending).then(() => process.exit(0)));
+// The agent gone, no one waits for an answer: what is under way is given up, so a call held
+// for the user's answer does not keep the bridge alive for minutes.
+lines.on("close", () => {
+  for (const giveUp of underWay.values()) giveUp.abort();
+  void Promise.allSettled(pending).then(() => process.exit(0));
+});

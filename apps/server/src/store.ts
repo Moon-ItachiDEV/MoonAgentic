@@ -2,6 +2,7 @@ import { chmodSync } from "node:fs";
 import { Checkpoints } from "./checkpoints.ts";
 import { backup, DatabaseSync, type StatementSync } from "node:sqlite";
 import {
+  AGENT_STOPPED,
   MAX_PROJECT_MEMORY,
   utf8Bytes,
   type ActivityDay,
@@ -79,6 +80,9 @@ type ThreadExtra = Pick<
   | "team"
   | "prReview"
 >;
+
+/** Why a turn found at work on start is over: the server stopped under it. */
+export const SERVER_STOPPED = "Le serveur s'est arrêté pendant ce tour.";
 
 /** What says where a thread works. */
 export type ThreadPlace = Pick<
@@ -833,7 +837,11 @@ export class Store {
 
   /** Work that was in flight when the server stopped cannot resume, so settle it. */
   recoverAfterRestart(): void {
-    this.db.exec(`UPDATE threads SET status = 'idle' WHERE status IN ('running', 'waiting')`);
+    // A turn the stop cut short says so, as after a clean stop, with « Reprendre » under it:
+    // put back to rest without a word, the half-written answer looked finished.
+    this.sql(
+      `UPDATE threads SET status = 'error', error = ? WHERE status IN ('running', 'waiting')`,
+    ).run(`${AGENT_STOPPED}\n${SERVER_STOPPED}`);
     // A turn cut short is not quiet any more, nor in line.
     this.db.exec(
       // A row whose JSON is damaged is left as it is: SQLite's JSON functions fail on it, and

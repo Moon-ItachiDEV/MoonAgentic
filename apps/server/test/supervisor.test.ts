@@ -11,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { backupNow } from "../src/backups.ts";
+import { CANNOT_START } from "../src/cannot-start.ts";
 import {
   createLineBuffer,
   DailyLog,
@@ -159,6 +160,64 @@ describe("supervisor", () => {
     expect(logged).toContain("redémarre dans 1 s");
     expect(logged).toContain("token=…");
     expect(logged).not.toContain("secret");
+  });
+
+  it("ends and starts again a server that stopped answering once ready (N4)", async () => {
+    const dir = tempDir();
+    const script = path.join(dir, "server.mjs");
+    const runs = path.join(dir, "runs");
+    // Says it answers, then holds its thread for good the first time; ends cleanly after.
+    writeFileSync(
+      script,
+      `import { appendFileSync, existsSync } from "node:fs";
+      const first = !existsSync(${JSON.stringify(runs)});
+      appendFileSync(${JSON.stringify(runs)}, "x");
+      process.send({ heartbeat: Date.now() });
+      if (first) for (;;) {}
+      process.exit(0);`,
+    );
+    const lines: string[] = [];
+    const started = Date.now();
+    const code = await new Promise<number>((resolve) => {
+      supervise({
+        script,
+        args: [],
+        logDir: path.join(dir, "logs"),
+        exit: resolve,
+        heartbeatLimitMs: 1_000,
+        stdout: { write: () => undefined },
+        stderr: { write: (chunk) => void lines.push(String(chunk)) },
+      });
+    });
+    expect(code).toBe(0);
+    expect(readFileSync(runs, "utf8")).toBe("xx");
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(lines.join("")).toContain("Le serveur ne répond plus depuis 1 s");
+  });
+
+  it("does not start again a server that cannot open its database, and ends with its code", async () => {
+    const dir = tempDir();
+    const script = path.join(dir, "server.mjs");
+    const runs = path.join(dir, "runs");
+    writeFileSync(
+      script,
+      `import { appendFileSync } from "node:fs";
+      appendFileSync(${JSON.stringify(runs)}, "x");
+      console.error("MoonAgentic ne peut pas démarrer : sa base de données est abîmée.");
+      process.exit(${CANNOT_START});`,
+    );
+    const code = await new Promise<number>((resolve) => {
+      supervise({
+        script,
+        args: [],
+        logDir: path.join(dir, "logs"),
+        exit: resolve,
+        stdout: { write: () => undefined },
+        stderr: { write: () => undefined },
+      });
+    });
+    expect(code).toBe(CANNOT_START);
+    expect(readFileSync(runs, "utf8")).toBe("x");
   });
 
   it("redacts split-chunk secrets in both DailyLog and forwarded stdout when redactOutput is enabled", async () => {
