@@ -284,6 +284,8 @@ ipcMain.on("moonagentic.notice.close", (event, tag: unknown) => {
 });
 
 function showStatus(state: ServerState): void {
+  // A server that cannot start any more says why in the window, even after the app showed.
+  if (state.kind === "failed") appLoaded = false;
   if (!window || appLoaded) return;
   if (state.kind === "ready") {
     appLoaded = true;

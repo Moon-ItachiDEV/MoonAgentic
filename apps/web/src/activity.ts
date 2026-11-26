@@ -102,6 +102,14 @@ export function activityFeed(items: Item[]): FeedBlock[] {
   return blocks;
 }
 
+/**
+ * A search the agent runs on the web, not in the code: agents give it the `search` kind
+ * too, so only its title tells (`search_web`, `google_search`, `WebSearch`, « Recherche web »).
+ * A word in a search of the code (`grep google src/`, `apps/web/src`) is not the web.
+ */
+const WEB_SEARCH =
+  /\b(?:web|google)[\s_-]?search|\bsearch(?:ing)?[\s_:-]+(?:(?:the|on)[\s_]+)?(?:web|google|internet)\b|\brecherch\w*[\s_:-]+(?:sur[\s_]+(?:le[\s_]+)?)?(?:web|google|internet)\b|^\W*https?:\/\//i;
+
 /** The last name of a file in a tool's title, such as `session.ts` in a full path. */
 function fileIn(title: string): string | undefined {
   const names = title.match(/[^\s/\\"'`]+\.[A-Za-z0-9]{1,8}(?=$|[\s"'`:,)])/g);
@@ -134,7 +142,7 @@ export function activityLabel(item: Item | undefined): string {
         case "move":
           return file ? `Déplace ${file}…` : "Déplace des fichiers…";
         case "search":
-          return "Cherche dans le code…";
+          return WEB_SEARCH.test(item.title) ? "Cherche sur le web…" : "Cherche dans le code…";
         case "execute":
           return TEST_CMD.test(item.title) ? "Lance les tests…" : "Lance une commande…";
         case "fetch":
@@ -170,7 +178,7 @@ export function activityGlyph(item: Item | undefined): GlyphKind {
         case "move":
           return "modifie";
         case "search":
-          return "cherche";
+          return WEB_SEARCH.test(item.title) ? "web" : "cherche";
         case "execute":
           return TEST_CMD.test(item.title) ? "tests" : "commande";
         case "fetch":

@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renameImports } from "../scripts/strip.ts";
 import {
   MAX_RESTART_DELAY_MS,
@@ -14,6 +14,23 @@ import {
 import { DEFAULTS, readSettings, writeSettings } from "../src/settings.ts";
 import { mergePaths, pathFromShell } from "../src/shell-path.ts";
 import { stateLabel, statusPage } from "../src/status-page.ts";
+
+/** For one test: the parent reads a child's error output only a while after the child's exit. */
+const held = vi.hoisted(() => ({ ms: 0 }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const spawn = ((...call: Parameters<typeof actual.spawn>) => {
+    const child = actual.spawn(...call);
+    const ms = held.ms;
+    if (ms > 0 && child.stderr) {
+      // Paused before anything listens: what the child wrote waits in the pipe.
+      child.stderr.pause();
+      child.once("exit", () => setTimeout(() => child.stderr?.resume(), ms));
+    }
+    return child;
+  }) as typeof actual.spawn;
+  return { ...actual, default: { ...actual, spawn }, spawn };
+});
 
 const fake = fileURLToPath(new URL("./fake-launcher.ts", import.meta.url));
 
@@ -28,9 +45,18 @@ describe("readLine", () => {
     expect(readLine("Error: listen EADDRINUSE: address already in use 127.0.0.1:4747")).toEqual({
       failed: expect.stringContaining("port est déjà pris"),
     });
+    // Its supervisor's line says it starts again: less than a reason given before it.
     expect(
       readLine("Le serveur s'est arrêté sur une erreur (code 1) : il redémarre dans 1 s."),
-    ).toEqual({ failed: expect.stringContaining("redémarre") });
+    ).toEqual({ restarting: expect.stringContaining("redémarre") });
+    expect(
+      readLine("Le serveur ne répond plus depuis 60 s : il est arrêté, puis relancé."),
+    ).toEqual({ restarting: expect.stringContaining("ne répondait plus") });
+    expect(
+      readLine(
+        "MoonAgentic ne peut pas démarrer : Cette base de données vient d'une version plus récente de MoonAgentic. Mets MoonAgentic à jour pour l'ouvrir.",
+      ),
+    ).toEqual({ failed: expect.stringMatching(/version plus récente.*Mets MoonAgentic à jour/) });
     expect(
       readLine("MoonAgentic tourne déjà sur ce dossier de données (/home/moi/.moonagentic)."),
     ).toEqual({ failed: expect.stringContaining("tourne déjà") });
@@ -119,6 +145,123 @@ describe("ServerProcess", () => {
       kind: "restarting",
       reason: expect.stringMatching(/tourne déjà.*Nouvel essai : il repart dans 1 s\./),
     });
+  });
+});
+
+describe("ServerProcess, when things go wrong (N4, N37)", () => {
+  const run = (mode: string, command = process.execPath) => {
+    const states: ServerState[] = [];
+    const server = new ServerProcess({
+      command,
+      script: fake,
+      args: ["--port", "4999"],
+      env: () => ({ ...process.env, FAKE_MODE: mode }),
+      onState: (state) => states.push(state),
+    });
+    return { server, states };
+  };
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("reads a line cut in the middle of a character, and one ended by \\r\\n", async () => {
+    const { server, states } = run("split");
+    server.start();
+    await wait(1_000);
+    expect(states.map((s) => s.kind)).toEqual(["starting", "ready"]);
+    expect(server.state).toEqual({ kind: "ready", url: "http://127.0.0.1:4999/#token=abc" });
+    await server.stop();
+  });
+
+  it("does not start again a server that cannot open its database, and says why", async () => {
+    const { server, states } = run("cannot");
+    server.start();
+    await wait(2_500);
+    expect(states.filter((s) => s.kind === "starting")).toHaveLength(1);
+    expect(server.state).toEqual({
+      kind: "failed",
+      reason: expect.stringMatching(/abîmée.*remplace x par la sauvegarde y/),
+    });
+    expect(stateLabel(server.state, 4747)).toBe("Ne peut pas démarrer");
+    expect(statusPage(server.state, "/logs")).toContain("MoonAgentic ne peut pas démarrer");
+    await server.stop();
+  });
+
+  it("still says why, and that it cannot start, when the reason is read after the launcher's exit", async () => {
+    held.ms = 300;
+    try {
+      const { server, states } = run("cannot");
+      server.start();
+      for (let i = 0; i < 200 && !states.some((s) => s.kind === "failed"); i++) await wait(50);
+      await wait(500);
+      expect(states.filter((s) => s.kind === "starting")).toHaveLength(1);
+      // Never « it starts again » once it has ended for good: nothing would start it.
+      expect(server.state).toEqual({
+        kind: "failed",
+        reason: expect.stringMatching(/abîmée.*remplace x par la sauvegarde y/),
+      });
+      await server.stop();
+    } finally {
+      held.ms = 0;
+    }
+  });
+
+  it("reads a last line that has no end of line", async () => {
+    const { server } = run("cannot-unended");
+    server.start();
+    await wait(1_500);
+    expect(server.state).toEqual({
+      kind: "failed",
+      reason: expect.stringMatching(/abîmée.*remplace x par la sauvegarde y/),
+    });
+    await server.stop();
+  });
+
+  // Ended by its signal, which Windows does not have.
+  it.skipIf(process.platform === "win32")(
+    "starts once when asked to start again, though the run before closes its output late",
+    async () => {
+      const { server, states } = run("lingering");
+      server.start();
+      await wait(600);
+      await server.restart();
+      await wait(1_500);
+      expect(states.map((s) => s.kind)).toEqual([
+        "starting",
+        "ready",
+        "stopping",
+        "stopped",
+        "starting",
+        "ready",
+      ]);
+      await server.stop();
+    },
+  );
+
+  it("keeps the server's own reason when its supervisor then says it starts again", async () => {
+    const { server } = run("port");
+    server.start();
+    await wait(800);
+    expect(server.state).toEqual({
+      kind: "restarting",
+      reason: expect.stringContaining("port est déjà pris"),
+    });
+    await server.stop();
+  });
+
+  it("tries again when the program itself cannot be started, and stops at once", async () => {
+    const missing = path.join(os.tmpdir(), "moonagentic-introuvable", "electron");
+    const { server, states } = run("steady", missing);
+    server.start();
+    await wait(3_000);
+    expect(states.filter((s) => s.kind === "starting").length).toBeGreaterThanOrEqual(2);
+    expect(
+      states.some(
+        (s) => s.kind === "restarting" && s.reason.includes("Impossible de lancer le serveur"),
+      ),
+    ).toBe(true);
+    const before = Date.now();
+    await server.stop();
+    expect(Date.now() - before).toBeLessThan(1_000);
+    expect(server.state.kind).toBe("stopped");
   });
 });
 

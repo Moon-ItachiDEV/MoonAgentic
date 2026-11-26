@@ -5,6 +5,7 @@ import { Agents } from "./agents.ts";
 import { gitSource, type ShellChannel } from "./app-update.ts";
 import { serverArgs } from "./args.ts";
 import { dailyBackups } from "./backups.ts";
+import { CANNOT_START, cannotStart } from "./cannot-start.ts";
 import { preparePrivateDataDir } from "./data-dir.ts";
 import { Devices } from "./devices.ts";
 import { DiagnosticsMonitor } from "./diagnostics.ts";
@@ -23,6 +24,7 @@ import {
 } from "./instance.ts";
 import { defaultReaders } from "./quotas.ts";
 import { Store } from "./store.ts";
+import { HEARTBEAT_MS } from "./supervisor.ts";
 
 function readAppVersion(webDir: string): string | undefined {
   const fromEnv = process.env.MOONAGENTIC_APP_VERSION?.trim();
@@ -68,7 +70,24 @@ const tokenFile = path.join(dataDir, "token");
 const token = readOrCreateToken(tokenFile, newToken);
 
 const webDir = fileURLToPath(new URL("../../web/dist", import.meta.url));
-const store = new Store(path.join(dataDir, "state.sqlite"));
+const databaseFile = path.join(dataDir, "state.sqlite");
+const backupsDir = path.join(dataDir, "backups");
+/**
+ * Opens what reads the database. A database of a newer MoonAgentic, or a damaged one, ends
+ * the start for good, saying why and what to do: starting again would only meet it again.
+ */
+const opening = <T>(open: () => T): T => {
+  try {
+    return open();
+  } catch (error) {
+    const why = cannotStart(error, databaseFile, backupsDir);
+    if (!why) throw error;
+    console.error(why);
+    lock.release();
+    process.exit(CANNOT_START);
+  }
+};
+const store = opening(() => new Store(databaseFile));
 // MoonAgentic's own GitHub sign-in, sealed by the system; read now so pushes find it at once.
 const github = new GithubAccount({
   vault: systemVault(dataDir),
@@ -99,14 +118,17 @@ const appGit =
   demo || process.env.MOONAGENTIC_DESKTOP
     ? undefined
     : gitSource(fileURLToPath(new URL("../../..", import.meta.url)));
-const hub = new Hub(store, new Agents({ demo }), {
-  dataDir,
-  worktreesDir,
-  quotaReaders: defaultReaders({ demo }),
-  backupsDir: path.join(dataDir, "backups"),
-  ...(shell ? { shell } : {}),
-  ...(appGit ? { appGit } : {}),
-});
+const hub = opening(
+  () =>
+    new Hub(store, new Agents({ demo }), {
+      dataDir,
+      worktreesDir,
+      quotaReaders: defaultReaders({ demo }),
+      backupsDir,
+      ...(shell ? { shell } : {}),
+      ...(appGit ? { appGit } : {}),
+    }),
+);
 const diagnostics = new DiagnosticsMonitor({
   dataDir,
   logDir: path.join(dataDir, "logs"),
@@ -140,6 +162,16 @@ server.listen(port, values.host, () => {
   const uiPort = values.dev ? 5173 : typeof address === "object" && address ? address.port : port;
   const host = values.host === "0.0.0.0" ? "localhost" : values.host;
   console.log(`MoonAgentic est prêt : http://${host}:${uiPort}/#token=${token}`);
+  // Its supervisor hears from it while it answers: a server stuck in a loop, or stopped,
+  // says nothing more, and is started again (N4).
+  if (process.send) {
+    const beat = () => {
+      if (process.connected)
+        process.send?.({ heartbeat: Date.now() }, undefined, undefined, () => undefined);
+    };
+    beat();
+    setInterval(beat, HEARTBEAT_MS).unref();
+  }
   if (!LOOPBACK.has(values.host)) {
     console.warn(
       "Attention : MoonAgentic écoute au-delà de cette machine, sans chiffrement. Ce lien donne " +
@@ -149,7 +181,7 @@ server.listen(port, values.host, () => {
   }
 });
 
-const backups = dailyBackups(store, path.join(dataDir, "backups"));
+const backups = dailyBackups(store, backupsDir);
 
 /** Gives up on stopping cleanly after this long: the process ends anyway. */
 const STOP_LIMIT_MS = 15_000;
