@@ -275,10 +275,15 @@ function Body({
   const chosen = gh ? !!fullName : !!folder.trim();
   const isProject = gh && !!already?.projectId;
   const action = !gh ? "Créer" : isProject ? "Ouvrir" : already ? "Créer" : "Cloner";
+  // On a phone the name is asked once the folder is chosen, and starts again with it. On an
+  // iPad or a computer it is typed first: it stays.
+  const forgetName = () => {
+    if (!roomy) setName("");
+  };
   const switchTo = (next: Source) => {
     setSource(next);
     setError(null);
-    setName("");
+    forgetName();
   };
 
   const mark = (on: boolean, idle: "plus" | "folder" = "plus") => (
@@ -299,7 +304,7 @@ function Body({
               className="npic"
               aria-haspopup="dialog"
               aria-label="Icône et couleur"
-              disabled={busy}
+              disabled={busy || isProject}
               onClick={() => setLookOpen((on) => !on)}
             >
               <ProjectIcon
@@ -373,7 +378,7 @@ function Body({
                   onClick={() => {
                     setTyping(false);
                     setFolder(folder === c.path && !typing ? "" : c.path);
-                    setName("");
+                    forgetName();
                   }}
                 >
                   {mark(!typing && folder === c.path)}
@@ -410,7 +415,7 @@ function Body({
                   onClick={() => {
                     setTyping(true);
                     setFolder("");
-                    setName("");
+                    forgetName();
                   }}
                 >
                   {mark(false, "folder")}
@@ -477,7 +482,7 @@ function Body({
                         disabled={busy}
                         onClick={() => {
                           setPicked(picked === r.fullName ? null : r.fullName);
-                          setName("");
+                          forgetName();
                           setEditing(false);
                           setError(null);
                         }}

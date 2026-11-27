@@ -3,7 +3,7 @@
 import type { McpServerInfo, PermissionMode, Project } from "@moonagentic/protocol";
 import { isDiscussionsProject } from "../default-models.ts";
 import { mcpInProject } from "../mcp-scope.ts";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dropdown } from "../v2/Dropdown.tsx";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
@@ -49,6 +49,10 @@ export function PlusPop(
   const whereRow = useRef<HTMLButtonElement>(null);
   const [whereOpen, setWhereOpen] = useState(false);
   const beside = roomy && !!props.where;
+  // The menu folding away takes its « Projet » menu with it at once, and opens closed again.
+  useEffect(() => {
+    if (props.out) setWhereOpen(false);
+  }, [props.out]);
   const servers = serversOf(props).length;
   let i = 0;
   const at = () => ({ "--i": i++ }) as React.CSSProperties;
@@ -119,7 +123,7 @@ export function PlusPop(
         <I n="dots" s={20} />
         <span className="nm">Plus</span>
       </button>
-      {beside && whereOpen && props.where && (
+      {beside && whereOpen && !props.out && props.where && (
         <Dropdown anchor={whereRow} side onClose={() => setWhereOpen(false)} label="Où travailler">
           <WhereItems {...props.where} project={props.project} />
         </Dropdown>
