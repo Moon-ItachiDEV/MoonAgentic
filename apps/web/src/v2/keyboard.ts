@@ -66,8 +66,10 @@ interface Shown {
 let shown: Shown | null = null;
 /** The composer's text, while it has the focus. */
 let field: HTMLTextAreaElement | null = null;
-/** A keyboard is expected until then (ms), from a touch on the composer. */
+/** A keyboard is expected until then (ms). */
 let waitUntil = 0;
+/** A finger asked for that keyboard: if it does not come, there is none to come. */
+let asked = false;
 /** The page was moved at the touch, before the focus that should follow. */
 let early = false;
 /** After the keyboard, the system brings the page back down: its top is followed until there. */
@@ -386,8 +388,9 @@ function look(): void {
     remember(keyboard.height);
     change({ inset: keyboard.inset, top: keyboard.top });
   } else if (shown && performance.now() >= waitUntil) {
-    // Expected and never seen (a keyboard is plugged in): it is not expected the next time.
-    if (waitUntil) remember(null);
+    // Asked for by a finger and never seen (a keyboard is plugged in): it is not expected
+    // the next time.
+    if (waitUntil && asked) remember(null);
     waitUntil = 0;
     change(null);
   }
@@ -409,9 +412,10 @@ function checkField(): void {
 }
 
 /** A keyboard is expected: the page follows the one remembered at once. */
-function anticipate(height: number): void {
+function anticipate(height: number, byTouch: boolean): void {
   change({ inset: height, top: 0 });
   waitUntil = performance.now() + WAIT;
+  asked = byTouch;
   setTimeout(look, WAIT + 30);
 }
 
@@ -424,11 +428,13 @@ export function watchKeyboard(): void {
     "mousedown",
     (e) => {
       const target = composerField(e.target);
-      if (!target || shown || document.activeElement === target || !touchScreen()) return;
+      if (!target || shown || !touchScreen()) return;
       const height = remembered();
       if (!height) return;
-      early = true;
-      anticipate(height);
+      // Already in the field with the keyboard put away (back from another app): the touch
+      // brings the keyboard back, and no focus follows.
+      early = document.activeElement !== target;
+      anticipate(height, true);
     },
     true,
   );
@@ -446,9 +452,11 @@ export function watchKeyboard(): void {
       const v = viewport();
       const keyboard = v && keyboardOf(v);
       if (keyboard) change({ inset: keyboard.inset, top: keyboard.top });
-      else if (touchScreen()) {
+      else if (touchScreen() && navigator.userActivation?.isActive) {
+        // The app gave the focus itself, in answer to a touch (a model picked): a phone then
+        // shows its keyboard. A focus given with no touch shows none, and moves nothing.
         const height = remembered();
-        if (height) anticipate(height);
+        if (height) anticipate(height, false);
       }
     },
     true,

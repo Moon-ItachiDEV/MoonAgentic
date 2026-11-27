@@ -337,6 +337,49 @@ describe("the phone's keyboard", () => {
     await context.close();
   });
 
+  it("moves nothing when the app gives the focus with no touch", async () => {
+    const { context, page } = await phone();
+    await page.evaluate(
+      ([key, tall]) => localStorage.setItem(key!, tall!),
+      [STORED, String(KEYBOARD)],
+    );
+    const before = await look(page);
+    // No finger asked for it (a draft put back in the composer): a phone shows no keyboard
+    // for such a focus, and says so.
+    const touched = (active: boolean) =>
+      page.evaluate((isActive) => {
+        Object.defineProperty(navigator, "userActivation", {
+          configurable: true,
+          get: () => ({ isActive }),
+        });
+      }, active);
+    await touched(false);
+    await composer(page).focus();
+    await atRest(page);
+    const focused = await look(page);
+    expect(focused.keyboard).toBe(false);
+    expect(focused.tabs).toEqual(before.tabs);
+    await page.waitForTimeout(300);
+    expect((await look(page)).keyboard).toBe(false);
+    // The keyboard's height is still known: a touch on the field, already in it, brings the
+    // keyboard back and the page with it.
+    expect(await page.evaluate((key) => localStorage.getItem(key), STORED)).toBe(String(KEYBOARD));
+    await composer(page).tap();
+    expect((await look(page)).keyboard).toBe(true);
+    await keyboard(page, KEYBOARD);
+    await atRest(page);
+    expect((await look(page)).composer!.bottom).toBe(PHONE.height - KEYBOARD - GAP);
+    await composer(page).blur();
+    await keyboard(page, 0);
+    await atRest(page);
+    // In answer to a touch elsewhere (a model picked in its menu), the app gives the focus:
+    // the keyboard comes, and the page is there before it.
+    await touched(true);
+    await composer(page).focus();
+    expect((await look(page)).keyboard).toBe(true);
+    await context.close();
+  });
+
   it("stays in sight when the system pushed the page up, and comes back down with it", async () => {
     const { context, page } = await phone();
     const before = await look(page);
