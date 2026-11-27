@@ -357,7 +357,9 @@ describe("Hermes · outils", () => {
       due: new Date(2020, 0, 3).getTime(),
     });
     h.hub.planner.update(late.id, { status: "doing" });
-    h.hub.planner.add({ projectId: h.projectId, title: "Page contact" });
+    const contact = h.hub.planner.add({ projectId: h.projectId, title: "Page contact" });
+    // A card a thread works on: its id, to go on with read_thread.
+    h.hub.planner.update(contact.id, { threadId: h.coordinatorId });
     const shipped = h.hub.planner.add({ projectId: other, title: "Paiement" });
     h.hub.planner.update(shipped.id, { status: "live" });
     const before = JSON.stringify(h.hub.planner.list());
@@ -374,7 +376,12 @@ describe("Hermes · outils", () => {
       due: "2020-01-03",
       late: true,
     });
-    expect(cards[1]).toMatchObject({ title: "Page contact", column: "À faire" });
+    expect(cards[1]).toMatchObject({
+      thread_id: h.coordinatorId,
+      thread_state: expect.any(String),
+    });
+    // Its column follows the thread that works on it.
+    expect(cards[1]).toMatchObject({ title: "Page contact", column: "En test" });
 
     const all = await h.result("read_planner");
     expect((all.result as { total: number }).total).toBe(3);
@@ -394,6 +401,16 @@ describe("Hermes · outils", () => {
     const unknown = await h.result("project_status", { project: "Inexistant" });
     expect(unknown.status).toBe(400);
     expect(unknown.error).toContain("Site vitrine");
+
+    // Its Planner neither, asked by name or with all the others.
+    h.hub.planner.add({ projectId: h.projectId, title: "Carte secrète" });
+    h.hub.locks.setPin("123456");
+    h.hub.locks.lock(h.projectId);
+    const named = await h.result("read_planner", { project: "Site vitrine" });
+    expect(named.status).toBe(400);
+    const all = await h.result("read_planner");
+    expect(JSON.stringify(all.result)).not.toContain("Carte secrète");
+    expect((all.result as { total: number }).total).toBe(0);
   });
 });
 

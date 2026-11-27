@@ -176,7 +176,6 @@ function sameDay(at: number, m: RegExpExecArray): boolean {
   );
 }
 
-/** A day written AAAA-MM-JJ, at midnight on this computer. */
 /** The Planner's columns, as the app names them. */
 const COLUMNS: Record<PlanStatus, string> = {
   todo: "À faire",
@@ -192,6 +191,7 @@ function dayText(at: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/** A day written AAAA-MM-JJ, at midnight on this computer. */
 export function dayOf(text: string, key: string): number {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text.trim());
   const at = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() : NaN;
@@ -812,7 +812,9 @@ export class Hermes {
               ...(c.due ? { due: dayText(c.due) } : {}),
               ...(c.due && c.due < today && c.status !== "live" ? { late: true } : {}),
               ...(c.doneAt ? { delivered: dayText(c.doneAt) } : {}),
-              ...(thread ? { thread: thread.title, thread_state: stateOf(thread) } : {}),
+              ...(thread
+                ? { thread_id: thread.id, thread: thread.title, thread_state: stateOf(thread) }
+                : {}),
             };
           }),
         };
