@@ -92,6 +92,8 @@ const KEPT_UNTIL_CONFIRMED = new Set([
 const MAX_UNCONFIRMED = 50;
 /** How long before it expires a ticket for the next connection is no longer used. */
 const SPARE_MARGIN_MS = 5000;
+/** How long a notice stays: long enough to read it, a longer one staying longer. */
+export const noticeMs = (message: string) => Math.min(10_000, 4_000 + 50 * message.length);
 /** Said when something the user did could not leave. */
 export const NOT_SENT =
   "Pas de connexion : ton action n'est pas partie. Réessaie une fois reconnecté.";
@@ -346,6 +348,8 @@ export class Connection {
   private pings: string[][] = [];
   /** Runs while a ping that confirms actions waits for its answer. */
   private confirmTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Takes the notice away once it has been shown long enough to be read. */
+  private noticeTimer: ReturnType<typeof setTimeout> | undefined;
   /** When each of the last actions was confirmed, by its `sendId`. */
   private readonly confirmedAt = new Map<string, number>();
 
@@ -596,12 +600,20 @@ export class Connection {
     });
   }
 
-  /** Shows a message to the user, for a failure no part of the page has room to show. */
+  /**
+   * Shows a message to the user, for a failure no part of the page has room to show. It goes
+   * by itself once read, or at once with its « Fermer ».
+   */
   notify(message: string): void {
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = setTimeout(() => this.dismissNotice(), noticeMs(message));
     this.set({ ...this.state, notice: message });
   }
 
   dismissNotice(): void {
+    clearTimeout(this.noticeTimer);
+    this.noticeTimer = undefined;
+    if (this.state.notice === null) return;
     this.set({ ...this.state, notice: null });
   }
 
