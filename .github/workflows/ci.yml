@@ -67,11 +67,6 @@ jobs:
   windows-e2e:
     name: Navigateur (Windows)
     runs-on: windows-latest
-    # DIAG (temporaire) : trois passes, le test du téléphone répété dix fois dans chacune.
-    strategy:
-      fail-fast: false
-      matrix:
-        attempt: [1, 2, 3]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -90,11 +85,10 @@ jobs:
       - run: pnpm e2e --maxWorkers=2
         env:
           E2E_FAILURES: e2e-failures
-          DIAG_REPEATS: 10
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: failure()
         with:
-          name: e2e-failures-windows-${{ matrix.attempt }}
+          name: e2e-failures-windows
           path: e2e-failures
           if-no-files-found: ignore
           retention-days: 7

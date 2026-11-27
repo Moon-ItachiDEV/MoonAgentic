@@ -388,124 +388,54 @@ describe("the update's capsule and card, once reviewed", () => {
     await page.close();
   });
 
-  it(
-    "is pulled down by its handle on a phone, and has no handle while it installs",
-    { repeats: Number(process.env.DIAG_REPEATS ?? 0) },
-    async () => {
-      shell.say({ ...LATER, state: "ready" });
-      const context = await browser.newContext({
-        viewport: { width: 390, height: 844 },
-        isMobile: true,
-        hasTouch: true,
+  it("is pulled down by its handle on a phone, and has no handle while it installs", async () => {
+    shell.say({ ...LATER, state: "ready" });
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+    await told(page);
+    await page.goto(url);
+    await capsule(page).tap();
+    const card = page.getByRole("dialog", { name: "Mise à jour 0.1.17" });
+    await card.waitFor();
+    await page.waitForTimeout(700);
+    const handle = card.locator(".grab");
+    expect(await handle.isVisible()).toBe(true);
+    const at = (await handle.boundingBox())!;
+    const cdp = await context.newCDPSession(page);
+    const finger = (type: string, dy = 0) =>
+      cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints:
+          type === "touchEnd" ? [] : [{ x: at.x + at.width / 2, y: at.y + at.height / 2 + dy }],
       });
-      const page = await context.newPage();
-      // DIAG: what the page heard and saw, printed if the test fails.
-      const t0 = Date.now();
-      const node: string[] = [];
-      const mark = (s: string) => node.push(`${Date.now() - t0} N ${s}`);
-      page.on("websocket", (ws) => {
-        mark(`ws open ${ws.url().slice(0, 40)}`);
-        ws.on("close", () => mark("ws close"));
-        ws.on("framereceived", (f) => {
-          const text = typeof f.payload === "string" ? f.payload : f.payload.toString();
-          if (/update|"app"/.test(text)) mark(`ws <- ${text.slice(0, 160)}`);
-        });
-      });
-      await page.addInitScript(() => {
-        const log: string[] = [];
-        (window as unknown as { evlog: string[] }).evlog = log;
-        const t = () => Math.round(performance.now());
-        const name = (e: EventTarget | null) =>
-          e instanceof Element
-            ? `${e.tagName.toLowerCase()}.${[...e.classList].join(".")}`
-            : String(e);
-        for (const type of [
-          "touchstart",
-          "touchend",
-          "touchcancel",
-          "pointerdown",
-          "pointerup",
-          "pointercancel",
-          "click",
-          "keydown",
-        ]) {
-          document.addEventListener(
-            type,
-            (e) => {
-              const p = e as PointerEvent;
-              log.push(
-                `${t()} ${type} ${name(e.target)} ${p.clientX ?? ""},${p.clientY ?? ""} ${(e as KeyboardEvent).key ?? ""}`,
-              );
-            },
-            true,
-          );
-        }
-        let last = "";
-        new MutationObserver(() => {
-          const s = document.querySelector(".sheet.upw");
-          const cap = document.querySelector(".useg")?.getAttribute("aria-label") ?? "no capsule";
-          const st = `${s ? `${s.className}|inert=${(s as HTMLElement).inert}|${s.getAttribute("aria-label")}` : "no sheet"} / ${cap} / ${document.querySelector(".scr")?.className ?? ""}`;
-          if (st !== last) log.push(`${t()} ${(last = st)}`);
-        }).observe(document, {
-          subtree: true,
-          childList: true,
-          attributes: true,
-          attributeFilter: ["class", "inert", "aria-label"],
-        });
-      });
-      const dump = async () =>
-        [
-          `page t0 ~ node ${t0}`,
-          ...node,
-          ...((await page
-            .evaluate(() => (window as unknown as { evlog: string[] }).evlog)
-            .catch(() => ["(illisible)"])) as string[]),
-        ].join("\n");
-      try {
-        await told(page);
-        await page.goto(url);
-        await capsule(page).tap();
-        const card = page.getByRole("dialog", { name: "Mise à jour 0.1.17" });
-        await card.waitFor();
-        await page.waitForTimeout(700);
-        const handle = card.locator(".grab");
-        expect(await handle.isVisible()).toBe(true);
-        const at = (await handle.boundingBox())!;
-        const cdp = await context.newCDPSession(page);
-        const finger = (type: string, dy = 0) =>
-          cdp.send("Input.dispatchTouchEvent", {
-            type,
-            touchPoints:
-              type === "touchEnd" ? [] : [{ x: at.x + at.width / 2, y: at.y + at.height / 2 + dy }],
-          });
-        await finger("touchStart");
-        for (let dy = 20; dy <= 220; dy += 20) await finger("touchMove", dy);
-        // The finger rests before it lets go. Lifted while still moving, it flicks: Chromium
-        // starts a fling, and a tap within about half a second only stops that fling, with no
-        // click, so the capsule would not open the card again (each Windows run, 2026-11-27).
-        await page.waitForTimeout(150);
-        await finger("touchMove", 220);
-        await page.waitForTimeout(50);
-        await finger("touchMove", 220);
-        await finger("touchEnd");
-        await expect.poll(() => card.count()).toBe(0);
+    await finger("touchStart");
+    for (let dy = 20; dy <= 220; dy += 20) await finger("touchMove", dy);
+    // The finger rests before it lets go. Lifted while still moving, it flicks: Chromium starts
+    // a fling, and a tap within about half a second only stops that fling, with no click, so
+    // the capsule would not open the card again (each Windows run, 2026-11-27).
+    await page.waitForTimeout(150);
+    await finger("touchMove", 220);
+    await page.waitForTimeout(50);
+    await finger("touchMove", 220);
+    await finger("touchEnd");
+    await expect.poll(() => card.count()).toBe(0);
 
-        // Installing: nothing to pull, and the page's own « Reconnexion » stays out of the way.
-        await capsule(page).tap();
-        await card.getByRole("button", { name: "Installer", exact: true }).tap();
-        const steps = page.getByRole("dialog", { name: "Installation de MoonAgentic 0.1.17" });
-        await steps.waitFor();
-        expect(await steps.locator(".grab").count()).toBe(0);
-        const reconnecting = page.locator(".offp:not(.unsaved)");
-        await reconnecting.waitFor({ state: "attached" });
-        expect(await reconnecting.isVisible()).toBe(false);
-        await page
-          .getByRole("dialog", { name: "MoonAgentic 0.1.17 installée" })
-          .waitFor({ timeout: 30_000 });
-      } catch (error) {
-        throw new Error(`${(error as Error).message}\n--- DIAG ---\n${await dump()}`);
-      }
-      await context.close();
-    },
-  );
+    // Installing: nothing to pull, and the page's own « Reconnexion » stays out of the way.
+    await capsule(page).tap();
+    await card.getByRole("button", { name: "Installer", exact: true }).tap();
+    const steps = page.getByRole("dialog", { name: "Installation de MoonAgentic 0.1.17" });
+    await steps.waitFor();
+    expect(await steps.locator(".grab").count()).toBe(0);
+    const reconnecting = page.locator(".offp:not(.unsaved)");
+    await reconnecting.waitFor({ state: "attached" });
+    expect(await reconnecting.isVisible()).toBe(false);
+    await page
+      .getByRole("dialog", { name: "MoonAgentic 0.1.17 installée" })
+      .waitFor({ timeout: 30_000 });
+    await context.close();
+  });
 });
