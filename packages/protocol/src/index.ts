@@ -332,6 +332,12 @@ export interface Project {
    */
   deleteMerged?: false;
   /**
+   * False when the project's folder is left as it is: by default MoonAgentic brings it up to
+   * GitHub's copy of its default branch (fast-forward only, a clean folder, no agent in it)
+   * before a new thread and before a turn that works right in it.
+   */
+  autoPull?: false;
+  /**
    * Put on hold from its settings: its running turns were stopped, and what its agents would
    * start on their own (a coordinator's threads, a team, a planned task) waits until it goes on.
    * What the user writes still goes.
@@ -2377,6 +2383,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   /** « Supprimer après la fusion »: whether a thread's branch goes once its PR is merged. */
   z.object({ type: z.literal("project.setDeleteMerged"), projectId: id, on: z.boolean() }),
+  /** « Mettre à jour depuis GitHub »: whether the project's folder follows GitHub by itself. */
+  z.object({ type: z.literal("project.setAutoPull"), projectId: id, on: z.boolean() }),
   /** The installed skills: answered with skills. */
   z.object({ type: z.literal("skills.list"), requestId: id }),
   /**

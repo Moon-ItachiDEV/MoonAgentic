@@ -892,6 +892,21 @@ function Environment(props: {
         {project.git && (
           <div className="ppi">
             <span className="ppii">
+              <I n="refresh" s={16} />
+            </span>
+            <span className="ppit">Mettre à jour depuis GitHub</span>
+            <Toggle
+              on={project.autoPull !== false}
+              label="Mettre à jour depuis GitHub"
+              onChange={(on) =>
+                connection.send({ type: "project.setAutoPull", projectId: project.id, on })
+              }
+            />
+          </div>
+        )}
+        {project.git && (
+          <div className="ppi">
+            <span className="ppii">
               <I n="merge" s={16} />
             </span>
             <span className="ppit">Supprimer la branche après la fusion</span>
