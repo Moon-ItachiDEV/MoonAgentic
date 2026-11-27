@@ -14,11 +14,20 @@ import {
   type MenuItemConstructorOptions,
   Notification,
   nativeImage,
+  powerMonitor,
   powerSaveBlocker,
   shell,
   Tray,
 } from "electron";
+import {
+  BlackBox,
+  reachable,
+  systemSampler,
+  windowsEvents,
+  windowsTopProcesses,
+} from "./black-box.ts";
 import { DesktopCrashLog, formatDesktopError } from "./crash-log.ts";
+import { keepAwakeSpawn, sleepBlockerKind } from "./keep-awake.ts";
 import { readNotice } from "./notices.ts";
 import { ServerProcess, type ServerState } from "./server-process.ts";
 import { readSettings, writeSettings } from "./settings.ts";
@@ -74,6 +83,25 @@ const server = new ServerProcess({
   env: () => ({ ...process.env, ELECTRON_RUN_AS_NODE: "1", MOONAGENTIC_DESKTOP: "1" }),
   onState: (state) => stateChanged(state),
   onMessage: (message) => fromServer(message),
+});
+
+/** The server's state as the black box writes it. */
+const SERVER_WORDS: Record<ServerState["kind"], string> = {
+  starting: "démarre",
+  ready: "prêt",
+  restarting: "redémarre",
+  stopping: "s'arrête",
+  stopped: "arrêté",
+  failed: "en échec",
+};
+
+/** Minute by minute, what the computer looked like: read again after a freeze or a restart. */
+const blackBox = new BlackBox({
+  dir: logDir,
+  version: app.getVersion(),
+  sample: systemSampler(dataDir, () => SERVER_WORDS[server.state.kind]),
+  online: () => reachable(),
+  ...(process.platform === "win32" ? { topProcesses: windowsTopProcesses } : {}),
 });
 
 /** Only an installed app replaces itself: one run from the repository updates with git. */
@@ -143,24 +171,48 @@ async function installUpdate(): Promise<void> {
     return;
   }
   installing = true;
+  blackBox.updating(updater.state.version ?? "une nouvelle version");
+  keepAwakeDuringUpdate();
   await server.stop();
   const { file, args, options } = installerSpawn(installer, path.dirname(process.execPath));
   const child = spawn(file, args, options);
   child.once("error", (error) => {
     installing = false;
+    blackBox.updateFailed(`l'installeur n'a pas pu démarrer : ${error.message}`);
     updater.fail(`L'installeur n'a pas pu démarrer : ${error.message}`);
     server.start();
   });
   child.once("spawn", () => {
     child.unref();
+    blackBox.stop(`mise à jour vers ${updater.state.version ?? "une nouvelle version"}`);
     quitting = true;
     app.quit();
   });
 }
 
+/**
+ * The app closes for its installer and lets the computer sleep with it: on a computer with
+ * only modern standby, it would fall asleep in the middle of the update. A small PowerShell
+ * keeps it awake until the new version has started and holds it again itself.
+ */
+function keepAwakeDuringUpdate(): void {
+  if (process.platform !== "win32" || !settings.preventSleep) return;
+  try {
+    const { file, args, options } = keepAwakeSpawn();
+    const awake = spawn(file, args, options);
+    awake.once("error", (error) =>
+      crashLog.write(`[veille] impossible de garder Windows éveillé : ${error.message}`),
+    );
+    awake.unref();
+  } catch (error) {
+    crashLog.write(`[veille] impossible de garder Windows éveillé : ${formatDesktopError(error)}`);
+  }
+}
+
 function start(): void {
   process.env.MOONAGENTIC_APP_VERSION = app.getVersion();
   app.setAppUserModelId(APP_ID);
+  openBlackBox();
   adoptLoginShellPath();
   applySleepSetting();
   createTray();
@@ -168,6 +220,28 @@ function start(): void {
     process.argv.includes(HIDDEN_ARG) || app.getLoginItemSettings().wasOpenedAtLogin;
   createWindow(!openedAtLogin);
   server.start();
+}
+
+/**
+ * Starts the black box: how the run before ended is written down first, with, after an end
+ * nobody announced, what Windows' own log says of that moment. Then a measure every minute, and
+ * what the computer says of sleep, wake and locks.
+ */
+function openBlackBox(): void {
+  const opening = blackBox.open();
+  if (opening.unexpected) {
+    crashLog.write(`[boîte noire] ${opening.report[0] ?? "arrêt précédent inattendu"}`);
+    if (process.platform === "win32") {
+      const { from, to, focus } = opening.unexpected;
+      void windowsEvents(from, to, focus).then((lines) => blackBox.append(lines));
+    }
+  }
+  blackBox.run();
+  powerMonitor.on("suspend", () => blackBox.note("L'ordinateur se met en veille.", true));
+  powerMonitor.on("resume", () => blackBox.note("L'ordinateur sort de veille."));
+  powerMonitor.on("lock-screen", () => blackBox.note("Session verrouillée."));
+  powerMonitor.on("unlock-screen", () => blackBox.note("Session déverrouillée."));
+  powerMonitor.on("shutdown", () => blackBox.stop("l'ordinateur s'arrête"));
 }
 
 /** The address with the token kept in the data folder now: it changes when renewed. */
@@ -233,6 +307,8 @@ function createWindow(show: boolean): void {
     if (server.state.kind === "ready") setTimeout(() => showStatus(server.state), 1_000);
     else showStatus(server.state);
   });
+  // Windows ends the session (restart, shutdown, sign-out): an end the box was told of.
+  window.on("session-end", () => blackBox.stop("Windows s'arrête, redémarre ou ferme la session"));
   window.on("close", (event) => {
     if (quitting) return;
     // Closing only hides it: the agents keep working, the tray icon brings it back.
@@ -315,6 +391,9 @@ function backgroundHint(): void {
 }
 
 function stateChanged(state: ServerState): void {
+  if (state.kind === "restarting" || state.kind === "failed") {
+    blackBox.note(`Serveur ${SERVER_WORDS[state.kind]} : ${state.reason}`);
+  }
   showStatus(state);
   updateTray();
 }
@@ -327,7 +406,8 @@ function setPreventSleep(on: boolean): void {
 
 function applySleepSetting(): void {
   if (settings.preventSleep && sleepBlocker === undefined) {
-    sleepBlocker = powerSaveBlocker.start("prevent-app-suspension");
+    // On Windows this keeps the screen on: the only request modern standby gives way to.
+    sleepBlocker = powerSaveBlocker.start(sleepBlockerKind(process.platform));
   } else if (!settings.preventSleep && sleepBlocker !== undefined) {
     powerSaveBlocker.stop(sleepBlocker);
     sleepBlocker = undefined;
@@ -423,6 +503,7 @@ app.on("activate", () => showWindow());
 // The window only hides, so this comes only from quitting: nothing to do but quit.
 app.on("window-all-closed", () => undefined);
 app.on("before-quit", (event) => {
+  blackBox.stop("MoonAgentic quitté");
   const stopping = quitting;
   quitting = true;
   if (server.state.kind === "stopped") return;
