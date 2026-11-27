@@ -17,6 +17,7 @@ import {
 import { createHttpServer } from "../src/http.ts";
 import { Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
+import { canLink } from "./can-link.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -153,7 +154,7 @@ describe("artifacts", { timeout: 40_000 }, () => {
     expect(replies.at(-1)).toMatchObject({ type: "artifacts", artifacts: [] });
   });
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(!canLink)(
     "leaves out a folder whose name looks like a page, and serves nothing from it",
     async () => {
       const { hub, store, dir, threadId } = await threadFolder();
@@ -165,15 +166,12 @@ describe("artifacts", { timeout: 40_000 }, () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "leaves out a link leading out of the folder",
-    async () => {
-      const { root, store, dir } = await threadFolder();
-      writeFileSync(path.join(root, "dehors.html"), "<p>dehors</p>");
-      symlinkSync(path.join(root, "dehors.html"), path.join(dir, "lien.html"));
-      expect((await findArtifacts(store.listThreads())).artifacts.map((a) => a.path)).toEqual([]);
-    },
-  );
+  it.skipIf(!canLink)("leaves out a link leading out of the folder", async () => {
+    const { root, store, dir } = await threadFolder();
+    writeFileSync(path.join(root, "dehors.html"), "<p>dehors</p>");
+    symlinkSync(path.join(root, "dehors.html"), path.join(dir, "lien.html"));
+    expect((await findArtifacts(store.listThreads())).artifacts.map((a) => a.path)).toEqual([]);
+  });
 
   it("gives an address for a listed file only, which stops working after a while", async () => {
     const { hub, store, dir, threadId } = await threadFolder();

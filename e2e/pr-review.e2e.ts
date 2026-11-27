@@ -1,11 +1,12 @@
 // « /revue » in the built app: a pull request read by several agents at once, against a real
 // server, the demo agents and a stand-in `gh`.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
+import { standIn } from "./stand-in.ts";
 import { addProject } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -62,18 +63,16 @@ beforeAll(async () => {
       statusCheckRollup: [],
     }),
   );
-  writeFileSync(
-    path.join(bin, "gh"),
+  standIn(
+    bin,
+    "gh",
     [
-      "#!/bin/sh",
-      'case "$1 $2" in',
-      `  "pr view") cat "${dir}/pr.json" ;;`,
-      "  *) exit 1 ;;",
-      "esac",
+      "import { readFileSync } from 'node:fs';",
+      "if (process.argv.slice(2, 4).join(' ') !== 'pr view') process.exit(1);",
+      `process.stdout.write(readFileSync(${JSON.stringify(path.join(dir, "pr.json"))}));`,
       "",
     ].join("\n"),
   );
-  chmodSync(path.join(bin, "gh"), 0o755);
   server = spawn(
     process.execPath,
     ["apps/server/src/bin.ts", "--demo", "--port", "0", "--data-dir", path.join(dir, "data")],
@@ -120,98 +119,94 @@ afterAll(async () => {
 });
 
 describe("/revue", () => {
-  // The stand-in « gh » is a POSIX shell script that Windows cannot run.
-  it.skipIf(process.platform === "win32")(
-    "has three agents read the pull request and shows their findings put together",
-    async () => {
-      const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
-      const errors: Error[] = [];
-      page.on("pageerror", (err) => errors.push(err));
-      const shot = async (name: string) => {
-        if (shots) await page.screenshot({ path: path.join(shots, `${name}.png`) });
-      };
-      await page.goto(url);
-      await addProject(page, repo);
-      const composer = page.getByRole("combobox", { name: "Message" });
-      await expect.poll(() => composer.isEnabled()).toBe(true);
+  it("has three agents read the pull request and shows their findings put together", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 860 } });
+    const errors: Error[] = [];
+    page.on("pageerror", (err) => errors.push(err));
+    const shot = async (name: string) => {
+      if (shots) await page.screenshot({ path: path.join(shots, `${name}.png`) });
+    };
+    await page.goto(url);
+    await addProject(page, repo);
+    const composer = page.getByRole("combobox", { name: "Message" });
+    await expect.poll(() => composer.isEnabled()).toBe(true);
 
-      // The command is on offer, then opens its dialog with the number typed after it.
-      await composer.fill("/rev");
-      await page.getByRole("option", { name: /revue/ }).first().waitFor();
-      await composer.fill("/revue 42");
-      await composer.press("Enter");
-      const dialog = page.getByRole("dialog", { name: "Relire une PR" });
-      await dialog.waitFor();
-      expect(await dialog.getByLabel("Numéro ou adresse de la PR").inputValue()).toBe("42");
-      // The demo agents stand in for the three makers; their models come once asked.
-      const pick = async (label: string, agent: string, model: RegExp) => {
-        await dialog.getByRole("button", { name: new RegExp(`^${label} : `) }).click();
-        const sheet = page.getByRole("dialog", { name: label, exact: true });
-        const all = sheet.getByRole("button", { name: "Tous", exact: true });
-        const wanted = sheet
-          .getByRole("group", { name: agent, exact: true })
-          .getByRole("radio", { name: model });
-        await expect
-          .poll(async () => {
-            if (await wanted.count()) return true;
-            if (await all.count()) await all.click();
-            return false;
-          })
-          .toBe(true);
-        await wanted.click();
-      };
-      await pick("Relecteur OpenAI", "Agent de démo", /^Démo rapide/);
-      await pick("Relecteur Anthropic", "Second agent de démo", /^Démo précis/);
-      await pick("Relecteur Google", "Second agent de démo", /^Démo rapide/);
-      await pick("Arbitre", "Agent de démo", /^Démo précis/);
-      await shot("r1-dialogue");
-      await dialog.getByRole("button", { name: "Lancer la revue" }).click();
+    // The command is on offer, then opens its dialog with the number typed after it.
+    await composer.fill("/rev");
+    await page.getByRole("option", { name: /revue/ }).first().waitFor();
+    await composer.fill("/revue 42");
+    await composer.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "Relire une PR" });
+    await dialog.waitFor();
+    expect(await dialog.getByLabel("Numéro ou adresse de la PR").inputValue()).toBe("42");
+    // The demo agents stand in for the three makers; their models come once asked.
+    const pick = async (label: string, agent: string, model: RegExp) => {
+      await dialog.getByRole("button", { name: new RegExp(`^${label} : `) }).click();
+      const sheet = page.getByRole("dialog", { name: label, exact: true });
+      const all = sheet.getByRole("button", { name: "Tous", exact: true });
+      const wanted = sheet
+        .getByRole("group", { name: agent, exact: true })
+        .getByRole("radio", { name: model });
+      await expect
+        .poll(async () => {
+          if (await wanted.count()) return true;
+          if (await all.count()) await all.click();
+          return false;
+        })
+        .toBe(true);
+      await wanted.click();
+    };
+    await pick("Relecteur OpenAI", "Agent de démo", /^Démo rapide/);
+    await pick("Relecteur Anthropic", "Second agent de démo", /^Démo précis/);
+    await pick("Relecteur Google", "Second agent de démo", /^Démo rapide/);
+    await pick("Arbitre", "Agent de démo", /^Démo précis/);
+    await shot("r1-dialogue");
+    await dialog.getByRole("button", { name: "Lancer la revue" }).click();
 
-      const card = page.getByRole("region", { name: "Revue de la PR #42" });
-      await card.waitFor();
-      await card.getByText("Donne enfin la bonne réponse").waitFor();
-      await shot("r2-en-cours");
+    const card = page.getByRole("region", { name: "Revue de la PR #42" });
+    await card.waitFor();
+    await card.getByText("Donne enfin la bonne réponse").waitFor();
+    await shot("r2-en-cours");
 
-      // Then they weigh each other's points, and the judge settles the one still disputed.
-      await card.getByText(/^Verdict · \d+ points?$/).waitFor({ timeout: 30_000 });
-      await card.getByText("1 tranché").waitFor();
-      await card.getByText(/\d+ confirmés?/).waitFor();
-      const points = card.locator(".rvf");
-      const ruled = points.filter({ hasText: "Tranché : réel" });
-      expect(await ruled.getAttribute("aria-label")).toMatch(/^Mineur : /);
-      // Lines 1 and 2 of the file changed are one point, seen by all three, worst first.
-      const first = points.first();
-      expect(await first.getAttribute("aria-label")).toMatch(/^Critique : /);
-      expect(await first.locator(".m .mono").textContent()).toBe("src/answer.ts:1");
-      await first.getByText("Critique · vu par 3").waitFor();
-      await first.click();
-      await first.getByText(/Gravité discutée/).waitFor();
-      await ruled.click();
-      await ruled
-        .getByText(/pas d'accord/)
-        .first()
-        .waitFor();
-      await shot("r4-synthese");
+    // Then they weigh each other's points, and the judge settles the one still disputed.
+    await card.getByText(/^Verdict · \d+ points?$/).waitFor({ timeout: 30_000 });
+    await card.getByText("1 tranché").waitFor();
+    await card.getByText(/\d+ confirmés?/).waitFor();
+    const points = card.locator(".rvf");
+    const ruled = points.filter({ hasText: "Tranché : réel" });
+    expect(await ruled.getAttribute("aria-label")).toMatch(/^Mineur : /);
+    // Lines 1 and 2 of the file changed are one point, seen by all three, worst first.
+    const first = points.first();
+    expect(await first.getAttribute("aria-label")).toMatch(/^Critique : /);
+    expect(await first.locator(".m .mono").textContent()).toBe("src/answer.ts:1");
+    await first.getByText("Critique · vu par 3").waitFor();
+    await first.click();
+    await first.getByText(/Gravité discutée/).waitFor();
+    await ruled.click();
+    await ruled
+      .getByText(/pas d'accord/)
+      .first()
+      .waitFor();
+    await shot("r4-synthese");
 
-      // Each reviewer has its own thread, which leads back to the review.
-      await card.locator(".tmrb").first().click();
-      await page.waitForURL((u) => u.pathname.startsWith("/t/"));
-      await page.getByRole("button", { name: /Relecteur de la « Revue de la PR #42 »/ }).click();
-      await card.waitFor();
+    // Each reviewer has its own thread, which leads back to the review.
+    await card.locator(".tmrb").first().click();
+    await page.waitForURL((u) => u.pathname.startsWith("/t/"));
+    await page.getByRole("button", { name: /Relecteur de la « Revue de la PR #42 »/ }).click();
+    await card.waitFor();
 
-      await page.emulateMedia({ colorScheme: "dark" });
-      await shot("r5-synthese-sombre");
-      await page.emulateMedia({ colorScheme: "light" });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await shot("r5-synthese-sombre");
+    await page.emulateMedia({ colorScheme: "light" });
 
-      await page.setViewportSize({ width: 390, height: 844 });
-      await page.reload();
-      await card.getByText(/^Verdict · /).waitFor();
-      const width = await page.evaluate(() => document.documentElement.scrollWidth);
-      expect(width).toBeLessThanOrEqual(390);
-      await shot("r6-mobile");
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload();
+    await card.getByText(/^Verdict · /).waitFor();
+    const width = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(width).toBeLessThanOrEqual(390);
+    await shot("r6-mobile");
 
-      expect(errors).toEqual([]);
-      await page.close();
-    },
-  );
+    expect(errors).toEqual([]);
+    await page.close();
+  });
 });

@@ -502,6 +502,90 @@ describe("Hub with the demo agent", () => {
     expect(store.getThread(threadId)?.status).toBe("idle");
   });
 
+  // Seen in the browser checks on Windows: « Arrêter » pressed as the agent was asking. Its
+  // request crossed the cancel, was shown after it, and held the turn until the agent was killed.
+  // A question (form elicitation) had the same window (Neon's review of PR #196).
+  it.each([
+    ["permission request", "permission"],
+    ["question", "question"],
+  ])("answers as cancelled a %s that crosses « Arrêter »", async (_name, kind) => {
+    const { dir, hub, store, projectId } = setup({ forceStopMs: 20_000 });
+    const agent = path.join(dir, "crossing-agent.mjs");
+    // Asks only once it is told to stop, then ends its turn with the answer it gets.
+    writeFileSync(
+      agent,
+      `import { createInterface } from "node:readline";
+      const send = (msg) => console.log(JSON.stringify({ jsonrpc: "2.0", ...msg }));
+      let prompt = null;
+      let asks = "";
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const msg = JSON.parse(line);
+        if (msg.id === 77 && !msg.method) {
+          const stopped = msg.result?.outcome?.outcome === "cancelled" || msg.result?.action === "cancel";
+          send({ id: prompt, result: { stopReason: stopped ? "cancelled" : "end_turn" } });
+          return;
+        }
+        if (msg.method === "initialize") {
+          send({ id: msg.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+        } else if (msg.method === "session/new") {
+          send({ id: msg.id, result: { sessionId: "s1" } });
+        } else if (msg.method === "session/prompt") {
+          prompt = msg.id;
+          asks = msg.params.prompt.at(-1)?.text ?? "";
+          send({ method: "session/update", params: { sessionId: "s1", update: {
+            sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Je commence" } } } });
+        } else if (msg.method === "session/cancel" && asks === "question") {
+          send({ id: 77, method: "elicitation/create", params: {
+            mode: "form",
+            sessionId: "s1",
+            message: "Quelle file de messages ?",
+            requestedSchema: { type: "object", properties: { question_0: { type: "string",
+              oneOf: [{ const: "Kafka", title: "Kafka" }, { const: "SQS", title: "SQS" }] } } },
+          } });
+        } else if (msg.method === "session/cancel") {
+          send({ id: 77, method: "session/request_permission", params: {
+            sessionId: "s1",
+            toolCall: { toolCallId: "edit", title: "Modifier src/app.ts", kind: "edit", status: "pending" },
+            options: [
+              { optionId: "allow", name: "Autoriser", kind: "allow_once" },
+              { optionId: "deny", name: "Refuser", kind: "reject_once" },
+            ],
+          } });
+        }
+      });`,
+    );
+    const agentId = hub.addCustomAgent({
+      name: "Crossing",
+      command: process.execPath,
+      args: [agent],
+    });
+    const threadId = hub.createThread({
+      projectId,
+      agentId,
+      permissionMode: "supervised",
+      text: kind,
+    });
+    await expect
+      .poll(() => lastTurnSaid(store.listItems(threadId)), { timeout: 10_000 })
+      .toContain("Je commence");
+    const asked = Date.now();
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+
+    expect(Date.now() - asked).toBeLessThan(5_000);
+    expect(store.getThread(threadId)?.status).toBe("idle");
+    // Nothing is left for the user to answer.
+    expect(
+      store
+        .listItems(threadId)
+        .filter(
+          (i) =>
+            (i.kind === "permission" && i.outcome === null) ||
+            (i.kind === "tool" && i.form === "open"),
+        ),
+    ).toEqual([]);
+  });
+
   it("keeps the same agent session across turns", async () => {
     const { hub, store, projectId } = setup();
     const threadId = hub.createThread({

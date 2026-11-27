@@ -186,13 +186,18 @@ describe("the project's menu", () => {
     await composer.click();
     await page.getByRole("button", { name: "Ajouter", exact: true }).click();
     await page.getByRole("menuitem", { name: /^Projet/ }).click();
-    await whereChoices(page)
+    const where = whereChoices(page);
+    await where
       .getByText(/^Hors projet/)
       .first()
       .click();
+    await where.waitFor({ state: "hidden" });
     await composer.fill("Bonjour");
-    // On a touch screen Enter is a new line: the button sends.
-    await page.getByRole("button", { name: "Envoyer", exact: true }).last().tap();
+    // On a touch screen Enter is a new line (N32): the button sends, once it can.
+    const send = page.getByRole("button", { name: "Envoyer", exact: true }).last();
+    await expect.poll(() => send.isEnabled()).toBe(true);
+    await send.tap();
+    await page.waitForURL(/\/t\//);
     await page.getByRole("button", { name: "Paramètres de la discussion" }).click();
     await page.getByRole("menuitem", { name: /^Accès/ }).click();
     await page.getByRole("menuitemradio", { name: /^Demande d'abord/ }).waitFor();

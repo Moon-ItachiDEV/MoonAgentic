@@ -10,6 +10,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SkillRunEnd } from "@moonagentic/protocol";
 import {
@@ -30,6 +31,7 @@ import {
   type SkillPlace,
   skillsIn,
 } from "../src/skills.ts";
+import { canLink } from "./can-link.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -50,6 +52,13 @@ function folder(files: Record<string, string> = {}): string {
 
 const skillMd = (name: string, description: string) =>
   `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`;
+
+/** A command line that runs these lines of Node, the same in sh and in cmd.exe. */
+function node(lines: string[]): string {
+  const script = path.join(folder(), "steps.mjs");
+  writeFileSync(script, `${lines.join("\n")}\n`);
+  return `"${process.execPath}" "${script}"`;
+}
 
 /** A home folder with no Hermes of the machine running the tests. */
 function home(files: Record<string, string> = {}): SkillPlace {
@@ -237,54 +246,58 @@ describe("commands that install skills", () => {
     });
   });
 
-  it.skipIf(process.platform === "win32")(
-    "runs a command in the folder, takes an answer, and says which skills it added",
-    async () => {
-      const place = home();
-      const parts: { output?: string; ended?: SkillRunEnd }[] = [];
-      let added: string[] = [];
-      const ended = new Promise<SkillRunEnd>((resolve) => {
-        const runs = new SkillRuns((_id, part) => {
-          parts.push(part);
-          if (part.output?.includes("Ok to proceed?")) runs.input("r1", "y");
-          if (part.ended) resolve(part.ended);
-        });
-        runs.start(
-          "r1",
-          [
-            "printf '\\033[1mOk to proceed? (y) \\033[0m'",
-            "read answer",
-            'mkdir -p .claude/skills/impeccable && printf -- "---\\ndescription: d\\n---\\n" > .claude/skills/impeccable/SKILL.md',
-            "echo '{}' > .claude/settings.json",
-            'echo "got $answer"',
-          ].join("; "),
-          place,
-          (names) => {
-            added = names;
-          },
-        );
-      });
-      expect(await ended).toEqual({
-        code: 0,
-        added: ["impeccable"],
-        changed: [".claude/settings.json"],
-      });
-      expect(added).toEqual(["impeccable"]);
-      const log = parts.map((p) => p.output ?? "").join("");
-      expect(log).toContain("Ok to proceed? (y)");
-      expect(log).not.toContain("\u001b");
-      expect(log).toContain("got y");
-    },
-  );
-
-  it.skipIf(process.platform === "win32")("stops a command", async () => {
+  it("runs a command in the folder, takes an answer, and says which skills it added", async () => {
     const place = home();
+    const parts: { output?: string; ended?: SkillRunEnd }[] = [];
+    let added: string[] = [];
+    // The same line in sh and in cmd.exe: Node runs the steps.
+    const command = node([
+      "import { mkdirSync, writeFileSync } from 'node:fs';",
+      "process.stdout.write('\\x1b[1mOk to proceed? (y) \\x1b[0m');",
+      "let answer = '';",
+      "process.stdin.setEncoding('utf8');",
+      "for await (const chunk of process.stdin) {",
+      "  answer += chunk;",
+      "  if (answer.includes('\\n')) break;",
+      "}",
+      "mkdirSync('.claude/skills/impeccable', { recursive: true });",
+      "writeFileSync('.claude/skills/impeccable/SKILL.md', '---\\ndescription: d\\n---\\n');",
+      "writeFileSync('.claude/settings.json', '{}\\n');",
+      "console.log('got ' + answer.trim());",
+    ]);
+    const ended = new Promise<SkillRunEnd>((resolve) => {
+      const runs = new SkillRuns((_id, part) => {
+        parts.push(part);
+        if (part.output?.includes("Ok to proceed?")) runs.input("r1", "y");
+        if (part.ended) resolve(part.ended);
+      });
+      runs.start("r1", command, place, (names) => {
+        added = names;
+      });
+    });
+    expect(await ended).toEqual({
+      code: 0,
+      added: ["impeccable"],
+      changed: [".claude/settings.json"],
+    });
+    expect(added).toEqual(["impeccable"]);
+    const log = parts.map((p) => p.output ?? "").join("");
+    expect(log).toContain("Ok to proceed? (y)");
+    expect(log).not.toContain("\u001b");
+    expect(log).toContain("got y");
+  });
+
+  it("stops a command", async () => {
+    const place = home();
+    const started = Date.now();
     const ended = new Promise<SkillRunEnd>((resolve) => {
       const runs = new SkillRuns((_id, part) => part.ended && resolve(part.ended));
-      runs.start("r2", "sleep 30", place, () => {});
+      runs.start("r2", node(["setTimeout(() => {}, 30_000);"]), place, () => {});
       setTimeout(() => runs.stop("r2"), 100);
     });
     expect((await ended).added).toEqual([]);
+    // Stopped, not left to end by itself.
+    expect(Date.now() - started).toBeLessThan(15_000);
   });
 });
 
@@ -299,41 +312,43 @@ const cacheOf = (repo: string) => {
 };
 
 describe("relecture de Neon (PR 191)", () => {
-  it.skipIf(process.platform === "win32")(
-    "1. never copies what a repository's link leads to out of it",
-    async () => {
-      const secret = folder({ id_rsa: "CLE PRIVEE", "SKILL.md": skillMd("vol", "x") });
-      const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF") });
-      symlinkSync(path.join(secret, "id_rsa"), path.join(repo, "skills/pdf/ref.txt"));
-      mkdirSync(path.join(repo, "skills/vol"), { recursive: true });
-      symlinkSync(path.join(secret, "SKILL.md"), path.join(repo, "skills/vol/SKILL.md"));
-      const dir = await cacheOf(repo).get("a/b");
-      // A SKILL.md that leads out of the repository is not read.
-      expect(skillsIn(dir, "b").map((s) => s.name)).toEqual(["pdf"]);
-      const project: SkillPlace = { scope: "project", base: folder() };
-      expect(() => installFromRepo(project, dir, "b", ["skills/pdf"], ["claude"])).toThrow(/lien/);
-      expect(existsSync(path.join(project.base, ".claude/skills/pdf"))).toBe(false);
-    },
-  );
+  it.skipIf(!canLink)("1. never copies what a repository's link leads to out of it", async () => {
+    const secret = folder({ id_rsa: "CLE PRIVEE", "SKILL.md": skillMd("vol", "x") });
+    const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF") });
+    symlinkSync(path.join(secret, "id_rsa"), path.join(repo, "skills/pdf/ref.txt"));
+    mkdirSync(path.join(repo, "skills/vol"), { recursive: true });
+    symlinkSync(path.join(secret, "SKILL.md"), path.join(repo, "skills/vol/SKILL.md"));
+    const dir = await cacheOf(repo).get("a/b");
+    // A SKILL.md that leads out of the repository is not read.
+    expect(skillsIn(dir, "b").map((s) => s.name)).toEqual(["pdf"]);
+    const project: SkillPlace = { scope: "project", base: folder() };
+    expect(() => installFromRepo(project, dir, "b", ["skills/pdf"], ["claude"])).toThrow(/lien/);
+    expect(existsSync(path.join(project.base, ".claude/skills/pdf"))).toBe(false);
+  });
 
-  it.skipIf(process.platform === "win32")(
-    "1. clones a repository's links as plain files",
-    async () => {
-      const { execFileSync } = await import("node:child_process");
-      const { shallowClone } = await import("../src/github.ts");
-      const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF") });
-      symlinkSync("/etc/hostname", path.join(repo, "skills/pdf/ref.txt"));
-      const git = (...args: string[]) =>
-        execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
-      git("init", "-q");
-      git("add", "-A");
-      git("commit", "-qm", "x");
-      const dest = path.join(folder(), "clone");
-      await shallowClone(`file://${repo}`, dest);
-      const { lstatSync } = await import("node:fs");
-      expect(lstatSync(path.join(dest, "skills/pdf/ref.txt")).isSymbolicLink()).toBe(false);
-    },
-  );
+  it.skipIf(!canLink)("1. clones a repository's links as plain files", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { shallowClone } = await import("../src/github.ts");
+    const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF") });
+    const outside = folder({ "hostname.txt": "machine" });
+    symlinkSync(path.join(outside, "hostname.txt"), path.join(repo, "skills/pdf/ref.txt"));
+    // Git for Windows keeps a link as a plain file unless told otherwise: the repository must
+    // hold a real one, or nothing is proven.
+    const git = (...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.symlinks=true", ...args],
+        { cwd: repo },
+      ).toString();
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-qm", "x");
+    expect(git("ls-files", "-s", "skills/pdf/ref.txt")).toMatch(/^120000 /);
+    const dest = path.join(folder(), "clone");
+    await shallowClone(pathToFileURL(repo).href, dest);
+    const { lstatSync } = await import("node:fs");
+    expect(lstatSync(path.join(dest, "skills/pdf/ref.txt")).isSymbolicLink()).toBe(false);
+  });
 
   it("2. takes only a GitHub owner/name and a branch name to install from", async () => {
     const { ClientMessage } = await import("@moonagentic/protocol");
@@ -356,26 +371,23 @@ describe("relecture de Neon (PR 191)", () => {
     expect(ok("anthropics/skills", "a/../b")).toBe(false);
   });
 
-  it.skipIf(process.platform === "win32")(
-    "4. keeps the installed skill when its update cannot be copied",
-    async () => {
-      const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF v1") });
-      const project: SkillPlace = { scope: "project", base: folder() };
-      installFromRepo(project, repo, "b", ["skills/pdf"], ["claude", "codex"]);
-      // The new version holds a link to nowhere: it cannot be copied.
-      writeFileSync(path.join(repo, "skills/pdf/SKILL.md"), skillMd("pdf", "PDF v2"));
-      symlinkSync(path.join(repo, "nulle-part"), path.join(repo, "skills/pdf/casse.txt"));
-      expect(() =>
-        installFromRepo(project, repo, "b", ["skills/pdf"], ["claude"], { replace: true }),
-      ).toThrow();
-      for (const root of [".claude/skills", ".agents/skills"]) {
-        expect(readFileSync(path.join(project.base, root, "pdf/SKILL.md"), "utf8")).toContain(
-          "PDF v1",
-        );
-      }
-      expect(scanSkills(project).map((s) => s.name)).toEqual(["pdf"]);
-    },
-  );
+  it.skipIf(!canLink)("4. keeps the installed skill when its update cannot be copied", async () => {
+    const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF v1") });
+    const project: SkillPlace = { scope: "project", base: folder() };
+    installFromRepo(project, repo, "b", ["skills/pdf"], ["claude", "codex"]);
+    // The new version holds a link to nowhere: it cannot be copied.
+    writeFileSync(path.join(repo, "skills/pdf/SKILL.md"), skillMd("pdf", "PDF v2"));
+    symlinkSync(path.join(repo, "nulle-part"), path.join(repo, "skills/pdf/casse.txt"));
+    expect(() =>
+      installFromRepo(project, repo, "b", ["skills/pdf"], ["claude"], { replace: true }),
+    ).toThrow();
+    for (const root of [".claude/skills", ".agents/skills"]) {
+      expect(readFileSync(path.join(project.base, root, "pdf/SKILL.md"), "utf8")).toContain(
+        "PDF v1",
+      );
+    }
+    expect(scanSkills(project).map((s) => s.name)).toEqual(["pdf"]);
+  });
 
   it("4. updates a skill under its own name, for its agents, when its source renamed it", () => {
     const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF v1") });

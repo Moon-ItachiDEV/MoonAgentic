@@ -97,6 +97,8 @@ async function ask(page: Page, project: string, text: string) {
   await composer.press("Enter");
   const answer = page.getByText(`Tu m'as demandé : « ${text} »`);
   await answer.waitFor();
+  // Written a word at a time: read once the turn has gone on past it, to its change.
+  await page.getByText("Modifier src/app.ts").first().waitFor();
   return { servers, answer: (await answer.textContent()) ?? "" };
 }
 

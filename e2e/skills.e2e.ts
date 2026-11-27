@@ -20,6 +20,26 @@ let home: string;
 
 const skillMd = (name: string, description: string) =>
   `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`;
+/**
+ * A command line that runs these lines of Node: the same in sh and in cmd.exe, where the
+ * server runs what the user typed on Windows.
+ */
+const nodeLine = (lines: string[]) => {
+  const script = path.join(mkdtempSync(path.join(dir, "script-")), "steps.mjs");
+  writeFileSync(script, `${lines.join("\n")}\n`);
+  return `"${process.execPath}" "${script}"`;
+};
+/** Lines of Node that print `prompt` and wait for a line typed in, kept as `answer`. */
+const askLine = (prompt: string) => [
+  `process.stdout.write(${JSON.stringify(prompt)});`,
+  "let answer = '';",
+  "process.stdin.setEncoding('utf8');",
+  "for await (const chunk of process.stdin) {",
+  "  answer += chunk;",
+  "  if (answer.includes('\\n')) break;",
+  "}",
+  "answer = answer.trim();",
+];
 const put = (file: string, text: string) => {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, text);
@@ -159,10 +179,13 @@ describe("skills", () => {
       await shot(page, `skill-menu-${device}`);
       await page.getByRole("menuitem", { name: "Par commande" }).click();
       const pop = page.getByRole("dialog", { name: "Par commande" });
-      const command =
-        `printf 'Ok to proceed? (y) '; read a; mkdir -p .claude/skills/${name}; ` +
-        `printf -- '---\\ndescription: Démo\\n---\\n' > .claude/skills/${name}/SKILL.md; ` +
-        `echo "got $a"`;
+      const command = nodeLine([
+        "import { mkdirSync, writeFileSync } from 'node:fs';",
+        ...askLine("Ok to proceed? (y) "),
+        `mkdirSync('.claude/skills/${name}', { recursive: true });`,
+        `writeFileSync('.claude/skills/${name}/SKILL.md', '---\\ndescription: Démo\\n---\\n');`,
+        "console.log('got ' + answer);",
+      ]);
       await pop.getByLabel("Commande").fill(command);
       await shot(page, `skill-commande-${device}`);
       await pop.getByRole("button", { name: "Voir ce qui va tourner" }).click();
@@ -206,7 +229,14 @@ describe("skills", () => {
     const pop = page.getByRole("dialog", { name: "Par commande" });
     await pop
       .getByLabel("Commande")
-      .fill("echo x >> compte.txt; printf 'Encore ? '; read a; echo fin");
+      .fill(
+        nodeLine([
+          "import { appendFileSync } from 'node:fs';",
+          "appendFileSync('compte.txt', 'x\\n');",
+          ...askLine("Encore ? "),
+          "console.log('fin');",
+        ]),
+      );
     await pop.getByRole("button", { name: "Voir ce qui va tourner" }).click();
     await page
       .getByRole("dialog", { name: "Lancer la commande ?" })
@@ -249,7 +279,11 @@ describe("skills", () => {
     await pop
       .getByLabel("Commande")
       .fill(
-        "mkdir -p .claude/skills/neuve && printf -- '---\\nname: neuve\\ndescription: Neuve\\n---\\nFais ceci.\\n' > .claude/skills/neuve/SKILL.md",
+        nodeLine([
+          "import { mkdirSync, writeFileSync } from 'node:fs';",
+          "mkdirSync('.claude/skills/neuve', { recursive: true });",
+          "writeFileSync('.claude/skills/neuve/SKILL.md', '---\\nname: neuve\\ndescription: Neuve\\n---\\nFais ceci.\\n');",
+        ]),
       );
     await pop.getByRole("button", { name: "Voir ce qui va tourner" }).click();
     await page

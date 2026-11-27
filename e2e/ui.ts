@@ -23,8 +23,12 @@ export async function directThread(page: Page) {
   await page.goto(new URL("/", page.url()).href);
   const composer = page.getByRole("combobox", { name: "Message" });
   await composer.waitFor();
-  // Back on the server after the reload: until then it cannot be written in.
-  await expect.poll(() => composer.isEnabled()).toBe(true);
+  // Back on the server after the reload. The field can be written in before, but until the
+  // projects are known a command such as « /revue » says to pick one first: the « + » is the
+  // first thing to wait for, given only once the composer knows where it writes.
+  await expect
+    .poll(() => page.getByRole("button", { name: "Ajouter", exact: true }).first().isEnabled())
+    .toBe(true);
 }
 
 /**

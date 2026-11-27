@@ -8,6 +8,7 @@ import { Agents } from "../src/agents.ts";
 import { Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
 import { MAX_READ_BYTES, readWorktreeFile, worktreeFiles } from "../src/workspace.ts";
+import { canLink } from "./can-link.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -106,14 +107,11 @@ describe("the files of a thread's folder", { timeout: 40_000 }, () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
-    "does not follow a symbolic link out of the folder",
-    async () => {
-      const { workspace, dir, root } = await threadFolder();
-      writeFileSync(path.join(root, "dehors.txt"), "hors du dossier\n");
-      symlinkSync(path.join(root, "dehors.txt"), path.join(dir, "lien.txt"));
-      expect((await worktreeFiles(workspace)).files).toContain("lien.txt");
-      await expect(readWorktreeFile(workspace, "lien.txt")).rejects.toThrow(/pas dans la copie/);
-    },
-  );
+  it.skipIf(!canLink)("does not follow a symbolic link out of the folder", async () => {
+    const { workspace, dir, root } = await threadFolder();
+    writeFileSync(path.join(root, "dehors.txt"), "hors du dossier\n");
+    symlinkSync(path.join(root, "dehors.txt"), path.join(dir, "lien.txt"));
+    expect((await worktreeFiles(workspace)).files).toContain("lien.txt");
+    await expect(readWorktreeFile(workspace, "lien.txt")).rejects.toThrow(/pas dans la copie/);
+  });
 });
