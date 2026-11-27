@@ -49,6 +49,7 @@ import type {
   AgentSetting,
   ClientMessage,
   ImageRef,
+  InstalledSkill,
   Item,
   Mascot,
   McpServerInput,
@@ -152,6 +153,21 @@ import {
   UNKNOWN_RESET_RETRY_MS,
 } from "./quota-relief.ts";
 import { isTeamPreset } from "./saved-shapes.ts";
+import {
+  installFromRepo,
+  listSkills,
+  moveSkill,
+  parseSkillSource,
+  planCommand,
+  removeSkillEverywhere,
+  RepoCache,
+  setSkillAgents,
+  SkillError,
+  SkillRecords,
+  SkillRuns,
+  type SkillPlace,
+  skillsIn,
+} from "./skills.ts";
 import { isRecord, type Store, StorageRefused, storageTrouble, type ThreadPlace } from "./store.ts";
 import {
   forecastFor,
@@ -262,6 +278,10 @@ export interface HubOptions {
   /** How often Hermes's gateway is looked at and started again; 0 for only when asked. */
   hermesGatewayMs?: number;
   homeDir?: string;
+  /** How a repository of skills is cloned; a shallow git clone when not given. */
+  cloneSkills?: (url: string, dest: string, ref?: string) => Promise<void>;
+  /** The environment skills folders are read from (`HERMES_HOME`); the process's own if not given. */
+  skillsEnv?: NodeJS.ProcessEnv;
   idleMs?: number;
   maxLiveAgents?: number;
   /** Where pull requests are read and merged; the user's own `gh` unless given. */
@@ -561,6 +581,11 @@ export class Hub {
 
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
+  /** Where the skills MoonAgentic installed came from. */
+  private readonly skillRecords: SkillRecords;
+  private readonly skillRepos: RepoCache;
+  private readonly skillRuns: SkillRuns;
+  private readonly skillsEnv: NodeJS.ProcessEnv;
   private readonly pullRequests: () => PullRequests | undefined;
   /** The tool behind each call of a turn, by thread, for agents that name it. */
   private readonly toolNames = new Map<string, Map<string, string>>();
@@ -610,6 +635,14 @@ export class Hub {
       steps: this.steps,
     });
     this.homeDir = options.homeDir ?? os.homedir();
+    this.skillsEnv = options.skillsEnv ?? process.env;
+    this.skillRecords = new SkillRecords(
+      options.dataDir ? path.join(options.dataDir, "skills.json") : undefined,
+    );
+    this.skillRepos = new RepoCache(options.cloneSkills);
+    this.skillRuns = new SkillRuns((runId, part) =>
+      this.broadcast({ type: "skillRun", runId, ...part }),
+    );
     this.pullRequests = options.pullRequests ?? localPullRequests;
     const watchMs = options.prWatchMs ?? PR_WATCH_MS;
     if (watchMs > 0) {
@@ -2042,6 +2075,129 @@ export class Hub {
         client.send({ type: "files", requestId: message.requestId, files });
         return;
       }
+      case "skills.list":
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      case "skills.find": {
+        const src = parseSkillSource(message.source);
+        if (!src) {
+          throw new SkillError(
+            "Indique un dépôt GitHub (propriétaire/nom ou son adresse) ou une page skills.sh.",
+          );
+        }
+        const repo = `${src.owner}/${src.name}`;
+        const dir = await this.skillRepos.get(repo, src.ref);
+        let skills = skillsIn(dir, src.name, src.path ?? "");
+        if (src.skill) {
+          const one = skills.filter((f) => f.name.toLowerCase() === src.skill!.toLowerCase());
+          if (one.length) skills = one;
+        }
+        if (skills.length === 0) throw new SkillError(`Aucune skill (SKILL.md) dans ${repo}.`);
+        client.send({
+          type: "skillsFound",
+          requestId: message.requestId,
+          repo,
+          ...(src.ref ? { ref: src.ref } : {}),
+          skills,
+        });
+        return;
+      }
+      case "skills.install": {
+        const place = this.skillPlace(message.projectId);
+        const repoName = message.repo.split("/")[1] ?? message.repo;
+        const dir = await this.skillRepos.get(message.repo, message.ref);
+        const names = installFromRepo(place, dir, repoName, message.paths, message.agents);
+        message.paths.forEach((p, i) => {
+          const name = names[i];
+          if (!name) return;
+          this.skillRecords.set({
+            name,
+            ...(message.projectId ? { projectId: message.projectId } : {}),
+            source: {
+              kind: "github",
+              repo: message.repo,
+              path: p,
+              ...(message.ref ? { ref: message.ref } : {}),
+            },
+            installedAt: Date.now(),
+          });
+        });
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      }
+      case "skills.update": {
+        const place = this.skillPlace(message.projectId);
+        const record = this.skillRecords.get(message.name, message.projectId);
+        if (record?.source.kind !== "github") {
+          throw new SkillError("Seule une skill venue de GitHub se met à jour d'ici.");
+        }
+        const { repo, path: at, ref } = record.source;
+        // Read again from GitHub, not from a clone kept from before.
+        this.skillRepos.forget(repo, ref);
+        const dir = await this.skillRepos.get(repo, ref);
+        // Under its own name and for its own agents, even when its source renamed it.
+        installFromRepo(place, dir, repo.split("/")[1] ?? repo, [at], ["claude"], {
+          replace: true,
+          name: message.name,
+        });
+        this.skillRecords.set({ ...record, installedAt: Date.now() });
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      }
+      case "skills.setAgents":
+        setSkillAgents(this.skillPlace(message.projectId), message.name, message.agents);
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      case "skills.move": {
+        if (message.to === message.projectId) {
+          client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+          return;
+        }
+        moveSkill(this.skillPlace(message.projectId), this.skillPlace(message.to), message.name);
+        const record = this.skillRecords.get(message.name, message.projectId);
+        if (record) {
+          this.skillRecords.drop(message.name, message.projectId);
+          const { projectId: _from, ...rest } = record;
+          this.skillRecords.set({ ...rest, ...(message.to ? { projectId: message.to } : {}) });
+        }
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      }
+      case "skills.remove":
+        removeSkillEverywhere(this.skillPlace(message.projectId), message.name);
+        this.skillRecords.drop(message.name, message.projectId);
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      case "skills.preview": {
+        const place = this.skillPlace(message.projectId);
+        client.send({
+          type: "skillCommand",
+          requestId: message.requestId,
+          plan: await planCommand(message.command, place.base),
+        });
+        return;
+      }
+      case "skills.run": {
+        const place = this.skillPlace(message.projectId);
+        this.skillRuns.start(message.runId, message.command, place, (added) => {
+          for (const name of added) {
+            this.skillRecords.set({
+              name,
+              ...(message.projectId ? { projectId: message.projectId } : {}),
+              source: { kind: "command", command: message.command },
+              installedAt: Date.now(),
+            });
+          }
+        });
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      }
+      case "skills.runInput":
+        this.skillRuns.input(message.runId, message.text);
+        return;
+      case "skills.runStop":
+        this.skillRuns.stop(message.runId);
+        return;
       case "composer.catalog": {
         const dir = this.folderOf(message.projectId, message.threadId);
         client.send({
@@ -2288,6 +2444,29 @@ export class Hub {
    * beside where projects are usually made, created the first time it is needed. One already made
    * is reused, wherever the next projects go.
    */
+  /** Where skills go: the home folder, or a project's folder when it is open. */
+  private skillPlace(projectId: string | undefined): SkillPlace {
+    const env = this.skillsEnv;
+    if (!projectId) return { scope: "user", base: this.homeDir, env, home: this.homeDir };
+    const project = this.store.getProject(projectId);
+    if (!project) throw new SkillError("Ce projet n'existe plus.");
+    if (this.locks.isLocked(project.id)) {
+      throw new SkillError("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    }
+    return { scope: "project", base: project.path, env, home: this.homeDir };
+  }
+
+  /** The skills of every project (the home folder's), then each open project's. */
+  private allSkills(): InstalledSkill[] {
+    const user = listSkills(this.skillPlace(undefined), this.skillRecords);
+    const projects = this.store
+      .listProjects()
+      .filter((p) => !this.locks.isLocked(p.id) && !this.isDiscussions(p.id))
+      .filter((p) => path.resolve(p.path) !== path.resolve(this.homeDir) && existsSync(p.path))
+      .flatMap((p) => listSkills(this.skillPlace(p.id), this.skillRecords, p.id));
+    return [...user, ...projects];
+  }
+
   discussionsProject(): string {
     const made = this.store.listProjects().find((p) => this.isDiscussions(p.id));
     if (made && existsSync(made.path)) return made.id;
@@ -4761,6 +4940,8 @@ export class Hub {
     const upTo = (work: Promise<unknown>) => within(work, deadline - Date.now());
     clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
+    this.skillRuns.stopAll();
+    this.skillRepos.clear();
     this.hermes.close();
     clearInterval(this.sweepTimer);
     clearInterval(this.quotaTimer);

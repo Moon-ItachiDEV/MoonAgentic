@@ -160,14 +160,16 @@ describe("the project's commands", () => {
 });
 
 describe("the project's skills", () => {
-  it("makes a skill in .agents/skills, edits it in place, then removes it", async () => {
+  it("makes a skill Claude Code and Codex both read, edits both copies, then removes them", async () => {
     const dir = folder();
     const rel = saveSkill(dir, {
       name: "tests-vitest",
       description: "Écrire des tests: avec Vitest",
       body: "# Tests\n\nLance `pnpm test`.",
     });
-    expect(rel).toBe(".agents/skills/tests-vitest/SKILL.md");
+    // Claude Code reads .claude/skills only, Codex and others .agents/skills.
+    expect(rel).toBe(".claude/skills/tests-vitest/SKILL.md");
+    expect(read(dir, ".agents/skills/tests-vitest/SKILL.md")).toBe(read(dir, rel));
     const [skill] = findSkills(dir, dir);
     expect(skill).toMatchObject({
       name: "tests-vitest",
@@ -190,9 +192,11 @@ describe("the project's skills", () => {
 
     saveSkill(dir, { path: rel, name: "tests-vitest", description: "Tests", body: "Nouveau" });
     expect(read(dir, rel)).toBe("---\nname: tests-vitest\ndescription: Tests\n---\n\nNouveau\n");
+    expect(read(dir, ".agents/skills/tests-vitest/SKILL.md")).toBe(read(dir, rel));
 
     removeSkill(dir, rel);
     expect(existsSync(path.join(dir, ".agents/skills/tests-vitest"))).toBe(false);
+    expect(existsSync(path.join(dir, ".claude/skills/tests-vitest"))).toBe(false);
   });
 
   it("edits a skill another agent keeps, and leaves what sits beside it", () => {

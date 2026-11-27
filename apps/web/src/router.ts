@@ -10,6 +10,7 @@ export type SettingsSection =
   | "coordinator"
   | "teams"
   | "mcp"
+  | "skills"
   | "remote"
   | "hermes";
 export const SETTINGS_SECTIONS: SettingsSection[] = [
@@ -22,6 +23,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   "coordinator",
   "teams",
   "mcp",
+  "skills",
   "remote",
   "hermes",
 ];

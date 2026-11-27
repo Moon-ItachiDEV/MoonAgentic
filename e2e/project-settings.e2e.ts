@@ -148,15 +148,28 @@ describe("a project's settings", () => {
     await skills.getByLabel("Description").fill("Écrire des tests avec Vitest");
     await skills.getByLabel("Instructions").fill("Lance pnpm test.");
     await skills.getByRole("button", { name: "Enregistrer" }).click();
-    await skills.getByRole("button", { name: "Modifier tests-vitest" }).waitFor();
+    // Listed with the project's skills; written to the folders Claude and Codex read.
+    const row = skills.getByRole("button", { name: /^tests-vitest/ });
+    await row.waitFor();
+    expect(existsSync(path.join(repo, ".claude/skills/tests-vitest/SKILL.md"))).toBe(true);
     expect(existsSync(path.join(repo, ".agents/skills/tests-vitest/SKILL.md"))).toBe(true);
     if (shots) await page.screenshot({ path: path.join(shots, "projet-skills.png") });
-    await skills.getByRole("button", { name: "Supprimer tests-vitest" }).click();
-    await page.getByRole("alertdialog").getByRole("button", { name: "Supprimer" }).click();
-    await expect
-      .poll(() => skills.getByRole("button", { name: "Modifier tests-vitest" }).count())
-      .toBe(0);
+    // Its window, hung from its line, writes it again or removes it.
+    await row.click();
+    const pop = page.getByRole("dialog", { name: "tests-vitest" });
+    await pop.getByRole("button", { name: "Modifier" }).click();
+    await skills.getByLabel("Instructions").fill("Lance pnpm test, puis pnpm lint.");
+    await skills.getByRole("button", { name: "Enregistrer" }).click();
+    await row.waitFor();
+    expect(readFileSync(path.join(repo, ".claude/skills/tests-vitest/SKILL.md"), "utf8")).toContain(
+      "pnpm lint",
+    );
+    await row.click();
+    await pop.getByRole("button", { name: "Retirer cette skill" }).click();
+    await pop.getByRole("button", { name: "Retirer tests-vitest" }).click();
+    await expect.poll(() => row.count()).toBe(0);
     expect(existsSync(path.join(repo, ".agents/skills/tests-vitest"))).toBe(false);
+    expect(existsSync(path.join(repo, ".claude/skills/tests-vitest"))).toBe(false);
     await dialog.getByRole("button", { name: "Fermer", exact: true }).click();
 
     // The composer of the project's folder offers the command.

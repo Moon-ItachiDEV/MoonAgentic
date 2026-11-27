@@ -161,6 +161,61 @@ export interface Skill {
   path: string;
 }
 
+/** The agents a skill is given to, each by the folder it reads skills from. */
+export const SKILL_AGENTS = ["claude", "codex", "antigravity", "hermes"] as const;
+export type SkillAgent = (typeof SKILL_AGENTS)[number];
+
+/** Where an installed skill came from, when MoonAgentic installed it. */
+export type SkillSource =
+  | { kind: "github"; repo: string; path: string; ref?: string }
+  | { kind: "command"; command: string }
+  | { kind: "app" };
+
+/**
+ * A skill in the folders agents read: the user's own (every project) or one project's. One
+ * entry per name, whichever agents' folders hold a copy of it.
+ */
+export interface InstalledSkill {
+  name: string;
+  description: string;
+  /** In the home folder (every project), or in one project's folder. */
+  projectId?: string;
+  /** The agents that read it: those whose folder holds a copy. */
+  agents: SkillAgent[];
+  /** Its folders, relative to the home folder or the project (absolute for Hermes). */
+  paths: string[];
+  /** Files in its folder (its `SKILL.md` and what comes with it). */
+  files: number;
+  source?: SkillSource;
+  installedAt?: number;
+}
+
+/** A skill found in a GitHub repository, before it is installed. */
+export interface FoundSkill {
+  name: string;
+  description: string;
+  /** Its folder in the repository; empty for a skill at the repository's root. */
+  path: string;
+}
+
+/** A command that installs skills, as it will run: where, and the npm package it starts. */
+export interface SkillCommandPlan {
+  command: string;
+  dir: string;
+  /** The package `npx` starts, read from npm: shown before it runs. */
+  npm?: { name: string; version?: string };
+}
+
+/** How a command that installs skills ended: what it added and what else it changed. */
+export interface SkillRunEnd {
+  code: number | null;
+  /** Skills that were not there before it ran. */
+  added: string[];
+  /** Other files it changed among those agents read (settings, hooks…), relative to `dir`. */
+  changed: string[];
+  error?: string;
+}
+
 /** A `/` command written for the project, in `.moonagentic/commands/<name>.md`. */
 export interface ProjectCommand {
   name: string;
@@ -1536,6 +1591,14 @@ export type ServerMessage =
   | { type: "teamPresets"; presets: TeamPreset[] | null }
   | { type: "roleMascots"; mascots: RoleMascots }
   | { type: "projectSetup"; requestId: string; projectId: string; setup: ProjectSetup }
+  /** The skills installed for every project and for each project, after a change too. */
+  | { type: "skills"; requestId: string; skills: InstalledSkill[] }
+  /** The skills a repository holds, read from a shallow clone of it. */
+  | { type: "skillsFound"; requestId: string; repo: string; ref?: string; skills: FoundSkill[] }
+  /** What a command that installs skills will run, before it runs. */
+  | { type: "skillCommand"; requestId: string; plan: SkillCommandPlan }
+  /** What a running command printed, then how it ended. */
+  | { type: "skillRun"; runId: string; output?: string; ended?: SkillRunEnd }
   | { type: "thread"; thread: Thread }
   /** The thread was deleted, its timeline with it. */
   | { type: "threadRemoved"; threadId: string }
@@ -1761,6 +1824,19 @@ const setupName = z
   .string()
   .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "Un nom en minuscules, chiffres, - ou _.");
 /** A description: one line. */
+/** A GitHub repository skills are installed from: `owner/name`, nothing else. */
+export const SKILL_REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/;
+/** A branch or tag of it: no option for git, no `.` or `..` part. */
+export const SKILL_REF = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9][\w./-]{0,199}$/;
+/** An installed skill's name: its folder's. */
+const skillName = z.string().regex(/^[A-Za-z0-9][\w.-]{0,99}$/);
+/** One line, as typed in a terminal. */
+const skillCommand = z
+  .string()
+  .trim()
+  .min(1)
+  .max(2000)
+  .refine((c) => !/[\r\n\0]/.test(c), "Une seule ligne.");
 const setupLine = z
   .string()
   .trim()
@@ -2290,6 +2366,75 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   /** « Supprimer après la fusion »: whether a thread's branch goes once its PR is merged. */
   z.object({ type: z.literal("project.setDeleteMerged"), projectId: id, on: z.boolean() }),
+  /** The installed skills: answered with skills. */
+  z.object({ type: z.literal("skills.list"), requestId: id }),
+  /**
+   * Reads the skills of a GitHub repository: `owner/name`, its address (a folder of it too),
+   * a skills.sh page or an `npx skills add` line. Answered with skillsFound.
+   */
+  z.object({ type: z.literal("skills.find"), requestId: id, source: z.string().min(1).max(500) }),
+  /** Installs skills found with skills.find, for every project or one, in these agents' folders. */
+  z.object({
+    type: z.literal("skills.install"),
+    requestId: id,
+    repo: z.string().regex(SKILL_REPO),
+    ref: z.string().regex(SKILL_REF).optional(),
+    paths: z.array(z.string().max(500)).min(1).max(50),
+    projectId: id.optional(),
+    agents: z.array(z.enum(SKILL_AGENTS)).min(1),
+  }),
+  /** Gives an installed skill to these agents only: copies it in or takes it out of their folders. */
+  z.object({
+    type: z.literal("skills.setAgents"),
+    requestId: id,
+    name: skillName,
+    projectId: id.optional(),
+    agents: z.array(z.enum(SKILL_AGENTS)).min(1),
+  }),
+  /** Moves an installed skill to every project (`to` left out) or to one project. */
+  z.object({
+    type: z.literal("skills.move"),
+    requestId: id,
+    name: skillName,
+    projectId: id.optional(),
+    to: id.optional(),
+  }),
+  /** Installs a skill from GitHub again, from where it came. */
+  z.object({
+    type: z.literal("skills.update"),
+    requestId: id,
+    name: skillName,
+    projectId: id.optional(),
+  }),
+  /** Removes an installed skill from every agent's folder. */
+  z.object({
+    type: z.literal("skills.remove"),
+    requestId: id,
+    name: skillName,
+    projectId: id.optional(),
+  }),
+  /** Says where a command that installs skills would run, before it runs: skillCommand. */
+  z.object({
+    type: z.literal("skills.preview"),
+    requestId: id,
+    command: skillCommand,
+    projectId: id.optional(),
+  }),
+  /**
+   * Runs a command that installs skills, as shown by skills.preview, in the project's folder
+   * or the home folder. Its output comes as skillRun; answered with done once started.
+   */
+  z.object({
+    type: z.literal("skills.run"),
+    requestId: id,
+    runId: id,
+    command: skillCommand,
+    projectId: id.optional(),
+  }),
+  /** Types a line into a running command, for a question it asks. */
+  z.object({ type: z.literal("skills.runInput"), runId: id, text: z.string().max(2000) }),
+  /** Stops a running command. */
+  z.object({ type: z.literal("skills.runStop"), runId: id }),
   /** Puts the project on hold, or lets it go on; see {@link Project.paused}. */
   z.object({ type: z.literal("project.setPaused"), projectId: id, paused: z.boolean() }),
   /** What the project gives its agents, read from its folder: answered with projectSetup. */
@@ -2328,7 +2473,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   /**
    * Writes a skill: the one at `path` when given (one of the project's), else a new one in
-   * `.agents/skills/<name>/SKILL.md`.
+   * `.claude/skills/<name>/SKILL.md` and `.agents/skills/<name>/SKILL.md`.
    */
   z.object({
     type: z.literal("project.saveSkill"),

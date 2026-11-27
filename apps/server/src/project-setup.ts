@@ -30,8 +30,20 @@ import { GIT_QUIET } from "./git-own.ts";
 
 export const RULES_FILE = "AGENTS.md";
 export const CLAUDE_FILE = "CLAUDE.md";
-/** Where a skill made from the app goes: the folder several agents read. */
+/**
+ * Where a skill made from the app goes: the folder Codex and others read, and Claude Code's
+ * own, which reads no other.
+ */
 export const NEW_SKILLS_DIR = ".agents/skills";
+export const NEW_SKILLS_DIRS = [".claude/skills", NEW_SKILLS_DIR];
+
+/** Every copy of a project skill, by its folder's name, in the folders agents read. */
+function copiesOf(dir: string, rel: string): string[] {
+  const folder = path.basename(path.dirname(rel));
+  return PROJECT_SKILL_ROOTS.map((root) => `${root}/${folder}/SKILL.md`).filter(
+    (r) => r === rel || !!resolveInside(dir, r),
+  );
+}
 /** The line by which `CLAUDE.md` pulls in `AGENTS.md`. */
 const IMPORT_LINE = "@AGENTS.md";
 const IMPORTS = /^[ \t]*@(?:\.\/)?AGENTS\.md[ \t]*$/m;
@@ -346,25 +358,31 @@ export function saveSkill(
       throw new SetupError(`Une skill ${skill.name} existe déjà.`);
     }
     const source = readText(current.file) ?? "";
-    writeInside(
-      dir,
-      current.path,
-      withFrontMatter(source, { name: skill.name, description: skill.description }, skill.body),
-    );
+    // Its copies in other agents' folders say the same.
+    for (const copy of copiesOf(dir, current.path)) {
+      writeInside(
+        dir,
+        copy,
+        withFrontMatter(source, { name: skill.name, description: skill.description }, skill.body),
+      );
+    }
     return current.path;
   }
   // A new one is named after its folder: one safe on every system.
   if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(skill.name)) {
     throw new SetupError("Un nom en minuscules, chiffres, - ou _.");
   }
-  const rel = `${NEW_SKILLS_DIR}/${skill.name}/SKILL.md`;
-  if (same || resolveInside(dir, rel)) throw new SetupError(`Une skill ${skill.name} existe déjà.`);
-  writeInside(
-    dir,
-    rel,
-    withFrontMatter("", { name: skill.name, description: skill.description }, skill.body),
+  const rels = NEW_SKILLS_DIRS.map((root) => `${root}/${skill.name}/SKILL.md`);
+  if (same || rels.some((rel) => resolveInside(dir, rel))) {
+    throw new SetupError(`Une skill ${skill.name} existe déjà.`);
+  }
+  const text = withFrontMatter(
+    "",
+    { name: skill.name, description: skill.description },
+    skill.body,
   );
-  return rel;
+  for (const rel of rels) writeInside(dir, rel, text);
+  return rels[0]!;
 }
 
 /**
@@ -374,10 +392,12 @@ export function saveSkill(
 export function removeSkill(dir: string, rel: string): void {
   const skill = projectSkills(dir).find((s) => s.path === rel);
   if (!skill) throw new SetupError("Cette skill n'existe plus.");
-  removeInside(dir, skill.path);
-  try {
-    rmdirSync(path.dirname(path.resolve(realpathSync(dir), skill.path)));
-  } catch {
-    // Not empty: what else is in it stays.
+  for (const copy of copiesOf(dir, skill.path)) {
+    removeInside(dir, copy);
+    try {
+      rmdirSync(path.dirname(path.resolve(realpathSync(dir), copy)));
+    } catch {
+      // Not empty: what else is in it stays.
+    }
   }
 }
