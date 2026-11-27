@@ -1,7 +1,8 @@
-// MoonAgentic's own updates as the interface shows them: a pill at the foot of the side bar
-// and on the home page, a card beside the side bar (a sheet on a phone), and the steps of an
-// install on every screen. What the server says, nothing guessed.
+// MoonAgentic's own updates as the interface shows them: a small moon in the capsule at the top
+// right of every page, which stretches once to announce a version, the card it opens, and the
+// steps of an install on every screen. What the server says, nothing guessed.
 import type { AppInfo, AppUpdate, Notice } from "@moonagentic/protocol";
+import { readPref, writePref } from "./prefs.ts";
 
 /** True when there is something to say about a newer version: a pill shows it. */
 export function updateShown(app: AppInfo | null | undefined): app is AppInfo {
@@ -147,6 +148,178 @@ export function watchInstall(
   const lost = saw && (was.lost || !connected);
   if (saw && connected && !phase) return { watch: { saw: false, lost: false }, reload: lost };
   return { watch: { saw, lost }, reload: false };
+}
+
+/** Where the card stands: one look of it per state. */
+export type CardState =
+  "ready" | "downloading" | "waiting" | "installing" | "failed" | "git" | "mac";
+
+/** Which look the card takes for what the server says. */
+export function cardState(app: AppInfo): CardState {
+  const u = app.update;
+  if (u.phase) return "installing";
+  if (u.install) return "waiting";
+  if (u.state === "downloading") return "downloading";
+  if (u.state === "failed") return "failed";
+  if (app.kind === "git") return "git";
+  if (app.kind === "mac") return "mac";
+  return "ready";
+}
+
+/** How this MoonAgentic runs, in a word. */
+export const kindName = (kind: AppInfo["kind"]): string =>
+  kind === "windows" ? "Windows" : kind === "mac" ? "Mac" : kind === "git" ? "Clone git" : "";
+
+/**
+ * The newer version cut around the first number that changes, so that number alone rolls from
+ * the old one to the new: « 0.1. » + 15 → 16. Undefined when the two do not compare (a commit).
+ */
+export function versionRoll(
+  from: string,
+  to: string,
+): { head: string; was: string; now: string; tail: string } | undefined {
+  const a = from.split(".");
+  const b = to.split(".");
+  if (a.length !== b.length || !b.every((part) => /^\d+$/.test(part))) return undefined;
+  const at = b.findIndex((part, i) => part !== a[i]);
+  if (at < 0 || !/^\d+$/.test(a[at]!)) return undefined;
+  return {
+    head: at ? `${b.slice(0, at).join(".")}.` : "",
+    was: a[at]!,
+    now: b[at]!,
+    tail: at < b.length - 1 ? `.${b.slice(at + 1).join(".")}` : "",
+  };
+}
+
+/**
+ * The lit part of a moon of radius `r` centred on (`c`, `c`), for a lit share from 0 (new moon)
+ * to 1 (full): the right limb, closed by the terminator. The share is exact in area.
+ */
+export function litPath(share: number, c = 24, r = 15): string {
+  const f = Math.max(0, Math.min(1, share));
+  if (f < 0.004) return "";
+  if (f > 0.996)
+    return `M${c} ${c - r}A${r} ${r} 0 1 1 ${c} ${c + r}A${r} ${r} 0 1 1 ${c} ${c - r}Z`;
+  const k = 1 - 2 * f;
+  const rx = (Math.abs(k) * r).toFixed(2);
+  return `M${c} ${c - r}A${r} ${r} 0 0 1 ${c} ${c + r}A${rx} ${r} 0 0 ${k > 0 ? 0 : 1} ${c} ${c - r}Z`;
+}
+
+/** What is left of a download, from what was measured: « ≈ 20 s », nothing while unknown. */
+export function etaLabel(progress: number, perSecond: number): string {
+  if (!(perSecond > 0) || progress >= 1) return "";
+  const seconds = Math.max(1, Math.round((1 - progress) / perSecond));
+  return seconds < 60 ? `≈ ${seconds} s` : `≈ ${Math.round(seconds / 60)} min`;
+}
+
+/** A time since a moment, as a stopwatch: « 0:07 ». */
+export function stopwatch(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** The capsule's two lines while it announces, and what its small moon says the rest of the time. */
+export function capsuleOf(app: AppInfo): {
+  title: string;
+  sub: string;
+  tone: "ready" | "wait" | "run" | "fail";
+} {
+  const u = app.update;
+  const state = cardState(app);
+  if (state === "downloading")
+    return {
+      title: "Téléchargement",
+      sub: `${Math.round((u.progress ?? 0) * 100)} %`,
+      tone: "run",
+    };
+  if (state === "waiting") {
+    const n = u.working ?? 0;
+    return {
+      title: `${u.version ?? "Mise à jour"} en attente`,
+      sub: n ? workingLine(n) : "Va s'installer",
+      tone: "wait",
+    };
+  }
+  if (state === "failed") return { title: "Mise à jour", sub: "Échec", tone: "fail" };
+  if (state === "git") {
+    const n = u.behind ?? 0;
+    return { title: "Nouvelle version", sub: `${n} commit${n > 1 ? "s" : ""}`, tone: "ready" };
+  }
+  return {
+    title: `Version ${u.version ?? ""}`.trim(),
+    sub: state === "mac" ? "Sortie" : "Prête",
+    tone: "ready",
+  };
+}
+
+/**
+ * The version the capsule owes an announcement for: one ready to install (or to fetch by hand)
+ * that this device has not announced yet (`told`). Once per version and device.
+ */
+export function announceDue(
+  app: AppInfo | null | undefined,
+  told: string | null,
+): string | undefined {
+  if (!app || app.kind === "other" || !app.update.version) return undefined;
+  const { state, version, install, phase } = app.update;
+  if (install || phase) return undefined;
+  const ready =
+    app.kind === "windows" ? state === "ready" : state === "ready" || state === "available";
+  return ready && version !== told ? version : undefined;
+}
+
+/** What a screen keeps of an install it watched, to say afterwards what the version brought. */
+export interface InstallMemo {
+  version: string;
+  from: string;
+  notes: { title: string; number?: number }[];
+}
+
+/** The memo of an install that begins, as kept on the device until the new version is seen. */
+export function installMemo(app: AppInfo): InstallMemo | undefined {
+  const u = app.update;
+  if (!u.phase || !u.version) return undefined;
+  return { version: u.version, from: app.version, notes: u.notes ?? [] };
+}
+
+/** The memo as read back: undefined unless it is one. */
+export function readMemo(raw: string | null): InstallMemo | undefined {
+  if (!raw) return undefined;
+  try {
+    const m = JSON.parse(raw) as Partial<InstallMemo>;
+    if (typeof m.version !== "string" || typeof m.from !== "string" || !Array.isArray(m.notes))
+      return undefined;
+    const notes = m.notes
+      .filter((n) => n && typeof n.title === "string")
+      .map((n) => ({
+        title: n.title,
+        ...(typeof n.number === "number" ? { number: n.number } : {}),
+      }));
+    return { version: m.version, from: m.from, notes };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Where the memo is kept on the device. */
+const MEMO = "update.installing";
+export const loadMemo = (): InstallMemo | undefined => readMemo(readPref(MEMO));
+export const saveMemo = (memo: InstallMemo | undefined): void =>
+  writePref(MEMO, memo ? JSON.stringify(memo) : "");
+
+/**
+ * What to do with a memo once the server answers: `show` when it now runs the version that was
+ * being installed, `drop` when the install is over and it does not (it failed, nothing to
+ * tell), `keep` while it is still under way or the server is not heard.
+ */
+export function memoFate(
+  memo: InstallMemo | undefined,
+  app: AppInfo | null | undefined,
+  connected: boolean,
+): "none" | "keep" | "show" | "drop" {
+  if (!memo) return "none";
+  if (!app || !connected || app.update.phase) return "keep";
+  return app.version === memo.version ? "show" : "drop";
 }
 
 /** The command that brings a clone up to date, as the user runs it to start MoonAgentic. */
