@@ -30,6 +30,7 @@ import {
   GOAL_MORE_TURNS,
   GOAL_TURNS,
   MAX_QUEUED_MESSAGES,
+  mcpReaches,
   PR_WATCH_TRIES,
   RESUME_TEXT,
   spentUntil,
@@ -95,6 +96,7 @@ import {
   removeWorktree,
   deleteBranch,
   worktreeStart,
+  freshStart,
   branchName,
   canonicalPath,
   dropCheckpoints,
@@ -321,6 +323,8 @@ type ProjectLook = Pick<Project, "icon" | "color">;
 const SETTLED_REVIEWS = "settledReviews";
 /** The projects that keep a thread's branch once its pull request is merged. */
 const KEEP_MERGED_BRANCHES = "keepMergedBranches";
+/** The projects whose folder is not brought up to GitHub's copy by itself. */
+const NO_AUTO_PULL = "noAutoPull";
 /** The projects put on hold from their settings. */
 const PAUSED_PROJECTS = "pausedProjects";
 /** Each project's rules for a quota that runs out, by project id. */
@@ -600,6 +604,8 @@ export class Hub {
   set coordinatorUrl(url: string | undefined) {
     this.coordinators.url = url;
   }
+  /** The turns bringing the project's folder up to GitHub: a stop lets each go at once. */
+  private readonly catchingUp = new Map<string, () => void>();
   /** True while known pull requests are being asked about, so rounds never pile up. */
   private watching = false;
   private readonly prTimer: NodeJS.Timeout | undefined;
@@ -1131,11 +1137,23 @@ export class Hub {
     }
     if (message.type === "mcp.setScope") {
       const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
-      if (
-        current?.projectIds?.some((p) => this.locks.isLocked(p)) ||
-        message.projectIds?.some((p) => this.locks.isLocked(p))
-      ) {
-        lockedError();
+      if (!current) return false;
+      const locked = this.locks.lockedProjects();
+      const next = message.projectIds
+        ? { projectIds: message.projectIds }
+        : { exceptProjectIds: message.exceptProjectIds };
+      // A locked project never loses a server, and gains one only as every project does.
+      const loses = (p: string) => mcpReaches(current, p) && !mcpReaches(next, p);
+      const named = (p: string) => !mcpReaches(current, p) && !!next.projectIds?.includes(p);
+      if (locked.some((p) => loses(p) || named(p))) lockedError();
+      // A server named for a locked project stays guarded like it (see below): it may leave or
+      // reach open projects, but neither goes to every project nor changes its roles; and one
+      // for locked projects alone is theirs, out of the others' reach.
+      if (current.projectIds?.some((p) => locked.includes(p))) {
+        const others = current.projectIds.filter((p) => !locked.includes(p));
+        if (!message.projectIds || !others.length || message.allRoles !== !!current.allRoles) {
+          lockedError();
+        }
       }
       return false;
     }
@@ -1598,6 +1616,16 @@ export class Hub {
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
+      case "project.setAutoPull": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        const others = this.store
+          .getSetting<string[]>(NO_AUTO_PULL, [])
+          .filter((p) => p !== project.id && this.store.getProject(p));
+        this.store.setSetting(NO_AUTO_PULL, message.on ? others : [...others, project.id]);
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
       case "project.setPaused": {
         const project = this.store.getProject(message.projectId);
         if (!project) throw new Error("Ce projet n'existe plus.");
@@ -1794,7 +1822,13 @@ export class Hub {
           requestId: message.requestId,
           // A locked project's folders are not even looked at, nor counted in the cap.
           ...(await findArtifacts(
-            this.store.listThreads().filter((t) => !this.locks.isLocked(t.projectId)),
+            this.store
+              .listThreads()
+              .filter(
+                (t) =>
+                  !this.locks.isLocked(t.projectId) &&
+                  (!message.projectId || t.projectId === message.projectId),
+              ),
           )),
         });
         return;
@@ -2252,7 +2286,12 @@ export class Hub {
         this.catalog.setMcpEnabled(message.id, message.enabled);
         return;
       case "mcp.setScope":
-        this.catalog.setMcpScope(message.id, message.projectIds, message.allRoles);
+        this.catalog.setMcpScope(
+          message.id,
+          message.projectIds,
+          message.allRoles,
+          message.exceptProjectIds,
+        );
         return;
       case "mcp.remove":
         await this.catalog.removeMcpServer(message.id);
@@ -3495,6 +3534,7 @@ export class Hub {
     // the request, so the turn remembers it and stops before sending its prompt.
     const turn = this.turns.get(threadId);
     if (turn) this.cancelled.add(threadId);
+    this.catchingUp.get(threadId)?.();
     // Still in line: it leaves it, and its turn ends there.
     this.line.leave(threadId);
     this.pool.abortStart(threadId);
@@ -4936,6 +4976,7 @@ export class Hub {
    */
   async close(): Promise<void> {
     this.closed = true;
+    for (const stop of this.catchingUp.values()) stop();
     const deadline = Date.now() + CLOSE_LIMIT_MS;
     const upTo = (work: Promise<unknown>) => within(work, deadline - Date.now());
     clearTimeout(this.indexTimer);
@@ -5023,6 +5064,12 @@ export class Hub {
       }
       // A pooled session whose connection already closed is replaced, not continued.
       const continuing = this.pool.has(thread.id) && !this.pool.isDead(thread.id);
+      await this.catchUpFolder(thread.id);
+      // Stopped meanwhile, the server too: no agent is started for it.
+      if (this.closed || this.cancelled.has(thread.id)) {
+        this.settleTurn(thread.id, { status: "idle" });
+        return;
+      }
       session = await this.session(thread);
       await this.checkpoint(thread.id, itemId);
       if (this.cancelled.has(thread.id)) {
@@ -5205,6 +5252,62 @@ export class Hub {
     return workFolder(workspace);
   }
 
+  /**
+   * True while a turn works right in the project's folder (the coordinator, or a thread
+   * without a folder of its own), `except` that one: the folder is not moved under it.
+   */
+  private agentInFolder(projectId: string, except?: string): boolean {
+    return this.store
+      .listThreads()
+      .some(
+        (t) =>
+          t.projectId === projectId &&
+          t.id !== except &&
+          this.turns.has(t.id) &&
+          !t.workspace &&
+          !t.worksIn,
+      );
+  }
+
+  /** Whether the project's folder follows GitHub by itself; see {@link Project.autoPull}. */
+  private autoPull(projectId: string): boolean {
+    return !this.store.getSetting<string[]>(NO_AUTO_PULL, []).includes(projectId);
+  }
+
+  /**
+   * Brings the project's folder up to GitHub's copy of its branch before a turn that works
+   * right in it, so the coordinator reads what was merged. Never holds the turn on a failure.
+   */
+  private async catchUpFolder(threadId: string): Promise<void> {
+    const thread = this.store.getThread(threadId);
+    const project = thread && this.store.getProject(thread.projectId);
+    if (this.closed || !thread || !project || thread.workspace || thread.worksIn) return;
+    if (this.isDiscussions(project.id) || !this.withGit(project).git) return;
+    if (!this.mayMoveFolder(project.id, threadId)) return;
+    // A stop does not wait on a remote that does not answer.
+    const stopped = new Promise<void>((resolve) => this.catchingUp.set(threadId, resolve));
+    try {
+      await Promise.race([
+        freshStart(project.path, () => this.mayMoveFolder(project.id, threadId)).catch(
+          () => undefined,
+        ),
+        stopped,
+      ]);
+    } finally {
+      this.catchingUp.delete(threadId);
+    }
+  }
+
+  /**
+   * Whether the project's folder may be brought up to GitHub's copy now: the project lets it,
+   * no turn works in it but `threadId`'s own, which is not being stopped, and the server runs.
+   */
+  private mayMoveFolder(projectId: string, threadId?: string): boolean {
+    if (this.closed || !this.autoPull(projectId)) return false;
+    if (threadId && this.cancelled.has(threadId)) return false;
+    return !this.agentInFolder(projectId, threadId);
+  }
+
   /** Makes the thread's worktree on first use; returns the folder the agent works in. */
   private async prepareWorkspace(threadId: string, project: Project): Promise<string> {
     const worksIn = this.store.getThread(threadId)?.worksIn;
@@ -5214,7 +5317,7 @@ export class Hub {
     if (!workspace.base) {
       // Where the branch starts is written down before git makes anything, so a stop in
       // between is finished next time. A branch made before that rule keeps its own start.
-      const start = await worktreeStart(project.path);
+      const start = await freshStart(project.path, () => this.mayMoveFolder(project.id));
       if (await branchExists(project.path, workspace.branch)) {
         start.base = await forkPoint(project.path, workspace.branch);
       }
@@ -5296,7 +5399,8 @@ export class Hub {
     const keep = this.store.getSetting<string[]>(KEEP_MERGED_BRANCHES, []).includes(project.id);
     const archived = this.store.getSetting<string[]>(ARCHIVED_PROJECTS, []).includes(project.id);
     const paused = this.paused(project.id);
-    return git || pinned || locked || look || quota || keep || archived || paused
+    const manual = !this.autoPull(project.id);
+    return git || pinned || locked || look || quota || keep || archived || paused || manual
       ? {
           ...project,
           ...(git ? { git } : {}),
@@ -5308,6 +5412,7 @@ export class Hub {
           ...(keep ? { deleteMerged: false as const } : {}),
           ...(archived ? { archived } : {}),
           ...(paused ? { paused } : {}),
+          ...(manual ? { autoPull: false as const } : {}),
         }
       : project;
   }

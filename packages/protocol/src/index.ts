@@ -267,6 +267,15 @@ export interface ContextUsage {
  * An MCP server handed to agent sessions. Secret values (environment variables, HTTP
  * headers) stay on the server; clients only see their names.
  */
+/** True when the threads of that project get the server, once it is enabled. */
+export const mcpReaches = (
+  server: { projectIds?: string[]; exceptProjectIds?: string[] },
+  projectId: string | undefined,
+): boolean =>
+  server.projectIds
+    ? projectId !== undefined && server.projectIds.includes(projectId)
+    : projectId === undefined || !server.exceptProjectIds?.includes(projectId);
+
 export interface McpServerInfo {
   id: string;
   name: string;
@@ -278,6 +287,8 @@ export interface McpServerInfo {
   secretNames: string[];
   /** The projects whose threads get it: every project when left out, none when empty. */
   projectIds?: string[];
+  /** For every project (no `projectIds`), these ones left out. */
+  exceptProjectIds?: string[];
   /**
    * Given to a team's reviewers, testers and mergers too. Left out, only the agents that
    * write the code get it: a thread's own agent, a coordinator, a team's lead and coders.
@@ -320,6 +331,12 @@ export interface Project {
    * MoonAgentic deletes it then, in the project's repository only (« Supprimer après la fusion »).
    */
   deleteMerged?: false;
+  /**
+   * False when the project's folder is left as it is: by default MoonAgentic brings it up to
+   * GitHub's copy of its default branch (fast-forward only, a clean folder, no agent in it)
+   * before a new thread and before a turn that works right in it.
+   */
+  autoPull?: false;
   /**
    * Put on hold from its settings: its running turns were stopped, and what its agents would
    * start on their own (a coordinator's threads, a team, a planned task) waits until it goes on.
@@ -2366,6 +2383,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   /** « Supprimer après la fusion »: whether a thread's branch goes once its PR is merged. */
   z.object({ type: z.literal("project.setDeleteMerged"), projectId: id, on: z.boolean() }),
+  /** « Mettre à jour depuis GitHub »: whether the project's folder follows GitHub by itself. */
+  z.object({ type: z.literal("project.setAutoPull"), projectId: id, on: z.boolean() }),
   /** The installed skills: answered with skills. */
   z.object({ type: z.literal("skills.list"), requestId: id }),
   /**
@@ -2588,8 +2607,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
     openAtLogin: z.boolean().optional(),
     preventSleep: z.boolean().optional(),
   }),
-  /** Lists the artifacts of the threads' own branches; see `artifacts`. */
-  z.object({ type: z.literal("artifacts.list"), requestId: id }),
+  /** Lists the artifacts of the threads' own branches, of one project when given; see `artifacts`. */
+  z.object({ type: z.literal("artifacts.list"), requestId: id, projectId: id.optional() }),
   /** Asks for an address to show one artifact; see `artifactLink`. */
   z.object({
     type: z.literal("artifacts.open"),
@@ -2681,6 +2700,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
     type: z.literal("mcp.setScope"),
     id,
     projectIds: z.array(id).max(500).nullable(),
+    /** With `projectIds` at `null`: the projects left out of all of them. */
+    exceptProjectIds: z.array(id).max(500).optional(),
     allRoles: z.boolean(),
   }),
   z.object({ type: z.literal("mcp.remove"), id }),

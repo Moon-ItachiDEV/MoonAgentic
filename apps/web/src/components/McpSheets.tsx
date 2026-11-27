@@ -18,7 +18,14 @@ function ScopeRows({
   onChange: (scope: McpScope) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const picked = new Set(scope.projectIds ?? []);
+  // Every project but some: those are ticked, so that one more is left out or let back in.
+  const picked = new Set(
+    scope.projectIds ??
+      (scope.exceptProjectIds?.length
+        ? projects.map((p) => p.id).filter((id) => !scope.exceptProjectIds?.includes(id))
+        : []),
+  );
+  const { exceptProjectIds: _except, ...listed } = scope;
   return (
     <>
       <div className="ins">
@@ -40,8 +47,8 @@ function ScopeRows({
             <button
               type="button"
               className="it fva"
-              aria-pressed={scope.projectIds === null}
-              onClick={() => onChange({ ...scope, projectIds: null })}
+              aria-pressed={scope.projectIds === null && !scope.exceptProjectIds?.length}
+              onClick={() => onChange({ ...listed, projectIds: null })}
             >
               <span className="tx">Tous les projets</span>
               <span className="fvc">
@@ -56,7 +63,7 @@ function ScopeRows({
                 aria-pressed={picked.has(p.id)}
                 onClick={() =>
                   onChange({
-                    ...scope,
+                    ...listed,
                     projectIds: projects
                       .map((o) => o.id)
                       .filter((id) => (id === p.id ? !picked.has(id) : picked.has(id))),

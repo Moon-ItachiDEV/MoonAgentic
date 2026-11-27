@@ -9,6 +9,7 @@ import {
   MAX_PROJECT_MEMORY,
   MAX_SETUP_FILE,
   type McpServerInfo,
+  mcpReaches,
   PROJECT_COLORS,
   type Project,
   type ProjectColor,
@@ -43,6 +44,7 @@ import {
 } from "../project-setup.ts";
 import { changeSkills, InstallSkill, SkillLists, useInstalledSkills } from "./Skills.tsx";
 import { KIND_LABEL, shortAgo } from "../project-threads.ts";
+import { renameKey } from "../rename.ts";
 import { useThreadModel } from "../thread-model.ts";
 import { I } from "../v2/I.tsx";
 import { ModelChip, type Route } from "../v2/ModelChip.tsx";
@@ -50,6 +52,7 @@ import { type Section, SettingsWindow } from "../v2/SettingsWindow.tsx";
 import { useScreen } from "../v2/use-screen.ts";
 import { BranchCleanup } from "./BranchCleanup.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
+import { lockedOnly, scopeSwitched } from "../mcp-switch.ts";
 import { LookMenu } from "./NewProjectDialog.tsx";
 import {
   findProjectIcons,
@@ -340,8 +343,10 @@ function NameField(props: { project: Project; onIcons: () => void }) {
         onChange={(e) => setName(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") {
+          // Not while a word is being composed (Japanese, Chinese…): that Enter ends the word.
+          const does = renameKey({ key: e.key, isComposing: e.nativeEvent.isComposing });
+          if (does === "save") e.currentTarget.blur();
+          if (does === "cancel") {
             e.preventDefault();
             e.stopPropagation();
             setName(project.name);
@@ -822,10 +827,6 @@ const agoText = (at: number) => {
   return /^\d/.test(said) ? `il y a ${said}` : said;
 };
 
-/** Whether the server reaches this project's threads, and the scope to send to change that. */
-const inProject = (server: McpServerInfo, projectId: string) =>
-  !server.projectIds || server.projectIds.includes(projectId);
-
 function Environment(props: {
   project: Project;
   projects: Project[];
@@ -836,23 +837,33 @@ function Environment(props: {
   const { project } = props;
   const { roomy } = useScreen();
   const folder = project.path.split(/[\\/]/).filter(Boolean).pop() ?? project.path;
-  const toggle = (server: McpServerInfo, on: boolean) => {
-    const others = (server.projectIds ?? props.projects.map((p) => p.id)).filter(
-      (id) => id !== project.id,
-    );
+  const toggle = (server: McpServerInfo, on: boolean) =>
     connection.send({
       type: "mcp.setScope",
       id: server.id,
-      projectIds: on ? [...others, project.id] : others,
+      ...scopeSwitched(server, project.id, on),
       allRoles: !!server.allRoles,
     });
-  };
-  const scope = (server: McpServerInfo) =>
-    !server.projectIds
-      ? "Tous les projets"
-      : server.projectIds.length === 1 && server.projectIds[0] === project.id
+  const scope = (server: McpServerInfo) => {
+    const except = server.exceptProjectIds ?? [];
+    if (!server.projectIds) {
+      return !except.length
+        ? "Tous les projets"
+        : except.length === 1 && except[0] === project.id
+          ? "Tous sauf ce projet"
+          : `Tous sauf ${except.length} projet${except.length > 1 ? "s" : ""}`;
+    }
+    const n = server.projectIds.length;
+    return n === 0
+      ? "Aucun projet"
+      : n === 1 && server.projectIds[0] === project.id
         ? "Ce projet"
-        : `${server.projectIds.length} projets`;
+        : `${n} projet${n > 1 ? "s" : ""}`;
+  };
+  // A locked project's own servers are not shown here.
+  const servers = props.mcpServers.filter(
+    (s) => mcpReaches(s, project.id) || !lockedOnly(s, props.projects),
+  );
   return (
     <>
       {roomy && <h2>Environnement</h2>}
@@ -881,6 +892,21 @@ function Environment(props: {
         {project.git && (
           <div className="ppi">
             <span className="ppii">
+              <I n="refresh" s={16} />
+            </span>
+            <span className="ppit">Mettre à jour depuis GitHub</span>
+            <Toggle
+              on={project.autoPull !== false}
+              label="Mettre à jour depuis GitHub"
+              onChange={(on) =>
+                connection.send({ type: "project.setAutoPull", projectId: project.id, on })
+              }
+            />
+          </div>
+        )}
+        {project.git && (
+          <div className="ppi">
+            <span className="ppii">
               <I n="merge" s={16} />
             </span>
             <span className="ppit">Supprimer la branche après la fusion</span>
@@ -896,7 +922,7 @@ function Environment(props: {
       </div>
       <h4>Serveurs MCP</h4>
       <div className="ppbox">
-        {props.mcpServers.map((server) => (
+        {servers.map((server) => (
           <div className="ppi" key={server.id}>
             <span className="ppii">
               <I n="plug" s={16} />
@@ -907,7 +933,7 @@ function Environment(props: {
             </span>
             {server.enabled ? (
               <Toggle
-                on={inProject(server, project.id)}
+                on={mcpReaches(server, project.id)}
                 label={`${server.name} dans ce projet`}
                 onChange={(on) => toggle(server, on)}
               />
@@ -960,13 +986,14 @@ function Usage(props: {
     if (!props.open) return;
     let live = true;
     connection
-      .ask({ type: "artifacts.list", requestId: newId() })
+      // This project's only: the others' folders are not looked at.
+      .ask({ type: "artifacts.list", requestId: newId(), projectId: props.project.id })
       .then((reply) => live && setArtifacts(reply.artifacts))
       .catch(() => live && setArtifacts(null));
     return () => {
       live = false;
     };
-  }, [props.open]);
+  }, [props.open, props.project.id]);
   const mine = artifacts?.filter((a) => a.projectId === props.project.id);
   const done = threads.filter((t) => t.archived).length;
   const atWork = threads.filter(
