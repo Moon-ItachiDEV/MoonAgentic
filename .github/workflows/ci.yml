@@ -78,7 +78,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - run: pnpm exec playwright install chromium
-      - run: pnpm e2e
+      # Two files at a time, each with its own server and browser: three at once on the
+      # runner's four cores made a team's turn twice as long as on Linux, past the tests' waits.
+      - run: pnpm e2e --maxWorkers=2
         env:
           E2E_FAILURES: e2e-failures
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
