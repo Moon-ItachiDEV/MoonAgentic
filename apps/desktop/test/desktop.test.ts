@@ -1,9 +1,10 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
-import { renameImports } from "../scripts/strip.ts";
+import { renameImports, stripServerSrc } from "../scripts/strip.ts";
 import {
   MAX_RESTART_DELAY_MS,
   readLine,
@@ -304,10 +305,61 @@ describe("status page", () => {
 });
 
 describe("renameImports", () => {
-  it("points relative imports at the JavaScript files", () => {
+  it("points relative imports and module URLs at the JavaScript files", () => {
     expect(renameImports(`import { a } from "./a.ts";\nexport { b } from '../b.ts';`)).toBe(
       `import { a } from "./a.js";\nexport { b } from '../b.js';`,
     );
+    expect(renameImports(`const s = new URL("./server.ts", import.meta.url);`)).toBe(
+      `const s = new URL("./server.js", import.meta.url);`,
+    );
     expect(renameImports(`import x from "zod";`)).toBe(`import x from "zod";`);
   });
+});
+
+describe("stripServerSrc", () => {
+  /** Starts a script the way Hermes starts its MCP servers, and gives its answer to `initialize`. */
+  const asHermes = (script: string) =>
+    new Promise<{ answer?: { result?: { serverInfo?: { name?: string } } }; said: string }>(
+      (resolve) => {
+        const child = spawn(process.execPath, [script, "http://127.0.0.1:1", "no-token"]);
+        let out = "";
+        let said = "";
+        const stop = setTimeout(() => child.kill(), 20_000);
+        child.stdout.on("data", (chunk) => {
+          out += chunk;
+          if (out.includes("\n")) child.stdin.end();
+        });
+        child.stderr.on("data", (chunk) => (said += chunk));
+        child.on("close", () => {
+          clearTimeout(stop);
+          const line = out.split("\n").find((l) => l.includes('"id":1'));
+          resolve({ ...(line ? { answer: JSON.parse(line) } : {}), said });
+        });
+        child.stdin.on("error", () => undefined);
+        child.stdin.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18" } })}\n`,
+        );
+      },
+    );
+
+  it("leaves only JavaScript, and the path an earlier version gave Hermes for its bridge", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moon-strip-"));
+    try {
+      const src = path.join(dir, "src");
+      cpSync(fileURLToPath(new URL("../../server/src", import.meta.url)), src, { recursive: true });
+      stripServerSrc(src);
+      expect(existsSync(path.join(src, "bin.js"))).toBe(true);
+      const typed = readdirSync(src, { recursive: true }).filter((f) => String(f).endsWith(".ts"));
+      expect(typed).toEqual(["hermes-bridge.ts"]);
+      // Hermes's `config.yaml` was written once, by the version that connected it: the script
+      // it names must still be an MCP server after the update.
+      for (const name of ["hermes-bridge.ts", "hermes-bridge.js"]) {
+        const run = await asHermes(path.join(src, name));
+        expect(run.said).not.toMatch(/Cannot find module/);
+        expect(run.answer?.result?.serverInfo?.name).toBe("moonagentic");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

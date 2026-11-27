@@ -485,6 +485,22 @@ const surfaceScale = (pixels: number): 1 | 2 => (pixels > size ? 2 : 1);
 const RECT_MS = 200;
 const DEFAULT_LABEL = "Faire un clin d’œil à la mascotte";
 
+/**
+ * Whether the page can be seen, and how to be told when that changes. The app gives its own
+ * (visibility.ts): a desktop window hidden in the tray keeps `document.hidden` false.
+ */
+export interface PageSight {
+  hidden(): boolean;
+  watch(listener: () => void): () => void;
+}
+let sight: PageSight = {
+  hidden: () => document.hidden,
+  watch(listener) {
+    document.addEventListener("visibilitychange", listener);
+    return () => document.removeEventListener("visibilitychange", listener);
+  },
+};
+
 class MoonMascot extends HTMLElement {
   static observedAttributes = ["shape", "color", "label", "expression", "decorative", "still"];
 
@@ -496,6 +512,7 @@ class MoonMascot extends HTMLElement {
   #last = 0;
   #bounds: ResizeObserver | undefined;
   #seen: IntersectionObserver | undefined;
+  #unwatch: (() => void) | undefined;
   #visible = true;
   #start = 0;
   #wink = -Infinity;
@@ -583,14 +600,14 @@ class MoonMascot extends HTMLElement {
     this.#mount();
     this.#bounds = new ResizeObserver(this.#measure);
     this.#bounds.observe(this);
-    // Off screen or in a hidden tab, nothing is drawn: the loop starts again when seen.
+    // Off screen or in a page nobody sees, nothing is drawn: the loop starts again when seen.
     this.#seen = new IntersectionObserver(([entry]) => {
       this.#visible = entry?.isIntersecting ?? true;
       this.#rect = undefined;
       this.#requestFrame();
     });
     this.#seen.observe(this);
-    document.addEventListener("visibilitychange", this.#requestFrame);
+    this.#unwatch = sight.watch(this.#requestFrame);
     this.#measure();
     this.#motion.addEventListener("change", this.#restyle);
     this.#requestFrame();
@@ -618,7 +635,8 @@ class MoonMascot extends HTMLElement {
     this.#frame = 0;
     this.#bounds?.disconnect();
     this.#seen?.disconnect();
-    document.removeEventListener("visibilitychange", this.#requestFrame);
+    this.#unwatch?.();
+    this.#unwatch = undefined;
     window.removeEventListener("pointermove", this.#track);
     window.removeEventListener("pointerout", this.#leave);
     window.removeEventListener("scroll", this.#invalidateRect, true);
@@ -656,7 +674,7 @@ class MoonMascot extends HTMLElement {
   };
 
   #requestFrame = () => {
-    if (!this.#frame && this.isConnected && this.#context && this.#visible && !document.hidden) {
+    if (!this.#frame && this.isConnected && this.#context && this.#visible && !sight.hidden()) {
       this.#frame = requestAnimationFrame(this.#draw);
     }
   };
@@ -808,7 +826,8 @@ class MoonMascot extends HTMLElement {
 }
 
 /** Registers `<moon-mascot>` once, in a browser only. */
-export function defineMoonMascot(): void {
+export function defineMoonMascot(pageSight?: PageSight): void {
+  if (pageSight) sight = pageSight;
   if (typeof customElements === "undefined" || customElements.get("moon-mascot")) return;
   customElements.define("moon-mascot", MoonMascot);
 }

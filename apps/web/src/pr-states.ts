@@ -2,6 +2,7 @@
 // server and kept fresh while they are shown. A link has no color until GitHub has answered.
 import type { PullRequestInfo } from "@moonagentic/protocol";
 import { connection, newId } from "./connection.ts";
+import { isPageHidden, onPageVisibility } from "./visibility.ts";
 
 type PrState = PullRequestInfo["state"];
 interface Entry {
@@ -78,7 +79,7 @@ function ask(url: string): void {
 }
 
 function refreshShown(): void {
-  if (document.visibilityState !== "visible") return;
+  if (isPageHidden()) return;
   for (const [url, entry] of entries) if (entry.shown > 0) ask(url);
 }
 
@@ -106,7 +107,7 @@ export const prStates = {
     }
     if (urls.length && !timer) {
       timer = setInterval(refreshShown, RETRY_MS);
-      document.addEventListener("visibilitychange", refreshShown);
+      onPageVisibility(refreshShown);
     }
     return () => {
       for (const url of urls) entryOf(url).shown -= 1;

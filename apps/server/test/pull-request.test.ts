@@ -690,3 +690,424 @@ describe("pull requests turned green", () => {
     expect(told()).toHaveLength(1);
   });
 });
+
+describe("batched PR polling, remote cache and idle cadence", () => {
+  it("parses gh pr list output keyed by branch and leaves out the pull requests of forks", async () => {
+    const { parsePullRequestList } = await import("../src/pull-request.ts");
+    const list = parsePullRequestList(
+      JSON.stringify([
+        { ...JSON.parse(view({ number: 10 })), headRefName: "feat/a", isCrossRepository: true },
+        { ...JSON.parse(view({ number: 11 })), headRefName: "feat/a", isCrossRepository: false },
+        { ...JSON.parse(view({ number: 12 })), headRefName: "feat/b", isDraft: true },
+        // A fork's branch of the same name is not the thread's: the thread is asked about by
+        // itself (`gh pr view`), which says its own pull request was merged, or that it has none.
+        { ...JSON.parse(view({ number: 13 })), headRefName: "feat/c", isCrossRepository: true },
+      ]),
+      "moon/demo",
+    );
+    expect(list.get("feat/a")?.number).toBe(11);
+    expect(list.get("feat/b")?.state).toBe("draft");
+    expect(list.has("feat/c")).toBe(false);
+
+    const calls: string[][] = [];
+    const gh = ghPullRequests(async (args) => {
+      calls.push(args);
+      return JSON.stringify([{ ...JSON.parse(view({ number: 12 })), headRefName: "feat/b" }]);
+    });
+    const open = await gh.listOpen!("moon/demo");
+    expect(open.get("feat/b")?.number).toBe(12);
+    expect(calls[0]).toContain("list");
+    expect(calls[0]).toContain("--state");
+    expect(calls[0]).toContain("open");
+  });
+
+  it("batches multiple open PRs in one repo into one listOpen call and falls back to find when one merges", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-prbatch-"));
+    const repo = path.join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test");
+    git(repo, "config", "commit.gpgsign", "false");
+    writeFileSync(path.join(repo, "README.md"), "# Demo\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "init");
+    git(repo, "remote", "add", "origin", "https://github.com/moon/demo.git");
+
+    let remoteCalls = 0;
+    const listedRepos: string[] = [];
+    const foundRefs: string[] = [];
+    const openByBranch = new Map<string, PullRequestInfo>();
+    const byBranch = new Map<string, PullRequestInfo>();
+    const pullRequests: PullRequests = {
+      find: async (_repoName, ref) => {
+        foundRefs.push(ref);
+        return byBranch.get(ref);
+      },
+      listOpen: async (repoName) => {
+        listedRepos.push(repoName);
+        return new Map(openByBranch);
+      },
+      merge: async () => undefined,
+    };
+
+    const store = new Store(path.join(root, "state.sqlite"));
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+      pullRequests: () => pullRequests,
+      resolveGithubRemote: async () => {
+        remoteCalls += 1;
+        return "moon/demo";
+      },
+      prWatchMs: 0,
+      prIdleWatchMs: 60_000,
+    });
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+
+    const projectId = hub.createProject("demo", repo);
+    const openThread = async (text: string) => {
+      const id = hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        isolated: true,
+        text,
+      });
+      await hub.whenIdle(id);
+      return id;
+    };
+    const t1 = await openThread("Première PR");
+    const t2 = await openThread("Deuxième PR");
+    const b1 = store.getThread(t1)!.workspace!.branch;
+    const b2 = store.getThread(t2)!.workspace!.branch;
+    const head1 = git(store.getThread(t1)!.workspace!.path, "rev-parse", "HEAD");
+    const head2 = git(store.getThread(t2)!.workspace!.path, "rev-parse", "HEAD");
+
+    const pr1: PullRequestInfo = {
+      ...OPEN,
+      number: 1,
+      url: "https://github.com/moon/demo/pull/1",
+      head: head1,
+      checks: [{ name: "ci", state: "passed" }],
+    };
+    const pr2: PullRequestInfo = {
+      ...OPEN,
+      number: 2,
+      url: "https://github.com/moon/demo/pull/2",
+      head: head2,
+      checks: [{ name: "ci", state: "passed" }],
+    };
+    byBranch.set(b1, pr1);
+    byBranch.set(b2, pr2);
+    openByBranch.set(b1, pr1);
+    openByBranch.set(b2, pr2);
+
+    await hub.pullRequest(t1);
+    await hub.pullRequest(t2);
+    // Remote was resolved once for the project and reused across both worktrees.
+    expect(remoteCalls).toBe(1);
+    expect(
+      store
+        .listWatchedPrThreads()
+        .map((t) => t.id)
+        .sort(),
+    ).toEqual([t1, t2].sort());
+
+    foundRefs.length = 0;
+    listedRepos.length = 0;
+    // Update checks via batched listOpen: 1 listOpen call, 0 find calls, still 1 remote resolution.
+    openByBranch.set(b1, { ...pr1, checks: [{ name: "ci", state: "failed" }] });
+    await hub.watchPullRequests();
+    expect(listedRepos).toEqual(["moon/demo"]);
+    expect(foundRefs).toEqual([]);
+    expect(remoteCalls).toBe(1);
+    expect(store.getThread(t1)!.pr!.checks).toBe("failed");
+
+    // When PR #1 merges and disappears from listOpen, fallback find detects the merge & archives it.
+    openByBranch.delete(b1);
+    byBranch.set(b1, { ...pr1, state: "merged" });
+    listedRepos.length = 0;
+    foundRefs.length = 0;
+    await hub.watchPullRequests();
+    expect(listedRepos).toEqual(["moon/demo"]);
+    expect(foundRefs).toEqual([b1]);
+    expect(store.getThread(t1)!.pr!.state).toBe("merged");
+    expect(store.getThread(t1)!.archived).toBe(true);
+    // Archived/merged thread is no longer returned by listWatchedPrThreads.
+    expect(store.listWatchedPrThreads().map((t) => t.id)).toEqual([t2]);
+  });
+
+  /** A repository, a hub that asks a stand-in GitHub, and threads each on its own branch. */
+  async function polled(pullRequests: PullRequests, origin?: string) {
+    const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-prpoll-"));
+    const repo = path.join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test");
+    git(repo, "config", "commit.gpgsign", "false");
+    writeFileSync(path.join(repo, "README.md"), "# Demo\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "init");
+    if (origin) git(repo, "remote", "add", "origin", origin);
+    const store = new Store(path.join(root, "state.sqlite"));
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+      pullRequests: () => pullRequests,
+      prWatchMs: 0,
+    });
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+    const projectId = hub.createProject("demo", repo);
+    const thread = async (text: string) => {
+      const id = hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        isolated: true,
+        text,
+      });
+      await hub.whenIdle(id);
+      const workspace = store.getThread(id)!.workspace!;
+      return { id, branch: workspace.branch, head: git(workspace.path, "rev-parse", "HEAD") };
+    };
+    return { hub, store, repo, thread };
+  }
+
+  it("keeps a merge noted while a round's list was on its way", async () => {
+    const now = new Map<string, PullRequestInfo>();
+    let listed: (() => void) | undefined;
+    let held: Promise<void> | undefined;
+    const pullRequests: PullRequests = {
+      find: async (_repo, ref) => now.get(ref),
+      // The list says what GitHub held when it was asked, and may arrive late.
+      listOpen: async () => {
+        const open = new Map([...now].filter(([, pr]) => pr.state === "open"));
+        listed?.();
+        await held;
+        return open;
+      },
+      merge: async () => undefined,
+    };
+    const { hub, store, thread } = await polled(pullRequests, "https://github.com/moon/demo.git");
+    const a = await thread("Première PR");
+    const b = await thread("Deuxième PR");
+    for (const [n, t] of [a, b].entries()) {
+      now.set(t.branch, {
+        ...OPEN,
+        number: n + 1,
+        url: `https://github.com/moon/demo/pull/${n + 1}`,
+        head: t.head,
+        checks: [{ name: "ci", state: "passed" }],
+      });
+      await hub.pullRequest(t.id);
+    }
+    expect(store.getThread(b.id)!.pr!.state).toBe("open");
+
+    let release = () => {};
+    held = new Promise<void>((resolve) => (release = resolve));
+    const asked = new Promise<void>((resolve) => (listed = resolve));
+    const round = hub.watchPullRequests();
+    await asked;
+    // Merged meanwhile, and seen by the thread's own question: its thread is resolved, and
+    // no later round looks at it again.
+    now.set(b.branch, { ...now.get(b.branch)!, state: "merged" });
+    await hub.pullRequest(b.id);
+    expect(store.getThread(b.id)!.pr!.state).toBe("merged");
+    expect(store.getThread(b.id)!.archived).toBe(true);
+    release();
+    await round;
+    expect(store.getThread(b.id)!.pr!.state).toBe("merged");
+    // The other thread of the list is still told what the list said.
+    expect(store.getThread(a.id)!.pr!.state).toBe("open");
+  });
+
+  it("asks git again as soon as the repository's remotes change", async () => {
+    const asked: string[] = [];
+    const pullRequests: PullRequests = {
+      find: async (repo) => {
+        asked.push(repo);
+        return undefined;
+      },
+      merge: async () => undefined,
+    };
+    const { hub, repo, thread } = await polled(pullRequests);
+    const t = await thread("Sans dépôt GitHub");
+    await hub.pullRequest(t.id);
+    expect(asked).toEqual([]);
+
+    // Pushed to GitHub since: the thread's pull request shows at once, not a minute later.
+    git(repo, "remote", "add", "origin", "https://github.com/moon/demo.git");
+    await hub.pullRequest(t.id);
+    expect(asked).toEqual(["moon/demo"]);
+
+    // Moved to another repository: the old one is not asked for ten more minutes.
+    git(repo, "remote", "set-url", "origin", "https://github.com/other/place.git");
+    await hub.pullRequest(t.id);
+    expect(asked).toEqual(["moon/demo", "other/place"]);
+  });
+
+  it("slows quiet open PRs when no client is connected, while keeping urgent PRs on fast cadence", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-pridle-"));
+    const repo = path.join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test");
+    git(repo, "config", "commit.gpgsign", "false");
+    writeFileSync(path.join(repo, "README.md"), "# Demo\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "init");
+    git(repo, "remote", "add", "origin", "https://github.com/moon/demo.git");
+
+    const foundRefs: string[] = [];
+    const byBranch = new Map<string, PullRequestInfo>();
+    const pullRequests: PullRequests = {
+      find: async (_repoName, ref) => {
+        foundRefs.push(ref);
+        return byBranch.get(ref);
+      },
+      merge: async () => undefined,
+    };
+    const store = new Store(path.join(root, "state.sqlite"));
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+      pullRequests: () => pullRequests,
+      resolveGithubRemote: async () => "moon/demo",
+      prWatchMs: 0,
+      prIdleWatchMs: 60_000,
+    });
+    cleanups.push(async () => {
+      await hub.close();
+      store.close();
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+
+    const projectId = hub.createProject("demo", repo);
+    const makeThread = async (text: string) => {
+      const id = hub.createThread({
+        projectId,
+        agentId: "demo",
+        permissionMode: "full",
+        isolated: true,
+        text,
+      });
+      await hub.whenIdle(id);
+      return id;
+    };
+    const quietId = await makeThread("PR calme");
+    const pendingId = await makeThread("PR CI en cours");
+    const quietBranch = store.getThread(quietId)!.workspace!.branch;
+    const pendingBranch = store.getThread(pendingId)!.workspace!.branch;
+
+    byBranch.set(quietBranch, {
+      ...OPEN,
+      number: 10,
+      url: "https://github.com/moon/demo/pull/10",
+      checks: [{ name: "ci", state: "passed" }],
+    });
+    byBranch.set(pendingBranch, {
+      ...OPEN,
+      number: 11,
+      url: "https://github.com/moon/demo/pull/11",
+      checks: [{ name: "ci", state: "pending" }],
+    });
+    await hub.pullRequest(quietId);
+    await hub.pullRequest(pendingId);
+    foundRefs.length = 0;
+
+    // First scheduled idle tick polls both (since lastIdlePrWatchAt was 0).
+    await hub.watchPullRequests({ scheduled: true });
+    expect(foundRefs.sort()).toEqual([pendingBranch, quietBranch].sort());
+    foundRefs.length = 0;
+
+    // Immediate next scheduled tick with 0 clients skips the quiet PR, but still polls the pending one.
+    await hub.watchPullRequests({ scheduled: true });
+    expect(foundRefs).toEqual([pendingBranch]);
+    foundRefs.length = 0;
+
+    // Once a client connects, both are polled again on the fast schedule.
+    const client: Client = { send: () => undefined };
+    const disconnect = hub.connect(client);
+    await hub.watchPullRequests({ scheduled: true });
+    expect(foundRefs.sort()).toEqual([pendingBranch, quietBranch].sort());
+    disconnect();
+  });
+
+  it("scales streamed text flush delay with draft size", async () => {
+    const { textFlushDelayMs } = await import("../src/hub.ts");
+    expect(textFlushDelayMs(0)).toBe(250);
+    expect(textFlushDelayMs(2_000)).toBe(250);
+    expect(textFlushDelayMs(4_096)).toBe(500);
+    expect(textFlushDelayMs(16_384)).toBe(1_000);
+  });
+
+  it("listWatchedPrThreads selects only active PR candidates and tolerates damaged JSON", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-pr-sql-"));
+    const store = new Store(path.join(dir, "test.db"));
+    cleanups.push(async () => {
+      store.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    });
+    const now = Date.now();
+    store.addProject({ id: "p1", name: "p", path: dir, createdAt: now });
+    const ws = (branch: string, prOpened?: boolean) => ({
+      path: path.join(dir, branch),
+      branch,
+      base: "abc123",
+      ...(prOpened ? { prOpened: true } : {}),
+    });
+    const prOf = (number: number, state: PullRequestInfo["state"] = "open") =>
+      threadPullRequest({
+        ...OPEN,
+        number,
+        state,
+        url: `https://github.com/moon/demo/pull/${number}`,
+      });
+    const add = (id: string, extra: Partial<Parameters<Store["addThread"]>[0]> = {}) =>
+      store.addThread({
+        id,
+        projectId: "p1",
+        title: id,
+        agentId: "demo",
+        status: "idle",
+        permissionMode: "full",
+        createdAt: now,
+        updatedAt: now,
+        ...extra,
+      });
+
+    add("t-open", { workspace: ws("b-open"), pr: prOf(1, "open") });
+    add("t-draft", { workspace: ws("b-draft"), pr: prOf(2, "draft") });
+    add("t-opened", { workspace: ws("b-opened", true) });
+    add("t-merged", { workspace: ws("b-merged", true), pr: prOf(3, "merged") });
+    add("t-closed", { workspace: ws("b-closed"), pr: prOf(4, "closed") });
+    add("t-archived", { workspace: ws("b-arch"), pr: prOf(5, "open"), archived: true });
+    add("t-no-ws", { pr: prOf(6, "open") });
+    add("t-plain", { workspace: ws("b-plain") });
+
+    // Simulate damaged JSON rows in `extra` and `workspace`: query must not throw.
+    const rawDb = (store as unknown as { db: { exec: (sql: string) => void } }).db;
+    rawDb.exec(
+      `INSERT INTO threads (id, project_id, title, agent_id, status, permission_mode, created_at, updated_at, workspace, extra)
+       VALUES ('t-corrupt-extra', 'p1', 'c1', 'demo', 'idle', 'full', ${now}, ${now}, '${JSON.stringify(ws("b-c1", true))}', '{broken')`,
+    );
+    rawDb.exec(
+      `INSERT INTO threads (id, project_id, title, agent_id, status, permission_mode, created_at, updated_at, workspace, extra)
+       VALUES ('t-corrupt-ws', 'p1', 'c2', 'demo', 'idle', 'full', ${now}, ${now}, '{broken', '{"pr":{"state":"open"}}')`,
+    );
+
+    const ids = store
+      .listWatchedPrThreads()
+      .map((t) => t.id)
+      .sort();
+    expect(ids).toEqual(["t-draft", "t-open", "t-opened"]);
+  });
+});

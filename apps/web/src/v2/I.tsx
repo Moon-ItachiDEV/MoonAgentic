@@ -1,18 +1,22 @@
+import { memo } from "react";
 import { PROJECT_SPRITE } from "../project-icons.ts";
 import { type IconName, SPRITE } from "./sprite.ts";
 
+const SPRITE_STYLE = { position: "absolute" } as const;
+const SPRITE_HTML = { __html: `<defs>${SPRITE}${PROJECT_SPRITE}</defs>` };
+
 /** The sprite itself, drawn once at the top of the app. */
-export function Sprite() {
+export const Sprite = memo(function Sprite() {
   return (
     <svg
       width="0"
       height="0"
-      style={{ position: "absolute" }}
+      style={SPRITE_STYLE}
       aria-hidden="true"
-      dangerouslySetInnerHTML={{ __html: `<defs>${SPRITE}${PROJECT_SPRITE}</defs>` }}
+      dangerouslySetInnerHTML={SPRITE_HTML}
     />
   );
-}
+});
 
 /** One icon of the sprite. */
 export function I({ n, s = 22, className }: { n: IconName; s?: number; className?: string }) {

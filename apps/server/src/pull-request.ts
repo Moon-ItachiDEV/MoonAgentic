@@ -9,6 +9,8 @@ const MERGE_TIMEOUT_MS = 2 * 60_000;
 
 const FIELDS =
   "number,url,title,state,isDraft,mergeable,mergeStateStatus,headRefOid,baseRefName,statusCheckRollup,author,createdAt,additions,deletions,changedFiles";
+const LIST_FIELDS = `headRefName,isCrossRepository,${FIELDS}`;
+const LIST_LIMIT = "100";
 
 /**
  * Where pull requests are read and merged. Today the user's own `gh`; a client holding a
@@ -17,6 +19,8 @@ const FIELDS =
 export interface PullRequests {
   /** The pull request `ref` names in `repo`: its number, or its branch. None: undefined. */
   find(repo: string, ref: string): Promise<PullRequestInfo | undefined>;
+  /** Open pull requests in `repo`, keyed by head branch name, to batch polling per repository. */
+  listOpen?(repo: string): Promise<Map<string, PullRequestInfo>>;
   /** Merges it if its last commit is still `head`, the way the repository allows. */
   merge(repo: string, number: number, head: string): Promise<void>;
   /**
@@ -76,14 +80,7 @@ function checkOf(raw: unknown): (PullRequestCheck & { key: string; at: string })
   };
 }
 
-/** Reads what `gh pr view --json` printed. A check run again counts once, as its last run. */
-export function parsePullRequest(json: string, repo: string): PullRequestInfo | undefined {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(json);
-  } catch {
-    return undefined;
-  }
+function parsePullRequestRecord(raw: unknown, repo: string): PullRequestInfo | undefined {
   if (!isRecord(raw) || typeof raw.number !== "number" || !text(raw.url)) return undefined;
   const latest = new Map<string, PullRequestCheck & { key: string; at: string }>();
   for (const one of Array.isArray(raw.statusCheckRollup) ? raw.statusCheckRollup : []) {
@@ -120,6 +117,43 @@ export function parsePullRequest(json: string, repo: string): PullRequestInfo | 
     ...(typeof raw.deletions === "number" ? { deletions: raw.deletions } : {}),
     ...(typeof raw.changedFiles === "number" ? { files: raw.changedFiles } : {}),
   };
+}
+
+/** Reads what `gh pr view --json` printed. A check run again counts once, as its last run. */
+export function parsePullRequest(json: string, repo: string): PullRequestInfo | undefined {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return undefined;
+  }
+  return parsePullRequestRecord(raw, repo);
+}
+
+/**
+ * Reads what `gh pr list --json` printed, keyed by head branch name. Only pull requests from
+ * the repository's own branches: one from a fork's branch of the same name is not the thread's,
+ * and `gh pr view <branch>` does not find it either.
+ */
+export function parsePullRequestList(json: string, repo: string): Map<string, PullRequestInfo> {
+  const byBranch = new Map<string, PullRequestInfo>();
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch {
+    return byBranch;
+  }
+  if (!Array.isArray(raw)) return byBranch;
+  for (const entry of raw) {
+    if (!isRecord(entry) || entry.isCrossRepository === true) continue;
+    const branch = text(entry.headRefName);
+    if (!branch) continue;
+    const pr = parsePullRequestRecord(entry, repo);
+    if (!pr) continue;
+    const prev = byBranch.get(branch);
+    if (!prev || pr.number > prev.number) byBranch.set(branch, pr);
+  }
+  return byBranch;
 }
 
 /** At most this much of one remark: a pasted log says what it needs in far less. */
@@ -229,6 +263,29 @@ export function ghPullRequests(run: GhRun): PullRequests {
         throw new Error(ghError(error), { cause: error });
       }
       return parsePullRequest(out, repo);
+    },
+    async listOpen(repo) {
+      let out: string;
+      try {
+        out = await run(
+          [
+            "pr",
+            "list",
+            "--repo",
+            repo,
+            "--state",
+            "open",
+            "--limit",
+            LIST_LIMIT,
+            "--json",
+            LIST_FIELDS,
+          ],
+          ASK_TIMEOUT_MS,
+        );
+      } catch (error) {
+        throw new Error(ghError(error), { cause: error });
+      }
+      return parsePullRequestList(out, repo);
     },
     async remarks(repo, number) {
       const [owner, name] = repo.split("/");

@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isTest, stripDir } from "./strip.ts";
+import { isTest, stripDir, stripServerSrc } from "./strip.ts";
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 const stage = fileURLToPath(new URL("../stage", import.meta.url));
@@ -40,6 +40,10 @@ if (pnpm && /pnpm/i.test(path.basename(pnpm)) && pnpm.endsWith("js")) {
 }
 rmSync(path.join(server, "test"), { recursive: true, force: true });
 rmSync(path.join(server, "tsconfig.json"), { force: true });
+
+// Pre-strip the server's TypeScript into plain JS so packaged startups skip Node's runtime
+// type-stripping on every module while keeping relative script paths (bridges, web/dist) intact.
+stripServerSrc(path.join(server, "src"));
 
 // The protocol package sits under node_modules now, where Node runs no TypeScript.
 const protocol = path.join(server, "node_modules", "@moonagentic", "protocol");

@@ -2085,3 +2085,10 @@ html[data-kb] #gstack {
   inset: auto 0 0;
   pointer-events: none;
 }
+/* Hidden in the desktop tray (or minimized): Electron disables backgroundThrottling for
+   notifications, so CSS animations pause explicitly instead of painting an unseen window. */
+html.page-hidden *,
+html.page-hidden *::before,
+html.page-hidden *::after {
+  animation-play-state: paused !important;
+}

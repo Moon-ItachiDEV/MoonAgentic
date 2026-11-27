@@ -2,6 +2,8 @@ import {
   type AgentInfo,
   type Item,
   MAX_PAGE_ITEMS,
+  type PendingQuestion,
+  type PendingRequest,
   type Project,
   type Schedule,
   type Thread,
@@ -18,7 +20,6 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import { Composer as PlainComposer } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
@@ -58,6 +59,7 @@ import { readPref, writePref } from "./prefs.ts";
 import { tightest } from "./quotas.ts";
 import { navigate, useRoute } from "./router.ts";
 import { useQuotas } from "./use-quotas.ts";
+import { useShellState, useThreadOpenQuestion } from "./use-store.ts";
 import { I, Sprite } from "./v2/I.tsx";
 import type { IconName } from "./v2/sprite.ts";
 import { Ring } from "./v2/Ring.tsx";
@@ -102,8 +104,41 @@ const ScheduleDialog = lazy(() =>
 const Sidebar = steady(PlainSidebar);
 const Composer = steady(PlainComposer);
 
+/** Subscribes only to one thread's open question so streaming text never re-renders the dock. */
+function ThreadDecisionCard(props: {
+  thread: Thread;
+  requests: PendingRequest[];
+  questions: PendingQuestion[];
+  threads: Thread[];
+  agents: AgentInfo[];
+  own: boolean;
+  onOpenThread: (id: string, itemId: string) => void;
+}) {
+  const asked = useThreadOpenQuestion(props.thread);
+  const list = useMemo(
+    () =>
+      waits({
+        thread: props.thread,
+        asked,
+        requests: props.requests,
+        questions: props.questions,
+        own: props.own,
+      }),
+    [props.thread, asked, props.requests, props.questions, props.own],
+  );
+  return (
+    <DecisionCard
+      waits={list}
+      threadId={props.thread.id}
+      threads={props.threads}
+      agents={props.agents}
+      onOpenThread={props.onOpenThread}
+    />
+  );
+}
+
 export function App() {
-  const state = useSyncExternalStore(connection.subscribe, connection.getState);
+  const state = useShellState();
   const route = useRoute();
   const [drawer, setDrawer] = useState(false);
   /** The list open above one of the phone's tabs, on the home page. */
@@ -261,8 +296,8 @@ export function App() {
     () => openProjects.filter((p) => !isDiscussionsProject(p) && !p.archived),
     [openProjects],
   );
-  // The side bar shows no message: text being written does not change what it is given.
-  const { items: _items, held: _held, reviews: _reviews, ...lists } = state;
+  // The side bar shows no reviews: review refreshes do not change what it is given.
+  const { reviews: _reviews, ...lists } = state;
   const sideState = useSame({ ...lists, threads: listedThreadsNow });
   // A coordinator lives on its project's page: its own address, reached from a notification
   // or an old link, leads there, and « back » does not come here again.
@@ -420,11 +455,12 @@ export function App() {
   const togglePin = (id: string, pinned: boolean) =>
     connection.send({ type: "thread.setPinned", threadId: id, pinned });
   const exportThread = (t: Thread | undefined = spoken) => {
-    const items = t && state.items[t.id];
+    const liveState = connection.getState();
+    const items = t && liveState.items[t.id];
     if (!t || !items) return;
     const save = (all: Item[]) =>
       downloadMarkdown(exportFileName(t.title), threadMarkdown(t, all, state.agents));
-    const held = state.held[t.id];
+    const held = liveState.held[t.id];
     if (!held?.earlier) return save(items);
     // Only the end of a long thread is here: what is before it is asked for, a page at a time.
     wholeThread(
@@ -652,18 +688,14 @@ export function App() {
         </div>
       )}
       {t && !t.archived && (
-        <DecisionCard
-          waits={waits({
-            thread: t,
-            items: state.items[t.id],
-            requests: state.requests,
-            questions: state.questions,
-            // A coordinator's page already lists what its project's threads wait for.
-            own: t.kind === "coordinator",
-          })}
-          threadId={t.id}
+        <ThreadDecisionCard
+          thread={t}
+          requests={state.requests}
+          questions={state.questions}
           threads={state.threads}
           agents={state.agents}
+          // A coordinator's page already lists what its project's threads wait for.
+          own={t.kind === "coordinator"}
           onOpenThread={(id, itemId) => {
             focusItem(id, itemId);
             openThread(id);
@@ -1227,8 +1259,6 @@ export function App() {
           thread ? (
             <ThreadView
               thread={thread}
-              items={state.items[thread.id]}
-              held={state.held[thread.id]}
               agents={state.agents}
               threads={state.threads}
               onOpenThread={(id) => navigate({ name: "thread", threadId: id })}
@@ -1332,8 +1362,6 @@ export function App() {
               })()}
               key={coordinator.id}
               thread={coordinator}
-              items={state.items[coordinator.id]}
-              held={state.held[coordinator.id]}
               agents={state.agents}
               threads={state.threads}
               onOpenThread={openThread}
@@ -1560,8 +1588,6 @@ export function App() {
                 </div>
                 <ThreadView
                   thread={paneThread}
-                  items={state.items[paneThread.id]}
-                  held={state.held[paneThread.id]}
                   agents={state.agents}
                   threads={state.threads}
                   onOpenThread={openThread}
@@ -1635,7 +1661,6 @@ export function App() {
           <DiscussionSettings
             key={`setup:${thread.id}`}
             thread={thread}
-            items={state.items[thread.id]}
             loose={looseThread}
             open={threadSetup}
             anchor={threadGear}

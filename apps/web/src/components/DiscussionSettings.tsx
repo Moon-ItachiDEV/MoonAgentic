@@ -12,6 +12,7 @@ import { looseDefault } from "../default-models.ts";
 import { effortOf } from "../effort.ts";
 import { renameKey, sendRename } from "../rename.ts";
 import { useThreadModel } from "../thread-model.ts";
+import { useThreadItemsOf } from "../use-store.ts";
 import { Dropdown } from "../v2/Dropdown.tsx";
 import { I } from "../v2/I.tsx";
 import { ModelChip, ModelLines, type Route } from "../v2/ModelChip.tsx";
@@ -70,7 +71,7 @@ const looseRoute = (agents: AgentInfo[], settings: CoordinatorSettings): Route |
  */
 export function DiscussionSettings(props: {
   thread: Thread;
-  items: Item[] | undefined;
+  items?: Item[] | undefined;
   /** Outside any project (« Discussions »): it can move into one, and sets new ones' model. */
   loose: boolean;
   open: boolean;
@@ -85,10 +86,14 @@ export function DiscussionSettings(props: {
   onDelete: () => void;
 }) {
   const { roomy } = useScreen();
-  return roomy ? <DiscussionWindow {...props} /> : <DiscussionMenu {...props} />;
+  const liveItems = useThreadItemsOf(props.thread.id, props.open && props.items === undefined);
+  const resolved = { ...props, items: props.items ?? liveItems };
+  return roomy ? <DiscussionWindow {...resolved} /> : <DiscussionMenu {...resolved} />;
 }
 
-type Props = Parameters<typeof DiscussionSettings>[0];
+type Props = Omit<Parameters<typeof DiscussionSettings>[0], "items"> & {
+  items: Item[] | undefined;
+};
 
 function DiscussionWindow(props: Props) {
   const { thread, agents, loose } = props;

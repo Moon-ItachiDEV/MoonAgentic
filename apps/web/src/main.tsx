@@ -24,12 +24,14 @@ import { startNotifications } from "./notifications.ts";
 import { startPush } from "./push.ts";
 import { applyTheme } from "./theme.ts";
 import { watchDevice } from "./v2/use-screen.ts";
+import { watchPageVisibility } from "./visibility.ts";
 
 installGlobalErrorHandlers();
 applyTheme();
 watchDevice();
 watchTabs();
 watchKeyboard();
+watchPageVisibility();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

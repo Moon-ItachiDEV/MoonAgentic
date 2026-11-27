@@ -23,6 +23,7 @@ import { useQuotas } from "../use-quotas.ts";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
 import { useMouse, useScreen } from "../v2/use-screen.ts";
+import { isPageHidden, onPageVisibility } from "../visibility.ts";
 
 type View = "model" | "all" | "effort" | "options";
 
@@ -1178,7 +1179,12 @@ export function Galaxy({ intro: wanted }: { intro: boolean }) {
       : [];
     let last = born;
     let frame = 0;
+    let done = false;
     const draw = (now: number) => {
+      if (isPageHidden()) {
+        frame = 0;
+        return;
+      }
       const t = now / 1000;
       const el = now - born;
       const dt = Math.min(0.05, (now - last) / 1000);
@@ -1262,10 +1268,31 @@ export function Galaxy({ intro: wanted }: { intro: boolean }) {
           const z = sp[4] * (1 - life * 0.5);
           g.fillRect(sp[0] - z / 2, sp[1] - z / 2, z, z);
         }
-      if (!still || age < 1 || live) frame = requestAnimationFrame(draw);
+      if (!still || age < 1 || live) {
+        frame = requestAnimationFrame(draw);
+      } else {
+        done = true;
+        frame = 0;
+      }
     };
-    frame = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(frame);
+    const start = () => {
+      if (done || frame || isPageHidden()) return;
+      last = performance.now();
+      frame = requestAnimationFrame(draw);
+    };
+    const stop = () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
+    };
+    const offVisibility = onPageVisibility(() => {
+      if (isPageHidden()) stop();
+      else start();
+    });
+    start();
+    return () => {
+      stop();
+      offVisibility();
+    };
   }, []);
   return <canvas ref={canvas} aria-hidden />;
 }
