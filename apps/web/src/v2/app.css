@@ -3946,6 +3946,17 @@
   background: var(--press);
   margin: 0 auto 8px;
 }
+/* A sheet without a title keeps the handle: a strip over its top, pulled down as a header is */
+.sgrab {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 24px;
+  padding-top: 8px;
+  z-index: 2;
+}
+.scr.roomy .sgrab {
+  display: none;
+}
 .shd h3 {
   margin: 0;
   height: 44px;

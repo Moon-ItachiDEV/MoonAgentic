@@ -5,7 +5,7 @@ import { useEffect, useSyncExternalStore } from "react";
  * the screen's root so the rest of the page can dim or step aside, as in the mockup. A part of
  * the page raises its flag while it is open; the root reads them all.
  */
-export type ScrFlag = "sh" | "pm" | "tm" | "tp" | "sg" | "ph" | "sdrag";
+export type ScrFlag = "sh" | "pm" | "tm" | "tp" | "sg" | "ph" | "sdrag" | "upi";
 
 const raised = new Map<ScrFlag, number>();
 const listeners = new Set<() => void>();
