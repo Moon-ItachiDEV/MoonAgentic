@@ -42,10 +42,20 @@ export function spawnPlan(
  * been spawned `detached`, so that it leads a group the signal can reach. Resolves once
  * the request to stop is made, which on Windows is once the tree is gone.
  */
-export function killTree(child: ChildProcess, signal: "SIGTERM" | "SIGKILL"): Promise<void> {
+export function killTree(
+  child: ChildProcess,
+  signal: "SIGTERM" | "SIGKILL",
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
   const pid = child.pid;
   if (pid === undefined) return Promise.resolve();
-  if (process.platform === "win32") {
+  if (platform === "win32") {
+    // Once Node has seen it end, its number is free, and Windows soon gives it to another
+    // process: taskkill would end that one and all it started, with code 1 and not a word.
+    // A probe of an MCP server asked a second time two seconds late, for a server always
+    // gone by then; a `git push` of another test ended that way at that very second (CI,
+    // 2026-11-27). Nothing the process had started can be found through it once it is gone.
+    if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
     // Windows has no signals: taskkill ends the whole tree at once. Its own end is waited
     // for, since the process it was given can be gone a moment before the ones it started.
     return new Promise((resolve) => {
