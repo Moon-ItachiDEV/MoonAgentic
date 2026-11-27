@@ -86,11 +86,11 @@ describe("/lock", () => {
     await other.goto(threadUrl);
     await other.getByText(ANSWER).waitFor();
 
-    // No code yet: the first lock, from the project's settings, asks for one, twice.
+    // No code yet: the first lock, from the project's menu, asks for one, twice.
     await menu.getByRole("button", { name: /^secret/ }).click();
     await page.waitForURL(/\/p\//);
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    await page.getByRole("button", { name: "Verrouiller par code" }).click();
+    await page.getByRole("button", { name: "Projet secret" }).click();
+    await page.getByRole("menuitem", { name: "Verrouiller par code" }).click();
     await page.getByRole("dialog", { name: "Choisis ton code" }).waitFor();
     await page.keyboard.type("123456");
     await page.getByRole("dialog", { name: "Confirme ton code" }).waitFor();

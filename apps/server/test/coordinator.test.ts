@@ -377,6 +377,67 @@ describe("a project's coordinator", () => {
     await hub.whenIdle(held);
   }, 90_000);
 
+  it("sends a project's work where its own routes say, with their effort, before the general ones", async () => {
+    const { hub, store, projectId, otherId, tokens, post, say, hold } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await hub.handle(client, {
+      type: "coordinator.setRoute",
+      kind: "bug",
+      agentId: "demo",
+      model: "rapide",
+    });
+    await hub.handle(client, {
+      type: "coordinator.setRoute",
+      kind: "default",
+      agentId: "demo",
+      model: "precis",
+      settings: { effort: "max" },
+      projectId,
+    });
+    // Another project's routes do not reach this one.
+    await hub.handle(client, {
+      type: "coordinator.setRoute",
+      kind: "tests",
+      agentId: "demo",
+      model: "rapide",
+      projectId: otherId,
+    });
+    await say("/fils");
+    await hold();
+    const call = async (args: unknown) =>
+      (await (await post(tokens[0]!, { tool: "open_thread", args })).json()) as {
+        result: { opened: { id: string } };
+      };
+    // The project's default goes before the general route for bugs.
+    const bug = await call({ task_key: "b", title: "Bug", brief: "B", kind: "bug" });
+    expect(store.getThread(bug.result.opened.id)).toMatchObject({
+      model: "precis",
+      settings: { effort: "max" },
+    });
+    const tests = await call({ task_key: "t", title: "T", brief: "B", kind: "tests" });
+    expect(store.getThread(tests.result.opened.id)).toMatchObject({ model: "precis" });
+  });
+
+  it("restarts its agent from the project's settings, its conversation kept", async () => {
+    const { hub, store, projectId, otherId, coordinatorId, say, hold } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await say("/fils");
+    expect(hub.liveAgents).toBe(1);
+    await hold();
+    let done = false;
+    await hub.handle(
+      { send: (m) => void (m.type === "done" && m.requestId === "r" && (done = true)) },
+      { type: "coordinator.restart", requestId: "r", projectId },
+    );
+    expect(done).toBe(true);
+    expect(store.getThread(coordinatorId)!.status).not.toBe("running");
+    expect(hub.liveAgents).toBe(0);
+    expect(await say("/fils")).toBe("Ce projet a 0 fil.");
+    await expect(
+      hub.handle(client, { type: "coordinator.restart", requestId: "s", projectId: otherId }),
+    ).rejects.toThrow("pas encore de coordinateur");
+  });
+
   it("sends each kind of work where the settings say, and starts the team the user set up", async () => {
     const { hub, store, projectId, coordinatorId, tokens, post, say, hold, release } =
       await coordinated();

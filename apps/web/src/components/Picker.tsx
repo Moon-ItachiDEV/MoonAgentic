@@ -15,13 +15,14 @@ import {
   useSyncExternalStore,
 } from "react";
 import { connection } from "../connection.ts";
+import { effortName } from "../effort.ts";
 import { entryKey, keepLines, type WheelEntry, wheelEntries } from "../wheel.ts";
 import { modelLabel, modelNameOf } from "../model-label.ts";
 import { formatPercent, quotaLevel, tightest } from "../quotas.ts";
 import { useQuotas } from "../use-quotas.ts";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
-import { useScreen } from "../v2/use-screen.ts";
+import { useMouse, useScreen } from "../v2/use-screen.ts";
 
 type View = "model" | "all" | "effort" | "options";
 
@@ -31,12 +32,6 @@ const LINE = 52;
 const SETTLE_MS = 140;
 /** Let go, the effort slider gives the wheel back after this long. */
 const EFFORT_CLOSE_MS = 1200;
-
-/** The name of an effort level: the agent's own, but the highest, which is « UltraMoon ». */
-const effortName = (setting: AgentSetting, index: number) =>
-  setting.choices.length > 1 && index === setting.choices.length - 1
-    ? "UltraMoon"
-    : (setting.choices[index]?.name ?? "");
 
 /**
  * The model sheet: the favorites on a wheel, the effort on a slider that takes the wheel's
@@ -464,20 +459,6 @@ function EffortPill(props: {
       </span>
       <I n="right" s={13} />
     </button>
-  );
-}
-
-/** Whether a mouse drives the page (`data-dev="desk"`, set by `watchDevice`). */
-function useMouse(): boolean {
-  return useSyncExternalStore(
-    (l) => {
-      if (typeof matchMedia !== "function") return () => {};
-      const q = matchMedia("(hover: hover) and (pointer: fine)");
-      q.addEventListener("change", l);
-      return () => q.removeEventListener("change", l);
-    },
-    () =>
-      typeof matchMedia === "function" && matchMedia("(hover: hover) and (pointer: fine)").matches,
   );
 }
 

@@ -101,8 +101,8 @@ describe("fenêtres et menus (iPad, ordinateur)", () => {
   it("keeps the lock's pad centred in its window", async () => {
     const page = await desk();
     await addProject(page, repo, false);
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    await page.getByRole("button", { name: "Verrouiller par code" }).click();
+    await page.getByRole("button", { name: /^Projet / }).click();
+    await page.getByRole("menuitem", { name: "Verrouiller par code" }).click();
     const sheet = page.getByRole("dialog", { name: "Choisis ton code" });
     await sheet.waitFor();
     await page.waitForTimeout(400);

@@ -1,6 +1,7 @@
 // What the project settings check before they send, the same rules as the server's, so a
 // mistake shows under the field rather than as a refusal.
 import {
+  type InstalledSkill,
   MAX_PROJECT_MEMORY,
   MAX_SETUP_FILE,
   type ProjectCommand,
@@ -38,6 +39,19 @@ export function skillProblem(
   const same = skills.find((s) => s.name.toLowerCase() === name.toLowerCase());
   if (same && same.path !== editing?.path) return `Une skill ${name} existe déjà.`;
   return undefined;
+}
+
+/**
+ * The skill of the project's folder that an installed one is, to write it from the app: found
+ * by its folder, since its `SKILL.md` may give it another name.
+ */
+export function setupSkillOf(
+  skill: InstalledSkill,
+  projectId: string,
+  skills: ProjectSkill[],
+): ProjectSkill | undefined {
+  if (skill.projectId !== projectId) return undefined;
+  return skills.find((k) => skill.paths.some((p) => k.path === `${p}/SKILL.md`));
 }
 
 /** Whether a text fits in a setup file. */

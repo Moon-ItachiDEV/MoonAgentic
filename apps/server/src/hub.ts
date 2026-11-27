@@ -49,6 +49,7 @@ import type {
   AgentSetting,
   ClientMessage,
   ImageRef,
+  InstalledSkill,
   Item,
   Mascot,
   McpServerInput,
@@ -152,6 +153,21 @@ import {
   UNKNOWN_RESET_RETRY_MS,
 } from "./quota-relief.ts";
 import { isTeamPreset } from "./saved-shapes.ts";
+import {
+  installFromRepo,
+  listSkills,
+  moveSkill,
+  parseSkillSource,
+  planCommand,
+  removeSkillEverywhere,
+  RepoCache,
+  setSkillAgents,
+  SkillError,
+  SkillRecords,
+  SkillRuns,
+  type SkillPlace,
+  skillsIn,
+} from "./skills.ts";
 import { isRecord, type Store, StorageRefused, storageTrouble, type ThreadPlace } from "./store.ts";
 import {
   forecastFor,
@@ -228,6 +244,19 @@ const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolCon
 
 /** How long an agent may take to stop after « Arrêter » before its process is killed. */
 const FORCE_STOP_MS = 10_000;
+/** How long a coordinator being restarted has to end its turn before its agent is stopped. */
+const RESTART_WAIT_MS = 5_000;
+
+/** A route as the app sends it: an agent, and its model and settings when given. */
+const memberOf = (picked: {
+  agentId: string;
+  model?: string | undefined;
+  settings?: Record<string, string> | undefined;
+}): TeamMember => ({
+  agentId: picked.agentId,
+  ...(picked.model ? { model: picked.model } : {}),
+  ...(picked.settings && Object.keys(picked.settings).length ? { settings: picked.settings } : {}),
+});
 /** How long an agent may take to open its session before the turn gives up. */
 const START_TIMEOUT_MS = 120_000;
 
@@ -249,6 +278,10 @@ export interface HubOptions {
   /** How often Hermes's gateway is looked at and started again; 0 for only when asked. */
   hermesGatewayMs?: number;
   homeDir?: string;
+  /** How a repository of skills is cloned; a shallow git clone when not given. */
+  cloneSkills?: (url: string, dest: string, ref?: string) => Promise<void>;
+  /** The environment skills folders are read from (`HERMES_HOME`); the process's own if not given. */
+  skillsEnv?: NodeJS.ProcessEnv;
   idleMs?: number;
   maxLiveAgents?: number;
   /** Where pull requests are read and merged; the user's own `gh` unless given. */
@@ -288,6 +321,8 @@ type ProjectLook = Pick<Project, "icon" | "color">;
 const SETTLED_REVIEWS = "settledReviews";
 /** The projects that keep a thread's branch once its pull request is merged. */
 const KEEP_MERGED_BRANCHES = "keepMergedBranches";
+/** The projects put on hold from their settings. */
+const PAUSED_PROJECTS = "pausedProjects";
 /** Each project's rules for a quota that runs out, by project id. */
 const PROJECT_QUOTA = "projectQuotaRules";
 /** How often threads waiting on a quota look whether it is back, unless told otherwise. */
@@ -546,6 +581,11 @@ export class Hub {
 
   /** The user's home folder, where agents keep their personal skills. */
   private readonly homeDir: string;
+  /** Where the skills MoonAgentic installed came from. */
+  private readonly skillRecords: SkillRecords;
+  private readonly skillRepos: RepoCache;
+  private readonly skillRuns: SkillRuns;
+  private readonly skillsEnv: NodeJS.ProcessEnv;
   private readonly pullRequests: () => PullRequests | undefined;
   /** The tool behind each call of a turn, by thread, for agents that name it. */
   private readonly toolNames = new Map<string, Map<string, string>>();
@@ -595,6 +635,14 @@ export class Hub {
       steps: this.steps,
     });
     this.homeDir = options.homeDir ?? os.homedir();
+    this.skillsEnv = options.skillsEnv ?? process.env;
+    this.skillRecords = new SkillRecords(
+      options.dataDir ? path.join(options.dataDir, "skills.json") : undefined,
+    );
+    this.skillRepos = new RepoCache(options.cloneSkills);
+    this.skillRuns = new SkillRuns((runId, part) =>
+      this.broadcast({ type: "skillRun", runId, ...part }),
+    );
     this.pullRequests = options.pullRequests ?? localPullRequests;
     const watchMs = options.prWatchMs ?? PR_WATCH_MS;
     if (watchMs > 0) {
@@ -1550,6 +1598,12 @@ export class Hub {
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
+      case "project.setPaused": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        await this.setPaused(project, message.paused);
+        return;
+      }
       case "project.setQuotaRules": {
         const project = this.store.getProject(message.projectId);
         if (!project) throw new Error("Ce projet n'existe plus.");
@@ -1828,19 +1882,47 @@ export class Hub {
         return;
       case "coordinator.setRoute": {
         const settings = this.coordinators.coordinatorSettings();
-        const routes = { ...settings.routes };
+        const projectId = message.projectId;
+        if (projectId && !this.store.getProject(projectId)) {
+          throw new Error("Ce projet n'existe plus.");
+        }
+        const routes = { ...(projectId ? settings.projectRoutes?.[projectId] : settings.routes) };
         delete routes[message.kind];
         if (message.agentId) {
           // Refused now rather than at the first thread a coordinator opens with it.
           this.agents.launch(message.agentId);
-          routes[message.kind] = {
-            agentId: message.agentId,
-            ...(message.model ? { model: message.model } : {}),
-          };
+          routes[message.kind] = memberOf({ ...message, agentId: message.agentId });
         }
-        this.coordinators.setCoordinatorSettings({ ...settings, routes });
+        if (!projectId) {
+          this.coordinators.setCoordinatorSettings({ ...settings, routes });
+          return;
+        }
+        // Projects removed since are dropped on the way.
+        const projectRoutes = Object.fromEntries(
+          Object.entries(settings.projectRoutes ?? {}).filter(
+            ([p]) => p !== projectId && this.store.getProject(p),
+          ),
+        );
+        if (Object.keys(routes).length) projectRoutes[projectId] = routes;
+        const { projectRoutes: _was, ...rest } = settings;
+        this.coordinators.setCoordinatorSettings(
+          Object.keys(projectRoutes).length ? { ...rest, projectRoutes } : rest,
+        );
         return;
       }
+      case "discussions.setModel": {
+        const { loose: _was, ...rest } = this.coordinators.coordinatorSettings();
+        const agentId = message.agentId;
+        if (agentId) this.agents.launch(agentId);
+        this.coordinators.setCoordinatorSettings(
+          agentId ? { ...rest, loose: memberOf({ ...message, agentId }) } : rest,
+        );
+        return;
+      }
+      case "coordinator.restart":
+        await this.restartCoordinator(message.projectId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "coordinator.setParallel":
         this.coordinators.setCoordinatorSettings({
           ...this.coordinators.coordinatorSettings(),
@@ -1993,6 +2075,129 @@ export class Hub {
         client.send({ type: "files", requestId: message.requestId, files });
         return;
       }
+      case "skills.list":
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      case "skills.find": {
+        const src = parseSkillSource(message.source);
+        if (!src) {
+          throw new SkillError(
+            "Indique un dépôt GitHub (propriétaire/nom ou son adresse) ou une page skills.sh.",
+          );
+        }
+        const repo = `${src.owner}/${src.name}`;
+        const dir = await this.skillRepos.get(repo, src.ref);
+        let skills = skillsIn(dir, src.name, src.path ?? "");
+        if (src.skill) {
+          const one = skills.filter((f) => f.name.toLowerCase() === src.skill!.toLowerCase());
+          if (one.length) skills = one;
+        }
+        if (skills.length === 0) throw new SkillError(`Aucune skill (SKILL.md) dans ${repo}.`);
+        client.send({
+          type: "skillsFound",
+          requestId: message.requestId,
+          repo,
+          ...(src.ref ? { ref: src.ref } : {}),
+          skills,
+        });
+        return;
+      }
+      case "skills.install": {
+        const place = this.skillPlace(message.projectId);
+        const repoName = message.repo.split("/")[1] ?? message.repo;
+        const dir = await this.skillRepos.get(message.repo, message.ref);
+        const names = installFromRepo(place, dir, repoName, message.paths, message.agents);
+        message.paths.forEach((p, i) => {
+          const name = names[i];
+          if (!name) return;
+          this.skillRecords.set({
+            name,
+            ...(message.projectId ? { projectId: message.projectId } : {}),
+            source: {
+              kind: "github",
+              repo: message.repo,
+              path: p,
+              ...(message.ref ? { ref: message.ref } : {}),
+            },
+            installedAt: Date.now(),
+          });
+        });
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      }
+      case "skills.update": {
+        const place = this.skillPlace(message.projectId);
+        const record = this.skillRecords.get(message.name, message.projectId);
+        if (record?.source.kind !== "github") {
+          throw new SkillError("Seule une skill venue de GitHub se met à jour d'ici.");
+        }
+        const { repo, path: at, ref } = record.source;
+        // Read again from GitHub, not from a clone kept from before.
+        this.skillRepos.forget(repo, ref);
+        const dir = await this.skillRepos.get(repo, ref);
+        // Under its own name and for its own agents, even when its source renamed it.
+        installFromRepo(place, dir, repo.split("/")[1] ?? repo, [at], ["claude"], {
+          replace: true,
+          name: message.name,
+        });
+        this.skillRecords.set({ ...record, installedAt: Date.now() });
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      }
+      case "skills.setAgents":
+        setSkillAgents(this.skillPlace(message.projectId), message.name, message.agents);
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      case "skills.move": {
+        if (message.to === message.projectId) {
+          client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+          return;
+        }
+        moveSkill(this.skillPlace(message.projectId), this.skillPlace(message.to), message.name);
+        const record = this.skillRecords.get(message.name, message.projectId);
+        if (record) {
+          this.skillRecords.drop(message.name, message.projectId);
+          const { projectId: _from, ...rest } = record;
+          this.skillRecords.set({ ...rest, ...(message.to ? { projectId: message.to } : {}) });
+        }
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      }
+      case "skills.remove":
+        removeSkillEverywhere(this.skillPlace(message.projectId), message.name);
+        this.skillRecords.drop(message.name, message.projectId);
+        client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });
+        return;
+      case "skills.preview": {
+        const place = this.skillPlace(message.projectId);
+        client.send({
+          type: "skillCommand",
+          requestId: message.requestId,
+          plan: await planCommand(message.command, place.base),
+        });
+        return;
+      }
+      case "skills.run": {
+        const place = this.skillPlace(message.projectId);
+        this.skillRuns.start(message.runId, message.command, place, (added) => {
+          for (const name of added) {
+            this.skillRecords.set({
+              name,
+              ...(message.projectId ? { projectId: message.projectId } : {}),
+              source: { kind: "command", command: message.command },
+              installedAt: Date.now(),
+            });
+          }
+        });
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      }
+      case "skills.runInput":
+        this.skillRuns.input(message.runId, message.text);
+        return;
+      case "skills.runStop":
+        this.skillRuns.stop(message.runId);
+        return;
       case "composer.catalog": {
         const dir = this.folderOf(message.projectId, message.threadId);
         client.send({
@@ -2239,6 +2444,29 @@ export class Hub {
    * beside where projects are usually made, created the first time it is needed. One already made
    * is reused, wherever the next projects go.
    */
+  /** Where skills go: the home folder, or a project's folder when it is open. */
+  private skillPlace(projectId: string | undefined): SkillPlace {
+    const env = this.skillsEnv;
+    if (!projectId) return { scope: "user", base: this.homeDir, env, home: this.homeDir };
+    const project = this.store.getProject(projectId);
+    if (!project) throw new SkillError("Ce projet n'existe plus.");
+    if (this.locks.isLocked(project.id)) {
+      throw new SkillError("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    }
+    return { scope: "project", base: project.path, env, home: this.homeDir };
+  }
+
+  /** The skills of every project (the home folder's), then each open project's. */
+  private allSkills(): InstalledSkill[] {
+    const user = listSkills(this.skillPlace(undefined), this.skillRecords);
+    const projects = this.store
+      .listProjects()
+      .filter((p) => !this.locks.isLocked(p.id) && !this.isDiscussions(p.id))
+      .filter((p) => path.resolve(p.path) !== path.resolve(this.homeDir) && existsSync(p.path))
+      .flatMap((p) => listSkills(this.skillPlace(p.id), this.skillRecords, p.id));
+    return [...user, ...projects];
+  }
+
   discussionsProject(): string {
     const made = this.store.listProjects().find((p) => this.isDiscussions(p.id));
     if (made && existsSync(made.path)) return made.id;
@@ -2630,7 +2858,12 @@ export class Hub {
 
   /** Lets the turns in line through, first come first served, while places are free. */
   private admit(): void {
-    while (this.line.size && this.turnsAtWork() < this.maxTurns()) this.line.next();
+    // A project on hold keeps its turns in line; those behind them go first.
+    const free = (threadId: string) => {
+      const projectId = this.store.getThread(threadId)?.projectId;
+      return !projectId || !this.paused(projectId);
+    };
+    while (this.turnsAtWork() < this.maxTurns() && this.line.next(free));
   }
 
   /**
@@ -4707,6 +4940,8 @@ export class Hub {
     const upTo = (work: Promise<unknown>) => within(work, deadline - Date.now());
     clearTimeout(this.indexTimer);
     clearInterval(this.prTimer);
+    this.skillRuns.stopAll();
+    this.skillRepos.clear();
     this.hermes.close();
     clearInterval(this.sweepTimer);
     clearInterval(this.quotaTimer);
@@ -4769,9 +5004,17 @@ export class Hub {
     let session: AgentSession | undefined;
     try {
       // Behind those already in line, so none is overtaken.
-      if (queued && (this.line.size > 0 || this.turnsAtWork() >= this.maxTurns())) {
+      if (
+        queued &&
+        (this.line.size > 0 ||
+          this.turnsAtWork() >= this.maxTurns() ||
+          this.paused(thread.projectId))
+      ) {
         this.updateThread(thread.id, { inLine: true });
-        await this.line.wait(thread.id);
+        const letThrough = this.line.wait(thread.id);
+        // Those on hold ahead of it do not keep it waiting while places are free.
+        this.admit();
+        await letThrough;
         if (this.store.getThread(thread.id)) this.updateThread(thread.id, { inLine: null });
         if (this.cancelled.has(thread.id)) {
           this.settleTurn(thread.id, { status: "idle" });
@@ -5052,7 +5295,8 @@ export class Hub {
     const quota = this.quotaRules(project.id);
     const keep = this.store.getSetting<string[]>(KEEP_MERGED_BRANCHES, []).includes(project.id);
     const archived = this.store.getSetting<string[]>(ARCHIVED_PROJECTS, []).includes(project.id);
-    return git || pinned || locked || look || quota || keep || archived
+    const paused = this.paused(project.id);
+    return git || pinned || locked || look || quota || keep || archived || paused
       ? {
           ...project,
           ...(git ? { git } : {}),
@@ -5063,8 +5307,58 @@ export class Hub {
           ...(quota ? { quota } : {}),
           ...(keep ? { deleteMerged: false as const } : {}),
           ...(archived ? { archived } : {}),
+          ...(paused ? { paused } : {}),
         }
       : project;
+  }
+
+  /** Whether the project is on hold; see {@link Project.paused}. */
+  private paused(projectId: string): boolean {
+    return this.store.getSetting<string[]>(PAUSED_PROJECTS, []).includes(projectId);
+  }
+
+  /**
+   * Puts the project on hold: its turns at work stop, and what its agents would start on their
+   * own waits in line. Going on lets what waits through, as places free up.
+   */
+  private async setPaused(project: Project, paused: boolean): Promise<void> {
+    const others = this.store
+      .getSetting<string[]>(PAUSED_PROJECTS, [])
+      .filter((p) => p !== project.id && this.store.getProject(p));
+    this.store.setSetting(PAUSED_PROJECTS, paused ? [...others, project.id] : others);
+    this.broadcast({ type: "project", project: this.withGit(project) });
+    if (!paused) {
+      this.admit();
+      return;
+    }
+    const atWork = this.store
+      .listThreads()
+      .filter((t) => t.projectId === project.id && this.turns.has(t.id) && !this.line.has(t.id));
+    await Promise.all(atWork.map((t) => this.cancel(t.id)));
+  }
+
+  /**
+   * Stops the project's coordinator: its turn, then its agent. Its session is kept, so the next
+   * message starts a new agent that resumes the conversation.
+   */
+  private async restartCoordinator(projectId: string): Promise<void> {
+    if (this.locks.isLocked(projectId)) {
+      throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    }
+    const coordinator = this.store
+      .listThreads()
+      .find((t) => t.projectId === projectId && t.kind === "coordinator");
+    if (!coordinator) throw new Error("Ce projet n'a pas encore de coordinateur.");
+    const turn = this.turns.get(coordinator.id);
+    if (turn) {
+      await this.cancel(coordinator.id);
+      // Its turn ends as stopped; one frozen past this is stopped with its agent below.
+      await Promise.race([
+        turn.catch(() => undefined),
+        new Promise((done) => setTimeout(done, RESTART_WAIT_MS).unref()),
+      ]);
+    }
+    await this.pool.stop(coordinator.id);
   }
 
   private async startSession(

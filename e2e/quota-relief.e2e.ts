@@ -81,8 +81,8 @@ describe("a quota that runs out", () => {
     await page.goto(url);
     await addProject(page, project, false);
 
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    const dialog = page.getByRole("dialog", { name: "Réglages du projet" });
+    await page.getByRole("button", { name: "Paramètres du projet" }).click();
+    const dialog = page.getByRole("dialog", { name: "Paramètres du projet" });
     await dialog
       .getByRole("switch", { name: "Reprendre les fils quand les quotas sont remis à zéro" })
       .click();
@@ -94,7 +94,8 @@ describe("a quota that runs out", () => {
       )
       .toBe("true");
     await dialog.getByRole("button", { name: /^Modèle de secours/ }).click();
-    const fallback = page.getByRole("dialog", { name: "Modèle de secours" });
+    // Its page takes the place of « Général » in the window.
+    const fallback = dialog;
     await fallback.getByRole("switch", { name: "Passer au secours" }).click();
     // Its models are read on asking, as no thread used it yet.
     const demo = fallback.locator(".gl2", { hasText: /^Agent de démo/ });
@@ -107,7 +108,7 @@ describe("a quota that runs out", () => {
       )
       .toBe("true");
     if (shots) await page.screenshot({ path: path.join(shots, "secours-reglage.png") });
-    await fallback.getByRole("button", { name: "Retour", exact: true }).click();
+    await fallback.getByRole("button", { name: "Général", exact: true }).first().click();
     await dialog.getByRole("button", { name: /^Modèle de secours.*Démo rapide/ }).waitFor();
     if (shots) {
       await dialog.getByRole("button", { name: /^Modèle de secours/ }).scrollIntoViewIfNeeded();
