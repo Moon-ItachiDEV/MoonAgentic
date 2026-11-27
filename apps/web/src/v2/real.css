@@ -2049,6 +2049,12 @@ html[data-kb] .view .end {
 html[data-kb] .tabbar {
   pointer-events: none;
 }
+/* Pushed past the keyboard, the page ends where the tabs' bar is and the composer rests there:
+   the bar stands behind it, without its background, until the composer is back above it. */
+html[data-kb-tabs] .tabbar {
+  z-index: 19;
+  background: none;
+}
 html[data-kb] .tabbar button {
   opacity: 0;
   transform: translateY(10px) scale(0.9);
@@ -2057,12 +2063,21 @@ html[data-kb] .tabbar button {
 html[data-kb] #gstack {
   transform: scale(0.96);
 }
-/* The composer between its two shapes (v2/composer-morph.ts): it grows from its base, and
-   while it folds its bar stays over the line it leaves. */
+/* The composer between its two shapes (v2/composer-morph.ts). Its layout has the new shape at
+   once: what makes it look taller or shorter meanwhile is the margin of its empty first child,
+   so its height is never held and it grows from its base. While it folds, its bar stays over
+   the line it leaves. */
+.cmp > .cgrow {
+  display: none;
+}
 .cmp[data-morph] {
   position: relative;
   overflow: hidden;
-  justify-content: flex-end;
+}
+.cmp[data-morph] > .cgrow {
+  display: block;
+  flex: none;
+  height: 0;
 }
 .cmp[data-morph="fold"] .bar {
   display: flex;
