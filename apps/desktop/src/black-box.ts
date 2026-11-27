@@ -670,13 +670,15 @@ export const KNOWN_EVENTS: Record<string, string> = {
   "Microsoft-Windows-Resource-Exhaustion-Detector:2004": "mémoire virtuelle presque épuisée",
   "Microsoft-Windows-Kernel-Power:42": "mise en veille",
   "Microsoft-Windows-Kernel-Power:107": "sortie de veille",
+  "Microsoft-Windows-Kernel-Power:506": "entrée en veille moderne",
+  "Microsoft-Windows-Kernel-Power:507": "sortie de veille moderne",
   "Microsoft-Windows-Power-Troubleshooter:1": "sortie de veille",
   "Microsoft-Windows-WindowsUpdateClient:19": "mise à jour Windows installée",
   "Microsoft-Windows-WindowsUpdateClient:20": "mise à jour Windows en échec",
   "Microsoft-Windows-WindowsUpdateClient:43": "installation d'une mise à jour Windows",
 };
 
-const KNOWN_IDS = [41, 6008, 6005, 6006, 1074, 1001, 2004, 42, 107, 1, 19, 20, 43];
+const KNOWN_IDS = [41, 6008, 6005, 6006, 1074, 1001, 2004, 42, 107, 506, 507, 1, 19, 20, 43];
 
 /**
  * The PowerShell that lists, from Windows' System log, what happened between two times:

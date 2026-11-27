@@ -27,6 +27,7 @@ import {
   windowsTopProcesses,
 } from "./black-box.ts";
 import { DesktopCrashLog, formatDesktopError } from "./crash-log.ts";
+import { keepAwakeSpawn, sleepBlockerKind } from "./keep-awake.ts";
 import { readNotice } from "./notices.ts";
 import { ServerProcess, type ServerState } from "./server-process.ts";
 import { readSettings, writeSettings } from "./settings.ts";
@@ -171,6 +172,7 @@ async function installUpdate(): Promise<void> {
   }
   installing = true;
   blackBox.updating(updater.state.version ?? "une nouvelle version");
+  keepAwakeDuringUpdate();
   await server.stop();
   const { file, args, options } = installerSpawn(installer, path.dirname(process.execPath));
   const child = spawn(file, args, options);
@@ -186,6 +188,25 @@ async function installUpdate(): Promise<void> {
     quitting = true;
     app.quit();
   });
+}
+
+/**
+ * The app closes for its installer and lets the computer sleep with it: on a computer with
+ * only modern standby, it would fall asleep in the middle of the update. A small PowerShell
+ * keeps it awake until the new version has started and holds it again itself.
+ */
+function keepAwakeDuringUpdate(): void {
+  if (process.platform !== "win32" || !settings.preventSleep) return;
+  try {
+    const { file, args, options } = keepAwakeSpawn();
+    const awake = spawn(file, args, options);
+    awake.once("error", (error) =>
+      crashLog.write(`[veille] impossible de garder Windows éveillé : ${error.message}`),
+    );
+    awake.unref();
+  } catch (error) {
+    crashLog.write(`[veille] impossible de garder Windows éveillé : ${formatDesktopError(error)}`);
+  }
 }
 
 function start(): void {
@@ -385,7 +406,8 @@ function setPreventSleep(on: boolean): void {
 
 function applySleepSetting(): void {
   if (settings.preventSleep && sleepBlocker === undefined) {
-    sleepBlocker = powerSaveBlocker.start("prevent-app-suspension");
+    // On Windows this keeps the screen on: the only request modern standby gives way to.
+    sleepBlocker = powerSaveBlocker.start(sleepBlockerKind(process.platform));
   } else if (!settings.preventSleep && sleepBlocker !== undefined) {
     powerSaveBlocker.stop(sleepBlocker);
     sleepBlocker = undefined;

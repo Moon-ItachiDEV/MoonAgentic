@@ -347,6 +347,18 @@ describe("what the black box reads", () => {
     expect(lines[2]).toContain("Kernel-Power 41 [critique]");
     expect(lines[2]).toContain("redémarrage sans arrêt propre");
     // PowerShell writes one event as an object, not a list.
+    // The 27/11 freeze: modern standby entered, never left.
+    const standby = parseWindowsEvents(
+      JSON.stringify({
+        at: "2026-11-27T13:33:42Z",
+        id: 506,
+        provider: "Microsoft-Windows-Kernel-Power",
+        level: 4,
+        message: "Le système est en veille moderne",
+      }),
+    );
+    expect(standby[0]).toContain("Kernel-Power 506 · entrée en veille moderne");
+    expect(windowsEventsScript(0, 1)).toContain("506,507");
     const one = parseWindowsEvents(
       JSON.stringify({ at: "2026-11-27T14:10:00Z", id: 6008, provider: "EventLog", level: 2 }),
     );
