@@ -271,9 +271,16 @@ export interface HeldSocket {
   readonly readyState: number;
   readonly OPEN: number;
   readonly bufferedAmount: number;
-  send(data: string): void;
+  send(data: string, options?: { compress?: boolean }): void;
   terminate(): void;
 }
+
+/**
+ * From this length a message is compressed. Below it (a streamed token, a pong) zlib would cost
+ * more time than the bytes it saves. Decided here for each message: `ws` reads its own
+ * `threshold` only when the compression context is not kept between messages.
+ */
+export const WS_COMPRESS_FROM = 1024;
 
 /**
  * Sends to a connection, or cuts it when it holds more than `limit` bytes it did not read: it
@@ -286,7 +293,7 @@ export function sendOrCut(ws: HeldSocket, data: string, limit: number): void {
     ws.terminate();
     return;
   }
-  ws.send(data);
+  ws.send(data, { compress: data.length >= WS_COMPRESS_FROM });
   if (ws.bufferedAmount > limit) ws.terminate();
 }
 
@@ -1355,8 +1362,9 @@ export function createHttpServer(options: {
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: 1024 * 1024,
-    // Small streaming tokens skip zlib; large snapshots, timelines, and diffs compress sharply.
-    perMessageDeflate: { threshold: 1024 },
+    // Large snapshots, timelines and diffs compress sharply. Which messages are compressed is
+    // decided at each send (`WS_COMPRESS_FROM`), not by `threshold` here.
+    perMessageDeflate: true,
   });
   /** Connections open and being opened, by whom: "owner", or a device's id. */
   const open = new Map<string, number>();
@@ -1377,7 +1385,9 @@ export function createHttpServer(options: {
     if (before !== undefined) wsTickets.delete(before);
     const ticket = issueWsTicket(who, spareTtlMs);
     spares.set(ws, ticket);
-    ws.send(JSON.stringify({ type: "ws.ticket", ticket, ttlMs: spareTtlMs }));
+    // A secret never goes through the compressed stream, where its length next to text someone
+    // else chose could give it away.
+    ws.send(JSON.stringify({ type: "ws.ticket", ticket, ttlMs: spareTtlMs }), { compress: false });
   };
   /**
    * Actions whose order matters to the client (`setArchived` before `send`, or a failure
@@ -1472,6 +1482,12 @@ export function createHttpServer(options: {
         ws.once("close", () => count(open, -1));
         const client: Client = {
           send: (message: ServerMessage) => sendOrCut(ws, JSON.stringify(message), maxBuffered),
+          // A ping is written after all that was sent before it, the compressed messages too.
+          flushed: () =>
+            new Promise<void>((resolve) => {
+              if (ws.readyState !== ws.OPEN) resolve();
+              else ws.ping(undefined, undefined, () => resolve());
+            }),
           ...(who.owner ? {} : { deviceId: who.deviceId }),
         };
         const disconnect = hub.connect(client);

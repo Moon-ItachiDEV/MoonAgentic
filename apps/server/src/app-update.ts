@@ -189,6 +189,11 @@ export interface AppUpdatesOptions {
   backup: (version: string) => Promise<void>;
   /** Tells every device something: a newer version is ready. */
   notify: (title: string, body: string) => void;
+  /**
+   * Settles once what was broadcast has left for every device: the desktop app stops the
+   * server as soon as it is asked to install, and the devices must have read « installing ».
+   */
+  said?: () => Promise<void>;
   /** Stops what would start new work while the app is being replaced. */
   pause?: () => void;
   /** Starts it again when the app is not replaced after all. */
@@ -447,6 +452,8 @@ export class AppUpdates {
     this.phase = "installing";
     this.installingSince = this.now();
     this.changed();
+    await this.options.said?.();
+    if (this.closed || this.phase !== "installing") return;
     this.options.shell?.send({ moon: "install" });
   }
 

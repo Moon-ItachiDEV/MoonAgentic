@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { request } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, connect, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
@@ -42,6 +42,7 @@ async function serve(
     rateLimit?: RateLimitOptions;
     devices?: Devices;
     handle?: Hub["handle"];
+    connect?: Hub["connect"];
   } = {},
 ) {
   const webDir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-web-"));
@@ -57,9 +58,9 @@ async function serve(
     artifactLinks: links,
     push,
     lockedThread: (threadId: string) => threadId === "verrouille",
-    connect: () => {
+    connect: (client: Parameters<Hub["connect"]>[0]) => {
       connected += 1;
-      return () => undefined;
+      return options.connect?.(client) ?? (() => undefined);
     },
     handle: options.handle ?? (async () => undefined),
     coordinatorExchange: () => {
@@ -82,6 +83,8 @@ async function serve(
       return { port, exposed: false, tailscale: "absent", addresses: [] };
     },
   });
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => sockets.add(socket));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   cleanups.push(async () => {
     server.closeAllConnections();
@@ -101,6 +104,8 @@ async function serve(
   return {
     origin,
     webDir,
+    /** As a server stopped on the spot: what it had not written yet is never read. */
+    cut: () => sockets.forEach((socket) => socket.destroy()),
     connections: () => connected,
     renewed,
     asked,
@@ -1182,5 +1187,123 @@ describe("compression HTTP et WebSocket", () => {
       ws.on("error", reject);
     });
     expect(closeCode).toBe(1009);
+  });
+
+  it("compresses a WebSocket message only from 1024 characters, and never the reconnect ticket", async () => {
+    const big = { type: "error", message: "MoonAgentic ".repeat(400) } as const;
+    const { origin } = await serve({
+      connect: (client) => {
+        client.send({ type: "pong" });
+        client.send(big);
+        client.send({ type: "pong" });
+        return () => undefined;
+      },
+    });
+    // What a browser reads: every message whole, in order, compressed or not.
+    const read: { type: string }[] = [];
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`ws://${origin}/ws`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+        perMessageDeflate: true,
+      });
+      ws.on("message", (data) => {
+        read.push(JSON.parse(String(data)) as { type: string });
+        if (read.length < 4) return;
+        ws.close();
+        resolve();
+      });
+      ws.on("error", reject);
+    });
+    // What the server puts on the wire for it, frame by frame, to Chrome's own offer.
+    const frames: { compressed: boolean; length: number }[] = [];
+    const extensions = await new Promise<string>((resolve, reject) => {
+      const socket = connect(Number(origin.split(":")[1]), "127.0.0.1");
+      let buf = Buffer.alloc(0);
+      let answered: string | undefined;
+      socket.on("connect", () =>
+        socket.write(
+          [
+            "GET /ws HTTP/1.1",
+            `Host: ${origin}`,
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits",
+            `Authorization: Bearer ${TOKEN}`,
+            "",
+            "",
+          ].join("\r\n"),
+        ),
+      );
+      socket.on("data", (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        if (answered === undefined) {
+          const end = buf.indexOf("\r\n\r\n");
+          if (end < 0) return;
+          answered =
+            /sec-websocket-extensions: (.*)/i.exec(buf.subarray(0, end).toString())?.[1] ?? "";
+          buf = buf.subarray(end + 4);
+        }
+        while (buf.length >= 2) {
+          let length = buf[1]! & 0x7f;
+          let at = 2;
+          if (length === 126) {
+            if (buf.length < 4) return;
+            length = buf.readUInt16BE(2);
+            at = 4;
+          }
+          if (buf.length < at + length) return;
+          if ((buf[0]! & 0x0f) === 1) frames.push({ compressed: (buf[0]! & 0x40) !== 0, length });
+          buf = buf.subarray(at + length);
+          if (frames.length < 4) continue;
+          socket.destroy();
+          resolve(answered);
+          return;
+        }
+      });
+      socket.on("error", reject);
+    });
+    // The compression context is kept between messages, as Chrome asks.
+    expect(extensions).toContain("permessage-deflate");
+    expect(extensions).not.toContain("server_no_context_takeover");
+
+    expect(read.map((m) => m.type)).toEqual(["pong", "error", "pong", "ws.ticket"]);
+    expect(read[1]).toEqual(big);
+    const size = JSON.stringify(big).length;
+    expect(frames.map((f) => f.compressed)).toEqual([false, true, false, false]);
+    // The small ones travel as written, the large one far smaller than written.
+    expect(frames[0]!.length).toBe(JSON.stringify({ type: "pong" }).length);
+    expect(frames[1]!.length).toBeLessThan(size / 10);
+    // The ticket, a secret, is on the wire as written too: it never entered the compressor.
+    expect(frames[3]!.length).toBe(JSON.stringify(read[3]).length);
+    expect(frames[3]!.length).toBeLessThan(1024);
+  });
+
+  it("says when its last words have left: a server stopped right after still delivered them", async () => {
+    const big = { type: "error", message: "MoonAgentic ".repeat(400) } as const;
+    const stopAfter = async (wait: boolean) => {
+      const served = await serve({
+        connect: (client) => {
+          client.send(big);
+          void (wait ? client.flushed!() : Promise.resolve()).then(() => served.cut());
+          return () => undefined;
+        },
+      });
+      const read: unknown[] = [];
+      await new Promise<void>((resolve) => {
+        const ws = new WebSocket(`ws://${served.origin}/ws`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+          perMessageDeflate: true,
+        });
+        ws.on("message", (data) => read.push(JSON.parse(String(data))));
+        ws.on("close", () => resolve());
+        ws.on("error", () => resolve());
+      });
+      return read;
+    };
+    // Compressed off the thread, the message was not written yet when the server stopped.
+    expect(await stopAfter(false)).toEqual([]);
+    expect((await stopAfter(true))[0]).toEqual(big);
   });
 });
