@@ -115,7 +115,10 @@ describe("agent stopped mid-turn", () => {
 
     await card.getByRole("button", { name: "Reprendre" }).click();
     await card.waitFor({ state: "detached", timeout: 15_000 });
-    await page.getByText("Tu as été interrompu : reprends là où tu t'es arrêté.").waitFor();
+    // The agent's answer quotes this sentence: only the message sent is looked for.
+    await page
+      .getByText("Tu as été interrompu : reprends là où tu t'es arrêté.", { exact: true })
+      .waitFor();
     // A new session took the thread up, with the model picked after the stop.
     await composer.click();
     expect(await chip.textContent()).toContain("Démo rapide");
