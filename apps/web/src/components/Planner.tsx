@@ -783,7 +783,10 @@ function Launch({
   before: () => void;
   onCancel: () => void;
 }) {
-  const favorites = useSyncExternalStore(connection.subscribe, connection.getState).favorites;
+  const favorites = useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().favorites,
+  );
   const [pick, setPick] = useState<ModelPick | undefined>(() => firstPick(agents, favorites));
   const agentId = pick?.agentId ?? "";
   const model = pick?.model ?? "";

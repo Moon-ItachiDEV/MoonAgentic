@@ -23,7 +23,10 @@ const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
 /** Shown over everything while a code is asked for. */
 export function LockSheet() {
   const asked = useSyncExternalStore(lockSheet.subscribe, lockSheet.get);
-  const pairedDevice = useSyncExternalStore(connection.subscribe, connection.getState).pairedDevice;
+  const pairedDevice = useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().pairedDevice,
+  );
   // A new ask starts afresh, even over one left open.
   if (!asked) return null;
   if (pairedDevice && (asked.ask.kind === "set" || asked.ask.kind === "change")) {

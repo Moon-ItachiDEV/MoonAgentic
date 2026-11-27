@@ -23,7 +23,11 @@ import { expectNewBuild } from "../update.ts";
 import { Glyph, I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
 
-export const useApp = () => useSyncExternalStore(connection.subscribe, connection.getState);
+export function useApp() {
+  const app = useSyncExternalStore(connection.subscribe, () => connection.getState().app);
+  const status = useSyncExternalStore(connection.subscribe, () => connection.getState().status);
+  return { app, status };
+}
 
 /** What the install has done and does now. */
 function Steps(props: { app: AppInfo; connected: boolean }) {
@@ -248,10 +252,10 @@ let watch: InstallWatch = { saw: false, lost: false };
  * the copy of the database until the app is back.
  */
 export function AppUpdateHost() {
-  const state = useApp();
+  const { app, status } = useApp();
+  const threads = useSyncExternalStore(connection.subscribe, () => connection.getState().threads);
   const at = useSyncExternalStore(subscribeUpdateCard, readUpdateCard);
-  const app = state.app;
-  const connected = state.status === "open";
+  const connected = status === "open";
   const installing = !!app?.update.phase;
   const phase = app?.update.phase;
   // Read during the drawing, kept after it: a drawing React throws away changes nothing.
@@ -264,7 +268,7 @@ export function AppUpdateHost() {
   }, [phase, connected]);
   const overlay = !!app && (installing || waitingBack);
   const shown = updateShown(app);
-  const running = state.threads.filter((t) => t.status === "running").length;
+  const running = threads.filter((t) => t.status === "running").length;
   if (!app) return null;
   return (
     <>

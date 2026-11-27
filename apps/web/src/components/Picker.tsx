@@ -62,7 +62,10 @@ export function Picker(props: {
 }) {
   const { agent, favorites, open } = props;
   // The wheel's order, set in Réglages › Modèles.
-  const order = useSyncExternalStore(connection.subscribe, connection.getState).favoriteOrder;
+  const order = useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().favoriteOrder,
+  );
   const quotas = useQuotas();
   // From the iPad's width up, a menu above the model's button, like the « + » one.
   const pop = useScreen().roomy;

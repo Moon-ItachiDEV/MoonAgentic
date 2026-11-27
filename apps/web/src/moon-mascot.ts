@@ -497,8 +497,9 @@ class MoonMascot extends HTMLElement {
   #visible = true;
   #start = 0;
   #wink = -Infinity;
-  /** Where the pointer last was on the page, read against the moon once per frame. */
+  /** Where the pointer last was on the page, read against a cached bounding box. */
   #client: { x: number; y: number } | undefined;
+  #rect: DOMRect | undefined;
   #pointerX = 0;
   #pointerY = 0;
   #gazeX = 0;
@@ -558,11 +559,16 @@ class MoonMascot extends HTMLElement {
     }
     window.removeEventListener("pointermove", this.#track);
     window.removeEventListener("pointerout", this.#leave);
+    window.removeEventListener("scroll", this.#invalidateRect, true);
+    window.removeEventListener("resize", this.#invalidateRect);
     this.#client = undefined;
+    this.#rect = undefined;
     this.#pointerX = this.#pointerY = 0;
     if (!this.#decorative && !this.#still) {
       window.addEventListener("pointermove", this.#track, { passive: true });
       window.addEventListener("pointerout", this.#leave);
+      window.addEventListener("scroll", this.#invalidateRect, { capture: true, passive: true });
+      window.addEventListener("resize", this.#invalidateRect, { passive: true });
     }
   }
 
@@ -577,6 +583,7 @@ class MoonMascot extends HTMLElement {
     // Off screen or in a hidden tab, nothing is drawn: the loop starts again when seen.
     this.#seen = new IntersectionObserver(([entry]) => {
       this.#visible = entry?.isIntersecting ?? true;
+      this.#rect = undefined;
       this.#requestFrame();
     });
     this.#seen.observe(this);
@@ -611,6 +618,8 @@ class MoonMascot extends HTMLElement {
     document.removeEventListener("visibilitychange", this.#requestFrame);
     window.removeEventListener("pointermove", this.#track);
     window.removeEventListener("pointerout", this.#leave);
+    window.removeEventListener("scroll", this.#invalidateRect, true);
+    window.removeEventListener("resize", this.#invalidateRect);
     this.#motion.removeEventListener("change", this.#restyle);
   }
 
@@ -619,7 +628,12 @@ class MoonMascot extends HTMLElement {
     this.#requestFrame();
   };
 
+  #invalidateRect = () => {
+    this.#rect = undefined;
+  };
+
   #measure = () => {
+    this.#rect = undefined;
     const pixels = Math.min(840, Math.max(64, Math.round(this.clientWidth * devicePixelRatio)));
     if (this.#canvas.width !== pixels) this.#canvas.width = this.#canvas.height = pixels;
     // A moon that grew past what its texture was drawn for gets a finer one.
@@ -682,7 +696,7 @@ class MoonMascot extends HTMLElement {
     }
     this.#last = now;
     if (this.#client) {
-      const box = this.getBoundingClientRect();
+      const box = (this.#rect ??= this.getBoundingClientRect());
       const range = Math.max(110, box.width * 0.65);
       this.#pointerX = clamp((this.#client.x - box.left - box.width * 0.35) / range, -1, 1);
       this.#pointerY = clamp((this.#client.y - box.top - box.height * 0.48) / range, -1, 1);

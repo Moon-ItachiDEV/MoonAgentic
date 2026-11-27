@@ -1636,7 +1636,7 @@ function SkillsTab(props: {
   onReload: () => void;
 }) {
   const [editing, setEditing] = useState<{ skill?: ProjectSkill; draft: Draft } | null>(null);
-  const projects = useSyncExternalStore(connection.subscribe, connection.getState).projects;
+  const projects = useSyncExternalStore(connection.subscribe, () => connection.getState().projects);
   const { skills: installed, error } = useInstalledSkills();
   const skills = props.setup.skills;
   // A skill installed, moved or removed here changes the folder: it is read again, so the

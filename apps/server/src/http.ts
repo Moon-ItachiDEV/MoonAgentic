@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { constants as zlibConstants, createBrotliCompress, createGzip } from "node:zlib";
 import {
   ARTIFACT_LIBRARY_HOSTS,
   ClientMessage,
@@ -84,6 +85,44 @@ const TYPES: Record<string, string> = {
   ".json": "application/json; charset=utf-8",
   ".webmanifest": "application/manifest+json; charset=utf-8",
 };
+
+/** Text-based static assets worth compressing over HTTP (fonts and images are already compressed). */
+const COMPRESSIBLE = new Set([".html", ".js", ".css", ".svg", ".json", ".webmanifest"]);
+/** Cap on cached compressed immutable assets in memory. */
+const MAX_COMPRESSED_ASSETS = 64;
+const MAX_COMPRESSED_ASSET_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Picks the best supported HTTP content-encoding from an `Accept-Encoding` header,
+ * honouring RFC 9110 quality values (`q=0` refuses an encoding; `br` wins ties over `gzip`).
+ */
+export function pickEncoding(header: string | string[] | undefined): "br" | "gzip" | undefined {
+  const raw = Array.isArray(header) ? header.join(",") : header;
+  if (!raw) return undefined;
+  let br: number | undefined;
+  let gzip: number | undefined;
+  let star: number | undefined;
+  for (const part of raw.split(",")) {
+    const [namePart, ...params] = part.trim().toLowerCase().split(";");
+    const name = namePart?.trim();
+    if (name !== "br" && name !== "gzip" && name !== "*") continue;
+    let q = 1;
+    for (const param of params) {
+      const [k, v] = param.trim().split("=");
+      if (k?.trim() === "q" && v !== undefined) {
+        const parsed = Number(v.trim());
+        q = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 ? parsed : 0;
+      }
+    }
+    if (name === "br") br = Math.max(br ?? 0, q);
+    else if (name === "gzip") gzip = Math.max(gzip ?? 0, q);
+    else star = Math.max(star ?? 0, q);
+  }
+  const brQ = br ?? star ?? 0;
+  const gzQ = gzip ?? star ?? 0;
+  if (brQ <= 0 && gzQ <= 0) return undefined;
+  return brQ >= gzQ ? "br" : "gzip";
+}
 
 /** Where the images sent with messages are received and read back. */
 export const ATTACHMENTS_PATH = "/api/attachments";
@@ -580,6 +619,8 @@ export function createHttpServer(options: {
   const sockets = new Map<WebSocket, Who>();
   /** Each open connection's latest spare ws.ticket, replaced when a pong proves it alive. */
   const spares = new Map<WebSocket, string>();
+  /** Compressed immutable `/assets/*` buffers kept in memory so hot JS/CSS are zipped once. */
+  const compressedAssets = new Map<string, Buffer>();
   const remote = options.remoteAccess ?? findRemoteAccess;
   const maxClients = options.maxClients ?? MAX_WS_CLIENTS;
   const maxPerDevice = options.maxPerDevice ?? MAX_WS_PER_DEVICE;
@@ -1204,28 +1245,100 @@ export function createHttpServer(options: {
       res.writeHead(404, { "cache-control": "no-store" }).end();
       return;
     }
+    const ext = path.extname(file);
+    const immutable = file.includes(`${path.sep}assets${path.sep}`);
+    const compressible = COMPRESSIBLE.has(ext);
+    const encoding = compressible ? pickEncoding(req.headers["accept-encoding"]) : undefined;
+    const headers: Record<string, string | number> = {
+      "content-type": TYPES[ext] ?? "application/octet-stream",
+      // The page is never kept: an iPhone app on the home screen that kept an old one
+      // would ask for files a newer build no longer has.
+      "cache-control": immutable
+        ? "public, max-age=31536000, immutable"
+        : ext === ".html"
+          ? "no-store"
+          : "no-cache",
+    };
+    if (compressible) headers["vary"] = "Accept-Encoding";
+    if (encoding) headers["content-encoding"] = encoding;
+
+    let cacheKey: string | undefined;
+    if (immutable && encoding) {
+      const stat = statSync(file, { throwIfNoEntry: false });
+      if (!stat?.isFile()) {
+        res.writeHead(404, { "cache-control": "no-store" }).end();
+        return;
+      }
+      if (stat.size <= MAX_COMPRESSED_ASSET_BYTES) {
+        cacheKey = `${file}\0${stat.mtimeMs}:${stat.size}\0${encoding}`;
+        const cached = compressedAssets.get(cacheKey);
+        if (cached) {
+          res.writeHead(200, { ...headers, "content-length": cached.byteLength });
+          if (req.method === "HEAD") res.end();
+          else res.end(cached);
+          return;
+        }
+      }
+    }
+
     const stream = createReadStream(file);
     // A file that vanished or cannot be read ends this response, not the server.
     stream.on("error", () => res.destroy());
     // A reader who leaves before the end would otherwise leave the file open.
     res.on("close", () => stream.destroy());
     stream.once("open", () => {
-      res.writeHead(200, {
-        "content-type": TYPES[path.extname(file)] ?? "application/octet-stream",
-        // The page is never kept: an iPhone app on the home screen that kept an old one
-        // would ask for files a newer build no longer has.
-        "cache-control": file.includes(`${path.sep}assets${path.sep}`)
-          ? "public, max-age=31536000, immutable"
-          : path.extname(file) === ".html"
-            ? "no-store"
-            : "no-cache",
-      });
       if (req.method === "HEAD") {
         stream.destroy();
+        res.writeHead(200, headers);
         res.end();
         return;
       }
-      stream.pipe(res);
+      if (!encoding) {
+        res.writeHead(200, headers);
+        stream.pipe(res);
+        return;
+      }
+      const zip =
+        encoding === "br"
+          ? createBrotliCompress({ params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 5 } })
+          : createGzip({ level: 6 });
+      let completed = false;
+      let aborted = false;
+      const chunks: Buffer[] | undefined = cacheKey ? [] : undefined;
+      let total = 0;
+      stream.on("error", () => {
+        aborted = true;
+        zip.destroy();
+      });
+      zip.on("error", () => {
+        aborted = true;
+        stream.destroy();
+        res.destroy();
+      });
+      res.on("close", () => {
+        if (!completed) {
+          aborted = true;
+          zip.destroy();
+        }
+      });
+      res.writeHead(200, headers);
+      stream.pipe(zip).pipe(res);
+      if (chunks) {
+        zip.on("data", (chunk: Buffer) => {
+          total += chunk.length;
+          if (total <= MAX_COMPRESSED_ASSET_BYTES) chunks.push(chunk);
+          else chunks.length = 0;
+        });
+      }
+      zip.on("end", () => {
+        completed = true;
+        if (!aborted && cacheKey && chunks && total > 0 && total <= MAX_COMPRESSED_ASSET_BYTES) {
+          if (!compressedAssets.has(cacheKey) && compressedAssets.size >= MAX_COMPRESSED_ASSETS) {
+            compressedAssets.delete(compressedAssets.keys().next().value!);
+          }
+          compressedAssets.set(cacheKey, Buffer.concat(chunks, total));
+        }
+      });
     });
   };
 
@@ -1239,7 +1352,12 @@ export function createHttpServer(options: {
     }
   });
 
-  const wss = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  const wss = new WebSocketServer({
+    noServer: true,
+    maxPayload: 1024 * 1024,
+    // Small streaming tokens skip zlib; large snapshots, timelines, and diffs compress sharply.
+    perMessageDeflate: { threshold: 1024 },
+  });
   /** Connections open and being opened, by whom: "owner", or a device's id. */
   const open = new Map<string, number>();
   const upgrading = new Map<string, number>();
@@ -1416,6 +1534,7 @@ export function createHttpServer(options: {
   server.on("close", () => {
     clearInterval(heartbeat);
     wsTickets.clear();
+    compressedAssets.clear();
     wss.close();
   });
   return server;

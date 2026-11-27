@@ -634,10 +634,13 @@ export function FrostMoon({
       return computeEyePose(state, t);
     };
 
+    const resting = state === "repos" || state === "termine" || state === "erreur";
+    const ambientStill = still || resting;
+
     const draw = (poseNow: EyePose) => {
       const speed = state === "file" ? 0.72 : state === "termine" ? 1.3 : 1.05;
-      const float = still ? 0 : Math.sin(time * speed) * 5;
-      const breathe = still ? 0 : Math.sin(time * speed + Math.PI / 2) * 0.012;
+      const float = ambientStill ? 0 : Math.sin(time * speed) * 5;
+      const breathe = ambientStill ? 0 : Math.sin(time * speed + Math.PI / 2) * 0.012;
       const sy = 1 + breathe - squish.p * 0.12;
       const sx = 1 - breathe + squish.p * 0.1;
       floatRef.current?.setAttribute(
@@ -647,7 +650,8 @@ export function FrostMoon({
 
       const starBias =
         phase === "star"
-          ? (state === "erreur" ? 0 : -3.2) + (still ? 0 : Math.sin(time * speed * 0.5) * 1.4)
+          ? (state === "erreur" ? 0 : -3.2) +
+            (ambientStill ? 0 : Math.sin(time * speed * 0.5) * 1.4)
           : 0;
       const totalRot = gaze.x * 2.6 + expr.tilt + starBias;
       turnRef.current?.setAttribute(
@@ -663,10 +667,12 @@ export function FrostMoon({
           state === "tests" ||
           state === "termine";
         const twRate = lively ? 3.2 : 1.6;
-        const twA = still ? 1 : 0.92 + Math.sin(time * twRate) * (lively ? 0.16 : 0.08);
-        const twB = still ? 1 : 0.92 + Math.cos(time * twRate * 1.15) * (lively ? 0.18 : 0.09);
-        const bobA = still ? 0 : Math.cos(time * speed * 1.3) * 2.8;
-        const bobB = still ? 0 : Math.sin(time * speed * 1.2 + 1.4) * 2.4;
+        const twA = ambientStill ? 1 : 0.92 + Math.sin(time * twRate) * (lively ? 0.16 : 0.08);
+        const twB = ambientStill
+          ? 1
+          : 0.92 + Math.cos(time * twRate * 1.15) * (lively ? 0.18 : 0.09);
+        const bobA = ambientStill ? 0 : Math.cos(time * speed * 1.3) * 2.8;
+        const bobB = ambientStill ? 0 : Math.sin(time * speed * 1.2 + 1.4) * 2.4;
         sparkleARef.current?.setAttribute(
           "transform",
           `translate(${(192 - gaze.x * 3.4).toFixed(2)} ${(64 + bobA - gaze.y * 2.4).toFixed(2)}) rotate(${(12 + (twA - 1) * 28).toFixed(2)}) scale(${twA.toFixed(3)})`,
@@ -678,7 +684,7 @@ export function FrostMoon({
       }
 
       if (phase === "planet") {
-        const wobble = still ? 0 : Math.sin(time * speed * 0.65) * 1.4;
+        const wobble = ambientStill ? 0 : Math.sin(time * speed * 0.65) * 1.4;
         const ringRot = RING_ROT + gaze.x * 3.2 - expr.tilt * 0.45 + wobble;
         const ringScaleY = Math.max(0.84, Math.min(1.16, 1 + gaze.y * 0.08));
         ringRef.current?.setAttribute(
@@ -703,9 +709,10 @@ export function FrostMoon({
       }
 
       if (phase === "chef") {
-        const hover = still ? 0 : Math.sin(time * speed * 1.35 - 0.6) * 2.4;
+        const hover = ambientStill ? 0 : Math.sin(time * speed * 1.35 - 0.6) * 2.4;
         const pop = expr.smile * 3.8 + squish.p * 7.5;
-        const angryTilt = state === "erreur" ? -5 + (still ? 0 : Math.sin(time * 34) * 1.8) : 0;
+        const angryTilt =
+          state === "erreur" ? -5 + (ambientStill ? 0 : Math.sin(time * 34) * 1.8) : 0;
         const crownRot = -3.5 + gaze.x * 4.2 + expr.tilt * 0.4 + angryTilt;
         crownRef.current?.setAttribute(
           "transform",
@@ -838,21 +845,38 @@ export function FrostMoon({
       shadowRef.current?.setAttribute("opacity", (0.36 - lift * 0.1).toFixed(3));
     };
 
+    let visible = typeof IntersectionObserver !== "function";
+    let animating = false;
+
+    const settled = (goal: EyePose) =>
+      !pointer &&
+      Math.abs(squish.p) < 0.002 &&
+      Math.abs(squish.v) < 0.01 &&
+      Math.hypot(goal.gx - gaze.x, goal.gy - gaze.y) < 0.005 &&
+      Math.abs(goal.tilt - expr.tilt) < 0.05 &&
+      (winkAt < 0 || time > winkAt + 0.35) &&
+      (smileBurstAt < 0 || time > smileBurstAt + 0.72);
+
     const tick = (now: number) => {
+      if (document.hidden || !visible) {
+        frame = 0;
+        return;
+      }
+      // Cap SVG filter rasterization at ~30 FPS (even on 120/240 Hz displays).
+      if (last && now - last < 32) {
+        frame = requestAnimationFrame(tick);
+        return;
+      }
       const dt = Math.min(0.05, (now - (last || now)) / 1000);
       last = now;
       time += dt;
-      if (phase === "planet" && !still) {
+      if (phase === "planet" && !still && !resting) {
         const fastOrbit =
-          state === "web" ||
-          state === "cherche" ||
-          state === "commande" ||
-          state === "tests" ||
-          state === "termine";
+          state === "web" || state === "cherche" || state === "commande" || state === "tests";
         orbitAngle += dt * (state === "file" ? 0.25 : fastOrbit ? 0.92 : 0.46);
       }
 
-      if (!pointer && state === "repos" && time > nextGlance) {
+      if (!pointer && state === "repos" && !resting && time > nextGlance) {
         const p = IDLE_POSES[Math.floor(Math.random() * IDLE_POSES.length)];
         if (p) {
           target.x = p.x;
@@ -866,9 +890,9 @@ export function FrostMoon({
         nextGlance = time + 1.3 + Math.random() * 2.2;
       }
 
-      const goal = currentGoal(time);
+      const goal = currentGoal(resting ? 0 : time);
 
-      if (time > nextBlink && state !== "termine" && goal.smile < 0.2) {
+      if (!resting && time > nextBlink && goal.smile < 0.2) {
         blinkAt = time;
         blinkTwice = state !== "file" && Math.random() < 0.26;
         nextBlink =
@@ -902,12 +926,40 @@ export function FrostMoon({
       squish.v += (-squish.p * 220 - squish.v * 9) * dt;
       squish.p += squish.v * dt;
 
+      if (resting && settled(goal)) {
+        animating = false;
+        winkAt = -99;
+        smileBurstAt = -99;
+        gaze.x = goal.gx;
+        gaze.y = goal.gy;
+        gaze.vx = 0;
+        gaze.vy = 0;
+        expr.tilt = goal.tilt;
+        expr.topL = goal.topL;
+        expr.topR = goal.topR;
+        expr.slantL = goal.slantL;
+        expr.slantR = goal.slantR;
+        expr.botL = goal.botL;
+        expr.botR = goal.botR;
+        expr.smile = goal.smile;
+        expr.dilate = goal.dilate;
+        expr.scaleYL = goal.scaleYL;
+        expr.scaleYR = goal.scaleYR;
+        expr.irisPulse = goal.irisPulse;
+        squish.p = 0;
+        squish.v = 0;
+        draw(goal);
+        frame = 0;
+        return;
+      }
+
       draw(goal);
       frame = requestAnimationFrame(tick);
     };
 
     const start = () => {
-      if (frame || still) return;
+      if (frame || still || !visible || document.hidden) return;
+      if (resting && !pointer && !animating) return;
       last = 0;
       frame = requestAnimationFrame(tick);
     };
@@ -916,7 +968,7 @@ export function FrostMoon({
       frame = 0;
     };
 
-    const initPose = currentGoal(time);
+    const initPose = currentGoal(resting ? 0 : time);
     gaze.x = initPose.gx;
     gaze.y = initPose.gy;
     expr.tilt = initPose.tilt;
@@ -934,10 +986,20 @@ export function FrostMoon({
 
     const io =
       typeof IntersectionObserver === "function"
-        ? new IntersectionObserver(([e]) => (e?.isIntersecting ? start() : stop()))
+        ? new IntersectionObserver(([e]) => {
+            visible = !!e?.isIntersecting;
+            if (visible) start();
+            else stop();
+          })
         : null;
     if (io) io.observe(el);
     else start();
+
+    const onVisibility = () => {
+      if (document.hidden) stop();
+      else start();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
     const onMove = (e: PointerEvent) => {
       if (!followPointer) return;
@@ -946,6 +1008,7 @@ export function FrostMoon({
       pointer = true;
       target.x = Math.max(-1, Math.min(1, ((e.clientX - r.left) / r.width - 0.5) * 2.4));
       target.y = Math.max(-1, Math.min(1, ((e.clientY - r.top) / r.height - 0.5) * 2.4));
+      start();
     };
     const onLeave = () => {
       pointer = false;
@@ -960,6 +1023,7 @@ export function FrostMoon({
         nextGlance = time + 1.1;
       }
     };
+    let stillTimer = 0;
     const onDown = () => {
       squish.p = 0.92;
       squish.v = 0;
@@ -971,9 +1035,13 @@ export function FrostMoon({
       }
       if (still) {
         cancelAnimationFrame(frame);
+        window.clearTimeout(stillTimer);
         last = 0;
         frame = requestAnimationFrame(tick);
-        window.setTimeout(stop, 1200);
+        stillTimer = window.setTimeout(stop, 1200);
+      } else {
+        animating = true;
+        start();
       }
     };
 
@@ -984,7 +1052,9 @@ export function FrostMoon({
 
     return () => {
       stop();
+      window.clearTimeout(stillTimer);
       io?.disconnect();
+      document.removeEventListener("visibilitychange", onVisibility);
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerleave", onLeave);
       el.removeEventListener("pointerdown", onDown);

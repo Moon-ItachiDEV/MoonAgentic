@@ -5,7 +5,11 @@ import { lazy, Suspense, useSyncExternalStore } from "react";
 import { installSteps, openUpdateCard, updateShown, workingLine } from "../app-update.ts";
 import { connection } from "../connection.ts";
 
-const useApp = () => useSyncExternalStore(connection.subscribe, connection.getState);
+const useApp = () => {
+  const app = useSyncExternalStore(connection.subscribe, () => connection.getState().app);
+  const status = useSyncExternalStore(connection.subscribe, () => connection.getState().status);
+  return { app, status };
+};
 
 const Host = lazy(() => import("./AppUpdate.tsx").then((m) => ({ default: m.AppUpdateHost })));
 

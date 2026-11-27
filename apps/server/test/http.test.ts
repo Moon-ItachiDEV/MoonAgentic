@@ -4,6 +4,7 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { RemoteAccess } from "@moonagentic/protocol";
@@ -17,6 +18,7 @@ import {
   createHttpServer,
   decode,
   DEVICE_REVOKED,
+  pickEncoding,
   rateKey,
   type RateLimitOptions,
   TOKEN_RENEWED,
@@ -1048,5 +1050,137 @@ describe("a database that refuses a write behind a route", () => {
     db.release();
 
     expect(ticket.status).toBe(200);
+  });
+});
+
+describe("compression HTTP et WebSocket", () => {
+  it("picks the right content-encoding from Accept-Encoding quality weights", () => {
+    expect(pickEncoding(undefined)).toBeUndefined();
+    expect(pickEncoding("identity")).toBeUndefined();
+    expect(pickEncoding("gzip, deflate, br")).toBe("br");
+    expect(pickEncoding("gzip, deflate")).toBe("gzip");
+    expect(pickEncoding("br;q=0, gzip")).toBe("gzip");
+    expect(pickEncoding("br;q=0.4, gzip;q=0.9")).toBe("gzip");
+    expect(pickEncoding("br;q=0, *;q=1")).toBe("gzip");
+    expect(pickEncoding("*;q=0")).toBeUndefined();
+    expect(pickEncoding("br;q=0, gzip;q=0")).toBeUndefined();
+    expect(pickEncoding("br;q=2, gzip;q=0.5")).toBe("gzip");
+  });
+
+  const rawGet = (
+    origin: string,
+    pathname: string,
+    headers: Record<string, string> = {},
+    method: "GET" | "HEAD" = "GET",
+  ) =>
+    new Promise<{
+      status: number;
+      headers: Record<string, string | string[] | undefined>;
+      body: Buffer;
+    }>((resolve, reject) => {
+      const req = request(`http://${origin}${pathname}`, { method, headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks),
+          }),
+        );
+      });
+      req.on("error", reject);
+      req.end();
+    });
+
+  it("compresses text assets with br/gzip, caches immutable hits, respects HEAD, and skips fonts", async () => {
+    const { origin, webDir } = await serve();
+    mkdirSync(path.join(webDir, "assets"), { recursive: true });
+    const jsBody = `export const payload = ${JSON.stringify("MoonAgentic ".repeat(400))};\n`;
+    const jsPath = path.join(webDir, "assets", "app-abc123.js");
+    const fontBody = Buffer.from([0x77, 0x4f, 0x46, 0x32, 0x00, 0x01, 0x02, 0x03]);
+    writeFileSync(jsPath, jsBody);
+    writeFileSync(path.join(webDir, "assets", "font-xyz.woff2"), fontBody);
+
+    // First Brotli request streams & populates immutable cache
+    const br1 = await rawGet(origin, "/assets/app-abc123.js", { "accept-encoding": "gzip, br" });
+    expect(br1.status).toBe(200);
+    expect(br1.headers["content-encoding"]).toBe("br");
+    expect(br1.headers["vary"]).toBe("Accept-Encoding");
+    expect(br1.body.byteLength).toBeLessThan(jsBody.length / 4);
+    expect(brotliDecompressSync(br1.body).toString("utf8")).toBe(jsBody);
+
+    // Second Brotli request hits memory cache and includes exact compressed content-length
+    const br2 = await rawGet(origin, "/assets/app-abc123.js", { "accept-encoding": "br" });
+    expect(br2.status).toBe(200);
+    expect(br2.headers["content-encoding"]).toBe("br");
+    expect(Number(br2.headers["content-length"])).toBe(br2.body.byteLength);
+    expect(brotliDecompressSync(br2.body).toString("utf8")).toBe(jsBody);
+
+    // Gzip fallback
+    const gz = await rawGet(origin, "/assets/app-abc123.js", { "accept-encoding": "gzip" });
+    expect(gz.status).toBe(200);
+    expect(gz.headers["content-encoding"]).toBe("gzip");
+    expect(gunzipSync(gz.body).toString("utf8")).toBe(jsBody);
+
+    // Explicit refusal keeps Vary header and sends raw bytes
+    const raw = await rawGet(origin, "/assets/app-abc123.js", {
+      "accept-encoding": "br;q=0, gzip;q=0",
+    });
+    expect(raw.status).toBe(200);
+    expect(raw.headers["content-encoding"]).toBeUndefined();
+    expect(raw.headers["vary"]).toBe("Accept-Encoding");
+    expect(raw.body.toString("utf8")).toBe(jsBody);
+
+    // HEAD returns headers with empty body
+    const head = await rawGet(origin, "/assets/app-abc123.js", { "accept-encoding": "br" }, "HEAD");
+    expect(head.status).toBe(200);
+    expect(head.headers["content-encoding"]).toBe("br");
+    expect(head.body.byteLength).toBe(0);
+
+    // Already-compressed binary font is served untouched
+    const font = await rawGet(origin, "/assets/font-xyz.woff2", { "accept-encoding": "br, gzip" });
+    expect(font.status).toBe(200);
+    expect(font.headers["content-encoding"]).toBeUndefined();
+    expect(font.body.equals(fontBody)).toBe(true);
+
+    // Updating the asset invalidates the mtime:size cache key
+    const updatedJs = `export const payload = "updated";\n`;
+    writeFileSync(jsPath, updatedJs);
+    const future = new Date(Date.now() + 5_000);
+    utimesSync(jsPath, future, future);
+    const br3 = await rawGet(origin, "/assets/app-abc123.js", { "accept-encoding": "br" });
+    expect(brotliDecompressSync(br3.body).toString("utf8")).toBe(updatedJs);
+  });
+
+  it("negotiates WebSocket perMessageDeflate while still enforcing maxPayload on inflated frames", async () => {
+    const { origin } = await serve();
+    const wsUrl = `ws://${origin}/ws`;
+
+    // Negotiates permessage-deflate when offered by the client
+    const negotiated = await new Promise<string>((resolve, reject) => {
+      const ws = new WebSocket(wsUrl, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+        perMessageDeflate: true,
+      });
+      ws.on("upgrade", (res) => resolve(String(res.headers["sec-websocket-extensions"] ?? "")));
+      ws.on("open", () => ws.close());
+      ws.on("error", reject);
+    });
+    expect(negotiated).toContain("permessage-deflate");
+
+    // A highly compressible >1 MB frame is still rejected with 1009 (Message Too Big)
+    const closeCode = await new Promise<number>((resolve, reject) => {
+      const ws = new WebSocket(wsUrl, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+        perMessageDeflate: true,
+      });
+      ws.on("open", () => {
+        ws.send(JSON.stringify({ type: "ping", pad: "a".repeat(1_200_000) }));
+      });
+      ws.on("close", (code) => resolve(code));
+      ws.on("error", reject);
+    });
+    expect(closeCode).toBe(1009);
   });
 });
