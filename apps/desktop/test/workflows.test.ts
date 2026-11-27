@@ -29,7 +29,7 @@ function permissions(block: string, indent: number): Record<string, string> | un
   const at = lines.findIndex((l) => new RegExp(`^ {${indent}}permissions:`).test(l));
   if (at < 0) return undefined;
   const inline = /permissions:\s*(\S.*)$/.exec(lines[at]!)?.[1];
-  if (inline) return { all: inline.trim() };
+  if (inline) return inline.trim() === "{}" ? {} : { all: inline.trim() };
   const granted: Record<string, string> = {};
   for (const line of lines.slice(at + 1)) {
     const pair = new RegExp(`^ {${indent + 2}}([\\w-]+):\\s*(\\S+)`).exec(line);
@@ -39,7 +39,20 @@ function permissions(block: string, indent: number): Record<string, string> | un
   return granted;
 }
 
+/** Whether these grants let the token write anything (`write`, `write-all`). */
+const writes = (granted: Record<string, string> | undefined) =>
+  Object.values(granted ?? {}).some((level) => !["read", "read-all", "none"].includes(level));
+
 describe("the release flow (N40)", () => {
+  it("reads every way a workflow can grant writing", () => {
+    expect(writes(permissions("permissions: write-all\n", 0))).toBe(true);
+    expect(writes(permissions("permissions:\n  contents: write\n", 0))).toBe(true);
+    expect(writes(permissions("    permissions:\n      pull-requests: write\n", 4))).toBe(true);
+    expect(writes(permissions("permissions: read-all\n", 0))).toBe(false);
+    expect(writes(permissions("permissions:\n  contents: read\n", 0))).toBe(false);
+    expect(writes(permissions("permissions: {}\n", 0))).toBe(false);
+  });
+
   it("runs every action from a commit, not from a tag its owner can move", () => {
     const loose: string[] = [];
     for (const file of workflows()) {
@@ -53,9 +66,7 @@ describe("the release flow (N40)", () => {
   it("gives the token write access to the release job only", () => {
     const { top, jobs } = split(read("desktop.yml"));
     expect(permissions(top, 0)).toEqual({ contents: "read" });
-    const writers = [...jobs].filter(([, body]) =>
-      Object.values(permissions(body, 4) ?? {}).includes("write"),
-    );
+    const writers = [...jobs].filter(([, body]) => writes(permissions(body, 4)));
     expect(writers.map(([name]) => name)).toEqual(["release"]);
     expect(permissions(jobs.get("release")!, 4)).toEqual({ contents: "write" });
   });

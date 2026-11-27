@@ -53,7 +53,6 @@ function folder(files: Record<string, string> = {}): string {
 const skillMd = (name: string, description: string) =>
   `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`;
 
-/** A home folder with no Hermes of the machine running the tests. */
 /** A command line that runs these lines of Node, the same in sh and in cmd.exe. */
 function node(lines: string[]): string {
   const script = path.join(folder(), "steps.mjs");
@@ -61,6 +60,7 @@ function node(lines: string[]): string {
   return `"${process.execPath}" "${script}"`;
 }
 
+/** A home folder with no Hermes of the machine running the tests. */
 function home(files: Record<string, string> = {}): SkillPlace {
   const base = folder(files);
   return { scope: "user", base, home: base, env: { HERMES_HOME: path.join(base, "hermes") } };
@@ -332,11 +332,18 @@ describe("relecture de Neon (PR 191)", () => {
     const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF") });
     const outside = folder({ "hostname.txt": "machine" });
     symlinkSync(path.join(outside, "hostname.txt"), path.join(repo, "skills/pdf/ref.txt"));
+    // Git for Windows keeps a link as a plain file unless told otherwise: the repository must
+    // hold a real one, or nothing is proven.
     const git = (...args: string[]) =>
-      execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+      execFileSync(
+        "git",
+        ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.symlinks=true", ...args],
+        { cwd: repo },
+      ).toString();
     git("init", "-q");
     git("add", "-A");
     git("commit", "-qm", "x");
+    expect(git("ls-files", "-s", "skills/pdf/ref.txt")).toMatch(/^120000 /);
     const dest = path.join(folder(), "clone");
     await shallowClone(pathToFileURL(repo).href, dest);
     const { lstatSync } = await import("node:fs");

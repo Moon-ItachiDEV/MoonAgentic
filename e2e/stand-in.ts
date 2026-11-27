@@ -1,6 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -20,10 +28,7 @@ export function standIn(bin: string, name: string, script: string): void {
     return;
   }
   const file = path.join(bin, name);
-  writeFileSync(
-    file,
-    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(code)} "$@"\n`,
-  );
+  writeFileSync(file, `#!/bin/sh\nexec ${shellQuote(process.execPath)} ${shellQuote(code)} "$@"\n`);
   chmodSync(file, 0o755);
 }
 
@@ -64,20 +69,32 @@ static class StandIn {
   if (existsSync(exe)) return exe;
   const work = path.join(os.tmpdir(), `moonagentic-stand-in-${hash}-${process.pid}`);
   mkdirSync(work, { recursive: true });
-  writeFileSync(path.join(work, "stand-in.cs"), source);
-  const csc = path.join(
-    process.env.WINDIR ?? "C:\\Windows",
-    "Microsoft.NET",
-    "Framework64",
-    "v4.0.30319",
-    "csc.exe",
-  );
-  execFileSync(csc, ["/nologo", "/out:stand-in.exe", "stand-in.cs"], { cwd: work, stdio: "pipe" });
   try {
-    // Test files start side by side: the first one to finish puts it in place.
-    renameSync(path.join(work, "stand-in.exe"), exe);
-  } catch (error) {
-    if (!existsSync(exe)) throw error;
+    writeFileSync(path.join(work, "stand-in.cs"), source);
+    const csc = path.join(
+      process.env.WINDIR ?? "C:\\Windows",
+      "Microsoft.NET",
+      "Framework64",
+      "v4.0.30319",
+      "csc.exe",
+    );
+    execFileSync(csc, ["/nologo", "/out:stand-in.exe", "stand-in.cs"], {
+      cwd: work,
+      stdio: "pipe",
+    });
+    try {
+      // Test files start side by side: the first one to finish puts it in place.
+      renameSync(path.join(work, "stand-in.exe"), exe);
+    } catch (error) {
+      if (!existsSync(exe)) throw error;
+    }
+  } finally {
+    rmSync(work, { recursive: true, force: true });
   }
   return exe;
+}
+
+/** A word for sh, taken as it is: in single quotes, nothing in it is read. */
+function shellQuote(word: string): string {
+  return `'${word.replaceAll("'", `'\\''`)}'`;
 }
