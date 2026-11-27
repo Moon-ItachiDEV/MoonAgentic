@@ -6182,6 +6182,8 @@ export class Hub {
     const form =
       asked.mode === "form" ? formQuestions(request.message, asked.requestedSchema) : undefined;
     if (!form || thread.parentId || signal.aborted) return Promise.resolve({ action: "decline" });
+    // « Arrêter » already pressed: a question that crossed it is cancelled, as a permission is.
+    if (this.cancelled.has(threadId)) return Promise.resolve({ action: "cancel" });
     // The question is the tool call's own card when the agent names it, else a card of its own.
     const call =
       typeof asked.toolCallId === "string"
