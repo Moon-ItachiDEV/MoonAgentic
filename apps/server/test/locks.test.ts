@@ -637,6 +637,45 @@ describe("a locked project on the wire", () => {
     await hub.handle(client, { type: "mcp.remove", id: openId });
   });
 
+  it("lets a global MCP server be cut from an open project while another is locked, the locked one keeping it", async () => {
+    // Neon's review of PR #192: « Paramètres du projet › Environnement » sends every project
+    // but this one, the locked one included; refused, the switch could not cut anything.
+    const { hub, client, secret, open } = setup();
+    const stdio = { type: "stdio" as const, command: "node", args: [], env: [] };
+    await hub.handle(client, {
+      type: "mcp.add",
+      requestId: "g1",
+      server: { name: "global-srv", transport: stdio },
+    });
+    const id = client.last("created").id;
+    await hub.handle(client, { type: "lock.setPin", requestId: "l1", pin: "123456" });
+    await hub.handle(client, { type: "lock.project", requestId: "l2", projectId: secret });
+
+    // Cut from `open`: the locked project had it, still has it.
+    await hub.handle(client, {
+      type: "mcp.setScope",
+      id,
+      projectIds: [secret],
+      allRoles: false,
+    });
+    // Given back to `open`: the locked project keeps it again.
+    await hub.handle(client, {
+      type: "mcp.setScope",
+      id,
+      projectIds: [secret, open],
+      allRoles: false,
+    });
+    // Taking it from the locked project, or giving it one more time, stays refused.
+    await expect(
+      hub.handle(client, { type: "mcp.setScope", id, projectIds: [open], allRoles: false }),
+    ).rejects.toThrow(/verrouillé/);
+    await hub.handle(client, { type: "mcp.setScope", id, projectIds: null, allRoles: false });
+    await hub.handle(client, { type: "mcp.setScope", id, projectIds: [open], allRoles: false });
+    await expect(
+      hub.handle(client, { type: "mcp.setScope", id, projectIds: [open, secret], allRoles: false }),
+    ).rejects.toThrow(/verrouillé/);
+  });
+
   it("excludes locked projects in SQL search before LIMIT so visible hits are never crowded out", async () => {
     const { hub, store, client, secret, open } = setup();
     const now = Date.now();

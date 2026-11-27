@@ -10,7 +10,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { connection } from "../connection.ts";
 import { looseDefault } from "../default-models.ts";
 import { effortOf } from "../effort.ts";
-import { sendRename } from "../rename.ts";
+import { renameKey, sendRename } from "../rename.ts";
 import { useThreadModel } from "../thread-model.ts";
 import { Dropdown } from "../v2/Dropdown.tsx";
 import { I } from "../v2/I.tsx";
@@ -255,8 +255,10 @@ function TitleField(props: { thread: Thread; loose: boolean }) {
         onChange={(e) => setTitle(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") {
+          // Not while a word is being composed (Japanese, Chinese…): that Enter ends the word.
+          const does = renameKey({ key: e.key, isComposing: e.nativeEvent.isComposing });
+          if (does === "save") e.currentTarget.blur();
+          if (does === "cancel") {
             e.preventDefault();
             e.stopPropagation();
             setTitle(thread.title);

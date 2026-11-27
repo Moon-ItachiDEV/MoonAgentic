@@ -27,6 +27,7 @@ import { modelLabel, modelNameOf } from "../model-label.ts";
 import { COLOR_NAME } from "../project-colors.ts";
 import { claudeAction, commandProblem, fits, oneLine, skillProblem } from "../project-setup.ts";
 import { KIND_LABEL, shortAgo } from "../project-threads.ts";
+import { renameKey } from "../rename.ts";
 import { useThreadModel } from "../thread-model.ts";
 import { I } from "../v2/I.tsx";
 import { ModelChip, type Route } from "../v2/ModelChip.tsx";
@@ -34,6 +35,7 @@ import { type Section, SettingsWindow } from "../v2/SettingsWindow.tsx";
 import { useScreen } from "../v2/use-screen.ts";
 import { BranchCleanup } from "./BranchCleanup.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
+import { scopeSwitched } from "../mcp-switch.ts";
 import { LookMenu } from "./NewProjectDialog.tsx";
 import {
   findProjectIcons,
@@ -316,8 +318,10 @@ function NameField(props: { project: Project; onIcons: () => void }) {
         onChange={(e) => setName(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") {
+          // Not while a word is being composed (Japanese, Chinese…): that Enter ends the word.
+          const does = renameKey({ key: e.key, isComposing: e.nativeEvent.isComposing });
+          if (does === "save") e.currentTarget.blur();
+          if (does === "cancel") {
             e.preventDefault();
             e.stopPropagation();
             setName(project.name);
@@ -816,23 +820,21 @@ function Environment(props: {
   const { project } = props;
   const { roomy } = useScreen();
   const folder = project.path.split(/[\\/]/).filter(Boolean).pop() ?? project.path;
-  const toggle = (server: McpServerInfo, on: boolean) => {
-    const others = (server.projectIds ?? props.projects.map((p) => p.id)).filter(
-      (id) => id !== project.id,
-    );
+  const toggle = (server: McpServerInfo, on: boolean) =>
     connection.send({
       type: "mcp.setScope",
       id: server.id,
-      projectIds: on ? [...others, project.id] : others,
+      projectIds: scopeSwitched(server, project.id, on, props.projects),
       allRoles: !!server.allRoles,
     });
-  };
   const scope = (server: McpServerInfo) =>
     !server.projectIds
       ? "Tous les projets"
-      : server.projectIds.length === 1 && server.projectIds[0] === project.id
-        ? "Ce projet"
-        : `${server.projectIds.length} projets`;
+      : server.projectIds.length === 0
+        ? "Aucun projet"
+        : server.projectIds.length === 1 && server.projectIds[0] === project.id
+          ? "Ce projet"
+          : `${server.projectIds.length} projets`;
   return (
     <>
       {roomy && <h2>Environnement</h2>}
@@ -940,13 +942,14 @@ function Usage(props: {
     if (!props.open) return;
     let live = true;
     connection
-      .ask({ type: "artifacts.list", requestId: newId() })
+      // This project's only: the others' folders are not looked at.
+      .ask({ type: "artifacts.list", requestId: newId(), projectId: props.project.id })
       .then((reply) => live && setArtifacts(reply.artifacts))
       .catch(() => live && setArtifacts(null));
     return () => {
       live = false;
     };
-  }, [props.open]);
+  }, [props.open, props.project.id]);
   const mine = artifacts?.filter((a) => a.projectId === props.project.id);
   const done = threads.filter((t) => t.archived).length;
   const atWork = threads.filter(

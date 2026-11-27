@@ -2438,8 +2438,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
     openAtLogin: z.boolean().optional(),
     preventSleep: z.boolean().optional(),
   }),
-  /** Lists the artifacts of the threads' own branches; see `artifacts`. */
-  z.object({ type: z.literal("artifacts.list"), requestId: id }),
+  /** Lists the artifacts of the threads' own branches, of one project when given; see `artifacts`. */
+  z.object({ type: z.literal("artifacts.list"), requestId: id, projectId: id.optional() }),
   /** Asks for an address to show one artifact; see `artifactLink`. */
   z.object({
     type: z.literal("artifacts.open"),

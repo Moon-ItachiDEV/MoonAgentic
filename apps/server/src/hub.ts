@@ -1089,10 +1089,13 @@ export class Hub {
       return false;
     }
     if (message.type === "mcp.setScope") {
-      const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
+      // A locked project neither loses a server listed for it nor gains one it had not: a
+      // server that reaches it (by name, or every project) may still change for the others.
+      const before = this.catalog.mcpServerInfos().find((s) => s.id === message.id)?.projectIds;
+      const after = message.projectIds;
       if (
-        current?.projectIds?.some((p) => this.locks.isLocked(p)) ||
-        message.projectIds?.some((p) => this.locks.isLocked(p))
+        before?.some((p) => this.locks.isLocked(p) && after && !after.includes(p)) ||
+        after?.some((p) => this.locks.isLocked(p) && before && !before.includes(p))
       ) {
         lockedError();
       }
@@ -1753,7 +1756,13 @@ export class Hub {
           requestId: message.requestId,
           // A locked project's folders are not even looked at, nor counted in the cap.
           ...(await findArtifacts(
-            this.store.listThreads().filter((t) => !this.locks.isLocked(t.projectId)),
+            this.store
+              .listThreads()
+              .filter(
+                (t) =>
+                  !this.locks.isLocked(t.projectId) &&
+                  (!message.projectId || t.projectId === message.projectId),
+              ),
           )),
         });
         return;

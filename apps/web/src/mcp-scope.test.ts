@@ -1,6 +1,7 @@
 import type { McpServerInfo, Project } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import { mcpCount, mcpInProject, mcpScopeLabel, scopeOf } from "./mcp-scope.ts";
+import { scopeSwitched } from "./mcp-switch.ts";
 
 const project = (id: string): Project => ({
   id,
@@ -51,5 +52,30 @@ describe("who gets an MCP server", () => {
     // No project yet: only those for every project.
     expect(mcpCount(servers, undefined)).toBe(1);
     expect(mcpInProject(servers[3]!, "a")).toBe(false);
+  });
+});
+
+describe("a project switched on or off for a server, from its settings", () => {
+  // Neon's review of PR #192: switched off then on again, a server for every project stayed
+  // stuck on the projects of that day, the new ones never getting it.
+  it("goes back to every project once they all have it again", () => {
+    const global = server("s");
+    const cut = scopeSwitched(global, "b", false, projects);
+    expect(cut).toEqual(["a", "c"]);
+    expect(scopeSwitched(server("s", { projectIds: cut! }), "b", true, projects)).toBeNull();
+  });
+
+  it("keeps the other projects, a locked one included, when one is cut", () => {
+    const locked = { ...project("c"), locked: true as const };
+    expect(scopeSwitched(server("s"), "a", false, [project("a"), project("b"), locked])).toEqual([
+      "b",
+      "c",
+    ]);
+  });
+
+  it("adds or removes only that project from a list", () => {
+    const some = server("s", { projectIds: ["a"] });
+    expect(scopeSwitched(some, "b", true, projects)).toEqual(["a", "b"]);
+    expect(scopeSwitched(some, "a", false, projects)).toEqual([]);
   });
 });
