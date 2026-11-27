@@ -30,6 +30,7 @@ import {
   GOAL_MORE_TURNS,
   GOAL_TURNS,
   MAX_QUEUED_MESSAGES,
+  mcpReaches,
   PR_WATCH_TRIES,
   RESUME_TEXT,
   spentUntil,
@@ -1131,11 +1132,23 @@ export class Hub {
     }
     if (message.type === "mcp.setScope") {
       const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
-      if (
-        current?.projectIds?.some((p) => this.locks.isLocked(p)) ||
-        message.projectIds?.some((p) => this.locks.isLocked(p))
-      ) {
-        lockedError();
+      if (!current) return false;
+      const locked = this.locks.lockedProjects();
+      const next = message.projectIds
+        ? { projectIds: message.projectIds }
+        : { exceptProjectIds: message.exceptProjectIds };
+      // A locked project never loses a server, and gains one only as every project does.
+      const loses = (p: string) => mcpReaches(current, p) && !mcpReaches(next, p);
+      const named = (p: string) => !mcpReaches(current, p) && !!next.projectIds?.includes(p);
+      if (locked.some((p) => loses(p) || named(p))) lockedError();
+      // A server named for a locked project stays guarded like it (see below): it may leave or
+      // reach open projects, but neither goes to every project nor changes its roles; and one
+      // for locked projects alone is theirs, out of the others' reach.
+      if (current.projectIds?.some((p) => locked.includes(p))) {
+        const others = current.projectIds.filter((p) => !locked.includes(p));
+        if (!message.projectIds || !others.length || message.allRoles !== !!current.allRoles) {
+          lockedError();
+        }
       }
       return false;
     }
@@ -1794,7 +1807,13 @@ export class Hub {
           requestId: message.requestId,
           // A locked project's folders are not even looked at, nor counted in the cap.
           ...(await findArtifacts(
-            this.store.listThreads().filter((t) => !this.locks.isLocked(t.projectId)),
+            this.store
+              .listThreads()
+              .filter(
+                (t) =>
+                  !this.locks.isLocked(t.projectId) &&
+                  (!message.projectId || t.projectId === message.projectId),
+              ),
           )),
         });
         return;
@@ -2252,7 +2271,12 @@ export class Hub {
         this.catalog.setMcpEnabled(message.id, message.enabled);
         return;
       case "mcp.setScope":
-        this.catalog.setMcpScope(message.id, message.projectIds, message.allRoles);
+        this.catalog.setMcpScope(
+          message.id,
+          message.projectIds,
+          message.allRoles,
+          message.exceptProjectIds,
+        );
         return;
       case "mcp.remove":
         await this.catalog.removeMcpServer(message.id);

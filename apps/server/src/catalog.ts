@@ -49,6 +49,7 @@ const isMcpServer = (value: unknown): value is McpServerRecord => {
   }
   if (value.enabled !== undefined && typeof value.enabled !== "boolean") return false;
   if (value.projectIds !== undefined && !isStrings(value.projectIds)) return false;
+  if (value.exceptProjectIds !== undefined && !isStrings(value.exceptProjectIds)) return false;
   if (value.allRoles !== undefined && typeof value.allRoles !== "boolean") return false;
   if (value.agentIds !== undefined && !isStrings(value.agentIds)) return false;
   const t = value.transport;
@@ -531,16 +532,26 @@ export class AgentCatalog {
     this.updateMcpServers((servers) => servers.map((s) => (s.id === id ? { ...s, enabled } : s)));
   }
 
-  /** Says which projects get the server (`null` for every project), and which roles. */
-  setMcpScope(id: string, projectIds: string[] | null, allRoles: boolean): void {
+  /**
+   * Says which projects get the server (`null` for every project, but `exceptProjectIds`),
+   * and which roles.
+   */
+  setMcpScope(
+    id: string,
+    projectIds: string[] | null,
+    allRoles: boolean,
+    exceptProjectIds?: string[],
+  ): void {
     if (!this.rawMcpServers().some((s) => s.id === id)) return;
+    const except = !projectIds && exceptProjectIds ? this.knownProjects(exceptProjectIds) : [];
     this.updateMcpServers((servers) =>
       servers.map((s) => {
         if (s.id !== id) return s;
-        const { projectIds: _projects, allRoles: _roles, ...rest } = s;
+        const { projectIds: _projects, exceptProjectIds: _except, allRoles: _roles, ...rest } = s;
         return {
           ...rest,
           ...(projectIds ? { projectIds: this.knownProjects(projectIds) } : {}),
+          ...(except.length ? { exceptProjectIds: except } : {}),
           ...(allRoles ? { allRoles: true } : {}),
         };
       }),
@@ -564,11 +575,16 @@ export class AgentCatalog {
    * alone is left for no project, never widened to all of them.
    */
   projectRemoved(projectId: string): void {
-    if (!this.rawMcpServers().some((s) => s.projectIds?.includes(projectId))) return;
+    const named = (s: McpServerRecord) =>
+      !!s.projectIds?.includes(projectId) || !!s.exceptProjectIds?.includes(projectId);
+    if (!this.rawMcpServers().some(named)) return;
     this.updateMcpServers((servers) =>
-      servers.map((s) =>
-        s.projectIds ? { ...s, projectIds: s.projectIds.filter((p) => p !== projectId) } : s,
-      ),
+      servers.map((s) => {
+        if (s.projectIds) return { ...s, projectIds: s.projectIds.filter((p) => p !== projectId) };
+        const { exceptProjectIds: except, ...rest } = s;
+        const left = except?.filter((p) => p !== projectId) ?? [];
+        return left.length ? { ...rest, exceptProjectIds: left } : rest;
+      }),
     );
   }
 
