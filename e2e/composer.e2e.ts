@@ -104,7 +104,13 @@ afterAll(async () => {
     server.kill("SIGTERM");
     await exited;
   }
-  if (dir) rmSync(dir, { recursive: true, force: true });
+  if (dir) {
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    } catch {
+      // Windows may briefly keep a handle on a temp directory after process shutdown.
+    }
+  }
 });
 
 const shot = async (page: Page, name: string) => {
