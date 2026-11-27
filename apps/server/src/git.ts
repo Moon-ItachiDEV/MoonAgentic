@@ -1485,12 +1485,13 @@ export async function syncTarget(
  * Where a new thread's branch starts: the folder's branch, or its copy on the remote when
  * that one is ahead (pull requests merged on GitHub since the folder was last pulled), so a
  * thread never starts from an old copy. The remote is given a few seconds, then the folder's
- * own copy is used. When `moveFolder`, the folder itself is brought up to it as well, the way
- * `git pull --ff-only` would, but only when that is all it does; see {@link fastForward}.
+ * own copy is used. When `moveFolder` says so, the folder itself is brought up to it as well,
+ * the way `git pull --ff-only` would, but only when that is all it does; see
+ * {@link fastForward}. It is asked last, once the remote answered, just before git moves it.
  */
 export async function freshStart(
   projectDir: string,
-  moveFolder: boolean,
+  moveFolder: boolean | (() => boolean),
 ): Promise<{ base: string; baseBranch?: string; subdir?: string }> {
   const start = await worktreeStart(projectDir);
   if (!start.baseBranch) return start;
@@ -1500,16 +1501,19 @@ export async function freshStart(
     await gitCode(projectDir, ["rev-parse", "-q", "--verify", `${target}^{commit}`])
   ).stdout.trim();
   if (!ahead) return start;
-  if (moveFolder) await fastForward(projectDir, start.baseBranch, target, start.base, ahead);
+  const may = typeof moveFolder === "function" ? moveFolder : () => moveFolder;
+  await fastForward(projectDir, start.baseBranch, target, start.base, ahead, may);
   return { ...start, base: ahead };
 }
 
 /**
- * Whether `remoteRef` (« origin/main ») is the remote's default branch: the one its `HEAD`
- * names, or `main` or `master` when the clone never learned it.
+ * Whether the folder's `branch` is the remote's default branch, `remoteRef` (« origin/main »)
+ * being its copy under the same name: the one the remote's `HEAD` names, or `main` or `master`
+ * when the clone never learned it. A branch of another name that follows it is not.
  */
-async function isDefaultBranch(dir: string, remoteRef: string): Promise<boolean> {
+async function isDefaultBranch(dir: string, branch: string, remoteRef: string): Promise<boolean> {
   const remote = remoteRef.slice(0, remoteRef.indexOf("/"));
+  if (remoteRef !== `${remote}/${branch}`) return false;
   const named = await gitCode(dir, [
     "symbolic-ref",
     "-q",
@@ -1522,8 +1526,8 @@ async function isDefaultBranch(dir: string, remoteRef: string): Promise<boolean>
 
 /**
  * Moves the folder's branch forward to `to`, its copy `remoteRef` on the remote, when that is
- * the remote's default branch, the folder is still on `branch` at `from`, and nothing in it is
- * the user's: no changed file, no file git does not track. Run with the worktree changes, so
+ * the remote's default branch, the folder is still on `branch` at `from`, nothing in it is
+ * the user's (no changed file, no file git does not track), and `may` still allows it. Run with the worktree changes, so
  * no `git worktree add` runs at the same time. Never fails: a folder it cannot move is simply
  * left where it was.
  */
@@ -1533,9 +1537,10 @@ function fastForward(
   remoteRef: string,
   from: string,
   to: string,
+  may: () => boolean,
 ): Promise<void> {
   return oneAtATime(dir, async () => {
-    if (!(await isDefaultBranch(dir, remoteRef))) return;
+    if (!(await isDefaultBranch(dir, branch, remoteRef))) return;
     const [on, at, changed] = await Promise.all([
       gitCode(dir, ["branch", "--show-current"]),
       gitCode(dir, ["rev-parse", "HEAD"]),
@@ -1543,6 +1548,8 @@ function fastForward(
     ]);
     if (on.code || at.code || changed.code) return;
     if (on.stdout.trim() !== branch || at.stdout.trim() !== from || changed.stdout.trim()) return;
+    // Asked again now: the user may have turned it off, or an agent started in the folder.
+    if (!may()) return;
     await gitCode(dir, ["merge", "--ff-only", "-q", to]);
   });
 }

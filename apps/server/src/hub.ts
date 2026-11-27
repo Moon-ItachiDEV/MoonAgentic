@@ -603,6 +603,8 @@ export class Hub {
   set coordinatorUrl(url: string | undefined) {
     this.coordinators.url = url;
   }
+  /** The turns bringing the project's folder up to GitHub: a stop lets each go at once. */
+  private readonly catchingUp = new Map<string, () => void>();
   /** True while known pull requests are being asked about, so rounds never pile up. */
   private watching = false;
   private readonly prTimer: NodeJS.Timeout | undefined;
@@ -3508,6 +3510,7 @@ export class Hub {
     // the request, so the turn remembers it and stops before sending its prompt.
     const turn = this.turns.get(threadId);
     if (turn) this.cancelled.add(threadId);
+    this.catchingUp.get(threadId)?.();
     // Still in line: it leaves it, and its turn ends there.
     this.line.leave(threadId);
     this.pool.abortStart(threadId);
@@ -4949,6 +4952,7 @@ export class Hub {
    */
   async close(): Promise<void> {
     this.closed = true;
+    for (const stop of this.catchingUp.values()) stop();
     const deadline = Date.now() + CLOSE_LIMIT_MS;
     const upTo = (work: Promise<unknown>) => within(work, deadline - Date.now());
     clearTimeout(this.indexTimer);
@@ -5255,8 +5259,29 @@ export class Hub {
     const project = thread && this.store.getProject(thread.projectId);
     if (this.closed || !thread || !project || thread.workspace || thread.worksIn) return;
     if (this.isDiscussions(project.id) || !this.withGit(project).git) return;
-    if (!this.autoPull(project.id) || this.agentInFolder(project.id, threadId)) return;
-    await freshStart(project.path, true).catch(() => undefined);
+    if (!this.mayMoveFolder(project.id, threadId)) return;
+    // A stop does not wait on a remote that does not answer.
+    const stopped = new Promise<void>((resolve) => this.catchingUp.set(threadId, resolve));
+    try {
+      await Promise.race([
+        freshStart(project.path, () => this.mayMoveFolder(project.id, threadId)).catch(
+          () => undefined,
+        ),
+        stopped,
+      ]);
+    } finally {
+      this.catchingUp.delete(threadId);
+    }
+  }
+
+  /**
+   * Whether the project's folder may be brought up to GitHub's copy now: the project lets it,
+   * no turn works in it but `threadId`'s own, which is not being stopped, and the server runs.
+   */
+  private mayMoveFolder(projectId: string, threadId?: string): boolean {
+    if (this.closed || !this.autoPull(projectId)) return false;
+    if (threadId && this.cancelled.has(threadId)) return false;
+    return !this.agentInFolder(projectId, threadId);
   }
 
   /** Makes the thread's worktree on first use; returns the folder the agent works in. */
@@ -5268,10 +5293,7 @@ export class Hub {
     if (!workspace.base) {
       // Where the branch starts is written down before git makes anything, so a stop in
       // between is finished next time. A branch made before that rule keeps its own start.
-      const start = await freshStart(
-        project.path,
-        this.autoPull(project.id) && !this.agentInFolder(project.id),
-      );
+      const start = await freshStart(project.path, () => this.mayMoveFolder(project.id));
       if (await branchExists(project.path, workspace.branch)) {
         start.base = await forkPoint(project.path, workspace.branch);
       }

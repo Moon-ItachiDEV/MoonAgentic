@@ -155,7 +155,9 @@ describe("where a new thread starts", { timeout: 40_000 }, () => {
     git(repo, "config", "remote.origin.uploadpack", "sleep 12; git-upload-pack");
     const startedAt = Date.now();
     expect(await freshStart(repo, true)).toMatchObject({ base: old });
-    expect(Date.now() - startedAt).toBeLessThan(20_000);
+    // Cut at the start's own limit: neither the remote's 12 s nor a failure at once.
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(7_500);
+    expect(Date.now() - startedAt).toBeLessThan(11_000);
     expect(git(repo, "rev-parse", "HEAD")).toBe(old);
     // The remote's side sleeps on after the cut: its folder is removed once it is done.
     await new Promise((resolve) =>
@@ -231,5 +233,46 @@ describe("where a new thread starts", { timeout: 40_000 }, () => {
     expect(git(repo, "rev-parse", "HEAD")).toBe(old);
     await hub.handle(client, { type: "project.setAutoPull", projectId, on: true });
     expect(hub.snapshot().projects.find((p) => p.id === projectId)?.autoPull).toBeUndefined();
+  });
+
+  it("never moves another branch that follows the remote's default one", async () => {
+    const { repo, old } = mergedElsewhere();
+    git(repo, "checkout", "-q", "-b", "ma-branche", "--track", "origin/main");
+    await freshStart(repo, true);
+    expect(git(repo, "branch", "--show-current")).toBe("ma-branche");
+    expect(git(repo, "rev-parse", "HEAD")).toBe(old);
+  });
+
+  it("asks whether the folder may move only once the remote answered", async () => {
+    const { repo, old, merged } = mergedElsewhere();
+    let seen = "";
+    await freshStart(repo, () => {
+      seen = git(repo, "rev-parse", "origin/main");
+      return false;
+    });
+    expect(seen).toBe(merged);
+    expect(git(repo, "rev-parse", "HEAD")).toBe(old);
+  });
+
+  it("stops a turn at once while the remote does not answer", async () => {
+    const { root, repo } = mergedElsewhere();
+    git(repo, "config", "remote.origin.uploadpack", "sleep 12; git-upload-pack");
+    const { hub, store, projectId } = hubOn(root, repo);
+    const startedAt = Date.now();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: false,
+      text: "Bonjour",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await hub.cancel(threadId);
+    await hub.whenIdle(threadId);
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    expect(store.getThread(threadId)).toMatchObject({ status: "idle" });
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.max(0, 13_000 - (Date.now() - startedAt))),
+    );
   });
 });
