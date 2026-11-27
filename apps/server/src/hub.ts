@@ -6012,6 +6012,9 @@ export class Hub {
     signal: AbortSignal,
   ): Promise<acp.RequestPermissionResponse> {
     const thread = this.requireThread(threadId);
+    // « Arrêter » already pressed: a request that crossed it gets the answer the ones open then
+    // got, as ACP asks, instead of waiting for the user until the agent is killed.
+    if (this.cancelled.has(threadId)) return Promise.resolve({ outcome: { outcome: "cancelled" } });
     if (request.toolCall.title) this.upsertTool(threadId, request.toolCall);
     // A coordinator only reads and routes; a team reviewer may also run read-only shell checks
     // (Codex reads files via execute), while file edits, fetches and unknown tools wait on the user.
