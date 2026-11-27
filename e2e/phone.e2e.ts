@@ -137,29 +137,35 @@ const smallTargets = (page: Page) =>
     return small;
   });
 
-describe("on a phone", () => {
-  it("has, from a computer, a thread waiting on a permission and another one idle", async () => {
-    // From a computer: one thread asks before it writes, the other has answered.
-    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
-    await page.goto(url);
-    await addProject(page, project, false);
-    projectPage = new URL(page.url()).pathname;
-    await directThread(page);
-    await pickAgent(page);
-    await setAccess(page, /Demande d'abord/);
-    await say(page, "Corrige le calcul des frais de port");
-    await page.locator(".dc").waitFor();
-    waiting = new URL(page.url()).pathname;
-    await directThread(page);
-    await pickAgent(page);
-    await setAccess(page, /Accès complet/);
-    await say(page, "Bonjour");
-    await page.waitForURL((u) => u.pathname.startsWith("/t/") && u.pathname !== waiting);
-    idle = new URL(page.url()).pathname;
-    await page.close();
-  }, 120_000);
+/**
+ * From a computer, once for the file whichever test runs first: one thread asks before it
+ * writes, the other has answered.
+ */
+let seeding: Promise<void> | undefined;
+const seeded = () => (seeding ??= seed());
+async function seed() {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+  await page.goto(url);
+  await addProject(page, project, false);
+  projectPage = new URL(page.url()).pathname;
+  await directThread(page);
+  await pickAgent(page);
+  await setAccess(page, /Demande d'abord/);
+  await say(page, "Corrige le calcul des frais de port");
+  await page.locator(".dc").waitFor();
+  waiting = new URL(page.url()).pathname;
+  await directThread(page);
+  await pickAgent(page);
+  await setAccess(page, /Accès complet/);
+  await say(page, "Bonjour");
+  await page.waitForURL((u) => u.pathname.startsWith("/t/") && u.pathname !== waiting);
+  idle = new URL(page.url()).pathname;
+  await page.close();
+}
 
+describe("on a phone", () => {
   it("folds the card of another thread to one line while the keyboard is up (N27)", async () => {
+    await seeded();
     const { context, page } = await phone();
     // The other thread waits on a permission: its card is here too.
     await go(page, idle);
@@ -181,9 +187,26 @@ describe("on a phone", () => {
     expect(await page.evaluate(() => document.activeElement?.getAttribute("aria-label"))).toBe(
       "Message",
     );
-    // The keyboard gone, it stays whole; up again, it folds again.
+    // Put off again, it stays folded when another request comes, the keyboard still up.
+    await card.getByRole("button", { name: "Plus tard" }).tap();
+    await folded.waitFor();
+    const desk = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await desk.goto(url);
+    await directThread(desk);
+    await pickAgent(desk);
+    await setAccess(desk, /Demande d'abord/);
+    await say(desk, "Renomme la fonction de calcul");
+    await desk.locator(".dc").waitFor();
+    await folded.locator(".n").waitFor();
+    expect(await card.count()).toBe(0);
+    // That one stopped, its request goes.
+    await desk.getByRole("button", { name: "Arrêter", exact: true }).click();
+    await expect.poll(() => folded.locator(".n").count()).toBe(0);
+    await desk.close();
+    // The keyboard gone, what was put off stays put off until a tap opens it; up again, it folds.
     await page.setViewportSize(PHONE);
     await composer(page).blur();
+    await folded.tap();
     await card.waitFor();
     await composer(page).tap();
     await page.setViewportSize({ width: PHONE.width, height: 464 });
@@ -192,6 +215,7 @@ describe("on a phone", () => {
   });
 
   it("goes to a new line with Enter, and sends with the button (N32)", async () => {
+    await seeded();
     const { context, page } = await phone();
     await go(page, idle);
     await composer(page).tap();
@@ -207,6 +231,7 @@ describe("on a phone", () => {
   });
 
   it("says the quota in a few words, whole (N29)", async () => {
+    await seeded();
     const { context, page } = await phone();
     await go(page, idle);
     const warning = page.locator(".updb.qw .tx");
@@ -222,6 +247,7 @@ describe("on a phone", () => {
   });
 
   it("keeps every control of the home page, the settings, a project and the planner at 44 px under the finger (M3)", async () => {
+    await seeded();
     const { context, page } = await phone();
     await go(page, "/");
     expect(await smallTargets(page)).toEqual([]);
@@ -237,6 +263,7 @@ describe("on a phone", () => {
     await context.close();
   });
   it("asks for a permission once, on the card, and keeps it with the steps once answered (M2)", async () => {
+    await seeded();
     const { context, page } = await phone();
     await go(page, waiting);
     const card = page.locator(".dc");
@@ -258,6 +285,7 @@ describe("on a phone", () => {
 
 describe("on a computer", () => {
   it("sends with Enter, and says the quota whole", async () => {
+    await seeded();
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
     await page.locator(".scr").waitFor();

@@ -337,4 +337,41 @@ describe("longs fils", () => {
     expect(await more.count()).toBe(0);
     await context.close();
   });
+  // Neon's review of #197: going up while the end is still being drawn.
+  it("draws what it holds before asking the server for more, and keeps what it drew in place", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // The parts above are drawn when the page says so, here when the test does.
+    await page.addInitScript(() => {
+      const held: (() => void)[] = [];
+      const w = window as unknown as Record<string, unknown>;
+      w.requestIdleCallback = (callback: () => void) => held.push(callback);
+      w.cancelIdleCallback = () => undefined;
+      w.drawMore = () => held.splice(0).forEach((callback) => callback());
+    });
+    const sent: string[] = [];
+    page.on("websocket", (socket) =>
+      socket.on("framesent", (frame) => sent.push(String(frame.payload))),
+    );
+    await page.goto(url);
+    await page.getByText("Long fil").first().click();
+    await page.getByText(`Question ${TURNS} ?`, { exact: true }).waitFor();
+    const view = page.locator(".view");
+    const messages = () => page.locator(".feed > .item").count();
+    const pages = () => sent.filter((f) => f.includes('"thread.page"')).length;
+    // Only the end is drawn; the reader goes to the top of it.
+    const drawn = await messages();
+    expect(drawn).toBeLessThanOrEqual(24);
+    await view.evaluate((el) => el.scrollTo(0, 0));
+    await page.waitForTimeout(600);
+    expect(pages()).toBe(0);
+    expect(await messages()).toBe(drawn);
+    // The button draws what is held, rather than ask for more.
+    await page.getByRole("button", { name: "Afficher les messages précédents" }).click();
+    await expect.poll(messages).toBeGreaterThan(100);
+    expect(pages()).toBe(0);
+    // All held is drawn: now going up asks for the page before.
+    await view.evaluate((el) => el.scrollTo(0, 0));
+    await expect.poll(pages).toBe(1);
+    await page.close();
+  });
 });
