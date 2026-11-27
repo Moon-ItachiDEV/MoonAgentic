@@ -29,6 +29,11 @@ import {
 import { Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
 import { canLink } from "./can-link.ts";
+import { removeTempDir } from "./temp-dir.ts";
+
+// Each test here runs git a dozen times and an agent's turn or two. On a Windows runner shared
+// with another test file, one of them took 15.6 s (CI, 2026-11-27): the usual 15 s is too short.
+vi.setConfig({ testTimeout: 40_000 });
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -70,7 +75,8 @@ function repository() {
   cleanups.push(async () => {
     await hub.close();
     store.close();
-    rmSync(root, { recursive: true, force: true });
+    // A test cut by its time limit may leave a git still holding a file (EPERM on Windows).
+    removeTempDir(root);
   });
   return { root, repo, remote, store, hub, projectId: hub.createProject("demo", repo) };
 }
