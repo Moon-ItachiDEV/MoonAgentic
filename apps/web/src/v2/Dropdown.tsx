@@ -29,8 +29,11 @@ export function Dropdown(props: {
   role?: "menu" | "dialog";
   children: ReactNode;
 }) {
-  const { anchor, onClose } = props;
+  const { anchor } = props;
   const box = useRef<HTMLDivElement>(null);
+  // The latest `onClose`, for the listeners set once while it is open.
+  const close = useRef(props.onClose);
+  close.current = props.onClose;
   /** Places it against its button again, after a scroll under it. */
   const replace = useRef<() => void>(() => {});
   const [at, setAt] = useState<{ x: number; y: number; up: boolean; ox: number } | null>(null);
@@ -44,11 +47,18 @@ export function Dropdown(props: {
       const w = el.offsetWidth;
       const h = el.offsetHeight;
       const menu = props.side ? a.closest(".pmenu, .ddm") : null;
+      // Placed again at the same spot, it keeps its state: nothing re-renders.
+      const put = (next: { x: number; y: number; up: boolean; ox: number }) =>
+        setAt((was) =>
+          was && was.x === next.x && was.y === next.y && was.up === next.up && was.ox === next.ox
+            ? was
+            : next,
+        );
       if (menu) {
         const m = menu.getBoundingClientRect();
         let x = m.right + 6;
         if (x + w > innerWidth - 8) x = m.left - w - 6;
-        setAt({ x, y: Math.max(8, Math.min(r.top - 5, innerHeight - h - 8)), up: false, ox: 0 });
+        put({ x, y: Math.max(8, Math.min(r.top - 5, innerHeight - h - 8)), up: false, ox: 0 });
         return;
       }
       const edge = props.center ? r.left + r.width / 2 - w / 2 : props.start ? r.left : r.right - w;
@@ -58,7 +68,7 @@ export function Dropdown(props: {
       const up = !fits && r.top - h - 4 >= 8;
       // Room neither under nor over its button: it keeps inside the window.
       const y = fits ? below : up ? r.top - h - 4 : Math.max(8, innerHeight - h - 8);
-      setAt({
+      put({
         x,
         y,
         up,
@@ -76,20 +86,29 @@ export function Dropdown(props: {
   useEffect(() => {
     const a = anchor.current;
     a?.setAttribute("aria-expanded", "true");
+    /** The click that follows a press closing the menu, kept from reaching what was under it. */
+    const swallow = (el: Element) => {
+      const stop = (e: Event) => {
+        e.stopPropagation();
+        e.preventDefault();
+      };
+      el.addEventListener("click", stop, { capture: true, once: true });
+      const drop = () => el.removeEventListener("click", stop, { capture: true });
+      // Let go elsewhere, no click reaches it: the next one must not be swallowed.
+      const later = () => setTimeout(drop, 0);
+      document.addEventListener("pointerup", later, { capture: true, once: true });
+      document.addEventListener("pointercancel", later, { capture: true, once: true });
+    };
     const outside = (event: PointerEvent) => {
-      const target = event.target as Node;
+      const target = event.target as Element;
       if (box.current?.contains(target)) return;
       // A menu opened beside it (« Notifications › ») is still part of it.
       if (target instanceof Element && target.closest(".ddm.side")) return;
       // A press on its own button closes it there; the button's click must not reopen it.
-      if (a?.contains(target)) {
-        const swallow = (e: MouseEvent) => {
-          e.stopPropagation();
-          e.preventDefault();
-        };
-        a.addEventListener("click", swallow, { capture: true, once: true });
-      }
-      onClose();
+      if (a?.contains(target)) swallow(a);
+      // A press on the veil of the window under it closes the menu, not the window too.
+      else if (target.closest?.(".sscrim, .ppsc")) swallow(target);
+      close.current();
     };
     const key = (event: KeyboardEvent) => {
       // Already leaving: the keys go to what is under it.
@@ -97,7 +116,7 @@ export function Dropdown(props: {
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
-        onClose();
+        close.current();
         a?.focus();
         return;
       }
@@ -120,25 +139,29 @@ export function Dropdown(props: {
     const away = (event: Event) => {
       if (box.current?.contains(event.target as Node)) return;
       const r = a?.getBoundingClientRect();
-      if (!r || r.bottom < 0 || r.top > innerHeight) onClose();
+      if (!r || r.bottom < 0 || r.top > innerHeight) close.current();
       else replace.current();
     };
+    const resize = () => close.current();
     document.addEventListener("pointerdown", outside, true);
     document.addEventListener("keydown", key, true);
-    addEventListener("resize", onClose);
+    addEventListener("resize", resize);
     document.addEventListener("scroll", away, true);
     return () => {
       a?.removeAttribute("aria-expanded");
       document.removeEventListener("pointerdown", outside, true);
       document.removeEventListener("keydown", key, true);
-      removeEventListener("resize", onClose);
+      removeEventListener("resize", resize);
       document.removeEventListener("scroll", away, true);
     };
-  }, [anchor, onClose]);
+  }, [anchor]);
 
-  // The keyboard starts on the chosen line, or the first one.
+  // The keyboard starts on the chosen line, or the first one, once: placed again later (a
+  // search narrowing the list, « Tous »), it stays where it is typed in.
+  const focused = useRef(false);
   useEffect(() => {
-    if (!at) return;
+    if (!at || focused.current) return;
+    focused.current = true;
     const el = box.current;
     const first =
       el?.querySelector<HTMLElement>("[aria-checked=true]") ??

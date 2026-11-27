@@ -183,17 +183,17 @@ html[data-dev="desk"] .scr.roomy .sheet .fvc svg {
   width: 11px;
   height: 11px;
 }
-.scr.roomy .sheet .cfw {
+.scr.roomy .sheet .cfw:not(.lkw) {
   align-items: flex-start;
   padding: 22px 24px 20px;
   gap: 8px;
 }
-.scr.roomy .sheet .cfw h3 {
+.scr.roomy .sheet .cfw:not(.lkw) h3 {
   font-size: 16px;
   font-weight: 500;
   text-align: left;
 }
-.scr.roomy .sheet .cfw .cft {
+.scr.roomy .sheet .cfw:not(.lkw) .cft {
   text-align: left;
 }
 .scr.roomy .sheet .cfa {
@@ -215,7 +215,7 @@ html[data-dev="desk"] .scr.roomy .sheet .cfa .b2 {
   padding: 0 16px;
   font-size: 14px;
 }
-.scr.roomy .sheet:has(.cfw) {
+.scr.roomy .sheet:has(.cfw:not(.lkw)) {
   width: min(400px, calc(100% - 48px));
 }
 
