@@ -1,5 +1,5 @@
 import type { Project, SearchHit, Thread } from "@moonagentic/protocol";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { connection, newId, type State } from "../connection.ts";
 import { isDiscussionsProject } from "../default-models.ts";
 import { plannerSignal, plannerSignalText } from "../planner.ts";
@@ -14,6 +14,7 @@ import {
   type LineStatus,
 } from "../sidebar-tree.ts";
 import { Glyph, I } from "../v2/I.tsx";
+import { usePullToSearch } from "../v2/pull-search.ts";
 import { useThreadRowMenu } from "../v2/ThreadRowMenu.tsx";
 import { Wordmark } from "./MoonMark.tsx";
 import { ProjectIcon } from "./ProjectIcon.tsx";
@@ -78,6 +79,10 @@ export function Sidebar(props: {
   const [projectsOpen, setProjectsOpen] = useState(() => readPref("projectsOpen") !== "false");
   // Lists cut to their latest lines until asked, and the resolved ones folded away.
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
+  const drawerTop = useRef<HTMLDivElement>(null);
+  const searchButton = useRef<HTMLButtonElement>(null);
+  const onSearching = props.onSearching;
+  const openSearch = useCallback(() => onSearching(true), [onSearching]);
   const toggle = (key: string) => {
     const next = new Set(unfolded);
     if (!next.delete(key)) next.add(key);
@@ -164,6 +169,8 @@ export function Sidebar(props: {
     );
   };
 
+  usePullToSearch(drawerTop, searchButton, openSearch, !props.searching);
+
   if (props.searching)
     return (
       <DrawerSearch
@@ -179,15 +186,27 @@ export function Sidebar(props: {
   return (
     <>
       {rowMenu}
-      <div className="dtop">
+      <div className="dtop" ref={drawerTop}>
         <Wordmark />
         <button
+          ref={searchButton}
           className="gb glass srch"
           aria-label="Rechercher"
           title="Rechercher (Ctrl K)"
           onClick={() => props.onSearching(true)}
         >
+          <svg className="pr" viewBox="0 0 44 44" aria-hidden="true">
+            <circle
+              cx="22"
+              cy="22"
+              r="20.5"
+              pathLength="1"
+              strokeDasharray="1"
+              strokeDashoffset="1"
+            />
+          </svg>
           <I n="search" s={20} />
+          <span className="lb">Rechercher</span>
         </button>
       </div>
       <div className="dscroll">

@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { Dropdown } from "./Dropdown.tsx";
 import { I } from "./I.tsx";
 import { Sheet } from "./Sheet.tsx";
+import { useScreen } from "./use-screen.ts";
 
 export type Choice = { value: string; label: string; group?: string };
 
@@ -17,6 +19,9 @@ export function ChoiceRow(props: {
   onPick: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const row = useRef<HTMLButtonElement>(null);
+  // On an iPad or a computer the choice drops from its line, as a menu; on a phone, a sheet.
+  const { roomy } = useScreen();
   const groups: { name: string | undefined; choices: Choice[] }[] = [];
   for (const choice of props.choices) {
     const last = groups.at(-1);
@@ -26,6 +31,7 @@ export function ChoiceRow(props: {
   return (
     <>
       <button
+        ref={row}
         type="button"
         className="it"
         aria-haspopup="dialog"
@@ -38,8 +44,51 @@ export function ChoiceRow(props: {
           <I n="right" s={15} />
         </span>
       </button>
+      {roomy && open && (
+        <Dropdown anchor={row} role="dialog" onClose={() => setOpen(false)} label={props.title}>
+          {props.more && (
+            <button
+              type="button"
+              className="ddmore"
+              aria-pressed={props.more.on}
+              onClick={props.more.toggle}
+            >
+              {props.more.label}
+            </button>
+          )}
+          {groups.map((g, i) => (
+            <div
+              key={g.name ?? i}
+              role={g.name ? "group" : "radiogroup"}
+              aria-label={g.name ?? props.label ?? props.title}
+            >
+              {i > 0 && <hr />}
+              {g.name && <div className="ddh">{g.name}</div>}
+              {g.choices.map((c) => (
+                <button
+                  key={c.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={c.value === props.value}
+                  onClick={() => {
+                    setOpen(false);
+                    if (c.value !== props.value) props.onPick(c.value);
+                  }}
+                >
+                  <span className="ddt">{c.label}</span>
+                  {c.value === props.value && (
+                    <span className="ddk">
+                      <I n="check" s={15} />
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          ))}
+        </Dropdown>
+      )}
       <Sheet
-        open={open}
+        open={open && !roomy}
         onClose={() => setOpen(false)}
         title={props.title}
         right={

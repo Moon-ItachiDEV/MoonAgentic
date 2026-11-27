@@ -8,10 +8,12 @@ import { type Browser, chromium, type Page } from "playwright";
 import {
   addProject,
   allModelsButton,
+  cloneButton,
   directThread,
   pickAgent,
   setAccess,
   showAgents,
+  whereChoices,
 } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -471,7 +473,7 @@ describe("composer", () => {
       const repoField = sheet.getByRole("textbox", { name: "Dépôt" });
       await repoField.fill("https://github.com/moon");
       await expect.poll(() => list.getByRole("button").count()).toBe(2);
-      expect(await sheet.getByRole("button", { name: "Cloner" }).isDisabled()).toBe(true);
+      expect(await cloneButton(sheet).isDisabled()).toBe(true);
       await repoField.fill("https://github.com/personne");
       await list.getByText("Aucun dépôt de @personne").waitFor();
       await repoField.fill("");
@@ -482,9 +484,7 @@ describe("composer", () => {
       ).toBe("site");
       await sheet.getByRole("button", { name: /^Emplacement/ }).click();
       await expect.poll(() => sheet.getByLabel("Cloner dans").inputValue()).not.toBe("");
-      await expect
-        .poll(() => sheet.getByRole("button", { name: "Cloner" }).isDisabled())
-        .toBe(false);
+      await expect.poll(() => cloneButton(sheet).isDisabled()).toBe(false);
       await page.close();
     },
   );
@@ -1312,9 +1312,12 @@ describe("composer", () => {
 
     // Where to work is chosen from it: the git repository « equipe ».
     await add.getByRole("menuitem", { name: /^Projet/ }).click();
-    const where = page.getByRole("dialog", { name: "Où travailler" });
-    await where.getByRole("button", { name: "Hors projet", exact: false }).waitFor();
-    await where.getByRole("button", { name: "equipe", exact: true }).click();
+    const where = whereChoices(page);
+    await where
+      .getByText(/^Hors projet/)
+      .first()
+      .waitFor();
+    await where.getByText("equipe", { exact: true }).click();
     await where.waitFor({ state: "hidden" });
     await composer(page).click();
     await page.getByRole("button", { name: "Ajouter", exact: true }).click();
@@ -1387,8 +1390,11 @@ describe("composer", () => {
     await composer(page).click();
     await page.getByRole("button", { name: "Ajouter", exact: true }).click();
     await page.getByRole("menuitem", { name: /^Projet/ }).click();
-    const where = page.getByRole("dialog", { name: "Où travailler" });
-    await where.getByRole("button", { name: /^Hors projet/ }).click();
+    const where = whereChoices(page);
+    await where
+      .getByText(/^Hors projet/)
+      .first()
+      .click();
     await where.waitFor({ state: "hidden" });
     await pickAgent(page);
     await supervised(page);
@@ -1507,8 +1513,11 @@ describe("composer", () => {
     await composer(page).click();
     await page.getByRole("button", { name: "Ajouter", exact: true }).click();
     await page.getByRole("menuitem", { name: /^Projet/ }).click();
-    const where = page.getByRole("dialog", { name: "Où travailler" });
-    await where.getByRole("button", { name: /^Hors projet/ }).click();
+    const where = whereChoices(page);
+    await where
+      .getByText(/^Hors projet/)
+      .first()
+      .click();
     await where.waitFor({ state: "hidden" });
     await pickAgent(page);
     await supervised(page);

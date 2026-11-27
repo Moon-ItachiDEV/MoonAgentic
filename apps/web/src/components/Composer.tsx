@@ -308,7 +308,7 @@ export function Composer(props: {
     if (!plusOpen && !ctxOpen) return;
     const close = (event: PointerEvent) => {
       const at = event.target as Element;
-      if (at.closest?.(".pmenu, .ctxp, [data-a='pmenu'], .gz")) return;
+      if (at.closest?.(".pmenu, .ddm, .ctxp, [data-a='pmenu'], .gz")) return;
       setPlusOpen(false);
       setCtxOpen(false);
     };
@@ -1375,6 +1375,29 @@ export function Composer(props: {
             setPlusOpen(false);
             setSheet("where");
           }}
+          {...(!thread && props.projects && props.onPickProject
+            ? {
+                where: {
+                  projects: props.projects,
+                  onPickProject: (id: string) => {
+                    setPlusOpen(false);
+                    props.onPickProject?.(id);
+                  },
+                  ...(props.onPickLoose
+                    ? {
+                        onPickLoose: () => {
+                          setPlusOpen(false);
+                          props.onPickLoose?.();
+                        },
+                      }
+                    : {}),
+                  onNewProject: () => {
+                    setPlusOpen(false);
+                    props.onNewProject();
+                  },
+                },
+              }
+            : {})}
           onMcp={openMcp}
           onMore={() => {
             setPlusOpen(false);
