@@ -51,13 +51,18 @@ function useCramped(): boolean {
       setCramped(!!typing && !inCard && height < CRAMPED_HEIGHT);
     };
     // A field left for another is told before the other has the focus.
-    const later = () => requestAnimationFrame(look);
+    let frame = 0;
+    const later = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(look);
+    };
     look();
     document.addEventListener("focusin", look);
     document.addEventListener("focusout", later);
     window.visualViewport?.addEventListener("resize", look);
     addEventListener("resize", look);
     return () => {
+      cancelAnimationFrame(frame);
       document.removeEventListener("focusin", look);
       document.removeEventListener("focusout", later);
       window.visualViewport?.removeEventListener("resize", look);
@@ -149,7 +154,9 @@ export function DecisionCard(props: {
   const folded = waits.length > 0 && (squeezed || waits.every((w) => later.has(w.id)));
   const setFolded = (on: boolean) => {
     setLater(new Set(on ? waits.map((w) => w.id) : []));
-    if (!on && squeezed) setRoomAnyway(true);
+    // Put off again, it folds as the keyboard asks: a request that comes after stays folded.
+    if (on) setRoomAnyway(false);
+    else if (squeezed) setRoomAnyway(true);
   };
   const [progress, setProgress] = useState<Progress>(fresh(""));
   const narrow = useNarrow();
