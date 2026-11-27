@@ -1,0 +1,48 @@
+import { describe, expect, it } from "vitest";
+import { keyboardOf } from "./keyboard.ts";
+
+// An iPhone 852 points tall, as in the recording the work started from.
+const page = { height: 852, visible: 852, offsetTop: 0, scale: 1 };
+
+describe("keyboardOf", () => {
+  it("sees no keyboard on a page seen whole", () => {
+    expect(keyboardOf(page)).toBeNull();
+  });
+
+  it("takes a browser's bar for what it is", () => {
+    expect(keyboardOf({ ...page, visible: 852 - 50 })).toBeNull();
+  });
+
+  it("gives the keyboard's height, hidden at the bottom of a page left in place", () => {
+    expect(keyboardOf({ ...page, visible: 466 })).toEqual({ height: 386, top: 0, inset: 386 });
+  });
+
+  it("counts what the system pushed the page up: less is hidden at its bottom", () => {
+    expect(keyboardOf({ ...page, visible: 466, offsetTop: 200 })).toEqual({
+      height: 386,
+      top: 200,
+      inset: 186,
+    });
+  });
+
+  it("says a page pushed past the keyboard ends above it", () => {
+    // The recording: the page pushed 430 points up for a keyboard of 386.
+    expect(keyboardOf({ ...page, visible: 466, offsetTop: 430 })).toEqual({
+      height: 386,
+      top: 430,
+      inset: -44,
+    });
+  });
+
+  it("says nothing of a page zoomed with two fingers", () => {
+    expect(keyboardOf({ ...page, visible: 426, offsetTop: 120, scale: 2 })).toBeNull();
+  });
+
+  it("rounds what a zoomed display gives in fractions", () => {
+    expect(keyboardOf({ ...page, visible: 465.6, offsetTop: 0.4 })).toEqual({
+      height: 386,
+      top: 0,
+      inset: 386,
+    });
+  });
+});
