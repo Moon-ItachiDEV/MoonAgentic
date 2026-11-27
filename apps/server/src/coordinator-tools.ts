@@ -14,8 +14,49 @@ export interface CoordinatorTool {
   };
 }
 
-/** What kind of thread the MCP bridge serves, enforced on both bridge and server sides. */
-export type BridgeMode = "coordinator" | "thread" | "readonly";
+/**
+ * What kind of thread the MCP bridge serves, enforced on both bridge and server sides. A
+ * conversation outside any project (`discussion`) shares nothing: it may only publish.
+ */
+export type BridgeMode = "coordinator" | "thread" | "readonly" | "discussion";
+
+/** The most characters of a page an agent gives as text to `publish_artifact`. */
+export const MAX_ARTIFACT_TEXT = 3_000_000;
+
+/**
+ * Publishes a page, an image or a PDF for the user to look at on any of their devices, as a
+ * card in the thread: what a mockup, a design or a walkthrough of code is shown with.
+ */
+export const PUBLISH_ARTIFACT_TOOL: CoordinatorTool = {
+  name: "publish_artifact",
+  description:
+    "Publie un artefact que l'utilisateur ouvre d'un geste sur son téléphone, son iPad ou son ordinateur : une maquette, un design, une présentation de code, un rapport, un schéma. Il s'affiche comme une carte dans ce fil et dans « Artefacts ». Donne soit content (le texte complet d'une page HTML autonome ou d'un SVG), soit path (une page HTML, une image ou un PDF que tu as écrit dans ton dossier ; ce qui est à côté, styles, scripts et images, est chargé aussi). La page s'ouvre dans un bac à sable : JavaScript marche, mais rien ne sort sur le réseau (pas de fetch ni de formulaire) ; seuls cdnjs.cloudflare.com, cdn.jsdelivr.net, unpkg.com, cdn.tailwindcss.com, code.jquery.com et Google Fonts peuvent être chargés, si l'utilisateur les autorise. Le localStorage n'existe pas : garde l'état en mémoire. Pense au téléphone (390 px de large) et au thème sombre. Rappelé avec l'artifact_id rendu, il publie une nouvelle version du même artefact au lieu d'en créer un autre.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description: "Nom court de l'artefact, 2 à 5 mots (par exemple « Maquette de l'accueil »).",
+      },
+      content: {
+        type: "string",
+        description:
+          "Le texte complet d'une page HTML autonome (styles et scripts dedans) ou d'un SVG. Sans path.",
+      },
+      path: {
+        type: "string",
+        description:
+          "Chemin d'une page HTML, d'une image ou d'un PDF que tu as écrit, relatif à ton dossier de travail ou absolu. Sans content.",
+      },
+      artifact_id: {
+        type: "string",
+        description:
+          "L'identifiant rendu par une publication précédente, pour en publier une nouvelle version.",
+      },
+    },
+    required: ["title"],
+  },
+};
 
 /** The kinds of work a thread can be opened for; the agent and model follow from it later. */
 export const THREAD_KINDS = ["question", "bug", "fonctionnalite", "relecture", "tests"] as const;
@@ -111,10 +152,20 @@ export const MEMORY_WRITE_TOOL: CoordinatorTool = {
 };
 
 /** Tools available to a regular project thread (read-only project context + shared memory). */
-export const THREAD_TOOLS: CoordinatorTool[] = [...PROJECT_READ_TOOLS, MEMORY_WRITE_TOOL];
+export const THREAD_TOOLS: CoordinatorTool[] = [
+  ...PROJECT_READ_TOOLS,
+  MEMORY_WRITE_TOOL,
+  PUBLISH_ARTIFACT_TOOL,
+];
 
-/** Tools available to read-only team members (reviewer, tester, merger). */
-export const READONLY_THREAD_TOOLS: CoordinatorTool[] = [...PROJECT_READ_TOOLS];
+/** Tools available to read-only team members (reviewer, tester, merger): they may still show. */
+export const READONLY_THREAD_TOOLS: CoordinatorTool[] = [
+  ...PROJECT_READ_TOOLS,
+  PUBLISH_ARTIFACT_TOOL,
+];
+
+/** A conversation outside any project: nothing to share, only what it shows. */
+export const DISCUSSION_TOOLS: CoordinatorTool[] = [PUBLISH_ARTIFACT_TOOL];
 
 /** Read-only MoonAgentic tool names that never mutate project state. */
 export const READ_ONLY_TOOL_NAMES = new Set(PROJECT_READ_TOOLS.map((t) => t.name));
@@ -122,6 +173,7 @@ export const READ_ONLY_TOOL_NAMES = new Set(PROJECT_READ_TOOLS.map((t) => t.name
 export const COORDINATOR_TOOLS: CoordinatorTool[] = [
   ...PROJECT_READ_TOOLS,
   MEMORY_WRITE_TOOL,
+  PUBLISH_ARTIFACT_TOOL,
   {
     name: "open_thread",
     description:
@@ -213,6 +265,7 @@ export const COORDINATOR_TOOLS: CoordinatorTool[] = [
 export function toolsForBridgeMode(mode: BridgeMode): CoordinatorTool[] {
   if (mode === "coordinator") return COORDINATOR_TOOLS;
   if (mode === "readonly") return READONLY_THREAD_TOOLS;
+  if (mode === "discussion") return DISCUSSION_TOOLS;
   return THREAD_TOOLS;
 }
 

@@ -35,6 +35,7 @@ async function serve(onConnect: (client: { send: (m: unknown) => void }) => () =
   const hub = {
     attachments: new Attachments(path.join(root, "images")),
     artifactLinks: links,
+    artifactLibraries: () => true,
     push: { forget: vi.fn() },
     lockedThread: () => false,
     connect: onConnect,

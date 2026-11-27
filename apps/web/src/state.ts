@@ -75,6 +75,8 @@ export interface State {
   /** The teams set up in the settings; null while the suggested ones stand. */
   teamPresets: TeamPreset[] | null;
   roleMascots: RoleMascots;
+  /** Whether artifact pages may load the known libraries and fonts. */
+  artifactLibraries: boolean;
   /** MoonAgentic's own version and what it knows of a newer one. */
   app: AppInfo | null;
   /** Why the server saves nothing right now (a full disk, a held database); null otherwise. */
@@ -114,6 +116,7 @@ export function reduce(state: State, message: ServerMessage): State {
         defaults: snapshot.defaults ?? null,
         teamPresets: snapshot.teamPresets ?? null,
         roleMascots: snapshot.roleMascots ?? {},
+        artifactLibraries: snapshot.artifactLibraries ?? true,
         app: snapshot.app ?? null,
         storageError: snapshot.storageError ?? null,
         mcpSecretsError: snapshot.mcpSecretsError ?? null,
@@ -140,6 +143,8 @@ export function reduce(state: State, message: ServerMessage): State {
       return { ...state, teamPresets: message.presets };
     case "roleMascots":
       return { ...state, roleMascots: message.mascots };
+    case "artifactLibraries":
+      return { ...state, artifactLibraries: message.on };
     case "coordinatorSettings":
       return { ...state, coordinator: message.settings };
     case "hermes":
@@ -350,6 +355,7 @@ export const initialState: State = {
   defaults: null,
   teamPresets: null,
   roleMascots: {},
+  artifactLibraries: true,
   app: null,
   storageError: null,
   items: {},

@@ -47,6 +47,9 @@ export function threadMarkdown(thread: Thread, items: Item[], agents: AgentInfo[
       case "moved":
         lines.push(`*Déplacée dans ${item.name}.*`, "");
         return;
+      case "artifact":
+        lines.push(`> Artefact : ${item.title} (v${item.version})`, "");
+        return;
       case "opened":
         lines.push(`> Fil ouvert : ${item.title}`, "");
         return;

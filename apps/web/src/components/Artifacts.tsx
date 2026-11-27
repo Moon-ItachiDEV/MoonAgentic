@@ -1,95 +1,120 @@
-import type { Artifact, Project, Thread } from "@moonagentic/protocol";
+import type { Artifact, ArtifactVersion, Project, Thread } from "@moonagentic/protocol";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   type ArtifactFilter,
+  artifactKey,
   artifactLine,
+  artifactName,
   counts,
   FILTERS,
-  fileName,
   filtered,
   KIND_LABEL,
   workingKey,
 } from "../artifacts.ts";
 import { connection, newId } from "../connection.ts";
 import { shortAgo } from "../project-threads.ts";
+import { seenAgo } from "../remote.ts";
+import { Dropdown } from "../v2/Dropdown.tsx";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
+import { useExit } from "../v2/use-exit.ts";
+import { ImageThumb, useArtifactUrl } from "./ArtifactThumb.tsx";
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-/**
- * An address that shows the artifact for some minutes, asked for when `on` and the connection
- * is open, and again when it opens anew: one asked while it was closed failed at once.
- */
-function useArtifactUrl(artifact: Artifact | null, on: boolean, online: boolean) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const asked = useRef(0);
-  const threadId = artifact?.threadId;
-  const path = artifact?.path;
-  const load = useCallback(() => {
-    if (!threadId || !path) return;
-    const seq = ++asked.current;
-    setError(null);
-    connection.ask({ type: "artifacts.open", requestId: newId(), threadId, path }).then(
-      (reply) => seq === asked.current && setUrl(reply.url),
-      (e: unknown) => seq === asked.current && setError(message(e)),
-    );
-  }, [threadId, path]);
-  useEffect(() => {
-    if (!on || !online) return;
-    load();
-    return () => {
-      asked.current += 1;
-    };
-  }, [load, on, online]);
-  return { url, error, load };
-}
-
-/** An image's own picture as its thumbnail, asked for once it comes into sight. */
-function ImageThumb({ artifact, online }: { artifact: Artifact; online: boolean }) {
-  const box = useRef<HTMLSpanElement>(null);
-  const [seen, setSeen] = useState(false);
-  useEffect(() => {
-    const el = box.current;
-    if (!el || seen) return;
-    const watch = new IntersectionObserver(
-      (entries) => entries.some((e) => e.isIntersecting) && setSeen(true),
-      { rootMargin: "200px" },
-    );
-    watch.observe(el);
-    return () => watch.disconnect();
-  }, [seen]);
-  const { url } = useArtifactUrl(artifact, seen, online);
-  const [broken, setBroken] = useState(false);
+/** The versions of a published artifact, the latest first: one picked is shown. */
+function VersionMenu(props: {
+  shown: number;
+  versions: ArtifactVersion[];
+  onPick: (n: number) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const chip = useRef<HTMLButtonElement>(null);
+  const drop = useExit(open);
+  const now = Date.now();
+  const last = props.versions[props.versions.length - 1]?.n;
   return (
-    <span ref={box} className={`thumb ${url && !broken ? "img" : "ic"}`}>
-      {url && !broken ? (
-        <img src={url} alt="" loading="lazy" onError={() => setBroken(true)} />
-      ) : (
-        <I n="image" s={26} />
+    <>
+      <button
+        ref={chip}
+        type="button"
+        className="ppch"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Version"
+        onClick={() => setOpen((on) => !on)}
+      >
+        v{props.shown}
+        <span className="pcv">
+          <I n="down" s={13} />
+        </span>
+      </button>
+      {drop.mounted && (
+        <Dropdown
+          anchor={chip}
+          label="Version"
+          start
+          className={`mcm${drop.leaving ? " out" : ""}`}
+          onClose={() => setOpen(false)}
+        >
+          {[...props.versions].reverse().map((v) => (
+            <button
+              key={v.n}
+              type="button"
+              role="menuitemradio"
+              aria-checked={v.n === props.shown}
+              onClick={() => {
+                setOpen(false);
+                props.onPick(v.n);
+              }}
+            >
+              <span className="ddt">
+                Version {v.n}
+                {v.n === last ? " · actuelle" : ""}
+                <small>{seenAgo(v.at, now)}</small>
+              </span>
+              {v.n === props.shown && (
+                <span className="ddk">
+                  <I n="check" s={15} />
+                </span>
+              )}
+            </button>
+          ))}
+        </Dropdown>
       )}
-    </span>
+    </>
   );
 }
 
-/** One artifact shown as it is, from an address that works for some minutes. */
+/**
+ * One artifact shown as it is, from an address that works for some minutes. A page runs its
+ * scripts in a sandbox of its own: nothing of the app's is in its reach, and nothing it does
+ * leaves the page.
+ */
 function Preview({
   artifact,
   online,
   onOpenThread,
+  version: first,
 }: {
   artifact: Artifact;
   online: boolean;
-  onOpenThread: (id: string) => void;
+  /** Not given in the thread itself, which is already open. */
+  onOpenThread?: ((id: string) => void) | undefined;
+  /** The version shown first; the latest when none. */
+  version?: number | undefined;
 }) {
-  const { url, error, load } = useArtifactUrl(artifact, true, online);
-  const name = fileName(artifact.path);
+  const [version, setVersion] = useState<number | undefined>(first);
+  const { url, error, load, versions } = useArtifactUrl(artifact, true, online, version);
+  const name = artifactName(artifact);
   return (
     <div className="sbody artv">
       <div className="pcm">
-        <span className="mono">{artifact.path}</span>
-        {artifact.kind === "html" && <span className="ppill">Aperçu protégé, sans scripts</span>}
+        {versions && versions.all.length > 1 ? (
+          <VersionMenu shown={versions.shown} versions={versions.all} onPick={setVersion} />
+        ) : (
+          artifact.path && <span className="mono">{artifact.path}</span>
+        )}
       </div>
       <div className={`artst k-${artifact.kind}`}>
         {error ? (
@@ -108,7 +133,13 @@ function Preview({
           <img key={url} src={url} alt={name} />
         ) : artifact.kind === "html" ? (
           // No token on such an address, and nothing the page could run with the app's rights.
-          <iframe key={url} src={url} title={name} sandbox="" referrerPolicy="no-referrer" />
+          <iframe
+            key={url}
+            src={url}
+            title={name}
+            sandbox="allow-scripts"
+            referrerPolicy="no-referrer"
+          />
         ) : (
           // The browser's own PDF reader, which a sandbox would turn away.
           <iframe key={url} src={url} title={name} referrerPolicy="no-referrer" />
@@ -130,9 +161,11 @@ function Preview({
             Nouvel onglet
           </a>
         )}
-        <button className="b2 ink press" onClick={() => onOpenThread(artifact.threadId)}>
-          Ouvrir le fil
-        </button>
+        {onOpenThread && (
+          <button className="b2 ink press" onClick={() => onOpenThread(artifact.threadId)}>
+            Ouvrir le fil
+          </button>
+        )}
       </div>
     </div>
   );
@@ -243,7 +276,7 @@ export function Artifacts({
             const project = projects.find((p) => p.id === a.projectId);
             return (
               <button
-                key={`${a.threadId}:${a.path}`}
+                key={artifactKey(a)}
                 className="acard press"
                 title={artifactLine(a, projects, now)}
                 onClick={() => setOpen(a)}
@@ -255,7 +288,7 @@ export function Artifacts({
                     <I n={a.kind === "html" ? "code" : "file"} s={26} />
                   </span>
                 )}
-                <b>{fileName(a.path)}</b>
+                <b>{artifactName(a)}</b>
                 <small>
                   {project && (
                     <i className={`pdot${project.color ? ` pc-${project.color}` : ""}`} />
@@ -269,22 +302,42 @@ export function Artifacts({
       )}
       {list?.capped && <span className="ppill">{all.length} plus récents</span>}
       <div className="end" style={{ height: 40 }} />
-      <Sheet
-        open={!!open}
+      <ArtifactSheet
+        artifact={open}
+        online={online}
         onClose={() => setOpen(null)}
-        title={open ? fileName(open.path) : "Artefact"}
-        tall
-        className="artsh"
-      >
-        {open && (
-          <Preview
-            key={`${open.threadId}:${open.path}`}
-            artifact={open}
-            online={online}
-            onOpenThread={onOpenThread}
-          />
-        )}
-      </Sheet>
+        onOpenThread={onOpenThread}
+      />
     </div>
+  );
+}
+
+/** One artifact in a tall sheet: from the list, or from its card in a thread. */
+export function ArtifactSheet(props: {
+  artifact: Artifact | null;
+  online: boolean;
+  onClose: () => void;
+  onOpenThread?: (id: string) => void;
+  version?: number;
+}) {
+  const { artifact } = props;
+  return (
+    <Sheet
+      open={!!artifact}
+      onClose={props.onClose}
+      title={artifact ? artifactName(artifact) : "Artefact"}
+      tall
+      className="artsh"
+    >
+      {artifact && (
+        <Preview
+          key={artifactKey(artifact)}
+          artifact={artifact}
+          online={props.online}
+          onOpenThread={props.onOpenThread}
+          version={props.version}
+        />
+      )}
+    </Sheet>
   );
 }

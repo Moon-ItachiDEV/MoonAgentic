@@ -1,6 +1,7 @@
 import { grantKeys, readOnlyCall, THREAD_GRANT_OPTION } from "./permission-rules.ts";
 import { AttachmentRefused, Attachments } from "./attachments.ts";
-import { ArtifactLinks, artifactUrl, findArtifacts } from "./artifacts.ts";
+import { ArtifactLinks, artifactKind, artifactUrl, findArtifacts } from "./artifacts.ts";
+import { ArtifactRefused, fileSlug, listed, PublishedArtifacts } from "./published-artifacts.ts";
 import type { AgentProcessRef, DiagnosticsMonitor } from "./diagnostics.ts";
 import { generatedFolders, madeImages, resolveThreadFile } from "./thread-files.ts";
 import { labelStart, plainLabel } from "./labels.ts";
@@ -20,6 +21,7 @@ import { HermesCli, type HermesRunner, hermesRunner } from "./hermes-cli.ts";
 import { ThreadClock, type WidgetData, widgetData } from "./widget.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -36,6 +38,8 @@ import {
   threadPullRequest,
 } from "@moonagentic/protocol";
 import type {
+  Artifact,
+  ArtifactKind,
   ProjectQuotaRules,
   Schedule,
   ScheduleRepeat,
@@ -214,6 +218,13 @@ const titleFrom = (text: string, images = 0) => {
   return line || (images > 1 ? "Images" : images ? "Image" : "Nouvelle discussion");
 };
 
+/**
+ * What an agent is told when it starts: how to show the user something to look at, which the
+ * user opens on any of their devices.
+ */
+export const ARTIFACT_HINT =
+  "Pour montrer à l'utilisateur quelque chose à regarder (maquette, design, présentation de code, schéma, rapport), publie-le avec l'outil publish_artifact de MoonAgentic : il l'ouvre d'un geste sur son téléphone, son iPad ou son ordinateur.";
+
 /** What an agent is told when the message is images alone: it needs some words to answer. */
 const IMAGES_ONLY = "(Message sans texte : regarde l'image jointe.)";
 
@@ -278,6 +289,8 @@ export interface HubOptions {
   quotaTickMs?: number;
   /** Where the images sent with messages are kept; beside the worktrees unless given. */
   attachmentsDir?: string;
+  /** Where the artifacts agents publish are kept; beside the worktrees unless given. */
+  artifactsDir?: string;
   /** The desktop app's channel, when it started this server. */
   shell?: ShellChannel;
   /** The clone this server runs from, looked at for newer commits on `main`. */
@@ -329,6 +342,8 @@ const PR_WATCH_MS = 60_000;
 const GREEN_AT_ONCE = 2;
 /** The setting that keeps the mascot of each role the user changed. */
 const ROLE_MASCOTS = "roleMascots";
+/** Whether artifact pages may load the known libraries and fonts; on unless turned off. */
+const ARTIFACT_LIBRARIES = "artifactLibraries";
 /** Characters kept of what an agent last said, for lists of threads. */
 const SUMMARY_LIMIT = 160;
 
@@ -490,6 +505,8 @@ export class Hub {
   private readonly worktreesDir: string;
   /** The images sent with messages. */
   readonly attachments: Attachments;
+  /** The artifacts agents published, version by version. */
+  readonly published: PublishedArtifacts;
   /** The notifications sent to phones while MoonAgentic is closed. */
   readonly push: Push;
   /** Hermes Agent, driven from Discord. */
@@ -595,6 +612,9 @@ export class Hub {
     this.worktreesDir = options.worktreesDir;
     this.attachments = new Attachments(
       options.attachmentsDir ?? path.join(path.dirname(options.worktreesDir), "attachments"),
+    );
+    this.published = new PublishedArtifacts(
+      options.artifactsDir ?? path.join(path.dirname(options.worktreesDir), "artifacts"),
     );
     this.forceStopMs = options.forceStopMs ?? FORCE_STOP_MS;
     this.storageRetryMs = options.storageRetryMs ?? STORAGE_RETRY_MS;
@@ -798,6 +818,7 @@ export class Hub {
         this.confirmTeamPermission(coordinatorId, task, signal),
       confirmMemoryWrite: (threadId, content, replace, signal) =>
         this.confirmMemoryWrite(threadId, content, replace, signal),
+      publishArtifact: (threadId, input) => this.publishArtifact(threadId, input),
     });
     store.recoverAfterRestart();
     // Messages the index does not have yet: all of them, the first time after an update.
@@ -1010,6 +1031,7 @@ export class Hub {
       ...(defaults ? { defaults } : {}),
       ...(presets ? { teamPresets: presets } : {}),
       roleMascots: this.store.getSetting<RoleMascots>(ROLE_MASCOTS, {}, "object"),
+      artifactLibraries: this.artifactLibraries(),
       app: this.app.info(),
       ...(this.storageDown ? { storageError: this.storageNotice()! } : {}),
     };
@@ -1755,17 +1777,50 @@ export class Hub {
         this.push.unsubscribe(message.endpoint, client.deviceId);
         client.send({ type: "done", requestId: message.requestId });
         return;
-      case "artifacts.list":
+      case "artifacts.list": {
+        // A locked project's folders are not even looked at, nor counted in the cap.
+        const threads = this.store.listThreads().filter((t) => !this.locks.isLocked(t.projectId));
+        const { artifacts, from } = await this.publishedOf(threads);
         client.send({
           type: "artifacts",
           requestId: message.requestId,
-          // A locked project's folders are not even looked at, nor counted in the cap.
-          ...(await findArtifacts(
-            this.store.listThreads().filter((t) => !this.locks.isLocked(t.projectId)),
-          )),
+          ...(await findArtifacts(threads, artifacts, from)),
         });
         return;
+      }
+      case "artifacts.setLibraries":
+        this.store.setSetting(ARTIFACT_LIBRARIES, message.on);
+        this.broadcast({ type: "artifactLibraries", on: message.on });
+        return;
       case "artifacts.open": {
+        if (message.artifactId) {
+          const thread = this.requireThread(message.threadId);
+          if (this.locks.isLocked(thread.projectId)) throw new Error("Ce projet est verrouillé.");
+          const found = await this.published.versionFile(
+            thread.id,
+            message.artifactId,
+            message.version,
+          );
+          if (!found) throw new Error("Cet artefact, ou cette version, n'existe plus.");
+          const { ticket, expiresAt } = this.artifactLinks.issuePublished(
+            thread.id,
+            {
+              entry: found.file,
+              name: found.version.name,
+              ...(found.version.source ? { source: found.version.source } : {}),
+            },
+            client.deviceId,
+          );
+          client.send({
+            type: "artifactLink",
+            requestId: message.requestId,
+            url: artifactUrl(ticket, found.version.name),
+            expiresAt,
+            version: found.version.n,
+            versions: found.artifact.versions.map(({ n, at, size }) => ({ n, at, size })),
+          });
+          return;
+        }
         const workspace = this.requireLiveThread(message.threadId).workspace;
         if (!(await listedWorktreeFile(workspace, message.path))) {
           throw new Error("Ce fichier n'est plus dans la copie de travail de ce fil.");
@@ -4053,6 +4108,7 @@ export class Hub {
         this.quotaRetryAt.delete(threadId);
         this.coordinators.forget(threadId);
         this.attachments.forget(threadId);
+        void this.published.forget(threadId);
         this.store.deleteThread(threadId);
         this.broadcast({ type: "threadRemoved", threadId });
         this.planner.threadDeleted(threadId);
@@ -4869,7 +4925,12 @@ export class Hub {
                 : undefined,
             )
           : undefined;
-      const preamble = [memory, history].filter(Boolean).join("\n\n") || undefined;
+      // Told once, when its agent starts: what it shows the user goes through its tool.
+      const showing =
+        !continuing && session.fresh && this.coordinatorUrl && thread.kind !== "coordinator"
+          ? ARTIFACT_HINT
+          : undefined;
+      const preamble = [memory, history, showing].filter(Boolean).join("\n\n") || undefined;
       const said = text.trim() || !images.length ? text : IMAGES_ONLY;
       const prompt = context ? `${context}\n\n${said}` : said;
       const stopReason = await session.prompt(prompt, preamble, [
@@ -5920,6 +5981,113 @@ export class Hub {
       this.broadcastRequests();
       signal?.addEventListener("abort", onAbort, { once: true });
     });
+  }
+
+  /** Whether artifact pages may load the known libraries and fonts from the internet. */
+  artifactLibraries(): boolean {
+    return this.store.getSetting<boolean>(ARTIFACT_LIBRARIES, true) !== false;
+  }
+
+  /**
+   * The artifacts published by these threads, as listed, and the real paths of the files
+   * they were published from, which the threads' branches then do not list a second time.
+   */
+  private async publishedOf(
+    threads: Thread[],
+  ): Promise<{ artifacts: Artifact[]; from: Set<string> }> {
+    const artifacts: Artifact[] = [];
+    const from = new Set<string>();
+    const published = await this.published.threads();
+    for (const thread of threads) {
+      if (!published.has(thread.id)) continue;
+      for (const artifact of await this.published.list(thread.id)) {
+        artifacts.push(listed(artifact, thread));
+        for (const v of artifact.versions) if (v.source) from.add(path.join(v.source, v.name));
+      }
+    }
+    return { artifacts, from };
+  }
+
+  /**
+   * `publish_artifact`: keeps a page the agent gave as text, or a page, an image or a PDF it
+   * wrote in one of its thread's folders, and shows it as a card in the thread. Called again
+   * with the id it gave, it keeps a new version.
+   */
+  private async publishArtifact(
+    threadId: string,
+    input: { title: string; content?: string; path?: string; artifactId?: string },
+  ): Promise<unknown> {
+    const thread = this.requireThread(threadId);
+    const title = plainLabel(input.title).slice(0, 120) || "Artefact";
+    let kind: ArtifactKind;
+    let ext: string;
+    let name: string;
+    let bytes: Buffer;
+    let source: string | undefined;
+    if (input.content !== undefined) {
+      const svg = /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/i.test(input.content);
+      kind = svg ? "image" : "html";
+      ext = svg ? ".svg" : ".html";
+      name = `${fileSlug(title)}${ext}`;
+      bytes = Buffer.from(input.content, "utf8");
+    } else {
+      const folder = this.folderOf(thread.projectId, thread.id);
+      const project = this.store.getProject(thread.projectId);
+      const found = await resolveThreadFile(
+        input.path ?? "",
+        folder,
+        [
+          folder,
+          ...(project ? [project.path] : []),
+          ...(thread.workspace?.path ? [thread.workspace.path] : []),
+        ],
+        generatedFolders(this.homeDir),
+      );
+      const foundKind = found && artifactKind(found.file);
+      if (!found || !foundKind) {
+        throw new Error(
+          "Ce fichier ne peut pas être publié : il n'existe pas, n'est pas une page HTML, une image ou un PDF, ou n'est pas dans ton dossier de travail.",
+        );
+      }
+      kind = foundKind;
+      ext = path.extname(found.file).toLowerCase();
+      name = found.name;
+      bytes = await readFile(found.file);
+      source = path.dirname(found.file);
+    }
+    let published;
+    try {
+      published = await this.published.publish({
+        threadId: thread.id,
+        id: input.artifactId,
+        title,
+        kind,
+        ext,
+        name,
+        bytes,
+        source,
+      });
+    } catch (error) {
+      if (error instanceof ArtifactRefused) throw new Error(error.message);
+      throw error;
+    }
+    const { artifact, version } = published;
+    this.putItem(thread.id, {
+      id: `artifact:${randomUUID()}`,
+      kind: "artifact",
+      artifactId: artifact.id,
+      title,
+      artifactKind: kind,
+      version: version.n,
+      at: version.at,
+    });
+    return {
+      artifact_id: artifact.id,
+      version: version.n,
+      kind,
+      shown:
+        "Publié : l'utilisateur voit une carte dans le fil et l'artefact dans « Artefacts ». Inutile de recopier son contenu dans ta réponse.",
+    };
   }
 
   /**

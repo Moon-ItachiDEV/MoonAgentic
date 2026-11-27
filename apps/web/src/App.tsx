@@ -24,7 +24,6 @@ import { Composer as PlainComposer } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { AppUpdateHostOnDemand, UpdateBar } from "./components/UpdateBar.tsx";
-import { Artifacts } from "./components/Artifacts.tsx";
 import { Home } from "./components/Home.tsx";
 import { LockSheet } from "./components/LockSheet.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
@@ -83,6 +82,9 @@ const DiscussionSettings = lazy(() =>
 );
 const ProjectSettings = lazy(() =>
   import("./components/ProjectSettings.tsx").then((m) => ({ default: m.ProjectSettings })),
+);
+const Artifacts = lazy(() =>
+  import("./components/Artifacts.tsx").then((m) => ({ default: m.Artifacts })),
 );
 const SettingsLayer = lazy(() =>
   import("./components/Settings.tsx").then((m) => ({ default: m.SettingsLayer })),
@@ -1342,12 +1344,14 @@ export function App() {
           )
         ) : route.name === "artifacts" ? (
           <ErrorBoundary key="artifacts">
-            <Artifacts
-              threads={state.threads}
-              projects={state.projects}
-              online={state.status === "open"}
-              onOpenThread={(id) => go({ name: "thread", threadId: id })}
-            />
+            <Suspense fallback={<div className="view" />}>
+              <Artifacts
+                threads={state.threads}
+                projects={state.projects}
+                online={state.status === "open"}
+                onOpenThread={(id) => go({ name: "thread", threadId: id })}
+              />
+            </Suspense>
           </ErrorBoundary>
         ) : route.name === "planner" ? (
           <ErrorBoundary key={`planner:${project?.id ?? ""}`}>

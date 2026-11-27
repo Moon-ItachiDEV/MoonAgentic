@@ -233,8 +233,8 @@ describe("artifacts", { timeout: 40_000 }, () => {
     expect(await real.resolve(issued.ticket, "docs/maquette.html")).toBeUndefined();
   });
 
-  it("serves an artifact inside the app's frame only, as a sandbox with no script", async () => {
-    const { root, hub, dir, threadId } = await threadFolder();
+  it("serves an artifact inside the app's frame only, as a sandbox of its own", async () => {
+    const { root, hub, store, dir, threadId } = await threadFolder();
     makeFiles(dir);
     const webDir = path.join(root, "web");
     mkdirSync(webDir);
@@ -252,9 +252,24 @@ describe("artifacts", { timeout: 40_000 }, () => {
     expect(page.status).toBe(200);
     expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
     const csp = page.headers.get("content-security-policy") ?? "";
-    expect(csp).toMatch(/^sandbox; default-src 'none'/);
+    // Its scripts run, in an origin of their own: nothing of the app's, nothing sent out.
+    expect(csp).toMatch(/^sandbox allow-scripts; default-src 'none'/);
+    expect(csp).not.toContain("allow-same-origin");
+    expect(csp).not.toContain("allow-top-navigation");
+    expect(csp).not.toContain("allow-popups");
+    expect(csp).toContain("connect-src 'none'");
+    expect(csp).toContain("form-action 'none'");
     expect(csp).toContain("frame-ancestors 'self'");
-    expect(csp).not.toContain("script-src");
+    // The known libraries and fonts, while the user allows them.
+    expect(csp).toMatch(/script-src 'self' 'unsafe-inline'[^;]* https:\/\/cdn\.tailwindcss\.com/);
+    expect(csp).toMatch(/font-src [^;]*https:\/\/fonts\.gstatic\.com/);
+    store.setSetting("artifactLibraries", false);
+    const closed = (await fetch(origin + artifactUrl(ticket, "docs/maquette.html"))).headers.get(
+      "content-security-policy",
+    );
+    expect(closed).toContain("script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:;");
+    expect(closed).not.toContain("https://");
+    store.setSetting("artifactLibraries", true);
     expect(page.headers.get("x-frame-options")).toBeNull();
     expect(page.headers.get("x-content-type-options")).toBe("nosniff");
     expect(page.headers.get("referrer-policy")).toBe("no-referrer");
