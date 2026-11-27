@@ -1455,6 +1455,48 @@ export async function syncTarget(dir: string, baseBranch: string): Promise<strin
   return ahead.code === 0 ? remoteRef : baseBranch;
 }
 
+/**
+ * Where a new thread's branch starts: the folder's branch, or its copy on the remote when
+ * that one is ahead (pull requests merged on GitHub since the folder was last pulled), so a
+ * thread never starts from an old copy. When `moveFolder`, the folder itself is brought up to
+ * it as well, the way `git pull --ff-only` would, but only when that is all it does: on its
+ * branch, no tracked file changed, no commit of its own. Anything else leaves it as it is.
+ */
+export async function freshStart(
+  projectDir: string,
+  moveFolder: boolean,
+): Promise<{ base: string; baseBranch?: string; subdir?: string }> {
+  const start = await worktreeStart(projectDir);
+  if (!start.baseBranch) return start;
+  const target = await syncTarget(projectDir, start.baseBranch);
+  if (target === start.baseBranch) return start;
+  const ahead = (
+    await gitCode(projectDir, ["rev-parse", "-q", "--verify", `${target}^{commit}`])
+  ).stdout.trim();
+  if (!ahead) return start;
+  if (moveFolder) await fastForward(projectDir, start.baseBranch, start.base, ahead);
+  return { ...start, base: ahead };
+}
+
+/**
+ * Moves the folder's branch forward to `to`, when it is still on `branch` at `from` and no
+ * tracked file is changed. Run with the worktree changes, so no `git worktree add` runs at
+ * the same time. Never fails: a folder it cannot move is simply left where it was.
+ */
+function fastForward(dir: string, branch: string, from: string, to: string): Promise<void> {
+  return oneAtATime(dir, async () => {
+    const [on, at, changed] = await Promise.all([
+      gitCode(dir, ["branch", "--show-current"]),
+      gitCode(dir, ["rev-parse", "HEAD"]),
+      gitCode(dir, ["status", "--porcelain", "--untracked-files=no"]),
+    ]);
+    if (on.code || at.code || changed.code) return;
+    if (on.stdout.trim() !== branch || at.stdout.trim() !== from || changed.stdout.trim()) return;
+    // git itself refuses when an untracked file would be overwritten: left as it is then.
+    await gitCode(dir, ["merge", "--ff-only", "-q", to]);
+  });
+}
+
 /** The repository's own `moon/*` branches: name, commit, and when that commit was made. */
 export async function moonBranchRefs(
   dir: string,

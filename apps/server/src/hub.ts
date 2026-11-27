@@ -95,6 +95,7 @@ import {
   removeWorktree,
   deleteBranch,
   worktreeStart,
+  freshStart,
   branchName,
   canonicalPath,
   dropCheckpoints,
@@ -5205,6 +5206,23 @@ export class Hub {
     return workFolder(workspace);
   }
 
+  /**
+   * True while an agent works right in the project's folder (a thread without a folder of its
+   * own): the folder is not brought up to GitHub's copy under it.
+   */
+  private agentInFolder(projectId: string): boolean {
+    return this.store
+      .listThreads()
+      .some(
+        (t) =>
+          t.projectId === projectId &&
+          t.status === "running" &&
+          !t.workspace &&
+          !t.worksIn &&
+          t.kind !== "coordinator",
+      );
+  }
+
   /** Makes the thread's worktree on first use; returns the folder the agent works in. */
   private async prepareWorkspace(threadId: string, project: Project): Promise<string> {
     const worksIn = this.store.getThread(threadId)?.worksIn;
@@ -5214,7 +5232,7 @@ export class Hub {
     if (!workspace.base) {
       // Where the branch starts is written down before git makes anything, so a stop in
       // between is finished next time. A branch made before that rule keeps its own start.
-      const start = await worktreeStart(project.path);
+      const start = await freshStart(project.path, !this.agentInFolder(project.id));
       if (await branchExists(project.path, workspace.branch)) {
         start.base = await forkPoint(project.path, workspace.branch);
       }
