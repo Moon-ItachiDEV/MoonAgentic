@@ -1982,7 +1982,9 @@ html[data-dev="touch"]
     .ovtabs button,
     .pi2,
     .mdl,
-    .seg button
+    .seg button,
+    .kbtabs button,
+    .plabel
   ) {
   position: relative;
 }
@@ -2004,7 +2006,9 @@ html[data-dev="touch"]
     .ovtabs button,
     .pi2,
     .mdl,
-    .seg button
+    .seg button,
+    .kbtabs button,
+    .plabel
   )::before {
   content: "";
   position: absolute;
@@ -2017,4 +2021,9 @@ html[data-dev="touch"] .cmp textarea {
 }
 html[data-dev="touch"] .cmp:not(.open) .line {
   padding-block: 4px;
+}
+/* The planner's columns scroll across: room inside the strip for the margin of their tabs. */
+html[data-dev="touch"] .kbtabs {
+  padding-block: 6px;
+  margin-block: -6px;
 }

@@ -83,7 +83,7 @@
   min-height: 40px;
   padding: 0 8px;
   border-radius: 10px;
-  font-size: 14.5px;
+  font-size: 15px;
   gap: 10px;
 }
 .skpop .it:not(.ro):hover {
@@ -93,7 +93,7 @@
   padding: 6px 0;
 }
 .skpop .it small {
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .skpop .sep {
   margin: 2px 8px;
@@ -155,7 +155,7 @@
 .skpop .okp {
   height: 20px;
   padding: 0 7px;
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .skpop .fvc {
   width: 18px;
@@ -182,7 +182,7 @@
   max-width: 62%;
 }
 .skpop .mcv .mono {
-  font-size: 12.5px;
+  font-size: 13px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -229,7 +229,7 @@
   padding: 10px;
   border-radius: 10px;
   background: var(--win-seg);
-  font: 400 11.5px/1.6 var(--mono);
+  font: 400 12px/1.6 var(--mono);
   color: var(--fg2);
   max-height: 150px;
   overflow: auto;

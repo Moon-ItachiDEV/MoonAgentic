@@ -21,6 +21,8 @@ let project: string;
 /** A thread waiting on a permission, and another one, idle. */
 let waiting: string;
 let idle: string;
+/** The project's own page. */
+let projectPage: string;
 
 beforeAll(async () => {
   if (!existsSync(path.join(root, "apps/web/dist/index.html"))) {
@@ -140,7 +142,9 @@ describe("on a phone", () => {
     // From a computer: one thread asks before it writes, the other has answered.
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
-    await addProject(page, project);
+    await addProject(page, project, false);
+    projectPage = new URL(page.url()).pathname;
+    await directThread(page);
     await pickAgent(page);
     await setAccess(page, /Demande d'abord/);
     await say(page, "Corrige le calcul des frais de port");
@@ -217,12 +221,18 @@ describe("on a phone", () => {
     await context.close();
   });
 
-  it("keeps every control of the home page and the settings at 44 px under the finger (M3)", async () => {
+  it("keeps every control of the home page, the settings, a project and the planner at 44 px under the finger (M3)", async () => {
     const { context, page } = await phone();
     await go(page, "/");
     expect(await smallTargets(page)).toEqual([]);
     await page.goto(new URL("/reglages/general", url).href);
     await page.getByRole("switch").first().waitFor();
+    expect(await smallTargets(page)).toEqual([]);
+    await page.goto(new URL(projectPage, url).href);
+    await page.locator(".plabel").waitFor();
+    expect(await smallTargets(page)).toEqual([]);
+    await page.goto(new URL("/planner", url).href);
+    await page.locator(".kbtabs button").first().waitFor();
     expect(await smallTargets(page)).toEqual([]);
     await context.close();
   });
