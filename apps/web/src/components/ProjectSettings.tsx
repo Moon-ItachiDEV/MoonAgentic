@@ -1,6 +1,7 @@
 import {
   type AgentInfo,
   type FavoriteRef,
+  type InstalledSkill,
   MAX_FALLBACK_MODELS,
   PROJECT_COLORS,
   type Project,
@@ -41,6 +42,7 @@ import {
   projectIconName,
 } from "../project-icons.ts";
 import { ProjectIcon } from "./ProjectIcon.tsx";
+import { changeSkills, InstallSkill, SkillLists, useInstalledSkills } from "./Skills.tsx";
 
 const why = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -941,6 +943,8 @@ function SkillsTab(props: {
   onConfirm: (confirm: Confirmation) => void;
 }) {
   const [editing, setEditing] = useState<{ skill?: ProjectSkill; draft: Draft } | null>(null);
+  const projects = useSyncExternalStore(connection.subscribe, connection.getState).projects;
+  const { skills: installed, error } = useInstalledSkills();
   const skills = props.setup.skills;
   if (editing) {
     return (
@@ -961,60 +965,45 @@ function SkillsTab(props: {
             description: draft.description.trim(),
             body: draft.text,
           });
+          // The list of installed skills shows it too.
+          void changeSkills(() => connection.ask({ type: "skills.list", requestId: newId() }));
           setEditing(null);
         }}
         onCancel={() => setEditing(null)}
       />
     );
   }
+  // A skill of the project's own folders can be written here.
+  const editable = (s: InstalledSkill) => {
+    const own = s.projectId === props.projectId && skills.find((k) => k.name === s.name);
+    if (!own) return undefined;
+    return () =>
+      setEditing({
+        skill: own,
+        draft: { name: own.name, description: own.description, text: own.body },
+      });
+  };
   return (
-    <div className="ins">
-      {skills.map((s) => (
-        <div key={s.path} className="it ro">
-          <button
-            className="mpick"
-            aria-label={`Modifier ${s.name}`}
-            onClick={() =>
-              setEditing({
-                skill: s,
-                draft: { name: s.name, description: s.description, text: s.body },
-              })
-            }
-          >
-            <span className="tx">
-              {s.name}
-              <small>{s.description}</small>
-            </span>
-          </button>
-          <button
-            className="mini"
-            aria-label={`Supprimer ${s.name}`}
-            onClick={() =>
-              props.onConfirm({
-                title: `Supprimer ${s.name} ?`,
-                text: "Son SKILL.md est retiré du projet. Les autres fichiers de son dossier restent.",
-                action: "Supprimer",
-                run: () =>
-                  props.change({
-                    type: "project.removeSkill",
-                    requestId: newId(),
-                    projectId: props.projectId,
-                    path: s.path,
-                  }),
-              })
-            }
-          >
-            Supprimer
-          </button>
-        </div>
-      ))}
-      <button
-        className="it acc"
-        onClick={() => setEditing({ draft: { name: "", description: "", text: "" } })}
-      >
-        <I n="plus" s={18} />
-        <span className="tx">Nouvelle skill</span>
-      </button>
-    </div>
+    <>
+      {error && <p className="snone">{error}</p>}
+      {installed && (
+        <SkillLists
+          skills={installed}
+          projects={projects}
+          projectId={props.projectId}
+          editable={editable}
+        />
+      )}
+      <div className="ins">
+        <InstallSkill projects={projects} installed={installed ?? []} projectId={props.projectId} />
+        <button
+          className="it acc"
+          onClick={() => setEditing({ draft: { name: "", description: "", text: "" } })}
+        >
+          <I n="edit" s={18} />
+          <span className="tx">Nouvelle skill</span>
+        </button>
+      </div>
+    </>
   );
 }

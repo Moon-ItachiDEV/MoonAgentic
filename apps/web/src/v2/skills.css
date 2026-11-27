@@ -1,0 +1,414 @@
+/* Skills: their windows and menus, hung from the button that opens them on every screen. */
+
+.it .ic .key {
+  font: 600 14px/1 var(--mono);
+  color: inherit;
+}
+
+/* A window hung from its button. */
+.skpop {
+  position: fixed;
+  z-index: 132;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100% - 24px);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow:
+    0 0 0 0.5px var(--glass-ring),
+    0 2px 6px rgba(20, 20, 30, 0.04),
+    0 28px 64px -20px rgba(20, 20, 30, 0.26);
+  overflow: hidden;
+  transform-origin: var(--ox, 50%) 0;
+  opacity: 0;
+}
+.skpop.up {
+  transform-origin: var(--ox, 50%) 100%;
+}
+.skpop.on {
+  opacity: 1;
+  animation: skin 230ms var(--out) both;
+}
+.skpop.out {
+  opacity: 1;
+  animation: skout 140ms cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+@keyframes skin {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(-4px);
+  }
+}
+.skpop.up.on {
+  animation-name: skinup;
+}
+@keyframes skinup {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+}
+@keyframes skout {
+  to {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+.skpop .skh {
+  flex: none;
+  padding: 14px 18px 0;
+}
+.skpop .skh h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 22px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skpop .skb {
+  padding: 10px 18px 16px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.skpop .ins {
+  background: none;
+  border-radius: 0;
+  padding: 0;
+  margin: 0 -8px 12px;
+  box-shadow: none;
+}
+.skpop .it {
+  min-height: 40px;
+  padding: 0 8px;
+  border-radius: 10px;
+  font-size: 14.5px;
+  gap: 10px;
+}
+.skpop .it:not(.ro):hover {
+  background: var(--hover);
+}
+.skpop .it .tx {
+  padding: 6px 0;
+}
+.skpop .it small {
+  font-size: 12.5px;
+}
+.skpop .sep {
+  margin: 2px 8px;
+  background: var(--glass-ring);
+}
+.skpop .gl2 {
+  padding: 0 0 4px;
+  font-size: 12px;
+}
+.skpop .mga,
+.skpop .cfa {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 4px 0 0;
+  margin: 0;
+}
+.skpop .cfa {
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+}
+/* Its buttons stay at its foot while the rest scrolls. */
+.skpop .skb > .mga:last-child,
+.skpop .skb > .cfa:last-child {
+  position: sticky;
+  bottom: -16px;
+  z-index: 2;
+  background: var(--surface);
+  margin: 0 -18px -16px;
+  padding: 10px 18px 16px;
+  box-shadow: 0 -0.5px 0 var(--glass-ring);
+}
+.skpop .b2 {
+  flex: none;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 9px;
+  font-size: 14px;
+  gap: 6px;
+}
+.skpop .b2.soft {
+  background: var(--surface);
+  box-shadow:
+    0 0 0 1px var(--glass-ring),
+    0 1px 2px rgba(20, 20, 30, 0.05);
+  color: var(--fg);
+}
+.skpop .b2.soft:hover {
+  background: var(--hover);
+}
+.skpop .b2.ink[disabled] {
+  opacity: 0.3;
+}
+.skpop .b2.dng {
+  background: var(--err);
+  color: #fff;
+}
+.skpop .okp {
+  height: 20px;
+  padding: 0 7px;
+  font-size: 11.5px;
+}
+.skpop .fvc {
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+}
+.skpop .fvc svg {
+  width: 11px;
+  height: 11px;
+}
+.skpop .tog {
+  transform: scale(0.78);
+  transform-origin: right center;
+}
+.skpop .npf input {
+  font-size: 14px;
+}
+.skpop .pwait {
+  padding: 6px 0 2px;
+  justify-content: flex-start;
+}
+.skpop .mcv {
+  min-width: 0;
+  max-width: 62%;
+}
+.skpop .mcv .mono {
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skag {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* A command, its folder, its output and its answer. */
+.skc {
+  padding: 8px 10px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  background: var(--sunken);
+  overflow-wrap: anywhere;
+}
+.skc .mono {
+  font: 400 13px var(--mono);
+}
+.skp {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: -2px 0 14px;
+}
+.skp .ppill,
+.skp .wnp {
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+.wnp {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--warnbg);
+  color: var(--warn);
+  font-weight: 500;
+}
+.sklog {
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--sunken);
+  font: 400 11.5px/1.6 var(--mono);
+  color: var(--fg2);
+  max-height: 150px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-bottom: 10px;
+  scrollbar-width: none;
+}
+.skst {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+  min-width: 0;
+}
+.skst .ppill {
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+.skst .ppill .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.skst .t2-spin,
+.skpop .pwait .t2-spin {
+  width: 12px;
+  height: 12px;
+}
+.skin {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.skin input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  border-radius: 9px;
+  padding: 0 12px;
+  background: var(--sunken);
+  font: 400 13px var(--mono);
+  color: var(--fg);
+  outline: none;
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: box-shadow 160ms var(--out);
+}
+.skin input:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--glass-ring);
+}
+
+/* A short list of choices hung from its button. */
+.ddm {
+  position: fixed;
+  z-index: 135;
+  min-width: 220px;
+  max-width: 300px;
+  max-height: min(420px, calc(100vh - 24px));
+  overflow: auto;
+  padding: 5px;
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow:
+    0 0 0 0.5px var(--glass-ring),
+    0 2px 6px rgba(20, 20, 30, 0.04),
+    0 20px 48px -16px rgba(20, 20, 30, 0.24);
+  scrollbar-width: none;
+  transform-origin: var(--ox, 100%) 0;
+  animation: ddin 160ms var(--out) both;
+}
+.ddm.up {
+  transform-origin: var(--ox, 100%) 100%;
+}
+.ddm.out {
+  animation: skout 120ms cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+@keyframes ddin {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-3px);
+  }
+}
+.ddm .ddh {
+  padding: 7px 10px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.ddm button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 9px;
+  font-size: 14px;
+  color: var(--fg);
+  text-align: left;
+}
+.ddm button:hover,
+.ddm button:focus-visible {
+  background: var(--hover);
+  outline: none;
+}
+.ddm .ddi {
+  display: grid;
+  color: var(--muted);
+}
+.ddm .ddt {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ddm .ddk {
+  display: grid;
+  color: var(--fg);
+}
+.ddm hr {
+  border: 0;
+  height: 0.5px;
+  background: var(--glass-ring);
+  margin: 5px 8px;
+}
+
+/* On a phone: larger lines and buttons for a finger. */
+.scr:not(.roomy) .skpop {
+  border-radius: 18px;
+  max-height: calc(100% - 70px);
+}
+.scr:not(.roomy) .skpop .it {
+  min-height: 46px;
+  font-size: 16px;
+}
+.scr:not(.roomy) .skpop .b2 {
+  height: 40px;
+  padding: 0 16px;
+  border-radius: 12px;
+  font-size: 15px;
+}
+.scr:not(.roomy) .skpop .skin input,
+.scr:not(.roomy) .skpop .skin .b2 {
+  height: 40px;
+}
+.scr:not(.roomy) .ddm {
+  border-radius: 16px;
+  min-width: 240px;
+}
+.scr:not(.roomy) .ddm button {
+  height: 44px;
+  font-size: 16px;
+}
+html[data-dev="touch"] .scr.roomy .ddm button {
+  height: 42px;
+  font-size: 15.5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skpop.on,
+  .skpop.up.on,
+  .skpop.out,
+  .ddm,
+  .ddm.out {
+    animation-name: skfade;
+  }
+  .skpop.out,
+  .ddm.out {
+    animation-direction: reverse;
+  }
+}
+@keyframes skfade {
+  from {
+    opacity: 0;
+  }
+}

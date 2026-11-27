@@ -148,6 +148,40 @@ export function parseGithubRepo(input: string): { owner: string; name: string } 
   return { owner, name };
 }
 
+/**
+ * Clones only the last commit of a repository (of `ref` when given) into `dest`, signed in
+ * the way other clones are: enough to read what it holds.
+ */
+export async function shallowClone(url: string, dest: string, ref?: string): Promise<void> {
+  const auth = await githubGitAuth();
+  try {
+    await run(
+      "git",
+      [
+        ...auth.args,
+        "clone",
+        "--quiet",
+        "--depth",
+        "1",
+        ...(ref ? ["--branch", ref] : []),
+        "--",
+        url,
+        dest,
+      ],
+      { timeout: 5 * 60_000, env: auth.env },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const missing = /Repository not found|not found|could not read Username|Authentication failed/i;
+    throw new Error(
+      missing.test(message)
+        ? "Dépôt introuvable sur GitHub. S'il est privé, connecte-toi à GitHub dans Réglages."
+        : `Le dépôt n'a pas pu être lu : ${message.split("\n").at(-1)}`,
+      { cause: error },
+    );
+  }
+}
+
 /** Where `~` means the home folder, like in a terminal. */
 export function expandHome(raw: string, home = os.homedir()): string {
   return path.resolve(raw.trim().replace(/^~(?=$|[\\/])/, home));

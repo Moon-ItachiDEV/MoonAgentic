@@ -4,6 +4,7 @@
 import { execFile } from "node:child_process";
 import { type Dirent, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { readdir } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_SETUP_FILE, type ProjectCommand, type Skill } from "@moonagentic/protocol";
@@ -292,14 +293,26 @@ const USER_SKILL_ROOTS = [
 ];
 const MAX_SKILL_FILE = MAX_SETUP_FILE;
 
+/** Where Hermes keeps its own skills: `HERMES_HOME`, else `~/.hermes`. */
+export function hermesSkillsDir(env: NodeJS.ProcessEnv = process.env, home = os.homedir()): string {
+  const base = env.HERMES_HOME?.trim() || path.join(home, ".hermes");
+  return path.join(base, "skills");
+}
+
 /** Skills found in the project and in the user's home folder; the project's win on a name. */
 export function findSkills(dir: string, home: string): SkillRecord[] {
   const byName = new Map<string, SkillRecord>();
   const scan = (base: string, scope: Skill["scope"]) => {
-    for (const root of scope === "project" ? PROJECT_SKILL_ROOTS : USER_SKILL_ROOTS) {
+    const roots =
+      scope === "project"
+        ? PROJECT_SKILL_ROOTS
+        : [...USER_SKILL_ROOTS, hermesSkillsDir(process.env, base)];
+    for (const root of roots) {
       let entries;
       try {
-        entries = readdirSync(path.join(base, root), { withFileTypes: true });
+        entries = readdirSync(path.isAbsolute(root) ? root : path.join(base, root), {
+          withFileTypes: true,
+        });
       } catch {
         continue;
       }
@@ -310,7 +323,9 @@ export function findSkills(dir: string, home: string): SkillRecord[] {
         const file =
           scope === "project"
             ? resolveInside(base, `${root}/${entry.name}/SKILL.md`)
-            : path.join(base, root, entry.name, "SKILL.md");
+            : path.isAbsolute(root)
+              ? path.join(root, entry.name, "SKILL.md")
+              : path.join(base, root, entry.name, "SKILL.md");
         if (!file) continue;
         let source: string;
         try {

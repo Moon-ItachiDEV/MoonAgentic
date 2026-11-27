@@ -46,6 +46,10 @@ export const LONG_ASKS_MS: Readonly<Record<string, number>> = {
   // Each thread with its own branch is asked what changed there.
   "artifacts.list": 2 * 60_000,
   "project.deleteBranches": 3 * 60_000,
+  // A repository of skills is cloned (5 minutes at most), then read or copied.
+  "skills.find": 6 * 60_000,
+  "skills.install": 6 * 60_000,
+  "skills.update": 6 * 60_000,
 };
 /** How long the page waits for the answer to a request of this type. */
 export const askTimeoutFor = (type: string, usual: number = ASK_TIMEOUT_MS): number =>
@@ -283,7 +287,22 @@ type ReplyTo<T extends Request["type"]> = T extends "files.search"
                                             ? Extract<ServerMessage, { type: "pushState" }>
                                             : T extends "mcp.tools"
                                               ? Extract<ServerMessage, { type: "mcpTools" }>
-                                              : ServerMessage;
+                                              : T extends
+                                                    | "skills.list"
+                                                    | "skills.install"
+                                                    | "skills.setAgents"
+                                                    | "skills.move"
+                                                    | "skills.update"
+                                                    | "skills.remove"
+                                                ? Extract<ServerMessage, { type: "skills" }>
+                                                : T extends "skills.find"
+                                                  ? Extract<ServerMessage, { type: "skillsFound" }>
+                                                  : T extends "skills.preview"
+                                                    ? Extract<
+                                                        ServerMessage,
+                                                        { type: "skillCommand" }
+                                                      >
+                                                    : ServerMessage;
 
 export class Connection {
   private state: State = initialState;
