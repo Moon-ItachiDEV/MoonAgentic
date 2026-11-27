@@ -61,6 +61,7 @@ import { QuotaBar } from "./QuotaBar.tsx";
 import { Picker } from "./Picker.tsx";
 import { type Suggestion, Suggestions } from "./Suggestions.tsx";
 import { I } from "../v2/I.tsx";
+import { useComposerMorph } from "../v2/composer-morph.ts";
 import { useScrFlag } from "../v2/scr.ts";
 import { useScreen } from "../v2/use-screen.ts";
 import { touchScreen } from "../touch.ts";
@@ -206,6 +207,15 @@ export function Composer(props: {
   const [focused, setFocused] = useState(false);
   /** A press that started inside the composer, so a blur it causes does not fold it. */
   const pressedInside = useRef(false);
+  const pressOver = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // A press is over once its click has landed. A focus lost later (the keyboard put away) is
+  // not its doing: the composer then folds at once, together with the keyboard.
+  const released = () => {
+    clearTimeout(pressOver.current);
+    pressOver.current = setTimeout(() => {
+      pressedInside.current = false;
+    }, 350);
+  };
   const images = useImageDrafts();
   const filePicker = useRef<HTMLInputElement>(null);
   const camera = useRef<HTMLInputElement>(null);
@@ -922,6 +932,9 @@ export function Composer(props: {
   // On a phone the composer is one line until it is used, as in the mockup.
   const hasImages = images.drafts.length > 0;
   const open = focused || !!text || hasImages || !!voice || pickerOpen || ctxOpen || suggesting;
+  // The line grows into the card, and back, instead of jumping from one to the other.
+  const card = useRef<HTMLDivElement>(null);
+  useComposerMorph(card, input, open);
   const seconds = voice ? Math.floor((Date.now() - voice.started) / 1000) : 0;
   const heardText = voice ? `${voice.heard.final} ` : "";
   const full = mode === "full";
@@ -1108,8 +1121,11 @@ export function Composer(props: {
       // Only the text opens the composer: its « + » works from the folded line too.
       onFocus={(e) => (e.target as Element) === input.current && setFocused(true)}
       onPointerDownCapture={() => {
+        clearTimeout(pressOver.current);
         pressedInside.current = true;
       }}
+      onPointerUpCapture={released}
+      onPointerCancelCapture={released}
       onBlur={(e) => {
         const box = e.currentTarget;
         if (box.contains(e.relatedTarget as Node | null)) return;
@@ -1166,6 +1182,7 @@ export function Composer(props: {
       <div
         className={`cmp${open ? " open" : ""}${focused && !full ? " focus" : ""}${full ? " full" : ""}${hasImages ? " hasatt" : ""}${voice ? " voice" : ""}${dropping ? " drop" : ""}`}
         id="cmp"
+        ref={card}
       >
         <ComposerImages drafts={images.drafts} onRemove={images.remove} />
         {dropping && (
