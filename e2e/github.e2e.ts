@@ -9,6 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { cloneButton, createButton } from "./ui.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 /** Set to a folder to keep screenshots of each step there. */
@@ -159,14 +160,14 @@ describe("GitHub sign-in", () => {
     // Picked, a repository says where its clone goes; picked again, it is let go.
     await list.getByRole("button", { name: /^app/ }).click();
     await page.getByRole("button", { name: /^Emplacement/ }).waitFor();
-    await page.getByRole("button", { name: "Cloner", exact: true }).waitFor();
+    await cloneButton(page).waitFor();
     await shot("g4-ou-va-le-clone");
     await list.getByRole("button", { name: /^app/ }).click();
 
     await list.getByRole("button", { name: /^site/ }).click();
     await page.getByRole("status").getByText("Déjà sur le PC").waitFor();
     await shot("g5-deja-clone");
-    await page.getByRole("button", { name: "Créer", exact: true }).click();
+    await createButton(page).click();
     await page.waitForURL(/\/p\//);
 
     // Opened again, the same repository is now a project: it opens, nothing is cloned.

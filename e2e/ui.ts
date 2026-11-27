@@ -10,7 +10,7 @@ export async function addProject(page: Page, folder: string, thread = true) {
   await page.getByRole("button", { name: "Nouveau projet" }).first().click();
   await page.getByRole("button", { name: "Autre dossier" }).click();
   await page.getByLabel("Dossier", { exact: true }).fill(folder);
-  await page.getByRole("button", { name: "Créer", exact: true }).click();
+  await createButton(page).click();
   await page.waitForURL(/\/p\//);
   if (thread) await directThread(page);
 }
@@ -61,3 +61,17 @@ export async function setAccess(page: Page, name: RegExp) {
   await page.getByRole("radio", { name }).click();
   await page.keyboard.press("Escape");
 }
+
+/** « Créer » in the phone's sheet, « Créer le projet » in the window of an iPad or a computer. */
+export const createButton = (scope: Page | Locator) =>
+  scope.getByRole("button", { name: /^Créer( le projet)?$/ });
+
+/** « Cloner », or « Cloner le projet » in the window of an iPad or a computer. */
+export const cloneButton = (scope: Page | Locator) =>
+  scope.getByRole("button", { name: /^Cloner( le projet)?$/ });
+
+/**
+ * Where a new conversation is held: a sheet on a phone, a menu beside the « + » menu on an iPad
+ * or a computer. Its lines are found by their text.
+ */
+export const whereChoices = (page: Page) => page.locator('[aria-label="Où travailler"]');
