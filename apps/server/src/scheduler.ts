@@ -16,24 +16,39 @@ const STILL_RUNNING = "Le lancement précédent tournait encore : celui-ci a ét
 
 /**
  * The first time a planned task is due after `now`, on the series that starts at `at`.
- * Days are counted on the server's calendar, so a daily task keeps its hour when the
- * clocks change. A one-time task has only `at`.
+ * Days are counted on the server's calendar, each one at the hour and minute of `at`: a
+ * daily task keeps its hour when the clocks change, and comes back to it after a night where
+ * that hour did not exist. A one-time task has only `at`.
  */
 export function nextRun(repeat: ScheduleRepeat, at: number, now: number): number {
   if (repeat === "once") return at;
   if (repeat === "hourly") {
     return at > now ? at : at + (Math.floor((now - at) / HOUR) + 1) * HOUR;
   }
-  const day = new Date(at);
+  const start = new Date(at);
+  // Each day made anew from the date and the hour wanted, never from the day before: a day
+  // without that hour (the clocks went forward) does not carry its shift to the next ones.
+  const dayAt = (days: number) =>
+    new Date(
+      start.getFullYear(),
+      start.getMonth(),
+      start.getDate() + days,
+      start.getHours(),
+      start.getMinutes(),
+      start.getSeconds(),
+      start.getMilliseconds(),
+    );
   const step = repeat === "weekly" ? 7 : 1;
-  const weekend = () => repeat === "weekdays" && (day.getDay() === 0 || day.getDay() === 6);
+  const weekend = (day: Date) =>
+    repeat === "weekdays" && (day.getDay() === 0 || day.getDay() === 6);
+  let days = 0;
   // Far behind, the days are first skipped at once, then walked one by one.
   if (now - at > 14 * 24 * HOUR) {
     const behind = Math.floor((now - at) / (24 * HOUR)) - 7;
-    day.setDate(day.getDate() + behind - (behind % 7));
+    days = behind - (behind % 7);
   }
-  while (day.getTime() <= now || weekend()) day.setDate(day.getDate() + step);
-  return day.getTime();
+  for (let day = dayAt(days); day.getTime() <= now || weekend(day); day = dayAt(days)) days += step;
+  return dayAt(days).getTime();
 }
 
 export interface ScheduleAdd {
@@ -118,6 +133,7 @@ export class Scheduler {
       ...(input.isolated ? { isolated: true } : {}),
       repeat: input.repeat,
       nextAt: this.firstTime(input.repeat, input.at, now),
+      ...(input.repeat !== "once" ? { at: input.at } : {}),
       enabled: true,
       runs: 0,
       ...(input.by ? { by: input.by } : {}),
@@ -135,12 +151,15 @@ export class Scheduler {
     const moved = patch.at !== undefined || repeat !== before.repeat;
     const on = patch.enabled ?? (moved ? true : before.enabled);
     // Given a new time, or turned back on after its time passed, it goes to its next time.
+    const at = patch.at ?? before.at ?? before.nextAt;
     const nextAt =
       moved || (on && !before.enabled && before.nextAt <= now)
-        ? this.firstTime(repeat, patch.at ?? before.nextAt, now)
+        ? this.firstTime(repeat, at, now)
         : before.nextAt;
+    const { at: _at, ...kept } = before;
     const schedule: Schedule = {
-      ...before,
+      ...kept,
+      ...(repeat !== "once" ? { at } : {}),
       ...(patch.title !== undefined ? { title: patch.title } : {}),
       ...(patch.text !== undefined ? { text: patch.text } : {}),
       repeat,
@@ -225,7 +244,7 @@ export class Scheduler {
     next =
       schedule.repeat === "once"
         ? { ...next, enabled: false }
-        : { ...next, nextAt: nextRun(schedule.repeat, schedule.nextAt, now) };
+        : { ...next, nextAt: nextRun(schedule.repeat, schedule.at ?? schedule.nextAt, now) };
     try {
       this.put(next);
     } catch (error) {

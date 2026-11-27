@@ -491,7 +491,10 @@ describe("archiving, deleting and recovering thread workspaces", () => {
     cleanups.unshift(() => again.close());
     await vi.waitFor(() => expect(existsSync(orphan)).toBe(false), { timeout: 20_000 });
     expect(existsSync(held)).toBe(true);
-    expect(git(repo, "worktree", "list")).not.toContain("0rphan00");
+    // When git could not remove it, the folder goes first and git forgets it a moment after.
+    await vi.waitFor(() => expect(git(repo, "worktree", "list")).not.toContain("0rphan00"), {
+      timeout: 10_000,
+    });
   }, 40_000);
 
   it("archives a thread with its uncommitted files, and brings them back", async () => {

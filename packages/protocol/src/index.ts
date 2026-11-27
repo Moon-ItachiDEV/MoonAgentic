@@ -1062,6 +1062,11 @@ export interface Schedule {
   repeat: ScheduleRepeat;
   /** When it next starts. For one that is off or has run its only time, when it last was due. */
   nextAt: number;
+  /**
+   * The time it was set for, its runs counted from it: a daily task of 2:30 moved to 3:30 on
+   * the night the clocks go forward is back at 2:30 the day after. Older tasks have none.
+   */
+  at?: number;
   /** Off: paused by the user, or a one-time task that has run. */
   enabled: boolean;
   /** How many times it really started a thread. */
