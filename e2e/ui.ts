@@ -10,6 +10,9 @@ export async function addProject(page: Page, folder: string, thread = true) {
   await page.getByRole("button", { name: "Nouveau projet" }).first().click();
   await page.getByRole("button", { name: "Autre dossier" }).click();
   await page.getByLabel("Dossier", { exact: true }).fill(folder);
+  // The window opens before the page has heard from its server, and what is asked then does
+  // not leave (« Pas de connexion… »). The home says « Chargement… » until it has.
+  await page.locator("h1", { hasText: "Chargement…" }).waitFor({ state: "detached" });
   await createButton(page).click();
   await page.waitForURL(/\/p\//);
   if (thread) await directThread(page);
