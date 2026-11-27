@@ -591,13 +591,10 @@ describe("composer", () => {
       .poll(() => side.getByRole("button", { name: /^Corrige la réponse/ }).count())
       .toBe(0);
 
-    // The project leaves from its own settings.
+    // The project leaves from its menu, dropped from its name.
     await side.getByRole("button", { name: /^projet/ }).click();
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    await page
-      .getByRole("dialog", { name: "Réglages du projet" })
-      .getByRole("button", { name: "Retirer de MoonAgentic" })
-      .click();
+    await page.getByRole("button", { name: "Projet projet" }).click();
+    await page.getByRole("menuitem", { name: "Retirer de MoonAgentic" }).click();
     await page
       .getByRole("alertdialog", { name: "Retirer ce projet ?" })
       .getByRole("button", { name: "Retirer" })
@@ -865,9 +862,9 @@ describe("composer", () => {
     await idle.waitFor();
 
     // The project takes another name from its settings, for every window.
-    const settings = page.getByRole("dialog", { name: "Réglages du projet" });
+    const settings = page.getByRole("dialog", { name: "Paramètres du projet" });
     const rename = async (name: string) => {
-      await page.getByRole("button", { name: "Réglages du projet" }).click();
+      await page.getByRole("button", { name: "Paramètres du projet" }).click();
       await settings.getByLabel("Nom du projet").fill(name);
       await settings.getByLabel("Nom du projet").press("Enter");
       await side.getByRole("button", { name: new RegExp(`^${name}( |$)`) }).waitFor();
@@ -878,15 +875,14 @@ describe("composer", () => {
     await shot(page, "p3-projet-renomme");
     await rename("equipe");
 
-    // Pinned from its settings: kept by the server, still so once the page is loaded again.
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    const pin = settings.getByRole("switch", { name: "Épingler le projet" });
-    await pin.click();
-    await expect.poll(() => pin.getAttribute("aria-checked")).toBe("true");
+    // Pinned from its menu: kept by the server, still so once the page is loaded again.
+    const projectMenu = page.getByRole("button", { name: "Projet equipe" });
+    await projectMenu.click();
+    await page.getByRole("menuitem", { name: "Épingler" }).click();
     await page.reload();
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    await expect.poll(() => pin.getAttribute("aria-checked")).toBe("true");
-    await settings.getByRole("button", { name: "Fermer", exact: true }).click();
+    await projectMenu.click();
+    await page.getByRole("menuitem", { name: "Désépingler" }).waitFor();
+    await page.keyboard.press("Escape");
 
     // The coordinator: one agent to talk to about the whole project. Its agent calls
     // MoonAgentic's own tools, here to open a thread on a branch of its own.
@@ -1413,7 +1409,7 @@ describe("composer", () => {
     expect(recent).toBeLessThan(rows.findIndex((r) => r.includes("Une question hors projet")));
     await shot(page, "c23-discussions-recents");
 
-    // Outside a project, the header keeps only « … »: no changes to look at.
+    // Outside a project, the header has no changes to look at.
     expect(await page.getByRole("button", { name: /^Modifications/ }).count()).toBe(0);
     // Renamed from its « … » menu, for every list of threads.
     await page.getByRole("button", { name: "Actions du fil" }).click();
@@ -1428,7 +1424,7 @@ describe("composer", () => {
     );
     await page.keyboard.type("Sans suite");
     await name.press("Escape");
-    await page.locator(".ttl b", { hasText: "Une question hors projet" }).waitFor();
+    await page.locator(".phb .pht", { hasText: "Une question hors projet" }).waitFor();
     await page.getByRole("button", { name: "Actions du fil" }).click();
     await page.getByRole("menuitem", { name: "Renommer" }).click();
     await name.fill("Nouveautés IA");
@@ -1465,7 +1461,7 @@ describe("composer", () => {
       .getByRole("button", { name: /^Nouveautés IA/ })
       .first()
       .waitFor();
-    await page.locator(".ttl b", { hasText: "Nouveautés IA" }).waitFor();
+    await page.locator(".phb .pht", { hasText: "Nouveautés IA" }).waitFor();
     await page.setViewportSize({ width: 390, height: 780 });
     await page.getByRole("button", { name: "Actions du fil" }).click();
     await page.getByRole("menuitem", { name: "Renommer" }).waitFor();
@@ -1599,7 +1595,7 @@ describe("composer", () => {
       .getByRole("button", { name: /^Question du projet/ })
       .first()
       .waitFor();
-    await page.locator(".ttl b", { hasText: "Question du projet" }).waitFor();
+    await page.locator(".phb .pht", { hasText: "Question du projet" }).waitFor();
     await page.close();
   });
 });

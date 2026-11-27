@@ -18,9 +18,13 @@ export class TurnLine {
     return new Promise((go) => this.waiting.push({ threadId, go }));
   }
 
-  /** Lets the first in line through. */
-  next(): void {
-    this.waiting.shift()?.go();
+  /** Lets the first in line through, or the first that `may` go; false when none does. */
+  next(may: (threadId: string) => boolean = () => true): boolean {
+    const found = this.waiting.find((w) => may(w.threadId));
+    if (!found) return false;
+    this.waiting = this.waiting.filter((w) => w !== found);
+    found.go();
+    return true;
   }
 
   /** Takes the thread out of the line, wherever it stands; false when it was not in it. */

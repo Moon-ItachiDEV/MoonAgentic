@@ -90,7 +90,7 @@ const above = (path: string) => path.replace(/[\\/]+[^\\/]+[\\/]*$/, "");
  * The colours and the icons a project can wear, in a menu that drops from the name's icon
  * (iPad, computer): the same choices as « Réglages du projet › Icône ».
  */
-function LookMenu(props: {
+export function LookMenu(props: {
   anchor: React.RefObject<HTMLButtonElement | null>;
   icon: string;
   color: ProjectColor | null;

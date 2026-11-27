@@ -228,6 +228,19 @@ const toolContent = (content: acp.ToolCallContent[] | null | undefined): ToolCon
 
 /** How long an agent may take to stop after « Arrêter » before its process is killed. */
 const FORCE_STOP_MS = 10_000;
+/** How long a coordinator being restarted has to end its turn before its agent is stopped. */
+const RESTART_WAIT_MS = 5_000;
+
+/** A route as the app sends it: an agent, and its model and settings when given. */
+const memberOf = (picked: {
+  agentId: string;
+  model?: string | undefined;
+  settings?: Record<string, string> | undefined;
+}): TeamMember => ({
+  agentId: picked.agentId,
+  ...(picked.model ? { model: picked.model } : {}),
+  ...(picked.settings && Object.keys(picked.settings).length ? { settings: picked.settings } : {}),
+});
 /** How long an agent may take to open its session before the turn gives up. */
 const START_TIMEOUT_MS = 120_000;
 
@@ -288,6 +301,8 @@ type ProjectLook = Pick<Project, "icon" | "color">;
 const SETTLED_REVIEWS = "settledReviews";
 /** The projects that keep a thread's branch once its pull request is merged. */
 const KEEP_MERGED_BRANCHES = "keepMergedBranches";
+/** The projects put on hold from their settings. */
+const PAUSED_PROJECTS = "pausedProjects";
 /** Each project's rules for a quota that runs out, by project id. */
 const PROJECT_QUOTA = "projectQuotaRules";
 /** How often threads waiting on a quota look whether it is back, unless told otherwise. */
@@ -1542,6 +1557,12 @@ export class Hub {
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
+      case "project.setPaused": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        await this.setPaused(project, message.paused);
+        return;
+      }
       case "project.setQuotaRules": {
         const project = this.store.getProject(message.projectId);
         if (!project) throw new Error("Ce projet n'existe plus.");
@@ -1820,19 +1841,47 @@ export class Hub {
         return;
       case "coordinator.setRoute": {
         const settings = this.coordinators.coordinatorSettings();
-        const routes = { ...settings.routes };
+        const projectId = message.projectId;
+        if (projectId && !this.store.getProject(projectId)) {
+          throw new Error("Ce projet n'existe plus.");
+        }
+        const routes = { ...(projectId ? settings.projectRoutes?.[projectId] : settings.routes) };
         delete routes[message.kind];
         if (message.agentId) {
           // Refused now rather than at the first thread a coordinator opens with it.
           this.agents.launch(message.agentId);
-          routes[message.kind] = {
-            agentId: message.agentId,
-            ...(message.model ? { model: message.model } : {}),
-          };
+          routes[message.kind] = memberOf({ ...message, agentId: message.agentId });
         }
-        this.coordinators.setCoordinatorSettings({ ...settings, routes });
+        if (!projectId) {
+          this.coordinators.setCoordinatorSettings({ ...settings, routes });
+          return;
+        }
+        // Projects removed since are dropped on the way.
+        const projectRoutes = Object.fromEntries(
+          Object.entries(settings.projectRoutes ?? {}).filter(
+            ([p]) => p !== projectId && this.store.getProject(p),
+          ),
+        );
+        if (Object.keys(routes).length) projectRoutes[projectId] = routes;
+        const { projectRoutes: _was, ...rest } = settings;
+        this.coordinators.setCoordinatorSettings(
+          Object.keys(projectRoutes).length ? { ...rest, projectRoutes } : rest,
+        );
         return;
       }
+      case "discussions.setModel": {
+        const { loose: _was, ...rest } = this.coordinators.coordinatorSettings();
+        const agentId = message.agentId;
+        if (agentId) this.agents.launch(agentId);
+        this.coordinators.setCoordinatorSettings(
+          agentId ? { ...rest, loose: memberOf({ ...message, agentId }) } : rest,
+        );
+        return;
+      }
+      case "coordinator.restart":
+        await this.restartCoordinator(message.projectId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "coordinator.setParallel":
         this.coordinators.setCoordinatorSettings({
           ...this.coordinators.coordinatorSettings(),
@@ -2622,7 +2671,12 @@ export class Hub {
 
   /** Lets the turns in line through, first come first served, while places are free. */
   private admit(): void {
-    while (this.line.size && this.turnsAtWork() < this.maxTurns()) this.line.next();
+    // A project on hold keeps its turns in line; those behind them go first.
+    const free = (threadId: string) => {
+      const projectId = this.store.getThread(threadId)?.projectId;
+      return !projectId || !this.paused(projectId);
+    };
+    while (this.turnsAtWork() < this.maxTurns() && this.line.next(free));
   }
 
   /**
@@ -4736,9 +4790,17 @@ export class Hub {
     let session: AgentSession | undefined;
     try {
       // Behind those already in line, so none is overtaken.
-      if (queued && (this.line.size > 0 || this.turnsAtWork() >= this.maxTurns())) {
+      if (
+        queued &&
+        (this.line.size > 0 ||
+          this.turnsAtWork() >= this.maxTurns() ||
+          this.paused(thread.projectId))
+      ) {
         this.updateThread(thread.id, { inLine: true });
-        await this.line.wait(thread.id);
+        const letThrough = this.line.wait(thread.id);
+        // Those on hold ahead of it do not keep it waiting while places are free.
+        this.admit();
+        await letThrough;
         if (this.store.getThread(thread.id)) this.updateThread(thread.id, { inLine: null });
         if (this.cancelled.has(thread.id)) {
           this.settleTurn(thread.id, { status: "idle" });
@@ -5019,7 +5081,8 @@ export class Hub {
     const quota = this.quotaRules(project.id);
     const keep = this.store.getSetting<string[]>(KEEP_MERGED_BRANCHES, []).includes(project.id);
     const archived = this.store.getSetting<string[]>(ARCHIVED_PROJECTS, []).includes(project.id);
-    return git || pinned || locked || look || quota || keep || archived
+    const paused = this.paused(project.id);
+    return git || pinned || locked || look || quota || keep || archived || paused
       ? {
           ...project,
           ...(git ? { git } : {}),
@@ -5030,8 +5093,58 @@ export class Hub {
           ...(quota ? { quota } : {}),
           ...(keep ? { deleteMerged: false as const } : {}),
           ...(archived ? { archived } : {}),
+          ...(paused ? { paused } : {}),
         }
       : project;
+  }
+
+  /** Whether the project is on hold; see {@link Project.paused}. */
+  private paused(projectId: string): boolean {
+    return this.store.getSetting<string[]>(PAUSED_PROJECTS, []).includes(projectId);
+  }
+
+  /**
+   * Puts the project on hold: its turns at work stop, and what its agents would start on their
+   * own waits in line. Going on lets what waits through, as places free up.
+   */
+  private async setPaused(project: Project, paused: boolean): Promise<void> {
+    const others = this.store
+      .getSetting<string[]>(PAUSED_PROJECTS, [])
+      .filter((p) => p !== project.id && this.store.getProject(p));
+    this.store.setSetting(PAUSED_PROJECTS, paused ? [...others, project.id] : others);
+    this.broadcast({ type: "project", project: this.withGit(project) });
+    if (!paused) {
+      this.admit();
+      return;
+    }
+    const atWork = this.store
+      .listThreads()
+      .filter((t) => t.projectId === project.id && this.turns.has(t.id) && !this.line.has(t.id));
+    await Promise.all(atWork.map((t) => this.cancel(t.id)));
+  }
+
+  /**
+   * Stops the project's coordinator: its turn, then its agent. Its session is kept, so the next
+   * message starts a new agent that resumes the conversation.
+   */
+  private async restartCoordinator(projectId: string): Promise<void> {
+    if (this.locks.isLocked(projectId)) {
+      throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    }
+    const coordinator = this.store
+      .listThreads()
+      .find((t) => t.projectId === projectId && t.kind === "coordinator");
+    if (!coordinator) throw new Error("Ce projet n'a pas encore de coordinateur.");
+    const turn = this.turns.get(coordinator.id);
+    if (turn) {
+      await this.cancel(coordinator.id);
+      // Its turn ends as stopped; one frozen past this is stopped with its agent below.
+      await Promise.race([
+        turn.catch(() => undefined),
+        new Promise((done) => setTimeout(done, RESTART_WAIT_MS).unref()),
+      ]);
+    }
+    await this.pool.stop(coordinator.id);
   }
 
   private async startSession(

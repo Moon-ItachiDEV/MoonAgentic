@@ -23,6 +23,8 @@ export function Dropdown(props: {
   side?: boolean;
   /** Lines up with the left edge of its button rather than the right one. */
   start?: boolean;
+  /** Centred under its button (a title in the middle of a phone's header). */
+  center?: boolean;
   className?: string;
   role?: "menu" | "dialog";
   children: ReactNode;
@@ -41,7 +43,7 @@ export function Dropdown(props: {
       const r = a.getBoundingClientRect();
       const w = el.offsetWidth;
       const h = el.offsetHeight;
-      const menu = props.side ? a.closest(".pmenu") : null;
+      const menu = props.side ? a.closest(".pmenu, .ddm") : null;
       if (menu) {
         const m = menu.getBoundingClientRect();
         let x = m.right + 6;
@@ -49,14 +51,19 @@ export function Dropdown(props: {
         setAt({ x, y: Math.max(8, Math.min(r.top - 5, innerHeight - h - 8)), up: false, ox: 0 });
         return;
       }
-      const edge = props.start ? r.left : r.right - w;
+      const edge = props.center ? r.left + r.width / 2 - w / 2 : props.start ? r.left : r.right - w;
       const x = Math.max(8, Math.min(edge, innerWidth - w - 8));
       const below = r.bottom + 4;
       const fits = below + h <= innerHeight - 8;
       const up = !fits && r.top - h - 4 >= 8;
       // Room neither under nor over its button: it keeps inside the window.
       const y = fits ? below : up ? r.top - h - 4 : Math.max(8, innerHeight - h - 8);
-      setAt({ x, y, up, ox: props.start ? 14 : r.right - x - 14 });
+      setAt({
+        x,
+        y,
+        up,
+        ox: props.center ? r.left + r.width / 2 - x : props.start ? 14 : r.right - x - 14,
+      });
     };
     replace.current = place;
     place();
@@ -64,7 +71,7 @@ export function Dropdown(props: {
     const watch = new ResizeObserver(place);
     if (box.current) watch.observe(box.current);
     return () => watch.disconnect();
-  }, [anchor, props.side, props.start]);
+  }, [anchor, props.side, props.start, props.center]);
 
   useEffect(() => {
     const a = anchor.current;
@@ -72,6 +79,8 @@ export function Dropdown(props: {
     const outside = (event: PointerEvent) => {
       const target = event.target as Node;
       if (box.current?.contains(target)) return;
+      // A menu opened beside it (« Notifications › ») is still part of it.
+      if (target instanceof Element && target.closest(".ddm.side")) return;
       // A press on its own button closes it there; the button's click must not reopen it.
       if (a?.contains(target)) {
         const swallow = (e: MouseEvent) => {
@@ -83,6 +92,8 @@ export function Dropdown(props: {
       onClose();
     };
     const key = (event: KeyboardEvent) => {
+      // Already leaving: the keys go to what is under it.
+      if (box.current?.classList.contains("out")) return;
       if (event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
