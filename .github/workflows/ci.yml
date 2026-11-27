@@ -47,7 +47,7 @@ jobs:
   windows:
     name: Tests (Windows)
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -58,7 +58,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      # Each test file starts agents and git processes of its own: three files at once on the
+      # 4-core runner held every one of them up to a minute (main, 2026-11-27, 5 tests red).
+      - run: pnpm test --maxWorkers=2
 
   # The app runs on the user's Windows computers: the browser checks run there too, against the
   # real server, its agents' processes, git and the stand-in command-line tools.

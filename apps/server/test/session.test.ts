@@ -641,3 +641,74 @@ describe("settingOptions", () => {
     ]);
   });
 });
+
+// Windows CI, PR 202: an agent that stopped right after « Je commence le travail… » showed only
+// « Je ». Node tells a process's exit before its output is read to the end, and the server
+// closed the connection on the exit, dropping the words still on their way.
+describe("an agent that stops right after it spoke", () => {
+  it("still has every word written on its output before its exit read", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-last-words-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 5 }));
+    const agent = path.join(dir, "agent.mjs");
+    // The words reach the server after the exit: a process left behind writes them, on the
+    // same output, a moment after the agent's own process is gone.
+    const late = path.join(dir, "late.mjs");
+    writeFileSync(
+      late,
+      `import { writeSync } from "node:fs";
+      setTimeout(() => {
+        for (const text of ["commence ", "le ", "travail…"]) {
+          writeSync(1, JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: {
+            sessionId: "s1",
+            update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } },
+          } }) + "\\n");
+        }
+      }, 300);`,
+    );
+    writeFileSync(
+      agent,
+      `import { spawn } from "node:child_process";
+      import { writeSync } from "node:fs";
+      import { createInterface } from "node:readline";
+      const send = (msg) => writeSync(1, JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\\n");
+      createInterface({ input: process.stdin }).on("line", (line) => {
+        const { id, method } = JSON.parse(line);
+        if (method === "initialize") {
+          send({ id, result: { protocolVersion: 1, agentCapabilities: {} } });
+        } else if (method === "session/new") {
+          send({ id, result: { sessionId: "s1" } });
+        } else if (method === "session/prompt") {
+          send({ method: "session/update", params: { sessionId: "s1", update: {
+            sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Je " },
+          } } });
+          spawn(process.execPath, [${JSON.stringify(late)}], {
+            stdio: ["ignore", "inherit", "ignore"],
+            detached: true,
+          }).unref();
+          process.exit(1);
+        }
+      });`,
+    );
+    const words: string[] = [];
+    let exited!: () => void;
+    const exit = new Promise<void>((resolve) => (exited = resolve));
+    const session = await AgentSession.start({
+      launch: { command: process.execPath, args: [agent] },
+      cwd: dir,
+      previousSessionId: null,
+      handlers: {
+        onUpdate: (update) => {
+          if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text") {
+            words.push(update.content.text);
+          }
+        },
+        requestPermission: async () => ({ outcome: { outcome: "cancelled" } }),
+        onExit: () => exited(),
+      },
+    });
+    cleanups.push(() => session.close().catch(() => undefined));
+    await session.prompt("parle").catch(() => undefined);
+    await exit;
+    expect(words.join("")).toBe("Je commence le travail…");
+  });
+});
