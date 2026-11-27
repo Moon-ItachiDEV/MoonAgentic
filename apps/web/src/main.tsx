@@ -11,6 +11,7 @@ import "./v2/planner.css";
 import "./v2/projet.css";
 import "./v2/fenetres.css";
 import "./v2/parametres.css";
+import "./v2/skills.css";
 import { watchTabs } from "./v2/tab-slide.ts";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";

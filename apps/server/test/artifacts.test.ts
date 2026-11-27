@@ -140,6 +140,19 @@ describe("artifacts", { timeout: 40_000 }, () => {
     expect((replies.at(-1) as { artifacts: unknown[] }).artifacts.length).toBeGreaterThan(0);
   });
 
+  it("looks only at the folders of the project asked for", async () => {
+    // Neon's review of PR #192: a project's « Utilisation » listed every project's artifacts,
+    // looking through all their folders, to count its own.
+    const { hub, dir, projectId } = await threadFolder();
+    makeFiles(dir);
+    const replies: ServerMessage[] = [];
+    const raw = { send: (m: ServerMessage) => void replies.push(m) };
+    await hub.handle(raw, { type: "artifacts.list", requestId: "a1", projectId });
+    expect((replies.at(-1) as { artifacts: unknown[] }).artifacts.length).toBeGreaterThan(0);
+    await hub.handle(raw, { type: "artifacts.list", requestId: "a2", projectId: "autre" });
+    expect(replies.at(-1)).toMatchObject({ type: "artifacts", artifacts: [] });
+  });
+
   it.skipIf(process.platform === "win32")(
     "leaves out a folder whose name looks like a page, and serves nothing from it",
     async () => {

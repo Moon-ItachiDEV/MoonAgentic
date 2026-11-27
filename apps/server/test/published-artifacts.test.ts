@@ -188,6 +188,11 @@ describe("publish_artifact", () => {
       kind: "html",
       versions: [{ n: 1 }, { n: 2 }],
     });
+    // Of one project when asked: those of another are left out.
+    const of = async (projectId: string) =>
+      (await reply({ type: "artifacts.list", requestId: "l", projectId }, "artifacts")).artifacts;
+    expect(await of(discussions)).toHaveLength(1);
+    expect(await of(hub.createProject("autre", temp("autre")))).toEqual([]);
 
     const open = (version?: number) =>
       reply(

@@ -3,11 +3,13 @@ import {
   type Artifact,
   type CoordinatorSettings,
   type FavoriteRef,
+  type InstalledSkill,
   type Favorites,
   MAX_FALLBACK_MODELS,
   MAX_PROJECT_MEMORY,
   MAX_SETUP_FILE,
   type McpServerInfo,
+  mcpReaches,
   PROJECT_COLORS,
   type Project,
   type ProjectColor,
@@ -19,14 +21,30 @@ import {
   utf8Bytes,
   WORK_KINDS,
 } from "@moonagentic/protocol";
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { connection, newId } from "../connection.ts";
 import { isDiscussionsProject } from "../default-models.ts";
 import { effortOf } from "../effort.ts";
 import { modelLabel, modelNameOf } from "../model-label.ts";
 import { COLOR_NAME } from "../project-colors.ts";
-import { claudeAction, commandProblem, fits, oneLine, skillProblem } from "../project-setup.ts";
+import {
+  claudeAction,
+  commandProblem,
+  fits,
+  oneLine,
+  setupSkillOf,
+  skillProblem,
+} from "../project-setup.ts";
+import { changeSkills, InstallSkill, SkillLists, useInstalledSkills } from "./Skills.tsx";
 import { KIND_LABEL, shortAgo } from "../project-threads.ts";
+import { renameKey } from "../rename.ts";
 import { useThreadModel } from "../thread-model.ts";
 import { I } from "../v2/I.tsx";
 import { ModelChip, type Route } from "../v2/ModelChip.tsx";
@@ -34,6 +52,7 @@ import { type Section, SettingsWindow } from "../v2/SettingsWindow.tsx";
 import { useScreen } from "../v2/use-screen.ts";
 import { BranchCleanup } from "./BranchCleanup.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
+import { lockedOnly, scopeSwitched } from "../mcp-switch.ts";
 import { LookMenu } from "./NewProjectDialog.tsx";
 import {
   findProjectIcons,
@@ -137,6 +156,13 @@ export function ProjectSettings(props: {
     const reply = await connection.ask(message);
     setSetup(reply.setup);
   };
+  /** Reads the folder again, after a skill was installed, moved or removed. */
+  const reload = () => {
+    connection
+      .ask({ type: "project.setup", requestId: newId(), projectId })
+      .then((reply) => setSetup(reply.setup))
+      .catch(() => {});
+  };
   const pick = (next: ProjectSection) => {
     setSub(null);
     setSection(next);
@@ -180,6 +206,7 @@ export function ProjectSettings(props: {
         setup={setup}
         loadError={loadError}
         change={change}
+        onReload={reload}
         onConfirm={setConfirm}
       />
     );
@@ -316,8 +343,10 @@ function NameField(props: { project: Project; onIcons: () => void }) {
         onChange={(e) => setName(e.target.value)}
         onBlur={save}
         onKeyDown={(e) => {
-          if (e.key === "Enter") e.currentTarget.blur();
-          if (e.key === "Escape") {
+          // Not while a word is being composed (Japanese, Chinese…): that Enter ends the word.
+          const does = renameKey({ key: e.key, isComposing: e.nativeEvent.isComposing });
+          if (does === "save") e.currentTarget.blur();
+          if (does === "cancel") {
             e.preventDefault();
             e.stopPropagation();
             setName(project.name);
@@ -674,6 +703,7 @@ function Memory(props: {
   setup: ProjectSetup | undefined;
   loadError: string | undefined;
   change: Change;
+  onReload: () => void;
   onConfirm: (confirm: Confirmation) => void;
 }) {
   const { setup, projectId, change } = props;
@@ -772,12 +802,7 @@ function Memory(props: {
       />
       <h4>Skills</h4>
       {setup ? (
-        <SkillsTab
-          setup={setup}
-          projectId={projectId}
-          change={change}
-          onConfirm={props.onConfirm}
-        />
+        <SkillsTab setup={setup} projectId={projectId} change={change} onReload={props.onReload} />
       ) : (
         <p className="snone">{waiting}</p>
       )}
@@ -802,10 +827,6 @@ const agoText = (at: number) => {
   return /^\d/.test(said) ? `il y a ${said}` : said;
 };
 
-/** Whether the server reaches this project's threads, and the scope to send to change that. */
-const inProject = (server: McpServerInfo, projectId: string) =>
-  !server.projectIds || server.projectIds.includes(projectId);
-
 function Environment(props: {
   project: Project;
   projects: Project[];
@@ -816,23 +837,33 @@ function Environment(props: {
   const { project } = props;
   const { roomy } = useScreen();
   const folder = project.path.split(/[\\/]/).filter(Boolean).pop() ?? project.path;
-  const toggle = (server: McpServerInfo, on: boolean) => {
-    const others = (server.projectIds ?? props.projects.map((p) => p.id)).filter(
-      (id) => id !== project.id,
-    );
+  const toggle = (server: McpServerInfo, on: boolean) =>
     connection.send({
       type: "mcp.setScope",
       id: server.id,
-      projectIds: on ? [...others, project.id] : others,
+      ...scopeSwitched(server, project.id, on),
       allRoles: !!server.allRoles,
     });
-  };
-  const scope = (server: McpServerInfo) =>
-    !server.projectIds
-      ? "Tous les projets"
-      : server.projectIds.length === 1 && server.projectIds[0] === project.id
+  const scope = (server: McpServerInfo) => {
+    const except = server.exceptProjectIds ?? [];
+    if (!server.projectIds) {
+      return !except.length
+        ? "Tous les projets"
+        : except.length === 1 && except[0] === project.id
+          ? "Tous sauf ce projet"
+          : `Tous sauf ${except.length} projet${except.length > 1 ? "s" : ""}`;
+    }
+    const n = server.projectIds.length;
+    return n === 0
+      ? "Aucun projet"
+      : n === 1 && server.projectIds[0] === project.id
         ? "Ce projet"
-        : `${server.projectIds.length} projets`;
+        : `${n} projet${n > 1 ? "s" : ""}`;
+  };
+  // A locked project's own servers are not shown here.
+  const servers = props.mcpServers.filter(
+    (s) => mcpReaches(s, project.id) || !lockedOnly(s, props.projects),
+  );
   return (
     <>
       {roomy && <h2>Environnement</h2>}
@@ -861,6 +892,21 @@ function Environment(props: {
         {project.git && (
           <div className="ppi">
             <span className="ppii">
+              <I n="refresh" s={16} />
+            </span>
+            <span className="ppit">Mettre à jour depuis GitHub</span>
+            <Toggle
+              on={project.autoPull !== false}
+              label="Mettre à jour depuis GitHub"
+              onChange={(on) =>
+                connection.send({ type: "project.setAutoPull", projectId: project.id, on })
+              }
+            />
+          </div>
+        )}
+        {project.git && (
+          <div className="ppi">
+            <span className="ppii">
               <I n="merge" s={16} />
             </span>
             <span className="ppit">Supprimer la branche après la fusion</span>
@@ -876,7 +922,7 @@ function Environment(props: {
       </div>
       <h4>Serveurs MCP</h4>
       <div className="ppbox">
-        {props.mcpServers.map((server) => (
+        {servers.map((server) => (
           <div className="ppi" key={server.id}>
             <span className="ppii">
               <I n="plug" s={16} />
@@ -887,7 +933,7 @@ function Environment(props: {
             </span>
             {server.enabled ? (
               <Toggle
-                on={inProject(server, project.id)}
+                on={mcpReaches(server, project.id)}
                 label={`${server.name} dans ce projet`}
                 onChange={(on) => toggle(server, on)}
               />
@@ -940,13 +986,14 @@ function Usage(props: {
     if (!props.open) return;
     let live = true;
     connection
-      .ask({ type: "artifacts.list", requestId: newId() })
+      // This project's only: the others' folders are not looked at.
+      .ask({ type: "artifacts.list", requestId: newId(), projectId: props.project.id })
       .then((reply) => live && setArtifacts(reply.artifacts))
       .catch(() => live && setArtifacts(null));
     return () => {
       live = false;
     };
-  }, [props.open]);
+  }, [props.open, props.project.id]);
   const mine = artifacts?.filter((a) => a.projectId === props.project.id);
   const done = threads.filter((t) => t.archived).length;
   const atWork = threads.filter(
@@ -1585,10 +1632,20 @@ function SkillsTab(props: {
   setup: ProjectSetup;
   projectId: string;
   change: Change;
-  onConfirm: (confirm: Confirmation) => void;
+  /** Reads the project's folder again. */
+  onReload: () => void;
 }) {
   const [editing, setEditing] = useState<{ skill?: ProjectSkill; draft: Draft } | null>(null);
+  const projects = useSyncExternalStore(connection.subscribe, connection.getState).projects;
+  const { skills: installed, error } = useInstalledSkills();
   const skills = props.setup.skills;
+  // A skill installed, moved or removed here changes the folder: it is read again, so the
+  // skill just installed can be written from here at once.
+  const reload = useRef(props.onReload);
+  reload.current = props.onReload;
+  useEffect(() => {
+    if (installed) reload.current();
+  }, [installed]);
   if (editing) {
     return (
       <Editor
@@ -1608,60 +1665,45 @@ function SkillsTab(props: {
             description: draft.description.trim(),
             body: draft.text,
           });
+          // The list of installed skills shows it too.
+          void changeSkills(() => connection.ask({ type: "skills.list", requestId: newId() }));
           setEditing(null);
         }}
         onCancel={() => setEditing(null)}
       />
     );
   }
+  // A skill of the project's own folders can be written here.
+  const editable = (s: InstalledSkill) => {
+    const own = setupSkillOf(s, props.projectId, skills);
+    if (!own) return undefined;
+    return () =>
+      setEditing({
+        skill: own,
+        draft: { name: own.name, description: own.description, text: own.body },
+      });
+  };
   return (
-    <div className="ins">
-      {skills.map((s) => (
-        <div key={s.path} className="it ro">
-          <button
-            className="mpick"
-            aria-label={`Modifier ${s.name}`}
-            onClick={() =>
-              setEditing({
-                skill: s,
-                draft: { name: s.name, description: s.description, text: s.body },
-              })
-            }
-          >
-            <span className="tx">
-              {s.name}
-              <small>{s.description}</small>
-            </span>
-          </button>
-          <button
-            className="mini"
-            aria-label={`Supprimer ${s.name}`}
-            onClick={() =>
-              props.onConfirm({
-                title: `Supprimer ${s.name} ?`,
-                text: "Son SKILL.md est retiré du projet. Les autres fichiers de son dossier restent.",
-                action: "Supprimer",
-                run: () =>
-                  props.change({
-                    type: "project.removeSkill",
-                    requestId: newId(),
-                    projectId: props.projectId,
-                    path: s.path,
-                  }),
-              })
-            }
-          >
-            Supprimer
-          </button>
-        </div>
-      ))}
-      <button
-        className="it acc"
-        onClick={() => setEditing({ draft: { name: "", description: "", text: "" } })}
-      >
-        <I n="plus" s={18} />
-        <span className="tx">Nouvelle skill</span>
-      </button>
-    </div>
+    <>
+      {error && <p className="snone">{error}</p>}
+      {installed && (
+        <SkillLists
+          skills={installed}
+          projects={projects}
+          projectId={props.projectId}
+          editable={editable}
+        />
+      )}
+      <div className="ins">
+        <InstallSkill projects={projects} installed={installed ?? []} projectId={props.projectId} />
+        <button
+          className="it acc"
+          onClick={() => setEditing({ draft: { name: "", description: "", text: "" } })}
+        >
+          <I n="edit" s={18} />
+          <span className="tx">Nouvelle skill</span>
+        </button>
+      </div>
+    </>
   );
 }

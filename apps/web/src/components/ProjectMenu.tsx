@@ -45,10 +45,13 @@ export function ProjectMenu(props: {
   const [side, setSide] = useState(false);
   /** Came back from a page of its own: the lines slide in from the left. */
   const [stepped, setStepped] = useState(false);
-  const [muted, setMuted] = useState(() => projectMuted(project.id));
+  // Read at each look: another window of this device may have changed it.
+  const muted = projectMuted(project.id);
+  const [, mutedAgain] = useState(0);
   const notifRow = useRef<HTMLButtonElement>(null);
   const side2 = useExit(side && props.open);
-  if (!props.open && (page !== "main" || side || stepped)) {
+  // Back to its first page once gone, not while it leaves: it goes as it was.
+  if (!shown.mounted && (page !== "main" || side || stepped)) {
     setPage("main");
     setSide(false);
     setStepped(false);
@@ -61,7 +64,7 @@ export function ProjectMenu(props: {
   };
   const mute = (on: boolean) => {
     setProjectMuted(project.id, on);
-    setMuted(on);
+    mutedAgain((n) => n + 1);
     // The server, which sends Web Push, must know it too.
     syncPush();
   };

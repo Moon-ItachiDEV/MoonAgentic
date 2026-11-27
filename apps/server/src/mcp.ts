@@ -1,5 +1,10 @@
 import type * as acp from "@agentclientprotocol/sdk";
-import type { McpServerInfo, McpServerInput, Thread } from "@moonagentic/protocol";
+import {
+  type McpServerInfo,
+  type McpServerInput,
+  mcpReaches,
+  type Thread,
+} from "@moonagentic/protocol";
 
 /** Reserved for MoonAgentic's internal coordinator bridge: user MCP servers cannot take it. */
 export const RESERVED_MCP_NAME = "moonagentic";
@@ -8,6 +13,8 @@ export const RESERVED_MCP_NAME = "moonagentic";
 export interface McpServerRecord extends McpServerInput {
   id: string;
   enabled: boolean;
+  /** For every project (no `projectIds`), these ones left out. */
+  exceptProjectIds?: string[];
 }
 
 const quote = (arg: string) => (/[\s"']/.test(arg) ? JSON.stringify(arg) : arg);
@@ -23,6 +30,7 @@ export function mcpInfo(server: McpServerRecord): McpServerInfo {
     target: t.type === "stdio" ? [t.command, ...t.args].map(quote).join(" ") : t.url,
     secretNames: (t.type === "stdio" ? t.env : t.headers).map((s) => s.name),
     ...(server.projectIds ? { projectIds: server.projectIds } : {}),
+    ...(server.exceptProjectIds ? { exceptProjectIds: server.exceptProjectIds } : {}),
     ...(server.allRoles ? { allRoles: true } : {}),
     ...(server.agentIds ? { agentIds: server.agentIds } : {}),
   };
@@ -40,7 +48,7 @@ export function mcpServersFor(
   const checks = !!thread.role && thread.role !== "lead" && thread.role !== "coder";
   return servers.filter(
     (s) =>
-      (!s.projectIds || s.projectIds.includes(thread.projectId)) &&
+      mcpReaches(s, thread.projectId) &&
       (!s.agentIds || s.agentIds.includes(thread.agentId)) &&
       (!checks || !!s.allRoles),
   );

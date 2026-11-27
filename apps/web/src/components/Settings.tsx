@@ -64,9 +64,10 @@ import {
   useGithubStatus,
 } from "./Connections.tsx";
 import { McpAddSheet, McpServerSheet } from "./McpSheets.tsx";
+import { SkillsSettings } from "./Skills.tsx";
 
 /** The sections, in the groups the list shows them in. */
-const GROUPS: { id: SettingsSection; label: string; icon: IconName | "half" }[][] = [
+const GROUPS: { id: SettingsSection; label: string; icon: IconName | "half" | "$" }[][] = [
   [
     { id: "general", label: "Général", icon: "gear" },
     { id: "appearance", label: "Apparence", icon: "half" },
@@ -81,6 +82,7 @@ const GROUPS: { id: SettingsSection; label: string; icon: IconName | "half" }[][
     { id: "coordinator", label: "Coordinateur", icon: "branch" },
     { id: "teams", label: "Équipes", icon: "users" },
     { id: "mcp", label: "Connexions et MCP", icon: "plug" },
+    { id: "skills", label: "Skills", icon: "$" },
   ],
   [
     { id: "remote", label: "Accès distant", icon: "wifi" },
@@ -837,6 +839,8 @@ function SectionBody(props: PageProps & GithubProps & { section: SettingsSection
     }
     case "mcp":
       return <McpPage {...props} />;
+    case "skills":
+      return <SkillsSettings projects={props.projects} />;
     case "teams":
       return <TeamPresets agents={props.agents} projectId={props.projectId} />;
     case "remote":
@@ -984,7 +988,13 @@ export function SettingsLayer(
                     onClick={() => pick(s.id)}
                   >
                     <span className="ic tile">
-                      {s.icon === "half" ? <span className="half" /> : <I n={s.icon} s={17} />}
+                      {s.icon === "half" ? (
+                        <span className="half" />
+                      ) : s.icon === "$" ? (
+                        <span className="key">$</span>
+                      ) : (
+                        <I n={s.icon} s={17} />
+                      )}
                     </span>
                     <span className="tx">{s.label}</span>
                     <span className="rt">
