@@ -8,6 +8,7 @@ import { seenAgo } from "../remote.ts";
 import { lineStatus } from "../sidebar-tree.ts";
 import type { State } from "../state.ts";
 import { Glyph, I } from "../v2/I.tsx";
+import { useKeyboardOpen } from "../v2/keyboard.ts";
 import { ProjectIcon } from "./ProjectIcon.tsx";
 
 export type TabPop = "projects" | "code" | "artifacts" | null;
@@ -21,6 +22,8 @@ export function TabBar(props: {
   onPop: (pop: TabPop) => void;
 }) {
   const { pop } = props;
+  // With the phone's keyboard up the tabs step aside (v2/keyboard.ts): they take no touch.
+  const keyboard = useKeyboardOpen();
   const waiting = props.state.requests.length > 0;
   const tab = (id: Exclude<TabPop, null>, icon: "stack" | "tcode" | "copies", label: string) => (
     <button
@@ -37,7 +40,7 @@ export function TabBar(props: {
     </button>
   );
   return (
-    <nav className="tabbar" aria-label="Sections">
+    <nav className="tabbar" aria-label="Sections" inert={keyboard}>
       <button
         className={pop ? undefined : "on"}
         aria-current={pop ? undefined : "page"}

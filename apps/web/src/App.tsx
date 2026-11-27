@@ -65,6 +65,7 @@ import type { IconName } from "./v2/sprite.ts";
 import { Ring } from "./v2/Ring.tsx";
 import { Sheet } from "./v2/Sheet.tsx";
 import { QuotaList } from "./components/Subscriptions.tsx";
+import { carry, setDockTeller } from "./v2/keyboard.ts";
 import { useScrFlags } from "./v2/scr.ts";
 import { screenClasses, useScreen } from "./v2/use-screen.ts";
 
@@ -1802,12 +1803,32 @@ function Bottom({ children }: { children: React.ReactNode }) {
     const el = box.current;
     const main = el?.parentElement;
     if (!el || !main) return;
-    const tell = () => main.style.setProperty("--cbh", `${el.offsetHeight + 12}px`);
+    // A composer changing shape says the height it will have (`data-rest`): the room is
+    // kept from the start of the move, not told again at each of its steps.
+    const morphing = () => el.querySelector<HTMLElement>(".cmp[data-rest]");
+    const room = () => {
+      const cmp = morphing();
+      const height = cmp
+        ? el.offsetHeight - cmp.offsetHeight + Number(cmp.dataset.rest)
+        : el.offsetHeight;
+      return `${height + 12}px`;
+    };
+    const tell = () => {
+      const next = room();
+      if (main.style.getPropertyValue("--cbh") !== next) main.style.setProperty("--cbh", next);
+    };
     tell();
-    const watch = new ResizeObserver(tell);
+    setDockTeller(tell);
+    const watch = new ResizeObserver(() => {
+      // What that room moves on the page (the greeting, the thread's last lines) travels with
+      // the composer instead of jumping ahead of it.
+      if (morphing() && main.style.getPropertyValue("--cbh") !== room()) carry(tell);
+      else tell();
+    });
     watch.observe(el);
     return () => {
       watch.disconnect();
+      setDockTeller(undefined);
       main.style.removeProperty("--cbh");
     };
   }, []);
