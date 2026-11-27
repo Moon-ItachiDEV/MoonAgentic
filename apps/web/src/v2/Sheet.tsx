@@ -23,6 +23,8 @@ export function Sheet(props: {
   onBack?: () => void;
   /** What names it for a screen reader, when it has no title. */
   label?: string;
+  /** Without a title, it still shows the phone's handle and is pulled down by it. */
+  grab?: boolean;
   /** Takes the whole height (a list to read, a form), not only what it holds. */
   tall?: boolean;
   /** On the right of the header, facing the button that closes. */
@@ -143,6 +145,17 @@ export function Sheet(props: {
               </button>
             )}
             {props.right}
+          </div>
+        )}
+        {props.title === undefined && props.grab && (
+          <div
+            className="sgrab"
+            onPointerDown={down}
+            onPointerMove={move}
+            onPointerUp={up}
+            onPointerCancel={up}
+          >
+            <div className="grab" />
           </div>
         )}
         <Fragment key={opening.current.count}>{open ? props.children : last.current}</Fragment>

@@ -1,0 +1,504 @@
+/* Mise à jour de l'app, ce que toute page charge : les ressorts, la lune et l'annonce dans la
+   capsule en haut à droite. La carte a sa feuille (maj-carte.css), chargée avec elle. */
+:root {
+  /* Ressorts : un rebond franc, un plus sage */
+  --spr-b: linear(
+    0,
+    0.043,
+    0.154,
+    0.305,
+    0.473,
+    0.639,
+    0.791,
+    0.92,
+    1.02,
+    1.092,
+    1.138,
+    1.159,
+    1.162,
+    1.151,
+    1.13,
+    1.104,
+    1.077,
+    1.05,
+    1.026,
+    1.007,
+    0.992,
+    0.982,
+    0.976,
+    0.974,
+    0.974,
+    0.976,
+    0.98,
+    0.985,
+    0.989,
+    0.993,
+    0.997,
+    1,
+    1.002,
+    1.003,
+    1.004,
+    1.004,
+    1
+  );
+  --spr-s: linear(
+    0,
+    0.04,
+    0.136,
+    0.263,
+    0.399,
+    0.531,
+    0.652,
+    0.755,
+    0.84,
+    0.907,
+    0.957,
+    0.992,
+    1.016,
+    1.03,
+    1.037,
+    1.038,
+    1.037,
+    1.033,
+    1.028,
+    1.023,
+    1.018,
+    1.013,
+    1.009,
+    1.006,
+    1.003,
+    1.002,
+    1,
+    0.999,
+    0.999,
+    0.999,
+    1
+  );
+  --upd-glow: 26%;
+  --upd-sheen: rgba(255, 255, 255, 0.75);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --upd-glow: 30%;
+    --upd-sheen: rgba(255, 255, 255, 0.13);
+  }
+}
+:root[data-theme="dark"] {
+  --upd-glow: 30%;
+  --upd-sheen: rgba(255, 255, 255, 0.13);
+}
+
+/* La lune : sa part éclairée suit le téléchargement, un satellite tourne pendant
+   l'installation, une couronne pendant que l'app est éteinte */
+.umoon {
+  width: 52px;
+  height: 52px;
+  flex: none;
+  overflow: visible;
+}
+.umoon .disc {
+  fill: color-mix(in srgb, var(--fg) 7%, transparent);
+}
+.umoon .lit {
+  fill: color-mix(in srgb, var(--fg) 26%, transparent);
+  transition: fill 500ms var(--out);
+}
+.umoon.live .lit {
+  fill: var(--accent);
+}
+.umoon .crat {
+  fill: var(--fg);
+  opacity: 0.09;
+}
+.umoon .orb {
+  fill: none;
+  stroke: var(--faint);
+  stroke-width: 1.3;
+  opacity: 0.45;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 0;
+}
+.umoon .orb.front {
+  opacity: 0.7;
+}
+.umoon .sat {
+  fill: var(--accent);
+  opacity: 0;
+  transition: opacity 400ms var(--out);
+}
+.umoon .sat circle {
+  offset-path: path("M-22 0A22 7 0 0 0 22 0A22 7 0 0 0 -22 0");
+  offset-rotate: 0deg;
+}
+.umoon.spin .sat {
+  opacity: 1;
+}
+.umoon.spin .sat circle {
+  animation: usat 2.6s cubic-bezier(0.4, 0.1, 0.6, 0.9) infinite;
+}
+@keyframes usat {
+  0% {
+    offset-distance: 0%;
+    opacity: 1;
+  }
+  50% {
+    offset-distance: 50%;
+    opacity: 1;
+  }
+  75% {
+    offset-distance: 75%;
+    opacity: 0.12;
+  }
+  100% {
+    offset-distance: 100%;
+    opacity: 1;
+  }
+}
+.umoon.spin .orb.front {
+  stroke: var(--accent);
+  opacity: 0.55;
+}
+.umoon .cor {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.1;
+  opacity: 0;
+  transition: opacity 700ms var(--out);
+}
+.umoon.back .cor {
+  opacity: 0.95;
+  animation: ucor 2.4s ease-in-out infinite;
+  filter: drop-shadow(0 0 2.5px var(--accent));
+}
+@keyframes ucor {
+  50% {
+    opacity: 0.45;
+  }
+}
+.umoon.back .sat {
+  opacity: 0;
+}
+.umoon .ok {
+  opacity: 0;
+  transform: scale(0.5);
+  transform-origin: 36px 35px;
+  transition:
+    opacity 300ms var(--out) 200ms,
+    transform 620ms var(--spr-b) 200ms;
+}
+.umoon.done .ok {
+  opacity: 1;
+  transform: none;
+}
+.umoon .ok circle {
+  fill: var(--ok);
+  stroke: var(--sheet);
+  stroke-width: 2.4;
+}
+.scr.roomy .upw .umoon .ok circle {
+  stroke: var(--win);
+}
+.umoon .ok path {
+  fill: none;
+  stroke: #fff;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  transition: stroke-dashoffset 380ms var(--out) 320ms;
+}
+.umoon.done .ok path {
+  stroke-dashoffset: 0;
+}
+.upw .umw {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+}
+/* ───────── L'annonce dans la capsule du haut ───────── */
+.tru {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: end;
+}
+.gcap.upc {
+  position: relative;
+  overflow: hidden;
+  transform-origin: 100% 50%;
+}
+.gcap.upc.solo {
+  padding: 0 2px;
+}
+.gcap.upc > button {
+  overflow: hidden;
+  flex: none;
+}
+.gcap.upc > button:not(.useg) {
+  transition:
+    width 560ms var(--spr-s),
+    opacity 240ms var(--out),
+    filter 300ms var(--out),
+    transform 560ms var(--spr-s);
+}
+.gcap.upc.ann > button:not(.useg) {
+  width: 0;
+  opacity: 0;
+  filter: blur(6px);
+  transform: scale(0.55);
+}
+/* Au repli, ce qu'elle tenait revient l'un après l'autre */
+.gcap.upc.fold > button:not(.useg) {
+  transition:
+    width 620ms var(--spr-s),
+    opacity 300ms var(--out) 120ms,
+    filter 360ms var(--out) 120ms,
+    transform 700ms var(--spr-b) 100ms;
+}
+.gcap.upc.fold > button:not(.useg):last-child {
+  transition-delay: 0ms, 190ms, 190ms, 170ms;
+}
+.gcap .useg {
+  position: relative;
+  width: 40px;
+  padding: 0 0 0 8px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  transition:
+    width 760ms var(--spr-b),
+    padding 500ms var(--out);
+}
+.gcap.upc.ann .useg {
+  padding-left: 10px;
+}
+.gcap.upc.fold .useg {
+  transition:
+    width 620ms var(--spr-s),
+    padding 400ms var(--out);
+}
+.gcap.upc.still,
+.gcap.upc.still * {
+  transition: none !important;
+  animation: none !important;
+}
+.gcap .useg .um2 {
+  position: relative;
+  width: 24px;
+  height: 24px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.gcap .useg .umoon {
+  width: 24px;
+  height: 24px;
+}
+.gcap .useg .umoon .orb,
+.gcap .useg .umoon .cor {
+  display: none;
+}
+/* La première fois, la petite lune se lève dans la capsule */
+.gcap .useg.rise {
+  animation: usegin 700ms var(--spr-s) both;
+}
+@keyframes usegin {
+  from {
+    width: 0;
+    padding-left: 0;
+    opacity: 0;
+  }
+}
+.gcap .useg.rise .um2 {
+  animation: urise 1000ms var(--spr-b) 120ms both;
+}
+@keyframes urise {
+  from {
+    transform: translateY(26px) scale(0.5);
+    filter: blur(4px);
+    opacity: 0;
+  }
+}
+.gcap.upc.ann .um2 .umoon {
+  animation: umpulse 1000ms var(--spr-b);
+}
+@keyframes umpulse {
+  28% {
+    transform: scale(1.25) rotate(-10deg);
+  }
+}
+/* De petites étoiles autour de la lune pendant l'annonce */
+.gcap .useg .tw {
+  position: absolute;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0;
+  pointer-events: none;
+}
+.gcap .useg .tw:nth-of-type(1) {
+  left: -3px;
+  top: 1px;
+}
+.gcap .useg .tw:nth-of-type(2) {
+  right: -4px;
+  top: -1px;
+  width: 2px;
+  height: 2px;
+}
+.gcap .useg .tw:nth-of-type(3) {
+  right: -2px;
+  bottom: 0;
+  width: 2.5px;
+  height: 2.5px;
+}
+.gcap.upc.ann .tw {
+  animation: utw 1.5s ease-in-out infinite;
+  animation-delay: 500ms;
+}
+.gcap.upc.ann .tw:nth-of-type(2) {
+  animation-delay: 880ms;
+}
+.gcap.upc.ann .tw:nth-of-type(3) {
+  animation-delay: 1260ms;
+}
+@keyframes utw {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  45% {
+    opacity: 0.9;
+    transform: scale(1);
+  }
+}
+/* Le point : quelque chose de neuf, pas encore regardé */
+.gcap .useg .nd {
+  position: absolute;
+  left: 25px;
+  top: 9px;
+  width: 7px;
+  height: 7px;
+  border-radius: 4px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--surface);
+  opacity: 0;
+  transform: scale(0.3);
+  transition:
+    opacity 240ms var(--out),
+    transform 520ms var(--spr-b);
+}
+.gcap .useg.ready .nd,
+.gcap .useg.fail .nd {
+  opacity: 1;
+  transform: none;
+  transition-delay: 420ms;
+}
+.gcap .useg.rise .nd {
+  transition-delay: 900ms;
+}
+.gcap .useg.fail .nd {
+  background: var(--err);
+}
+.gcap.upc.ann .useg .nd {
+  opacity: 0;
+  transform: scale(0.3);
+  transition-delay: 0ms;
+}
+.gcap .useg.wait .umoon {
+  opacity: 0.5;
+}
+.gcap .useg .ul {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  white-space: nowrap;
+  line-height: 1.16;
+  pointer-events: none;
+  color: var(--fg);
+}
+.gcap .useg .ul b {
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  white-space: pre;
+}
+.gcap .useg .ul small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.gcap .useg.fail .ul small {
+  color: var(--err-tx);
+}
+/* Les mots arrivent un par un */
+.gcap .useg .ul b span,
+.gcap .useg .ul small {
+  display: inline-block;
+  opacity: 0;
+  filter: blur(6px);
+  transform: translateY(7px);
+  transition:
+    opacity 160ms var(--out),
+    filter 200ms var(--out),
+    transform 200ms var(--out);
+}
+.gcap.upc.ann .useg .ul b span {
+  opacity: 1;
+  filter: none;
+  transform: none;
+  transition:
+    opacity 380ms var(--out) calc(130ms + var(--i) * 80ms),
+    filter 460ms var(--out) calc(130ms + var(--i) * 80ms),
+    transform 700ms var(--spr-b) calc(130ms + var(--i) * 80ms);
+}
+.gcap.upc.ann .useg .ul small {
+  opacity: 1;
+  filter: none;
+  transform: none;
+  transition:
+    opacity 380ms var(--out) 340ms,
+    filter 460ms var(--out) 340ms,
+    transform 700ms var(--spr-b) 340ms;
+}
+/* Un reflet de lune traverse la capsule */
+.gcap.upc::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(105deg, transparent 38%, var(--upd-sheen) 50%, transparent 62%);
+  transform: translateX(-110%);
+  opacity: 0;
+  pointer-events: none;
+}
+.gcap.upc.ann::after {
+  animation: usheen 1200ms var(--out) 420ms;
+}
+@keyframes usheen {
+  0% {
+    transform: translateX(-110%);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(110%);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .umoon,
+  .umoon *,
+  .gcap.upc,
+  .gcap.upc *,
+  .gcap.upc::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    transition-delay: 0ms !important;
+  }
+}

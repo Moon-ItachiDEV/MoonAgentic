@@ -23,7 +23,8 @@ import {
 import { Composer as PlainComposer } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
-import { AppUpdateHostOnDemand, UpdateBar } from "./components/UpdateBar.tsx";
+import { AppUpdateHostOnDemand } from "./components/UpdateBar.tsx";
+import { TopRight, UpdCap } from "./components/UpdateCapsule.tsx";
 import { Home } from "./components/Home.tsx";
 import { LockSheet } from "./components/LockSheet.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
@@ -867,27 +868,29 @@ export function App() {
         )}
       </div>
       <span />
-      <div className="phr">
-        {thread.workspace && !thread.archived && !looseThread && (
+      <TopRight>
+        <div className="phr">
+          {thread.workspace && !thread.archived && !looseThread && (
+            <button
+              className="gb press"
+              aria-label={reviewCount ? `Modifications : ${reviewCount} à revoir` : "Modifications"}
+              aria-pressed={reviewing}
+              onClick={() => setReviewOpen(!reviewing)}
+            >
+              <I n="code" s={19} />
+            </button>
+          )}
           <button
+            ref={threadGear}
             className="gb press"
-            aria-label={reviewCount ? `Modifications : ${reviewCount} à revoir` : "Modifications"}
-            aria-pressed={reviewing}
-            onClick={() => setReviewOpen(!reviewing)}
+            aria-label={looseThread ? "Paramètres de la discussion" : "Paramètres du fil"}
+            aria-expanded={threadSetup}
+            onClick={() => setThreadSetup(true)}
           >
-            <I n="code" s={19} />
+            <I n="gear" s={19} />
           </button>
-        )}
-        <button
-          ref={threadGear}
-          className="gb press"
-          aria-label={looseThread ? "Paramètres de la discussion" : "Paramètres du fil"}
-          aria-expanded={threadSetup}
-          onClick={() => setThreadSetup(true)}
-        >
-          <I n="gear" s={19} />
-        </button>
-      </div>
+        </div>
+      </TopRight>
     </>
   ) : (
     <span />
@@ -919,7 +922,7 @@ export function App() {
             <span>{routeProject.name}</span>
           </div>
         </div>
-        <span />
+        <TopRight />
       </>
     ) : route.name === "project" ? (
       screen.roomy ? (
@@ -951,31 +954,31 @@ export function App() {
               ))}
           </div>
           <span />
-          {routeProject && !routeProject.locked ? (
-            <div className="phr">
-              <button
-                className="gb press"
-                aria-label="Paramètres du projet"
-                aria-expanded={projectSetup}
-                onClick={() => setProjectSetup(true)}
-              >
-                <I n="gear" s={19} />
-              </button>
-              <button
-                className={`gb press${split ? " pside" : ""}`}
-                aria-label="Fils du projet"
-                aria-expanded={split ? pane.open : undefined}
-                onClick={() =>
-                  split ? setPane((was) => ({ open: !was.open })) : setProjectTab("overview")
-                }
-              >
-                <I n={split ? "side" : "list"} s={20} />
-                {waitingCount(state.threads, routeProject.id) > 0 && <span className="dot" />}
-              </button>
-            </div>
-          ) : (
-            <span />
-          )}
+          <TopRight>
+            {routeProject && !routeProject.locked && (
+              <div className="phr">
+                <button
+                  className="gb press"
+                  aria-label="Paramètres du projet"
+                  aria-expanded={projectSetup}
+                  onClick={() => setProjectSetup(true)}
+                >
+                  <I n="gear" s={19} />
+                </button>
+                <button
+                  className={`gb press${split ? " pside" : ""}`}
+                  aria-label="Fils du projet"
+                  aria-expanded={split ? pane.open : undefined}
+                  onClick={() =>
+                    split ? setPane((was) => ({ open: !was.open })) : setProjectTab("overview")
+                  }
+                >
+                  <I n={split ? "side" : "list"} s={20} />
+                  {waitingCount(state.threads, routeProject.id) > 0 && <span className="dot" />}
+                </button>
+              </div>
+            )}
+          </TopRight>
         </>
       ) : (
         <>
@@ -1010,18 +1013,18 @@ export function App() {
                 </>
               ))}
           </div>
-          {routeProject && !routeProject.locked ? (
-            <button
-              className="gb glass press"
-              aria-label="Vue d'ensemble"
-              onClick={() => setProjectTab("overview")}
-            >
-              <I n="list" s={21} />
-              {waitingCount(state.threads, routeProject.id) > 0 && <span className="dot" />}
-            </button>
-          ) : (
-            <span />
-          )}
+          <TopRight>
+            {routeProject && !routeProject.locked && (
+              <button
+                className="gb glass press"
+                aria-label="Vue d'ensemble"
+                onClick={() => setProjectTab("overview")}
+              >
+                <I n="list" s={21} />
+                {waitingCount(state.threads, routeProject.id) > 0 && <span className="dot" />}
+              </button>
+            )}
+          </TopRight>
         </>
       )
     ) : route.name === "thread" ? (
@@ -1098,7 +1101,7 @@ export function App() {
               <I n="check" s={20} />
             </button>
           ) : thread ? (
-            <div className="gcap glass">
+            <UpdCap>
               {thread.workspace && !thread.archived && !looseThread && (
                 <button
                   aria-label={
@@ -1133,9 +1136,9 @@ export function App() {
                   <I n="dots" s={20} />
                 </button>
               )}
-            </div>
+            </UpdCap>
           ) : (
-            <span />
+            <TopRight />
           )}
         </>
       )
@@ -1147,26 +1150,23 @@ export function App() {
             <b>{pageTitle}</b>
           </div>
         </div>
-        <span />
+        <TopRight />
       </>
     );
 
   /** What is written from, floating at the bottom of the page: none where there is nothing to write to. */
   const bottom =
-    route.name === "home" ? (
-      <>
-        <UpdateBar />
-        {composerFor(undefined)}
-      </>
-    ) : route.name === "thread" ? (
-      thread && composerFor(thread)
-    ) : route.name === "project" &&
-      // A locked project's page has nothing to write to until the code is given; under
-      // « Fils » the coordinator's conversation is out of sight, and so is its composer.
-      !routeProject?.locked &&
-      (projectTab === "chat" || split) ? (
-      coordinatorDock
-    ) : null;
+    route.name === "home"
+      ? composerFor(undefined)
+      : route.name === "thread"
+        ? thread && composerFor(thread)
+        : route.name === "project" &&
+            // A locked project's page has nothing to write to until the code is given; under
+            // « Fils » the coordinator's conversation is out of sight, and so is its composer.
+            !routeProject?.locked &&
+            (projectTab === "chat" || split)
+          ? coordinatorDock
+          : null;
 
   return (
     <div
@@ -1809,9 +1809,9 @@ function HomeCapsule(props: {
   const quotas = useQuotas();
   const worst = tightest(quotas.find((q) => q.agentId === props.agentId));
   const name = props.agents.find((a) => a.id === props.agentId)?.name;
-  if (!worst && !props.onLock) return <span />;
+  if (!worst && !props.onLock) return <TopRight />;
   return (
-    <div className="gcap glass">
+    <UpdCap>
       {worst && (
         <button
           aria-label={`Utilisation de ${name ?? "l'agent"} : ${Math.round(worst.usedPercent)} %`}
@@ -1829,7 +1829,7 @@ function HomeCapsule(props: {
           <I n="lock" s={20} />
         </button>
       )}
-    </div>
+    </UpdCap>
   );
 }
 
