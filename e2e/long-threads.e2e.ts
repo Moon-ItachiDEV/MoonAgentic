@@ -82,6 +82,28 @@ function seedLongThread(): void {
     });
   }
   store.db.exec("COMMIT");
+  // An answer of 300 KB, as an agent gives a whole report.
+  store.addThread({
+    id: "gros-fil",
+    projectId: "long",
+    title: "Gros rapport",
+    agentId: "demo",
+    status: "idle",
+    permissionMode: "full",
+    createdAt: 2,
+    updatedAt: 2,
+  });
+  store.putItem("gros-fil", { id: "q", kind: "user", text: "Fais le rapport complet", at: 1 });
+  const parts = Array.from(
+    { length: 3_000 },
+    (_, n) => `Paragraphe ${n + 1} du rapport, avec \`fichier${n}.ts\` et **un point** à voir.`,
+  );
+  store.putItem("gros-fil", {
+    id: "a",
+    kind: "agent",
+    text: [...parts, "Fin du rapport : tout est vert."].join("\n\n"),
+    at: 2,
+  });
   store.close();
 }
 
@@ -190,7 +212,8 @@ describe("longs fils", () => {
 
     // The last 60 turns came, 120 messages of 600, and the page is at its end.
     await question(TURNS).waitFor();
-    expect(await messages()).toBe(120);
+    // Drawn from its end, the rest above a moment after.
+    await expect.poll(messages).toBe(120);
     expect(got("items")).toHaveLength(1);
     expect(got("items")[0]).toContain("Question 241 ?");
     expect(got("items")[0]).not.toContain("Question 240 ?");
@@ -265,6 +288,14 @@ describe("longs fils", () => {
     await page.getByText("Long fil").first().click();
     await page.getByText(`Question ${TURNS} ?`, { exact: true }).waitFor();
     const messages = () => page.locator(".feed > .item").count();
+    // Drawn from its end: what is above has all come once the count holds.
+    await expect
+      .poll(async () => {
+        const now = await messages();
+        await page.waitForTimeout(300);
+        return now === (await messages());
+      })
+      .toBe(true);
     const shown = await messages();
 
     const composer = page.getByRole("combobox", { name: "Message" });
@@ -283,5 +314,27 @@ describe("longs fils", () => {
     expect(sent.some((m) => m.type === "thread.read")).toBe(false);
     expect(await messages()).toBe(shown);
     await page.close();
+  });
+  it("draws the start of a very long answer, the rest when asked, and leaves what is far out of sight unpainted (audit N35)", async () => {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+    await page.goto(url);
+    await page.goto(new URL("/t/gros-fil", url).href);
+    const answer = page.locator('.feed [data-item="a"]');
+    await answer.getByText("Paragraphe 1 du rapport", { exact: false }).first().waitFor();
+    const more = answer.getByRole("button", { name: "Afficher la suite" });
+    await more.waitFor();
+    expect(await answer.getByText("Fin du rapport").count()).toBe(0);
+    // Some 3,000 paragraphs would be 3,000 nodes and more: a few hundred are drawn.
+    expect(await answer.evaluate((el) => el.querySelectorAll("*").length)).toBeLessThan(2_000);
+    expect(await answer.evaluate((el) => getComputedStyle(el).contentVisibility)).toBe("auto");
+    await more.tap();
+    await answer.getByText("Fin du rapport : tout est vert.").waitFor();
+    expect(await more.count()).toBe(0);
+    await context.close();
   });
 });

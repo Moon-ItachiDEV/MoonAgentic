@@ -503,9 +503,23 @@ export function decode(data: string): { message: ClientMessage } | { error: Serv
     error: {
       type: "error",
       ...(typeof requestId === "string" && requestId.length <= 200 ? { requestId } : {}),
-      message: "Message invalide.",
+      message: tooLong(parsed.error.issues) ?? "Message invalide.",
     },
   };
+}
+
+/** A text over the limit says what the limit is, so the user knows what to cut. */
+function tooLong(
+  issues: readonly { code: string; path: PropertyKey[]; origin?: string; maximum?: unknown }[],
+): string | undefined {
+  for (const issue of issues) {
+    if (issue.code !== "too_big" || issue.origin !== "string" || issue.path.at(-1) !== "text") {
+      continue;
+    }
+    const most = Number(issue.maximum).toLocaleString("fr-FR").replace(/\s/g, " ");
+    return `Message trop long : ${most} caractères au plus.`;
+  }
+  return undefined;
 }
 
 /**

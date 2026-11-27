@@ -68,7 +68,7 @@
 }
 .pl-tl-head .w {
   top: 26px;
-  font-size: 10.5px;
+  font-size: 11px;
   line-height: 1;
   color: var(--faint);
 }
@@ -81,7 +81,7 @@
   border-radius: 999px;
   background: var(--accent);
   color: var(--surface);
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
   display: flex;
   align-items: center;

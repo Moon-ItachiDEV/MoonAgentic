@@ -11,6 +11,7 @@ import {
   type Wait,
 } from "../decision.ts";
 import { I } from "../v2/I.tsx";
+import { touchScreen } from "../touch.ts";
 
 const PREV = <I n="left" s={16} />;
 const NEXT = <I n="right" s={16} />;
@@ -29,6 +30,42 @@ const useNarrow = () =>
     },
     () => narrowQuery?.matches ?? false,
   );
+
+/** Below this, with the keyboard up, the card leaves no room for the conversation. */
+const CRAMPED_HEIGHT = 700;
+
+/**
+ * True while the user types outside the card on a touch screen whose keyboard leaves little
+ * of it: the card then folds to one line, so the conversation stays in sight (audit N27).
+ */
+function useCramped(): boolean {
+  const [cramped, setCramped] = useState(false);
+  useEffect(() => {
+    if (!touchScreen()) return;
+    const look = () => {
+      const typing = document.activeElement?.matches(
+        "textarea, input:not([type=checkbox], [type=radio], [type=button], [type=submit])",
+      );
+      const inCard = document.activeElement?.closest(".dc");
+      const height = window.visualViewport?.height ?? innerHeight;
+      setCramped(!!typing && !inCard && height < CRAMPED_HEIGHT);
+    };
+    // A field left for another is told before the other has the focus.
+    const later = () => requestAnimationFrame(look);
+    look();
+    document.addEventListener("focusin", look);
+    document.addEventListener("focusout", later);
+    window.visualViewport?.addEventListener("resize", look);
+    addEventListener("resize", look);
+    return () => {
+      document.removeEventListener("focusin", look);
+      document.removeEventListener("focusout", later);
+      window.visualViewport?.removeEventListener("resize", look);
+      removeEventListener("resize", look);
+    };
+  }, []);
+  return cramped;
+}
 
 /** Where the user is in one wait: the row lit, and the answers given so far. */
 interface Progress {
@@ -102,8 +139,18 @@ export function DecisionCard(props: {
   const [current, setCurrent] = useState<string>();
   // « Plus tard » folds the requests that wait now: one that comes after opens the card again.
   const [later, setLater] = useState<ReadonlySet<string>>(new Set());
-  const folded = waits.length > 0 && waits.every((w) => later.has(w.id));
-  const setFolded = (on: boolean) => setLater(new Set(on ? waits.map((w) => w.id) : []));
+  const cramped = useCramped();
+  // Reopened while the keyboard is up, it stays open until the keyboard goes.
+  const [roomAnyway, setRoomAnyway] = useState(false);
+  useEffect(() => {
+    if (!cramped) setRoomAnyway(false);
+  }, [cramped]);
+  const squeezed = cramped && !roomAnyway;
+  const folded = waits.length > 0 && (squeezed || waits.every((w) => later.has(w.id)));
+  const setFolded = (on: boolean) => {
+    setLater(new Set(on ? waits.map((w) => w.id) : []));
+    if (!on && squeezed) setRoomAnyway(true);
+  };
   const [progress, setProgress] = useState<Progress>(fresh(""));
   const narrow = useNarrow();
   const card = useRef<HTMLElement>(null);

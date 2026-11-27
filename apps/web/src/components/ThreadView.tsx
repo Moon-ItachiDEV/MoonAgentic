@@ -30,6 +30,7 @@ import { imageBlob } from "../attachments.ts";
 import { fillComposer, openComposerPicker } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
 import { openQuestion as askedQuestion } from "../decision.ts";
+import { answerHead } from "../long-answer.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { useLiveText } from "../live-text.ts";
 import type { Held } from "../state.ts";
@@ -71,6 +72,12 @@ const WORKING_VERB: Partial<Record<GlyphKind, string>> = {
 
 /** How far above what is shown the earlier messages start to be fetched, in pixels. */
 const EARLIER_MARGIN = 600;
+/**
+ * A long thread is drawn from its end: this many of its blocks at first, then the ones above
+ * them a part at a time, so its end shows at once on a phone (audit N35).
+ */
+const FIRST_DRAWN = 24;
+const DRAWN_STEP = 24;
 
 interface ThreadViewProps {
   /** Shown above the conversation, such as a coordinator's ways to start. */
@@ -156,6 +163,32 @@ function Conversation({
   const earlier = (items && held?.earlier) || 0;
   const [paging, setPaging] = useState<{ threadId: string; state: "busy" | "failed" }>();
   const pagingState = paging?.threadId === thread.id ? paging.state : undefined;
+  const team = isTeamThread(thread);
+  const blocks = items ? (team ? teamFeed(thread, items, earlier > 0) : activityFeed(items)) : [];
+  // How many blocks at the start are not drawn yet, while the thread is drawn from its end.
+  const [drawing, setDrawing] = useState<{ threadId: string; hidden: number }>();
+  let hidden = drawing?.threadId === thread.id ? drawing.hidden : undefined;
+  if (items && hidden === undefined) {
+    hidden = Math.max(0, blocks.length - FIRST_DRAWN);
+    setDrawing({ threadId: thread.id, hidden });
+  }
+  const undrawn = hidden ?? 0;
+  useEffect(() => {
+    if (!undrawn) return;
+    const threadId = thread.id;
+    const more = () =>
+      setDrawing((now) =>
+        now?.threadId === threadId
+          ? { threadId, hidden: Math.max(0, now.hidden - DRAWN_STEP) }
+          : now,
+      );
+    if (typeof requestIdleCallback === "function") {
+      const asked = requestIdleCallback(more, { timeout: 200 });
+      return () => cancelIdleCallback(asked);
+    }
+    const timer = setTimeout(more, 30);
+    return () => clearTimeout(timer);
+  }, [undrawn, thread.id]);
   /** The thread a page is being asked for: one at a time. */
   const asking = useRef<string>(undefined);
   /** Asks for the page before what is held, back to the item `reach` if given. */
@@ -207,10 +240,13 @@ function Conversation({
         : undefined;
   };
   const firstShown = useRef(first);
+  const drawnFrom = useRef(undrawn);
   useLayoutEffect(() => {
     const grewUp = first !== undefined && firstShown.current !== undefined;
-    const before = grewUp && first < firstShown.current!;
+    // What is held grew above, or more of it is drawn above.
+    const before = (grewUp && first < firstShown.current!) || undrawn < drawnFrom.current;
     firstShown.current = first;
+    drawnFrom.current = undrawn;
     const scroller = view.current;
     const was = anchor.current;
     if (before && scroller && was) {
@@ -218,9 +254,9 @@ function Conversation({
       if (was.el.isConnected) scroller.scrollTop += was.el.getBoundingClientRect().top - was.top;
       else scroller.scrollTop = scroller.scrollHeight - was.fromEnd;
     }
-    if (earlier) markAnchor();
+    if (earlier || undrawn) markAnchor();
     else anchor.current = undefined;
-  }, [first, earlier, thread.id]);
+  }, [first, earlier, thread.id, undrawn]);
   // Going up near the first message shown fetches the page before it.
   const more = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -255,6 +291,12 @@ function Conversation({
       if (!itemId) return;
       if (items.some((i) => i.id === itemId)) {
         seeking.current = undefined;
+        // Held but not drawn yet: all of it is drawn, then it is shown.
+        if (undrawn) {
+          revealing.current = itemId;
+          setDrawing({ threadId: thread.id, hidden: 0 });
+          return;
+        }
         if (itemId !== reveal) {
           revealing.current = itemId;
           setReveal(itemId);
@@ -282,7 +324,7 @@ function Conversation({
     // Restarts the highlight when the same message is picked twice.
     void el.offsetWidth;
     el.classList.add("flash");
-  }, [items, earlier, thread.id, focusTick, reveal]);
+  }, [items, earlier, thread.id, focusTick, reveal, undrawn]);
 
   // Keep following new output while the reader is at the bottom: at once for a new message
   // or another thread...
@@ -329,8 +371,6 @@ function Conversation({
   const newLabel = newAt === undefined ? "Nouveau" : newMarkLabel(newAt);
   const relayed = items ? relayedAnswers(items) : new Set<number>();
 
-  const team = isTeamThread(thread);
-  const blocks = items ? (team ? teamFeed(thread, items, earlier > 0) : activityFeed(items)) : [];
   // What the agent does now, from the last item shown (plan mode switches are not shown).
   const lastItem = items?.findLast((i) => !isPlanModeSwitch(i));
   const lastGlyph = activityGlyph(lastItem);
@@ -440,6 +480,7 @@ function Conversation({
         )}
         <div ref={top} className="feed-top" />
         {blocks.map((block, b) => {
+          if (b < undrawn) return null;
           if (block.kind === "detail") {
             const live =
               working && b === blocks.length - 1 && block.indices.some((i) => i > lastUser);
@@ -811,9 +852,21 @@ function Who({ agent, thread }: { agent: AgentInfo | undefined; thread: Thread }
 function Answer({ text, live, threadId }: { text: string; live: boolean; threadId: string }) {
   const shown = useLiveText(text, live);
   const { text: body, verdict } = useMemo(() => splitVerdict(shown), [shown]);
+  // A very long answer is drawn in part until asked for whole; one seen being written stays
+  // whole, so it does not shrink under the reader's eyes when it ends.
+  const [whole, setWhole] = useState(live);
+  const { head, left } = useMemo(
+    () => (whole || live ? { head: body, left: 0 } : answerHead(body)),
+    [body, whole, live],
+  );
   return (
     <>
-      <Markdown text={body} threadId={threadId} />
+      <Markdown text={head} threadId={threadId} />
+      {left > 0 && (
+        <button className="evt more-text" onClick={() => setWhole(true)}>
+          Afficher la suite
+        </button>
+      )}
       {verdict && <VerdictCard verdict={verdict} />}
     </>
   );
@@ -1002,9 +1055,6 @@ const TOOL_KIND: Record<string, string> = {
   think: "réflexion",
 };
 
-/** What waits for the user is answered on the card above the composer: here, a reminder. */
-const WAITING = <span className="st w">Attend ta réponse</span>;
-
 /**
  * A question the agent asks with a tool of its own (Antigravity's `ask_question`, Claude
  * Code's AskUserQuestion). The feed keeps what was asked and answered; the answer itself
@@ -1012,15 +1062,16 @@ const WAITING = <span className="st w">Attend ta réponse</span>;
  */
 function QuestionCard({ item, open }: { item: Extract<Item, { kind: "tool" }>; open: boolean }) {
   const questions = item.questions ?? [];
+  // Still asked, it is on the decision card alone: twice, they took half a phone (audit M2).
+  if (open) return null;
   return (
-    <div className={`ask${open ? "" : " done"}`}>
+    <div className="ask done">
       {questions.map((q, i) => (
         <div key={i} className="aq">
           <b>{q.question}</b>
           {item.form === "answered" && item.answers?.[i] && <span>{item.answers[i]}</span>}
         </div>
       ))}
-      {open && WAITING}
       {item.form === "cancelled" && <span className="st">Sans réponse</span>}
     </div>
   );
@@ -1188,12 +1239,6 @@ function PermissionCard({ item }: { item: Extract<Item, { kind: "permission" }> 
       </div>
     );
   }
-  return (
-    <div className="ask">
-      <div className="aq">
-        <b>{item.title}</b>
-      </div>
-      {WAITING}
-    </div>
-  );
+  // Still asked, it is on the decision card alone (audit M2).
+  return null;
 }

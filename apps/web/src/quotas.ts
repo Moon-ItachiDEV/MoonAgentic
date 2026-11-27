@@ -102,7 +102,7 @@ export function quotaWarning(
   agentName: string,
   now = Date.now(),
   model?: (string | undefined)[],
-): { key: string; level: "warn" | "full"; text: string; when?: string } | undefined {
+): { key: string; level: "warn" | "full"; text: string; brief: string; when?: string } | undefined {
   const worst = tightest(quota, model);
   if (!worst) return undefined;
   const level = quotaLevel(worst.usedPercent);
@@ -117,6 +117,11 @@ export function quotaWarning(
       level === "full"
         ? `${agentName} a atteint sa limite (${worst.short}).`
         : `${agentName} a utilisé ${formatPercent(worst.usedPercent)} (${worst.short}).`,
+    // On a phone the line holds no more than this (audit N29).
+    brief:
+      level === "full"
+        ? `Limite atteinte (${worst.short})`
+        : `${formatPercent(worst.usedPercent)} (${worst.short})`,
     ...(when ? { when } : {}),
   };
 }

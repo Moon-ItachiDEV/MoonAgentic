@@ -121,7 +121,7 @@
 }
 .scr.roomy .sheet .gl2 {
   padding: 0 0 6px;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
 }
 .scr.roomy .sheet .seg {
@@ -133,7 +133,7 @@
 .scr.roomy .sheet .seg button {
   height: 36px;
   border-radius: 9px;
-  font-size: 14.5px;
+  font-size: 15px;
 }
 .scr.roomy .sheet .mga,
 .scr.roomy .sheet .rva {
@@ -147,7 +147,7 @@
   height: 38px;
   padding: 0 20px;
   border-radius: 19px;
-  font-size: 14.5px;
+  font-size: 15px;
 }
 .scr.roomy .sheet .b2.ink[disabled] {
   opacity: 0.28;
@@ -157,11 +157,11 @@
 }
 html[data-dev="desk"] .scr.roomy .sheet .it {
   min-height: 40px;
-  font-size: 14.5px;
+  font-size: 15px;
   font-weight: 400;
 }
 html[data-dev="desk"] .scr.roomy .sheet .it small {
-  font-size: 12.5px;
+  font-size: 13px;
 }
 html[data-dev="desk"] .scr.roomy .sheet .seg button {
   height: 32px;
@@ -208,7 +208,7 @@ html[data-dev="desk"] .scr.roomy .sheet .fvc svg {
   height: 38px;
   border-radius: 19px;
   padding: 0 20px;
-  font-size: 14.5px;
+  font-size: 15px;
 }
 html[data-dev="desk"] .scr.roomy .sheet .cfa .b2 {
   height: 34px;
@@ -280,7 +280,7 @@ html[data-dev="desk"] .scr.roomy .sheet .cfa .b2 {
   text-overflow: ellipsis;
 }
 .ddm button small {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   margin-left: 6px;
 }
@@ -296,7 +296,7 @@ html[data-dev="desk"] .scr.roomy .sheet .cfa .b2 {
 }
 html[data-dev="touch"] .ddm button {
   height: 42px;
-  font-size: 15.5px;
+  font-size: 16px;
 }
 .it[aria-expanded="true"] {
   background: var(--win-hover);
@@ -308,7 +308,7 @@ html[data-dev="touch"] .ddm button {
   margin: 2px 4px 4px auto;
   padding: 0 10px;
   border-radius: 13px;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--fg2);
   background: var(--win-seg);
@@ -334,7 +334,7 @@ html[data-dev="touch"] .ddm button {
   padding-top: 12px;
 }
 .npd .npfl {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 500;
   margin: 0 0 8px;
 }
@@ -371,7 +371,7 @@ html[data-dev="touch"] .ddm button {
   border: 0;
   background: none;
   outline: 0;
-  font: 400 14.5px var(--sans);
+  font: 400 15px var(--sans);
   color: var(--fg);
 }
 .npd .npnm input::placeholder {
@@ -390,7 +390,7 @@ html[data-dev="touch"] .ddm button {
   padding: 6px 8px 4px 10px;
 }
 .npd .npbh b {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 500;
 }
 .npd .npt {
@@ -407,7 +407,7 @@ html[data-dev="touch"] .ddm button {
   height: 26px;
   padding: 0 10px;
   border-radius: 7px;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 .npd .npt button[aria-pressed="true"] {
@@ -482,7 +482,7 @@ html[data-dev="touch"] .npd .npl {
 .npd .npbox .it .tx small {
   display: inline;
   margin-left: 8px;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .npd .npbox .fvs {
   position: sticky;
@@ -572,7 +572,7 @@ html[data-dev="touch"] .npd .npft .b2 {
   border: 0;
   background: none;
   outline: 0;
-  font: 400 13.5px var(--sans);
+  font: 400 14px var(--sans);
   color: var(--fg);
 }
 .icp .ipk {
@@ -603,7 +603,7 @@ html[data-dev="touch"] .npd .npft .b2 {
   height: 30px;
   padding: 0 12px;
   border-radius: 15px;
-  font-size: 13.5px;
+  font-size: 14px;
   background: var(--win-seg);
 }
 .scr.roomy .shd .ok2 {

@@ -202,7 +202,9 @@ describe("decision card", () => {
     const page = await open({ width: 390, height: 800 }, true);
     await page.goto(thread);
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
-    await say(page, "/apercus");
+    // On a touch screen Enter goes to a new line: the button sends.
+    await composer(page).fill("/apercus");
+    await page.getByRole("button", { name: "Envoyer", exact: true }).tap();
     await card(page)
       .getByRole("heading", { name: "Quelle forme pour l'appel d'envoi ?" })
       .waitFor();

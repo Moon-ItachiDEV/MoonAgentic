@@ -1,4 +1,8 @@
 /* Jetons et bases du redesign v2 (maquette mobile v72). */
+/*
+ * Type scale, checked by type-scale.test.ts: 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 28,
+ * 30 and 40 px, in weights 400, 500 and 600 only (audit M4).
+ */
 :root {
   --bg: #fafafa;
   --side: #f2f2f4;

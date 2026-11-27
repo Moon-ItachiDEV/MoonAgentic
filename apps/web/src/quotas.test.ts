@@ -57,6 +57,12 @@ describe("quotas", () => {
     expect(quotaWarning(claude, "Claude Code", Date.now(), ["fable"])).toMatchObject({
       level: "full",
       text: "Claude Code a atteint sa limite (semaine Fable).",
+      brief: "Limite atteinte (semaine Fable)",
+    });
+    expect(quotaWarning(claude, "Claude Code", Date.now(), ["opus"])).toMatchObject({
+      level: "warn",
+      text: `Claude Code a utilisé ${formatPercent(85)} (semaine Opus).`,
+      brief: `${formatPercent(85)} (semaine Opus)`,
     });
   });
 

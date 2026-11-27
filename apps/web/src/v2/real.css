@@ -551,7 +551,7 @@ html[data-dev="touch"] .vxh {
 
 /* Settings › Accès à distance. */
 .it .tx.mono {
-  font: 400 13.5px var(--mono);
+  font: 400 14px var(--mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1338,7 +1338,7 @@ button.dcm {
   height: 34px;
   padding: 0 14px;
   border-radius: 17px;
-  font-size: 13.5px;
+  font-size: 14px;
 }
 .drj {
   margin-top: 18px;
@@ -1379,7 +1379,7 @@ html[data-dev="desk"] .prk .stp a:hover {
   width: 100%;
 }
 .prm.prw small {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -1590,7 +1590,7 @@ textarea.rni.mcps {
   min-height: 84px;
   padding: 12px 14px;
   margin-bottom: 22px;
-  font: 400 13.5px/1.5 var(--mono);
+  font: 400 14px/1.5 var(--mono);
   resize: vertical;
   display: block;
 }
@@ -1625,7 +1625,7 @@ a.it {
   height: 36px;
   padding: 0 14px;
   border-radius: 18px;
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
@@ -1958,4 +1958,63 @@ html[data-dev="touch"] .mpr .st {
 }
 .mpf .mseg {
   margin: 2px 4px 6px;
+}
+
+/*
+ * On a touch screen every control takes at least 44 × 44 px under the finger, drawn as before:
+ * an invisible margin around those drawn smaller (audit M3).
+ */
+html[data-dev="touch"]
+  :is(
+    .cb,
+    .gbt,
+    .updb .b2,
+    .later,
+    .dc .src,
+    .uact,
+    .det > button,
+    .dsec,
+    .gz,
+    .accp,
+    .mini,
+    .tog,
+    .kba,
+    .ovtabs button,
+    .pi2,
+    .mdl,
+    .seg button
+  ) {
+  position: relative;
+}
+html[data-dev="touch"]
+  :is(
+    .cb,
+    .gbt,
+    .updb .b2,
+    .later,
+    .dc .src,
+    .uact,
+    .det > button,
+    .dsec,
+    .gz,
+    .accp,
+    .mini,
+    .tog,
+    .kba,
+    .ovtabs button,
+    .pi2,
+    .mdl,
+    .seg button
+  )::before {
+  content: "";
+  position: absolute;
+  inset: min(0px, calc(50% - 23px));
+}
+/* The field itself: 4 px more of it under the finger, the composer as tall as before. */
+html[data-dev="touch"] .cmp textarea {
+  height: 44px;
+  padding-block: 11px;
+}
+html[data-dev="touch"] .cmp:not(.open) .line {
+  padding-block: 4px;
 }

@@ -15,7 +15,7 @@
   color: var(--fg);
 }
 .brand b {
-  font-weight: 650;
+  font-weight: 600;
 }
 .scr {
   position: fixed;
@@ -339,42 +339,6 @@
 }
 .row .chev {
   color: var(--faint);
-}
-.ab {
-  width: 22px;
-  height: 22px;
-  border-radius: 7px;
-  display: grid;
-  place-items: center;
-  font-size: 10px;
-  font-weight: 650;
-  color: #fff;
-  flex: none;
-  letter-spacing: -0.02em;
-}
-.ab.cl {
-  background: var(--a-claude);
-}
-.ab.ag {
-  background: var(--a-ag);
-}
-.ab.he {
-  background: var(--a-hermes);
-}
-.ab.cx {
-  background: var(--a-codex);
-}
-.ab.sm {
-  width: 16px;
-  height: 16px;
-  border-radius: 5px;
-  font-size: 8.5px;
-}
-.ab.lg {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  font-size: 14px;
 }
 .quota {
   display: flex;
@@ -2341,7 +2305,7 @@
   border-radius: 16px;
 }
 .fv .tx small {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 .fv.drag {
@@ -2448,7 +2412,7 @@
   width: 34px;
   height: 30px;
   border-radius: 15px;
-  font-size: 19px;
+  font-size: 20px;
   color: var(--fg);
 }
 .stpr button:active {
@@ -4397,7 +4361,7 @@
   display: grid;
   place-items: center;
   font-size: 17px;
-  font-weight: 650;
+  font-weight: 600;
   color: var(--fg);
   background: radial-gradient(120% 120% at 50% 0%, var(--orb-hi) 0%, var(--orb-lo) 100%);
   box-shadow:
@@ -4563,7 +4527,7 @@
   align-items: center;
   gap: 12px;
   min-height: 42px;
-  font-size: 14.5px;
+  font-size: 15px;
   color: var(--fg);
   animation: evin 260ms var(--out);
 }
@@ -4585,7 +4549,7 @@
   text-overflow: ellipsis;
 }
 .tmmi .s {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   white-space: nowrap;
   flex: none;
@@ -4682,7 +4646,7 @@
 .sgr small {
   flex: 1;
   min-width: 0;
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -5202,7 +5166,7 @@
 }
 .dfc {
   display: grid;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .dl {
   display: grid;
@@ -5446,7 +5410,7 @@
   color: var(--muted);
 }
 .npm {
-  font-size: 13.5px;
+  font-size: 14px;
 }
 .fva .ic {
   color: var(--muted);
@@ -5567,7 +5531,7 @@
   padding: 12px 0;
 }
 .npk {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   margin-right: 10px;
   flex: none;
@@ -5700,7 +5664,7 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--faint);
   white-space: nowrap;
   overflow: hidden;
@@ -5712,7 +5676,7 @@
 }
 .rmh .mono {
   margin-left: auto;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -5721,7 +5685,7 @@
   border-radius: 12px;
   overflow: hidden;
   background: var(--sunken);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .rmd .dl {
   min-height: 24px;
@@ -5730,7 +5694,7 @@
 }
 .rmc p {
   margin: 0;
-  font-size: 14.5px;
+  font-size: 15px;
   line-height: 1.45;
   color: var(--fg);
 }
@@ -5770,7 +5734,7 @@
 .rvph span {
   position: relative;
   padding-top: 9px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--faint);
   text-align: center;
 }
@@ -5853,7 +5817,7 @@
   gap: 3px;
 }
 .rvf .t {
-  font-size: 14.5px;
+  font-size: 15px;
   line-height: 1.35;
   font-weight: 500;
 }
@@ -5866,13 +5830,13 @@
   overflow: hidden;
 }
 .rvf .m .mono {
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .rvf .w {
-  font-size: 13.5px;
+  font-size: 14px;
   line-height: 1.45;
   color: var(--fg2);
   margin-top: 4px;
@@ -6088,7 +6052,7 @@
   color: var(--faint);
 }
 .brr .tx .mono {
-  font-size: 14.5px;
+  font-size: 15px;
   display: block;
   white-space: nowrap;
   overflow: hidden;
@@ -6109,7 +6073,7 @@
 }
 .cfw h3 {
   margin: 6px 0 0;
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.01em;
   text-align: center;
@@ -6143,7 +6107,7 @@
 }
 .updb .tx small {
   display: block;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 400;
   color: var(--muted);
 }
@@ -6196,7 +6160,7 @@
   gap: 4px;
   padding: 8px 0 7px;
   border-radius: 14px;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--muted);
 }
 .msh button span {
@@ -6779,7 +6743,7 @@
 .tmo {
   margin-left: auto;
   margin-right: 10px;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 .tmc {

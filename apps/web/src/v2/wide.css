@@ -430,11 +430,11 @@ html[data-dev="desk"] .scr.wide .dfoot .me svg {
 }
 html[data-dev="desk"] .scr.wide .dfoot .newd {
   height: 40px;
-  font-size: 14.5px;
+  font-size: 15px;
 }
 html[data-dev="desk"] .scr.wide #sroot .it {
   min-height: 40px;
-  font-size: 14.5px;
+  font-size: 15px;
   border-radius: 12px;
 }
 html[data-dev="desk"] .scr.wide #sroot .lt {
@@ -456,7 +456,7 @@ html[data-dev="desk"] .scr.wide #sroot .lt {
 html:not([data-dev="desk"]) .scr.wide .ni,
 html:not([data-dev="desk"]) .scr.wide .pj {
   height: 42px;
-  font-size: 15.5px;
+  font-size: 16px;
   gap: 12px;
   border-radius: 12px;
 }
@@ -472,7 +472,7 @@ html:not([data-dev="desk"]) .scr.wide .rc {
 }
 html:not([data-dev="desk"]) .scr.wide .dsec {
   height: 30px;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 /* Menus flottants sur iPad et ordinateur : lignes plus fines, comme sur le téléphone en plus petit */
