@@ -99,6 +99,11 @@ html:not([data-dev="desk"]) .scr.roomy .phb {
   height: 40px;
   font-size: 16px;
 }
+/* Ce qu'on fait venir à l'écran ne se cache ni sous l'en-tête ni sous ce qui flotte en bas */
+.scr.roomy .view {
+  scroll-padding-top: 56px;
+  scroll-padding-bottom: var(--cbh, 120px);
+}
 .gb.pside svg {
   transform: scaleX(-1);
 }
