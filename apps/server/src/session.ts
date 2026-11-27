@@ -261,6 +261,8 @@ async function answered<T>(request: Promise<T>, ms = SETTING_TIMEOUT_MS): Promis
 
 const STDERR_TAIL = 4000;
 const KILL_GRACE_MS = 3000;
+/** The longest the output of an agent that exited is still read, for its last words. */
+const OUTPUT_AFTER_EXIT_MS = 1000;
 /** ACP's "Authentication required" error code. */
 export const AUTH_REQUIRED = -32000;
 
@@ -711,13 +713,20 @@ export class AgentSession {
     const exit = new Promise<void>((resolve) => {
       child.once("exit", (code) => {
         exited = true;
-        flushStderr();
-        connection.close();
-        const failed = code !== 0 && !stopping;
-        handlers.onExit(
-          failed ? stderr.trim() || `L'agent s'est arrêté (code ${code}).` : undefined,
-        );
-        resolve();
+        // Node can tell the exit before the agent's output is read to its end: what it said
+        // last is still on its way (« Je » shown of « Je commence le travail… », on Windows).
+        // The connection ends by itself once that output does, every message delivered; a
+        // process left behind that holds the output is not waited for long.
+        const read = new Promise<void>((done) => setTimeout(done, OUTPUT_AFTER_EXIT_MS).unref());
+        void Promise.race([connection.closed, read]).then(() => {
+          flushStderr();
+          connection.close();
+          const failed = code !== 0 && !stopping;
+          handlers.onExit(
+            failed ? stderr.trim() || `L'agent s'est arrêté (code ${code}).` : undefined,
+          );
+          resolve();
+        });
       });
     });
     /** Stops the agent and resolves once its process is gone, forcing it after a grace period. */
