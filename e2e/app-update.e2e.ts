@@ -414,6 +414,13 @@ describe("the update's capsule and card, once reviewed", () => {
       });
     await finger("touchStart");
     for (let dy = 20; dy <= 220; dy += 20) await finger("touchMove", dy);
+    // The finger rests before it lets go. Lifted while still moving, it flicks: Chromium starts
+    // a fling, and a tap within about half a second only stops that fling, with no click, so
+    // the capsule would not open the card again (each Windows run, 2026-11-27).
+    await page.waitForTimeout(150);
+    await finger("touchMove", 220);
+    await page.waitForTimeout(50);
+    await finger("touchMove", 220);
     await finger("touchEnd");
     await expect.poll(() => card.count()).toBe(0);
 
