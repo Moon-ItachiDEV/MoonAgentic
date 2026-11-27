@@ -191,7 +191,8 @@ describe("the project's menu", () => {
       .first()
       .click();
     await composer.fill("Bonjour");
-    await composer.press("Enter");
+    // On a touch screen Enter goes to a new line (audit N32): the button sends.
+    await page.getByRole("button", { name: "Envoyer", exact: true }).tap();
     await page.getByRole("button", { name: "Paramètres de la discussion" }).click();
     await page.getByRole("menuitem", { name: /^Accès/ }).click();
     await page.getByRole("menuitemradio", { name: /^Demande d'abord/ }).waitFor();
