@@ -22,6 +22,13 @@ afterEach(async () => {
 
 /** Longer than this, a screen waits on the server for something it can see. */
 const STALL_MS = 200;
+/** Waited before a second try on a CI runner, twice as long before the third, and so on. */
+const SPREAD_MS = process.env.CI ? 15_000 : 0;
+/**
+ * Five tries, of up to fifty seconds each on a slow runner, and on a CI runner the waits
+ * between them.
+ */
+const TRIES_MS = 400_000;
 
 /**
  * The longest time a 5 ms timer could not run while `work` went on, and the slowest calls to
@@ -82,6 +89,13 @@ async function longestStall<T>(
  * files running on the same machine (216 ms once on a CI runner, 324 ms once for a review
  * on Windows, 202 ms three times in a row for a deletion and 51 ms for a search, both on a
  * Windows runner, where they stay far under) does not.
+ *
+ * On a CI runner the tries are spread out. A Windows runner can hold single calls a quarter
+ * of a second for a minute and more, while the work itself goes at its usual pace: five tries
+ * one after the other, 68 s in all, each had one (240 ms for a deletion, 2026-11-27), and on
+ * two other runs of that evening the fourth try and the fifth were the first under the limit.
+ * Each wait is longer than the one before: the last try starts two minutes and a half later
+ * than it did.
  */
 async function leastStall<S, R>(
   setup: () => S | Promise<S>,
@@ -90,6 +104,7 @@ async function leastStall<S, R>(
 ): Promise<S & { stall: number; result: R; slowest: string }> {
   let best: (S & { stall: number; result: R; slowest: string }) | undefined;
   for (let tries = 0; tries < 5 && !(best && best.stall < limit); tries++) {
+    if (tries) await new Promise((resolve) => setTimeout(resolve, tries * SPREAD_MS));
     const state = await setup();
     const { result, stall, slowest } = await longestStall(() => work(state));
     if (!best || stall < best.stall) best = { ...state, stall, result, slowest };
@@ -155,7 +170,7 @@ class Screen implements Client {
   }
 }
 
-describe("removing a project or a long thread (N5)", { timeout: 120_000 }, () => {
+describe("removing a project or a long thread (N5)", { timeout: TRIES_MS }, () => {
   it("removes 100 threads among 2 000 without holding the server", async () => {
     const { store, stall, slowest } = await leastStall(
       async () => {
@@ -189,7 +204,7 @@ describe("removing a project or a long thread (N5)", { timeout: 120_000 }, () =>
   });
 });
 
-describe("searching a big database (N23)", { timeout: 120_000 }, () => {
+describe("searching a big database (N23)", { timeout: TRIES_MS }, () => {
   it("answers two letters with nothing, without reading every message", async () => {
     const { screen, stall, slowest } = await leastStall(
       () => ({ ...seeded(300, 0, 50), screen: new Screen() }),
@@ -261,7 +276,7 @@ function worktreeWithBigFile(mb: number) {
   return { dir, base };
 }
 
-describe("reviewing a very big text file (N6)", { timeout: 120_000 }, () => {
+describe("reviewing a very big text file (N6)", { timeout: TRIES_MS }, () => {
   it("shows the start of a 50 MB file, marked cut, without holding the server", async () => {
     const { result, stall, slowest } = await leastStall(
       () => worktreeWithBigFile(50),
