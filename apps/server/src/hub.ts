@@ -3,7 +3,8 @@ import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactKind, artifactUrl, findArtifacts } from "./artifacts.ts";
 import { ArtifactRefused, fileSlug, listed, PublishedArtifacts } from "./published-artifacts.ts";
 import type { AgentProcessRef, DiagnosticsMonitor } from "./diagnostics.ts";
-import { generatedFolders, madeImages, resolveThreadFile } from "./thread-files.ts";
+import { generatedFolders, insideAny, madeImages, resolveThreadFile } from "./thread-files.ts";
+import { type PageAsset, pageAssets } from "./page-assets.ts";
 import { labelStart, plainLabel } from "./labels.ts";
 import { COMPUTER_ACTOR, ProjectLocks } from "./locks.ts";
 import {
@@ -1801,13 +1802,13 @@ export class Hub {
             message.artifactId,
             message.version,
           );
-          if (!found) throw new Error("Cet artefact, ou cette version, n'existe plus.");
+          if (!found) throw new Error("Cet artefact n'existe plus.");
           const { ticket, expiresAt } = this.artifactLinks.issuePublished(
             thread.id,
             {
               entry: found.file,
               name: found.version.name,
-              ...(found.version.source ? { source: found.version.source } : {}),
+              ...(found.assets ? { assets: found.assets } : {}),
             },
             client.deviceId,
           );
@@ -4108,7 +4109,7 @@ export class Hub {
         this.quotaRetryAt.delete(threadId);
         this.coordinators.forget(threadId);
         this.attachments.forget(threadId);
-        void this.published.forget(threadId);
+        await this.published.forget(threadId);
         this.store.deleteThread(threadId);
         this.broadcast({ type: "threadRemoved", threadId });
         this.planner.threadDeleted(threadId);
@@ -6002,7 +6003,7 @@ export class Hub {
       if (!published.has(thread.id)) continue;
       for (const artifact of await this.published.list(thread.id)) {
         artifacts.push(listed(artifact, thread));
-        for (const v of artifact.versions) if (v.source) from.add(path.join(v.source, v.name));
+        for (const v of artifact.versions) if (v.from) from.add(v.from);
       }
     }
     return { artifacts, from };
@@ -6023,7 +6024,8 @@ export class Hub {
     let ext: string;
     let name: string;
     let bytes: Buffer;
-    let source: string | undefined;
+    let from: string | undefined;
+    let assets: PageAsset[] = [];
     if (input.content !== undefined) {
       const svg = /^\s*(?:<\?xml[^>]*>\s*)?(?:<!--[\s\S]*?-->\s*)*<svg[\s>]/i.test(input.content);
       kind = svg ? "image" : "html";
@@ -6033,16 +6035,13 @@ export class Hub {
     } else {
       const folder = this.folderOf(thread.projectId, thread.id);
       const project = this.store.getProject(thread.projectId);
-      const found = await resolveThreadFile(
-        input.path ?? "",
+      const roots = [
         folder,
-        [
-          folder,
-          ...(project ? [project.path] : []),
-          ...(thread.workspace?.path ? [thread.workspace.path] : []),
-        ],
-        generatedFolders(this.homeDir),
-      );
+        ...(project ? [project.path] : []),
+        ...(thread.workspace?.path ? [thread.workspace.path] : []),
+      ];
+      const generated = generatedFolders(this.homeDir);
+      const found = await resolveThreadFile(input.path ?? "", folder, roots, generated);
       const foundKind = found && artifactKind(found.file);
       if (!found || !foundKind) {
         throw new Error(
@@ -6053,7 +6052,12 @@ export class Hub {
       ext = path.extname(found.file).toLowerCase();
       name = found.name;
       bytes = await readFile(found.file);
-      source = path.dirname(found.file);
+      from = found.file;
+      // What a page loads beside it, kept with it; an image or a PDF loads nothing. Not from
+      // a folder agents share between projects: what sits there may be another project's.
+      if (kind === "html" && !(await insideAny(found.file, generated))) {
+        assets = await pageAssets(found.file, path.dirname(found.file));
+      }
     }
     let published;
     try {
@@ -6065,7 +6069,8 @@ export class Hub {
         ext,
         name,
         bytes,
-        source,
+        from,
+        assets,
       });
     } catch (error) {
       if (error instanceof ArtifactRefused) throw new Error(error.message);

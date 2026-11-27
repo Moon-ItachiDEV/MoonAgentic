@@ -143,8 +143,8 @@ export interface PublishedEntry {
   entry: string;
   /** The name it is served as. */
   name: string;
-  /** The folder of the file it was published from, if it came from one. */
-  source?: string;
+  /** The folder of what the page loads beside it, kept with its version. */
+  assets?: string;
 }
 
 /** The address of a file under a link: each part of its path encoded on its own. */
@@ -167,7 +167,7 @@ export class ArtifactLinks {
       file?: string;
       /**
        * For an address of a published artifact: its version's file under the name it is
-       * served as, and what sits beside the file it was published from.
+       * served as, and what it loads beside it, kept with that version.
        */
       published?: PublishedEntry;
     }
@@ -276,9 +276,9 @@ export class ArtifactLinks {
     if (!type) return undefined;
     if (link.published) {
       if (!this.shown(link.threadId)) return undefined;
-      const { entry, name, source } = link.published;
-      // Its own file under its name; beside it, what sits beside the file it came from.
-      const real = file === name ? entry : source ? resolveInside(source, file) : undefined;
+      const { entry, name, assets } = link.published;
+      // Its own file under its name; beside it, only what it loaded when it was published.
+      const real = file === name ? entry : assets ? resolveInside(assets, file) : undefined;
       if (!real || !servedType(real)) return undefined;
       try {
         const found = await stat(real);

@@ -22,7 +22,11 @@ export function ArtifactCard({
   item: Extract<Item, { kind: "artifact" }>;
   thread: Thread;
 }) {
-  const online = useSyncExternalStore(connection.subscribe, connection.getState).status === "open";
+  // Only whether it is online: the whole state changes with every chunk of an answer.
+  const online = useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().status === "open",
+  );
   const [open, setOpen] = useState(false);
   // Loaded the first time it is opened, then kept: it closes with its own motion.
   const [loaded, setLoaded] = useState(false);

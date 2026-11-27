@@ -494,6 +494,8 @@ export function artifactHeaders(type: string, libraries = false): Record<string,
     "cache-control": "no-store",
     // No resource policy: the page, sandboxed, has an origin of its own, and loads its images
     // and styles from here. Only its address, secret and short-lived, lets them be read.
+    // Its modules and fonts are asked for in CORS mode, from that opaque origin (`null`).
+    "access-control-allow-origin": "*",
     "content-disposition": "inline",
   };
 }

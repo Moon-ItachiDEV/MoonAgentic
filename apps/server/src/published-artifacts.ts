@@ -4,7 +4,17 @@
 // One folder per thread and per artifact: what is known of it, and one file per version.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import {
   type Artifact,
@@ -13,6 +23,7 @@ import {
   MAX_ARTIFACT_VERSIONS,
   type Thread,
 } from "@moonagentic/protocol";
+import type { PageAsset } from "./page-assets.ts";
 
 /** An id this store makes, or a thread's: nothing that leads out of its folder. */
 const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/;
@@ -23,12 +34,13 @@ export interface StoredVersion extends ArtifactVersion {
   file: string;
   /** The name it is served as, so the page's relative links find what sits beside it. */
   name: string;
+  /** The real path of the file it was published from; none for a page the agent gave as text. */
+  from?: string;
   /**
-   * The folder of the file it was published from, inside the thread's folders: what the page
-   * loads beside it (styles, scripts, images) is served from there. None for a page whose
-   * text the agent gave: it holds all it needs.
+   * Its folder here (`3`) holding what the page loads beside it, as it was when published:
+   * only that is served beside it. None when it loads nothing of its own folder.
    */
-  source?: string;
+  assets?: string;
 }
 
 export interface PublishedArtifact {
@@ -40,6 +52,9 @@ export interface PublishedArtifact {
   /** The oldest first, at most `MAX_ARTIFACT_VERSIONS`. */
   versions: StoredVersion[];
 }
+
+/** Most artifacts one thread keeps: past this, it publishes new versions of them. */
+export const MAX_ARTIFACTS_PER_THREAD = 100;
 
 export class ArtifactRefused extends Error {}
 
@@ -116,7 +131,9 @@ export class PublishedArtifacts {
     ext: string;
     name: string;
     bytes: Buffer;
-    source?: string | undefined;
+    from?: string | undefined;
+    /** What the page loads beside it, copied with its version. */
+    assets?: PageAsset[] | undefined;
     now?: number;
   }): Promise<{ artifact: PublishedArtifact; version: StoredVersion }> {
     const id = input.id ?? randomUUID();
@@ -141,6 +158,14 @@ export class PublishedArtifacts {
     const folder = this.artifactDir(input.threadId, id);
     const before = input.id ? await this.get(input.threadId, input.id) : undefined;
     if (input.id && !before) throw new ArtifactRefused("Cet artefact n'existe pas dans ce fil.");
+    if (!input.id) {
+      const kept = await readdir(this.threadDir(input.threadId)).catch(() => []);
+      if (kept.length >= MAX_ARTIFACTS_PER_THREAD) {
+        throw new ArtifactRefused(
+          `Ce fil garde déjà ${MAX_ARTIFACTS_PER_THREAD} artefacts : publie plutôt une nouvelle version de l'un d'eux, avec son artifact_id.`,
+        );
+      }
+    }
     if (before && before.kind !== input.kind) {
       throw new ArtifactRefused(
         "Cet artefact n'est pas du même type : publie ce fichier comme un nouvel artefact.",
@@ -154,7 +179,8 @@ export class PublishedArtifacts {
       size: input.bytes.length,
       file: `${n}${input.ext}`,
       name: input.name,
-      ...(input.source ? { source: input.source } : {}),
+      ...(input.from ? { from: input.from } : {}),
+      ...(input.assets?.length ? { assets: String(n) } : {}),
     };
     const all = [...(before?.versions ?? []), version];
     const dropped = all.slice(0, Math.max(0, all.length - MAX_ARTIFACT_VERSIONS));
@@ -167,29 +193,56 @@ export class PublishedArtifacts {
       versions: all.slice(dropped.length),
     };
     await mkdir(folder, { recursive: true });
+    if (version.assets) {
+      const dir = path.join(folder, version.assets);
+      // Left by a stop in the middle of an earlier try of the same version.
+      await rm(dir, { recursive: true, force: true });
+      for (const asset of input.assets ?? []) {
+        const to = path.join(dir, ...asset.rel.split("/"));
+        await mkdir(path.dirname(to), { recursive: true });
+        await copyFile(asset.file, to);
+      }
+    }
     await writeFile(path.join(folder, version.file), input.bytes);
     // What is known of it is replaced whole: a stop in between leaves the version before.
     const about = path.join(folder, "artifact.json");
     const next = `${about}.${randomUUID()}.tmp`;
     await writeFile(next, JSON.stringify(artifact));
     await rename(next, about);
-    for (const old of dropped) await unlink(path.join(folder, old.file)).catch(() => undefined);
+    for (const old of dropped) {
+      await unlink(path.join(folder, old.file)).catch(() => undefined);
+      if (old.assets && /^\d+$/.test(old.assets)) {
+        await rm(path.join(folder, old.assets), { recursive: true, force: true }).catch(() => {});
+      }
+    }
     return { artifact, version };
   }
 
-  /** Where one version's file is, when it is still kept. */
+  /**
+   * Where one version's file is, and the folder of what it loads beside it. A version no
+   * longer kept (a card made before the oldest were dropped) gives the latest.
+   */
   async versionFile(
     threadId: string,
     id: string,
     n?: number,
-  ): Promise<{ artifact: PublishedArtifact; version: StoredVersion; file: string } | undefined> {
+  ): Promise<
+    | { artifact: PublishedArtifact; version: StoredVersion; file: string; assets?: string }
+    | undefined
+  > {
     const artifact = await this.get(threadId, id);
     if (!artifact) return undefined;
-    const version = n === undefined ? latest(artifact) : artifact.versions.find((v) => v.n === n);
-    if (!version || !/^\d+\.[a-z0-9]+$/.test(version.file)) return undefined;
-    const file = path.join(this.artifactDir(threadId, id), version.file);
+    const version =
+      (n === undefined ? undefined : artifact.versions.find((v) => v.n === n)) ?? latest(artifact);
+    if (!/^\d+\.[a-z0-9]+$/.test(version.file)) return undefined;
+    const folder = this.artifactDir(threadId, id);
+    const file = path.join(folder, version.file);
+    const assets =
+      version.assets && /^\d+$/.test(version.assets)
+        ? { assets: path.join(folder, version.assets) }
+        : {};
     try {
-      return (await stat(file)).isFile() ? { artifact, version, file } : undefined;
+      return (await stat(file)).isFile() ? { artifact, version, file, ...assets } : undefined;
     } catch {
       return undefined;
     }
