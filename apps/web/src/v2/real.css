@@ -2027,3 +2027,61 @@ html[data-dev="touch"] .kbtabs {
   padding-block: 6px;
   margin-block: -6px;
 }
+
+/* The phone's keyboard (v2/keyboard.ts): the page starts where the system pushed it (`--kbt`)
+   and says what the keyboard hides (`--kb`, negative when the page was pushed past it). The
+   composer rests on the keyboard and the home page's tabs step aside. These are the places at
+   rest: what moves is carried from one to the other by springs, not by transitions. */
+.scr {
+  top: var(--kbt, 0px);
+  bottom: min(0px, var(--kb, 0px));
+}
+html[data-kb] #bottom {
+  bottom: max(0px, var(--kb, 0px));
+  padding-bottom: 8px;
+}
+html[data-kb] .scr .bfade {
+  bottom: max(0px, var(--kb, 0px));
+}
+html[data-kb] .view .end {
+  height: calc(var(--cbh, 120px) + max(0px, var(--kb, 0px)));
+}
+html[data-kb] .tabbar {
+  pointer-events: none;
+}
+/* Pushed past the keyboard, the page ends where the tabs' bar is and the composer rests there:
+   the bar stands behind it, without its background, until the composer is back above it. */
+html[data-kb-tabs] .tabbar {
+  z-index: 19;
+  background: none;
+}
+html[data-kb] .tabbar button {
+  opacity: 0;
+  transform: translateY(10px) scale(0.9);
+  filter: blur(6px);
+}
+html[data-kb] #gstack {
+  transform: scale(0.96);
+}
+/* The composer between its two shapes (v2/composer-morph.ts). Its layout has the new shape at
+   once: what makes it look taller or shorter meanwhile is the margin of its empty first child,
+   so its height is never held and it grows from its base. While it folds, its bar stays over
+   the line it leaves. */
+.cmp > .cgrow {
+  display: none;
+}
+.cmp[data-morph] {
+  position: relative;
+  overflow: hidden;
+}
+.cmp[data-morph] > .cgrow {
+  display: block;
+  flex: none;
+  height: 0;
+}
+.cmp[data-morph="fold"] .bar {
+  display: flex;
+  position: absolute;
+  inset: auto 0 0;
+  pointer-events: none;
+}
