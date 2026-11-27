@@ -436,6 +436,8 @@ export class Hub {
   private readonly forceStopMs: number;
   /** Steps under way (a push, a step back, a hand-off), awaited before the server stops. */
   private readonly steps = new Set<Promise<unknown>>();
+  /** The earlier run of a planned task going to the archive, by the thread of the next run. */
+  private readonly puttingAway = new Map<string, Promise<void>>();
   /** Identifies the running turn, so a turn's plan and text stay separate from the next. */
   private readonly turnIds = new Map<string, string>();
   private readonly pendingPermissions = new Map<
@@ -692,8 +694,8 @@ export class Hub {
     });
     this.quotas.start(options.quotaEveryMs);
     this.scheduler = new Scheduler(store, (m) => this.broadcast(m), {
-      start: (s) =>
-        this.createThread({
+      start: (s) => {
+        const id = this.createThread({
           projectId: s.projectId,
           agentId: s.agentId,
           permissionMode: s.permissionMode,
@@ -702,7 +704,12 @@ export class Hub {
           title: s.title,
           text: s.text,
           auto: true,
-        }),
+        });
+        // Only the latest run stays in sight: each one would otherwise leave its thread and
+        // its copy of the repository, 720 a month for an hourly task.
+        if (s.lastThreadId) this.putAwayRun(s.lastThreadId, id);
+        return id;
+      },
       running: (id) => this.turns.has(id),
     });
     this.teams = new Teams({
@@ -3222,6 +3229,31 @@ export class Hub {
   /** Resolves once the thread has no turn running. */
   async whenIdle(threadId: string): Promise<void> {
     await this.turns.get(threadId);
+    await this.puttingAway.get(threadId);
+  }
+
+  /**
+   * Puts the earlier run of a planned task in the archive, its folder given back to the disk,
+   * once the next run has started: it can be taken out again, its files with it. Not one
+   * still at work, pinned, or already put away.
+   */
+  private putAwayRun(earlier: string, next: string): void {
+    const thread = this.store.getThread(earlier);
+    // One the user pinned stays where they want it.
+    if (!thread || thread.archived || thread.pinned || thread.kind === "coordinator") return;
+    if (this.turns.has(earlier) || this.busy.has(earlier) || this.groupActive(earlier)) return;
+    const step = this.setArchived(earlier, true).catch((error: unknown) =>
+      console.error(
+        `Lancement précédent d'une tâche planifiée laissé en place (${earlier}) :`,
+        error,
+      ),
+    );
+    this.steps.add(step);
+    this.puttingAway.set(next, step);
+    void step.finally(() => {
+      this.steps.delete(step);
+      if (this.puttingAway.get(next) === step) this.puttingAway.delete(next);
+    });
   }
 
   async cancel(threadId: string): Promise<void> {

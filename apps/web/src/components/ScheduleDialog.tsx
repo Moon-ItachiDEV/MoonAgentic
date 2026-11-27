@@ -9,7 +9,14 @@ import type {
 import { useEffect, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { parseRouteValue, routeChoices, routeValue } from "../route-choices.ts";
-import { firstMoment, fromField, REPEATS, titleFromText, toField } from "../schedule.ts";
+import {
+  firstMoment,
+  fromField,
+  REPEATS,
+  timeChange,
+  titleFromText,
+  toField,
+} from "../schedule.ts";
 import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
@@ -94,10 +101,7 @@ export function ScheduleDialog({
       if (schedule) {
         // Only what changed is sent: a task left as it was keeps its time, and a paused one
         // stays paused. A one-time task that has run is planned again.
-        const moved =
-          when !== firstWhen ||
-          repeat !== schedule.repeat ||
-          (!schedule.enabled && schedule.repeat === "once");
+        const time = timeChange(schedule, { timeChanged: when !== firstWhen, repeat, at });
         await connection.request({
           type: "schedule.update",
           requestId: newId(),
@@ -105,7 +109,7 @@ export function ScheduleDialog({
           text: text.trim(),
           // Left empty, the name is taken from the task again.
           title: title.trim() || titleFromText(text),
-          ...(moved ? { at, repeat } : {}),
+          ...time,
         });
       } else if (project) {
         const picked = model || agent?.defaultModel;
