@@ -4210,10 +4210,9 @@
 .ni svg {
   color: var(--fg2);
 }
-/* Menu: thin line icons, like the popups. */
-.drawer :is(.ni, .pj, .dsec, .rc) svg :is(path, circle, rect, line, polyline, ellipse),
-.dfoot .me svg :is(path, circle, rect, line, polyline, ellipse) {
-  stroke-width: 1.5px;
+/* Menu: thin line icons, like the popups (scales the sprite's strokes, see sprite.ts). */
+.drawer {
+  --icon-k: 0.88;
 }
 .ni .sp {
   flex: 1;

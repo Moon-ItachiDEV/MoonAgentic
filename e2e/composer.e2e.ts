@@ -9,6 +9,7 @@ import {
   addProject,
   allModelsButton,
   cloneButton,
+  directThread,
   pickAgent,
   setAccess,
   showAgents,
@@ -793,8 +794,11 @@ describe("composer", () => {
     /** The project's threads beside its page, on a wide screen. */
     const beside = page.getByRole("complementary", { name: "Fils du projet" });
 
-    // A conversation opened from the page lands in the project, and comes back on its list.
-    await beside.getByRole("button", { name: "Nouveau fil" }).click();
+    // The project's threads are opened by its coordinator: no « Nouveau fil » beside it.
+    await beside.waitFor();
+    expect(await page.getByRole("button", { name: "Nouveau fil" }).count()).toBe(0);
+    // A direct conversation, from home in that project, comes back on its list.
+    await directThread(page);
     await pickAgent(page);
     await supervised(page);
     await composer(page).fill("Dis bonjour");
@@ -804,7 +808,7 @@ describe("composer", () => {
     await inSidebar.click();
     await page.waitForURL(/\/p\//);
     // Sent, then gone to another page before the thread exists: the user stays where they went.
-    await beside.getByRole("button", { name: "Nouveau fil" }).click();
+    await directThread(page);
     await composer(page).fill("Dis au revoir");
     await composer(page).press("Enter");
     await inSidebar.click();
@@ -1166,10 +1170,7 @@ describe("composer", () => {
     await menu(page)
       .getByRole("button", { name: /^equipe/ })
       .click();
-    await page
-      .getByRole("complementary", { name: "Fils du projet" })
-      .getByRole("button", { name: "Nouveau fil" })
-      .click();
+    await directThread(page);
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
     const dialog = page.getByRole("dialog", { name: "Planifier une tâche" });
     const list = page.getByRole("list", { name: "Tâches planifiées" });

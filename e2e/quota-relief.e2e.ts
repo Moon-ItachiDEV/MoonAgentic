@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
-import { addProject, pickAgent, setAccess } from "./ui.ts";
+import { addProject, directThread, pickAgent, setAccess } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -115,7 +115,7 @@ describe("a quota that runs out", () => {
     }
     await page.keyboard.press("Escape");
 
-    await page.getByRole("button", { name: "Nouveau fil" }).first().click();
+    await directThread(page);
     const composer = page.getByRole("combobox", { name: "Message" });
     await expect.poll(() => composer.isEnabled()).toBe(true);
     await pickAgent(page);

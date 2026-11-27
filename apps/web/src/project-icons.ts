@@ -497,6 +497,6 @@ export function findProjectIcons(query: string): ProjectIconName[] {
 export const PROJECT_SPRITE = Object.entries(PROJECT_ICONS)
   .map(
     ([name, [, body]]) =>
-      `<symbol id="pi-${name}" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${body}</g></symbol>`,
+      `<symbol id="pi-${name}" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" style="stroke-width:calc(1.7px * var(--icon-k, 1))" stroke-linecap="round" stroke-linejoin="round">${body}</g></symbol>`,
   )
   .join("");

@@ -654,18 +654,15 @@ export function App() {
     </>
   );
 
-  /** What a project's lists of conversations can do with one. */
-  const projectThreadActions = (p: Project) => ({
+  /** What a project's lists of conversations can do with one. Its threads are opened by the
+   * coordinator, never by hand: there is no « Nouveau fil » here. */
+  const projectThreadActions = {
     onOpenThread: openThread,
-    onNewThread: () => {
-      pickProject(p.id);
-      go({ name: "home" });
-    },
     onTogglePin: togglePin,
     onSetArchived: setArchived,
     onDeleteThread: askDeleteThread,
     onRenameThread: renameThread,
-  });
+  };
 
   /** Under the coordinator's conversation: what its project's threads wait for, then its composer. */
   const coordinatorDock = coordinator && routeProject && (
@@ -1040,7 +1037,7 @@ export function App() {
               onSchedule={(schedule) =>
                 setScheduling(schedule ? { text: "", schedule } : { text: "" })
               }
-              {...projectThreadActions(routeProject)}
+              {...projectThreadActions}
             />
           ) : coordinator ? (
             <ThreadView
@@ -1312,7 +1309,7 @@ export function App() {
                 onSchedule={(schedule) =>
                   setScheduling(schedule ? { text: "", schedule } : { text: "" })
                 }
-                {...projectThreadActions(routeProject)}
+                {...projectThreadActions}
               />
             )}
           </aside>
