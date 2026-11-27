@@ -381,10 +381,17 @@ describe("what lists of threads keep of a pull request", () => {
       threadPullRequest(OPEN).checks === "pending" ? "idle" : "waiting",
     );
 
-    github.pr = { ...OPEN, checks: [{ name: "ci", state: "failed" }] };
+    github.pr = {
+      ...OPEN,
+      checks: [{ name: "ci", state: "failed" }],
+      additions: 120,
+      deletions: 8,
+    };
     await hub.watchPullRequests();
     expect(github.asked).toHaveLength(2);
     expect(store.getThread(threadId)!.pr!.checks).toBe("failed");
+    // Its lines added and removed are kept for the project's usage.
+    expect(store.getThread(threadId)!.pr).toMatchObject({ additions: 120, deletions: 8 });
     expect(threadGroup(store.getThread(threadId)!)).toBe("waiting");
 
     // Closed: nothing more to watch.

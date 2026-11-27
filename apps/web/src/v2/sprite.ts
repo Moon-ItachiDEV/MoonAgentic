@@ -64,6 +64,26 @@ export const ICONS = {
     "0 0 24 24",
     '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.5 4.5v15" stroke="currentColor" stroke-width="1.7"/>',
   ],
+  bell: [
+    "0 0 24 24",
+    '<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15ZM10 20.5a2.2 2.2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  ],
+  archive: [
+    "0 0 24 24",
+    '<path d="M4 5.5h16v4H4ZM5.5 9.5v8.5a1.5 1.5 0 0 0 1.5 1.5h10a1.5 1.5 0 0 0 1.5-1.5V9.5M10 13h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  ],
+  book: [
+    "0 0 24 24",
+    '<path d="M12 6.5C10.5 5.3 8.4 4.8 4 5v13c4.4-.2 6.5.3 8 1.5 1.5-1.2 3.6-1.7 8-1.5V5c-4.4-.2-6.5.3-8 1.5Zm0 0v13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>',
+  ],
+  server: [
+    "0 0 24 24",
+    '<rect x="4" y="4.5" width="16" height="6.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="4" y="13" width="16" height="6.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 7.75h.01M8 16.25h.01" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>',
+  ],
+  chart: [
+    "0 0 24 24",
+    '<path d="M4 4.5v15h16M7.5 15l3.5-4 3 2.5 5-6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  ],
   gear: [
     "0 0 24 24",
     '<circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z" fill="none" stroke="currentColor" stroke-width="1.5"/>',

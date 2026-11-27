@@ -36,9 +36,9 @@ import { ReviewPanel } from "./components/ReviewPanel.tsx";
 import { PairGate } from "./components/PairGate.tsx";
 import { CoordinatorStart, ProjectOverview } from "./components/ProjectPage.tsx";
 import { ProjectIcon } from "./components/ProjectIcon.tsx";
+import type { ProjectSection } from "./components/ProjectSettings.tsx";
 import { PullRequests } from "./components/PullRequests.tsx";
 import { steady, useSame } from "./steady.tsx";
-import { modelNameOf } from "./model-label.ts";
 import { coordinatorOf, listedThreads, waitingCount } from "./project-threads.ts";
 import { Sidebar as PlainSidebar } from "./components/Sidebar.tsx";
 import { TabBar, type TabPop, TabPopover } from "./components/TabBar.tsx";
@@ -75,6 +75,12 @@ const Planner = lazy(() =>
   import("./components/Planner.tsx").then((m) => ({ default: m.Planner })),
 );
 // Opened now and then: its editors stay out of the first load.
+const ProjectMenu = lazy(() =>
+  import("./components/ProjectMenu.tsx").then((m) => ({ default: m.ProjectMenu })),
+);
+const DiscussionSettings = lazy(() =>
+  import("./components/DiscussionSettings.tsx").then((m) => ({ default: m.DiscussionSettings })),
+);
 const ProjectSettings = lazy(() =>
   import("./components/ProjectSettings.tsx").then((m) => ({ default: m.ProjectSettings })),
 );
@@ -202,10 +208,31 @@ export function App() {
    * the « Vue d'ensemble » on the right, where a thread opens too.
    */
   const [pane, setPane] = useState<{ open: boolean; threadId?: string }>({ open: true });
-  const [projectSetup, setProjectSetup] = useState(false);
+  const [projectSetup, setProjectSetupNow] = useState(false);
+  /** The section the project's settings open on. */
+  const [projectSection, setProjectSection] = useState<ProjectSection>("general");
+  const setProjectSetup = (on: boolean, section: ProjectSection = "general") => {
+    if (on) setProjectSection(section);
+    setProjectSetupNow(on);
+  };
   // Loaded the first time it is opened, then kept: it slides away when closed.
   const [projectSetupSeen, setProjectSetupSeen] = useState(false);
   if (projectSetup && !projectSetupSeen) setProjectSetupSeen(true);
+  /** The project's menu, dropped from its name in the header. */
+  const [projectMenu, setProjectMenu] = useState(false);
+  const [projectMenuSeen, setProjectMenuSeen] = useState(false);
+  if (projectMenu && !projectMenuSeen) setProjectMenuSeen(true);
+  const projectName = useRef<HTMLButtonElement>(null);
+  /** The project's name, become a field in the header. */
+  const [renamingProject, setRenamingProject] = useState(false);
+  /** The open conversation's settings: a window, or on a phone a menu from its button. */
+  const [threadSetup, setThreadSetup] = useState(false);
+  const [threadSetupSeen, setThreadSetupSeen] = useState(false);
+  if (threadSetup && !threadSetupSeen) setThreadSetupSeen(true);
+  const threadGear = useRef<HTMLButtonElement>(null);
+  /** On an iPad or a computer, the thread's menu drops from its title, at its left. */
+  const threadTitle = useRef<HTMLButtonElement>(null);
+  const [threadMenuLeft, setThreadMenuLeft] = useState<number>();
   // Lists show every thread but the coordinators.
   const listedThreadsNow = useMemo(() => listedThreads(state.threads), [state.threads]);
   const listed = useMemo(
@@ -334,6 +361,9 @@ export function App() {
     setSearching(false);
     setTabPop(null);
     setThreadMenu(false);
+    setProjectMenu(false);
+    setRenamingProject(false);
+    setThreadSetup(false);
     setReviewOpen(false);
     setLoose(false);
     setSettingsList(false);
@@ -486,6 +516,11 @@ export function App() {
               },
             ]),
         { label: "Exporter en Markdown", icon: "file", run: () => exportThread() },
+        {
+          label: looseThread ? "Paramètres de la discussion" : "Paramètres du fil",
+          icon: "gear",
+          run: () => setThreadSetup(true),
+        },
         // A conversation outside any project can go into one, to go on there.
         ...(looseThread && !thread.archived && codeProjects.some((p) => !p.locked)
           ? [
@@ -685,7 +720,7 @@ export function App() {
   const drawerOpen = drawer || searching;
   /** The agent the home page's composer starts on, whose subscription the ring shows. */
   const homeAgentId = looseConversation
-    ? looseDefault(state.agents)?.agentId
+    ? (state.coordinator.loose ?? looseDefault(state.agents))?.agentId
     : (
         state.agents.find((a) => a.id === readPref("agent") && a.available) ??
         state.agents.find((a) => a.available)
@@ -746,6 +781,105 @@ export function App() {
     </button>
   );
   const threadAgent = thread && state.agents.find((a) => a.id === thread.agentId);
+  /** On an iPad or a computer the thread's menu drops from its title, under it. */
+  const openThreadMenuWide = () => {
+    const title = threadTitle.current;
+    const host = title?.closest(".main")?.getBoundingClientRect();
+    if (title) setThreadMenuLeft(title.getBoundingClientRect().left - (host?.left ?? 0));
+    setThreadMenu(!threadMenu);
+  };
+  const threadBack = () =>
+    thread && openProjects.some((p) => p.id === thread.projectId && !isDiscussionsProject(p))
+      ? go({ name: "project", projectId: thread.projectId })
+      : go({ name: "home" });
+  /** iPad and computer: the title on the left with its menu, the changes and settings on the right. */
+  const threadHeaderWide = thread ? (
+    <>
+      <div className="phl">
+        {looseThread ? (
+          menuButton()
+        ) : (
+          <button className="gb press" aria-label="Retour" onClick={threadBack}>
+            <I n="back" s={20} />
+          </button>
+        )}
+        {renaming?.id === thread.id ? (
+          <>
+            <HeaderRename
+              key={thread.id}
+              initial={renaming.title}
+              label={renaming.loose ? "Nom de la discussion" : "Nom du fil"}
+              sub={thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}
+              onDone={finishRename}
+            />
+            <button
+              className="gb press tok"
+              aria-label="Valider le nom"
+              // The field keeps its focus: its own blur would save it a second time.
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => {
+                const field = document.getElementById("tren") as HTMLInputElement | null;
+                finishRename(true, field?.value ?? renaming.title);
+              }}
+            >
+              <I n="check" s={18} />
+            </button>
+          </>
+        ) : (
+          <button
+            ref={threadTitle}
+            className="phb"
+            aria-label={`${thread.title}, actions du fil`}
+            aria-haspopup="menu"
+            aria-expanded={threadMenu}
+            onClick={openThreadMenuWide}
+          >
+            <span className="phi">
+              <I n={looseThread ? "bubble" : thread.team ? "users" : "branch"} s={16} />
+            </span>
+            <span className="pht">{thread.title}</span>
+            {thread.pinned && (
+              <i className="tpn" role="img" aria-label="Épinglé">
+                <I n="star" s={12} />
+              </i>
+            )}
+            {!looseThread && (
+              <span className="phs">
+                {thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}
+              </span>
+            )}
+            <span className="phc">
+              <I n="down" s={13} />
+            </span>
+          </button>
+        )}
+      </div>
+      <span />
+      <div className="phr">
+        {thread.workspace && !thread.archived && !looseThread && (
+          <button
+            className="gb press"
+            aria-label={reviewCount ? `Modifications : ${reviewCount} à revoir` : "Modifications"}
+            aria-pressed={reviewing}
+            onClick={() => setReviewOpen(!reviewing)}
+          >
+            <I n="code" s={19} />
+          </button>
+        )}
+        <button
+          ref={threadGear}
+          className="gb press"
+          aria-label={looseThread ? "Paramètres de la discussion" : "Paramètres du fil"}
+          aria-expanded={threadSetup}
+          onClick={() => setThreadSetup(true)}
+        >
+          <I n="gear" s={19} />
+        </button>
+      </div>
+    </>
+  ) : (
+    <span />
+  );
   const topBar =
     route.name === "home" ? (
       <>
@@ -776,119 +910,223 @@ export function App() {
         <span />
       </>
     ) : route.name === "project" ? (
-      <>
-        {menuButton()}
-        <div className="ctr">
-          {routeProject && !routeProject.locked && (
-            <>
+      screen.roomy ? (
+        <>
+          <div className="phl">
+            {menuButton()}
+            {routeProject &&
+              !routeProject.locked &&
+              (renamingProject ? (
+                <ProjectRename project={routeProject} onDone={() => setRenamingProject(false)} />
+              ) : (
+                <button
+                  ref={projectName}
+                  className={`phb${routeProject.color ? ` pc-${routeProject.color}` : ""}`}
+                  aria-label={`Projet ${routeProject.name}${routeProject.paused ? ", en pause" : ""}`}
+                  aria-haspopup="menu"
+                  aria-expanded={projectMenu}
+                  onClick={() => setProjectMenu(!projectMenu)}
+                >
+                  <span className="phi">
+                    <ProjectIcon project={routeProject} size={18} />
+                  </span>
+                  <span className="pht">{routeProject.name}</span>
+                  {routeProject.paused && <span className="phs">En pause</span>}
+                  <span className="phc">
+                    <I n="down" s={13} />
+                  </span>
+                </button>
+              ))}
+          </div>
+          <span />
+          {routeProject && !routeProject.locked ? (
+            <div className="phr">
               <button
-                className={`pava glass press${routeProject.color ? ` pc-${routeProject.color}` : ""}`}
-                aria-label="Réglages du projet"
+                className="gb press"
+                aria-label="Paramètres du projet"
+                aria-expanded={projectSetup}
                 onClick={() => setProjectSetup(true)}
               >
-                <ProjectIcon project={routeProject} size={22} />
+                <I n="gear" s={19} />
               </button>
-              <button className="plabel glass" onClick={() => setProjectSetup(true)}>
-                {routeProject.name}
+              <button
+                className={`gb press${split ? " pside" : ""}`}
+                aria-label="Fils du projet"
+                aria-expanded={split ? pane.open : undefined}
+                onClick={() =>
+                  split ? setPane((was) => ({ open: !was.open })) : setProjectTab("overview")
+                }
+              >
+                <I n={split ? "side" : "list"} s={20} />
+                {waitingCount(state.threads, routeProject.id) > 0 && <span className="dot" />}
               </button>
-            </>
+            </div>
+          ) : (
+            <span />
           )}
-        </div>
-        {routeProject && !routeProject.locked ? (
+        </>
+      ) : (
+        <>
+          {menuButton()}
+          <div className="ctr">
+            {routeProject &&
+              !routeProject.locked &&
+              (renamingProject ? (
+                <ProjectRename project={routeProject} onDone={() => setRenamingProject(false)} />
+              ) : (
+                <>
+                  <button
+                    className={`pava glass press${routeProject.color ? ` pc-${routeProject.color}` : ""}`}
+                    aria-label={`Projet ${routeProject.name}`}
+                    aria-haspopup="menu"
+                    onClick={() => setProjectMenu(!projectMenu)}
+                  >
+                    <ProjectIcon project={routeProject} size={22} />
+                  </button>
+                  <button
+                    ref={projectName}
+                    className="plabel glass"
+                    aria-haspopup="menu"
+                    aria-expanded={projectMenu}
+                    onClick={() => setProjectMenu(!projectMenu)}
+                  >
+                    {routeProject.name}
+                    <span className={`phc${projectMenu ? " on" : ""}`}>
+                      <I n="down" s={12} />
+                    </span>
+                  </button>
+                </>
+              ))}
+          </div>
+          {routeProject && !routeProject.locked ? (
+            <button
+              className="gb glass press"
+              aria-label="Vue d'ensemble"
+              onClick={() => setProjectTab("overview")}
+            >
+              <I n="list" s={21} />
+              {waitingCount(state.threads, routeProject.id) > 0 && <span className="dot" />}
+            </button>
+          ) : (
+            <span />
+          )}
+        </>
+      )
+    ) : route.name === "thread" ? (
+      screen.roomy ? (
+        threadHeaderWide
+      ) : (
+        <>
           <button
             className="gb glass press"
-            aria-label="Vue d'ensemble"
-            aria-expanded={split ? pane.open : undefined}
+            aria-label="Retour"
             onClick={() =>
-              split ? setPane((was) => ({ open: !was.open })) : setProjectTab("overview")
+              thread &&
+              openProjects.some((p) => p.id === thread.projectId && !isDiscussionsProject(p))
+                ? go({ name: "project", projectId: thread.projectId })
+                : go({ name: "home" })
             }
           >
-            <I n="list" s={21} />
-            {waitingCount(state.threads, routeProject.id) > 0 && <span className="dot" />}
+            <I n="back" />
           </button>
-        ) : (
-          <span />
-        )}
-      </>
-    ) : route.name === "thread" ? (
-      <>
-        <button
-          className="gb glass press"
-          aria-label="Retour"
-          onClick={() =>
-            thread &&
-            openProjects.some((p) => p.id === thread.projectId && !isDiscussionsProject(p))
-              ? go({ name: "project", projectId: thread.projectId })
-              : go({ name: "home" })
-          }
-        >
-          <I n="back" />
-        </button>
-        <div className="ctr">
-          {thread && renaming?.id === thread.id ? (
-            <HeaderRename
-              key={thread.id}
-              initial={renaming.title}
-              label={renaming.loose ? "Nom de la discussion" : "Nom du fil"}
-              sub={thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}
-              onDone={finishRename}
-            />
-          ) : (
-            thread && (
-              <div className="ttl glass">
-                <b>
-                  {thread.pinned && (
-                    <i className="tpn" role="img" aria-label="Épinglé">
-                      <I n="star" s={12} />
-                    </i>
-                  )}
-                  {thread.title}
-                </b>
-                <span>{thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}</span>
-              </div>
-            )
-          )}
-        </div>
-        {thread && renaming?.id === thread.id ? (
-          <button
-            className="gb glass press tok"
-            aria-label="Valider le nom"
-            // The field keeps its focus: its own blur would save it a second time.
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={() => {
-              const field = document.getElementById("tren") as HTMLInputElement | null;
-              finishRename(true, field?.value ?? renaming.title);
-            }}
-          >
-            <I n="check" s={20} />
-          </button>
-        ) : thread ? (
-          <div className="gcap glass">
-            {thread.workspace && !thread.archived && !looseThread && (
-              <button
-                aria-label={
-                  reviewCount ? `Modifications : ${reviewCount} à revoir` : "Modifications"
-                }
-                aria-pressed={reviewing}
-                onClick={() => setReviewOpen(!reviewing)}
-              >
-                <I n="code" s={20} />
-              </button>
+          <div className="ctr">
+            {thread && renaming?.id === thread.id ? (
+              <HeaderRename
+                key={thread.id}
+                initial={renaming.title}
+                label={renaming.loose ? "Nom de la discussion" : "Nom du fil"}
+                sub={thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}
+                onDone={finishRename}
+              />
+            ) : (
+              thread && (
+                <div
+                  className={`ttl glass${looseThread ? " tap" : ""}`}
+                  {...(looseThread
+                    ? {
+                        role: "button",
+                        tabIndex: 0,
+                        "aria-label": `${thread.title}, actions du fil`,
+                        "aria-haspopup": "menu" as const,
+                        "aria-expanded": threadMenu,
+                        onClick: () => setThreadMenu(!threadMenu),
+                        onKeyDown: (e: React.KeyboardEvent) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setThreadMenu(!threadMenu);
+                          }
+                        },
+                      }
+                    : {})}
+                >
+                  <b>
+                    {thread.pinned && (
+                      <i className="tpn" role="img" aria-label="Épinglé">
+                        <I n="star" s={12} />
+                      </i>
+                    )}
+                    {thread.title}
+                  </b>
+                  <span>{thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}</span>
+                </div>
+              )
             )}
-            <button
-              className={threadMenu ? "act" : undefined}
-              aria-label="Actions du fil"
-              aria-haspopup="menu"
-              aria-expanded={threadMenu}
-              onClick={() => setThreadMenu(!threadMenu)}
-            >
-              <I n="dots" s={20} />
-            </button>
           </div>
-        ) : (
-          <span />
-        )}
-      </>
+          {thread && renaming?.id === thread.id ? (
+            <button
+              className="gb glass press tok"
+              aria-label="Valider le nom"
+              // The field keeps its focus: its own blur would save it a second time.
+              onPointerDown={(e) => e.preventDefault()}
+              onClick={() => {
+                const field = document.getElementById("tren") as HTMLInputElement | null;
+                finishRename(true, field?.value ?? renaming.title);
+              }}
+            >
+              <I n="check" s={20} />
+            </button>
+          ) : thread ? (
+            <div className="gcap glass">
+              {thread.workspace && !thread.archived && !looseThread && (
+                <button
+                  aria-label={
+                    reviewCount ? `Modifications : ${reviewCount} à revoir` : "Modifications"
+                  }
+                  aria-pressed={reviewing}
+                  onClick={() => setReviewOpen(!reviewing)}
+                >
+                  <I n="code" s={20} />
+                </button>
+              )}
+              {looseThread ? (
+                <button
+                  ref={threadGear}
+                  className={threadSetup ? "act" : undefined}
+                  aria-label="Paramètres de la discussion"
+                  aria-haspopup="menu"
+                  aria-expanded={threadSetup}
+                  onClick={() => setThreadSetup(!threadSetup)}
+                >
+                  <I n="gear" s={20} />
+                </button>
+              ) : (
+                <button
+                  ref={threadGear}
+                  className={threadMenu ? "act" : undefined}
+                  aria-label="Actions du fil"
+                  aria-haspopup="menu"
+                  aria-expanded={threadMenu}
+                  onClick={() => setThreadMenu(!threadMenu)}
+                >
+                  <I n="dots" s={20} />
+                </button>
+              )}
+            </div>
+          ) : (
+            <span />
+          )}
+        </>
+      )
     ) : (
       <>
         {menuButton()}
@@ -1183,7 +1421,10 @@ export function App() {
         {(threadMenu || threadMenuOut) && thread && (
           <div
             ref={threadMenuRef}
-            className={`pmenu tmn${threadMenu ? "" : " out"}${threadPage.from === undefined ? "" : ` still tsw ${threadPage.page === "move" ? "fw" : "bk"}`}`}
+            style={
+              screen.roomy && threadMenuLeft !== undefined ? { left: threadMenuLeft } : undefined
+            }
+            className={`pmenu tmn${screen.roomy ? " tml" : ""}${threadMenu ? "" : " out"}${threadPage.from === undefined ? "" : ` still tsw ${threadPage.page === "move" ? "fw" : "bk"}`}`}
             role="menu"
             aria-label={threadPage.page === "move" ? "Déplacer vers un projet" : "Actions du fil"}
             aria-hidden={!threadMenu}
@@ -1243,6 +1484,23 @@ export function App() {
               ))
             )}
           </div>
+        )}
+        {route.name === "project" && routeProject && !routeProject.locked && projectMenuSeen && (
+          <Suspense fallback={null}>
+            <ProjectMenu
+              // Not the page's own key: both are children of the same section.
+              key={`menu:${routeProject.id}`}
+              project={routeProject}
+              open={projectMenu}
+              anchor={projectName}
+              unread={state.threads.some((t) => t.projectId === routeProject.id && t.unread)}
+              onClose={() => setProjectMenu(false)}
+              onRename={() => setRenamingProject(true)}
+              onSettings={() => setProjectSetup(true)}
+              onLock={() => lockOne(routeProject)}
+              onRemove={() => askRemoveProject(routeProject.id)}
+            />
+          </Suspense>
         )}
         {route.name === "home" && !screen.wide && (
           <TabBar state={listed} pop={tabPop} onPop={setTabPop} />
@@ -1331,24 +1589,43 @@ export function App() {
             key={routeProject.id}
             project={routeProject}
             open={projectSetup}
-            unread={state.threads.some((t) => t.projectId === routeProject.id && t.unread)}
-            coordinator={
-              coordinator
-                ? (modelNameOf(
-                    state.agents.find((a) => a.id === coordinator.agentId)?.models,
-                    coordinator.model,
-                  ) ?? state.agents.find((a) => a.id === coordinator.agentId)?.name)
-                : undefined
-            }
+            section={projectSection}
+            coordinator={coordinator}
+            threads={listedThreadsNow.filter((t) => t.projectId === routeProject.id)}
+            agents={state.agents}
+            favorites={state.favorites}
+            settings={state.coordinator}
+            mcpServers={state.mcpServers}
+            projects={state.projects}
             onClose={() => setProjectSetup(false)}
-            onOpenCoordinator={() => go({ name: "settings", section: "coordinator" })}
-            onOpenUsage={() => go({ name: "settings", section: "subscriptions" })}
-            onOpenPlanner={() => {
-              pickProject(routeProject.id);
-              openPlanner();
+            onLock={() => {
+              setProjectSetup(false);
+              lockOne(routeProject);
             }}
-            onLock={() => lockOne(routeProject)}
             onRemove={() => askRemoveProject(routeProject.id)}
+            onOpenThread={(id) => {
+              setProjectSetup(false);
+              openThread(id);
+            }}
+            onOpenMcp={openMcp}
+          />
+        </Suspense>
+      )}
+      {thread && threadSetupSeen && (
+        <Suspense fallback={null}>
+          <DiscussionSettings
+            key={`setup:${thread.id}`}
+            thread={thread}
+            items={state.items[thread.id]}
+            loose={looseThread}
+            open={threadSetup}
+            anchor={threadGear}
+            agents={state.agents}
+            favorites={state.favorites}
+            settings={state.coordinator}
+            projects={codeProjects.filter((p) => !p.locked)}
+            onClose={() => setThreadSetup(false)}
+            onDelete={() => askDeleteThread(thread)}
           />
         </Suspense>
       )}
@@ -1531,6 +1808,58 @@ function HomeCapsule(props: {
         </button>
       )}
     </div>
+  );
+}
+
+/** The project's name, become a field in the header: Enter or leaving it saves, Esc cancels. */
+function ProjectRename({ project, onDone }: { project: Project; onDone: () => void }) {
+  const field = useRef<HTMLInputElement>(null);
+  const done = useRef(false);
+  const finish = (save: boolean) => {
+    if (done.current) return;
+    done.current = true;
+    const clean = (field.current?.value ?? "").replace(/\s+/g, " ").trim();
+    if (save && clean && clean !== project.name) {
+      connection.send({ type: "project.rename", projectId: project.id, name: clean });
+    }
+    onDone();
+  };
+  useEffect(() => {
+    field.current?.focus();
+    field.current?.select();
+  }, []);
+  return (
+    <label className={`phb ren${project.color ? ` pc-${project.color}` : ""}`}>
+      <span className="phi">
+        <ProjectIcon project={project} size={18} />
+      </span>
+      <input
+        ref={field}
+        defaultValue={project.name}
+        aria-label="Nom du projet"
+        maxLength={120}
+        autoComplete="off"
+        spellCheck={false}
+        enterKeyHint="done"
+        onKeyDown={(e) => {
+          const does = renameKey({ key: e.key, isComposing: e.nativeEvent.isComposing });
+          if (!does) return;
+          e.preventDefault();
+          e.stopPropagation();
+          finish(does === "save");
+        }}
+        onBlur={() => finish(true)}
+      />
+      <button
+        type="button"
+        className="phok"
+        aria-label="Valider le nom"
+        onPointerDown={(e) => e.preventDefault()}
+        onClick={() => finish(true)}
+      >
+        <I n="check" s={14} />
+      </button>
+    </label>
   );
 }
 

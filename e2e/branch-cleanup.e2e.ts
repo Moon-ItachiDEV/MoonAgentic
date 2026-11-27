@@ -89,12 +89,11 @@ describe("cleaning a project's branches", () => {
     await page.goto(url);
     await addProject(page, repo, false);
 
-    // « Branches » is in the project's settings.
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    await page
-      .getByRole("dialog", { name: "Réglages du projet" })
-      .getByRole("button", { name: "Branches" })
-      .click();
+    // « Branches » is in the project's settings, under « Environnement ».
+    await page.getByRole("button", { name: "Paramètres du projet" }).click();
+    const settings = page.getByRole("dialog", { name: "Paramètres du projet" });
+    await settings.getByRole("button", { name: "Environnement" }).click();
+    await settings.getByRole("button", { name: "Branches" }).click();
     const dialog = page.getByRole("dialog", { name: "Branches" });
     // The merged one is ticked; the other is only shown, with why it stays.
     const merged = dialog.getByRole("button", { name: /moon\/fini-aaaaaa/ });

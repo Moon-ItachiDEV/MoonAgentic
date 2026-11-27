@@ -1,39 +1,40 @@
 import {
   type AgentInfo,
+  type Artifact,
+  type CoordinatorSettings,
   type FavoriteRef,
+  type Favorites,
   MAX_FALLBACK_MODELS,
+  MAX_PROJECT_MEMORY,
+  MAX_SETUP_FILE,
+  type McpServerInfo,
   PROJECT_COLORS,
   type Project,
   type ProjectColor,
   type ProjectSetup,
   type ProjectSkill,
+  type RouteKind,
+  routeFor,
+  type Thread,
+  utf8Bytes,
+  WORK_KINDS,
 } from "@moonagentic/protocol";
-import {
-  type FormEvent,
-  type ReactNode,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { connection, newId } from "../connection.ts";
 import { isDiscussionsProject } from "../default-models.ts";
-import { modelLabel } from "../model-label.ts";
+import { effortOf } from "../effort.ts";
+import { modelLabel, modelNameOf } from "../model-label.ts";
 import { COLOR_NAME } from "../project-colors.ts";
-import {
-  claudeAction,
-  commandProblem,
-  fits,
-  memoryFits,
-  oneLine,
-  skillProblem,
-} from "../project-setup.ts";
-import { notificationsOn, projectMuted, setProjectMuted } from "../notifications.ts";
-import { syncPush } from "../push.ts";
+import { claudeAction, commandProblem, fits, oneLine, skillProblem } from "../project-setup.ts";
+import { KIND_LABEL, shortAgo } from "../project-threads.ts";
+import { useThreadModel } from "../thread-model.ts";
 import { I } from "../v2/I.tsx";
-import { Sheet } from "../v2/Sheet.tsx";
+import { ModelChip, type Route } from "../v2/ModelChip.tsx";
+import { type Section, SettingsWindow } from "../v2/SettingsWindow.tsx";
+import { useScreen } from "../v2/use-screen.ts";
 import { BranchCleanup } from "./BranchCleanup.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
+import { LookMenu } from "./NewProjectDialog.tsx";
 import {
   findProjectIcons,
   PROJECT_ICON_PREFIX,
@@ -44,14 +45,17 @@ import { ProjectIcon } from "./ProjectIcon.tsx";
 
 const why = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-type Pane = "main" | "icon" | "commands" | "skills" | "fallback";
-const PANE_TITLE: Record<Pane, string> = {
-  main: "Réglages du projet",
-  icon: "Icône",
-  commands: "Commandes",
-  skills: "Skills",
-  fallback: "Modèle de secours",
-};
+export type ProjectSection = "general" | "memory" | "env" | "usage" | "advanced";
+const SECTIONS: Section<ProjectSection>[] = [
+  { id: "general", label: "Général", icon: "gear" },
+  { id: "memory", label: "Mémoire", icon: "book" },
+  { id: "env", label: "Environnement", icon: "server" },
+  { id: "usage", label: "Utilisation", icon: "chart" },
+  { id: "advanced", label: "Avancée", icon: "wrench" },
+];
+
+/** A page of its own inside a section, with a way back to it. */
+type Sub = "fallback" | "icon" | null;
 
 /** A project's fallback models while none were set: off, coming back once the quota is reset. */
 const NO_FALLBACK = { on: false, back: true, models: [] as FavoriteRef[] };
@@ -62,50 +66,60 @@ const modelName = (agents: AgentInfo[], ref: FavoriteRef) => {
   return known ? modelLabel(known) : ref.model;
 };
 
+/** What a route is called: its model, or its agent while it has none. */
+export const routeName = (agents: AgentInfo[], route: Route | undefined): string | undefined => {
+  if (!route) return undefined;
+  const agent = agents.find((a) => a.id === route.agentId);
+  return modelNameOf(agent?.models, route.model) ?? agent?.name ?? route.agentId;
+};
+
+/** A size in kilobytes, as « 0,1 / 256 Ko » shows it. */
+const kb = (bytes: number) =>
+  (bytes / 1024).toLocaleString("fr-FR", { maximumFractionDigits: bytes < 10_240 ? 1 : 0 });
+
+/** Thousands as « 12,4 k ». */
+const thousands = (n: number) =>
+  n >= 1000 ? `${(n / 1000).toLocaleString("fr-FR", { maximumFractionDigits: 1 })} k` : String(n);
+
 /**
- * A project's settings, as one sheet: its name, icon and tint, what it gives its agents
- * (read from and written to its own folder: `AGENTS.md`, its `/` commands and its skills),
- * its shared memory, its repository, and what can be done with the project itself.
+ * A project's settings, in sections as the Claude app shows them: Général (name, icon, models,
+ * archive), Mémoire (AGENTS.md, shared memory, skills, commands), Environnement (repository,
+ * MCP servers), Utilisation (its threads and what they made) and Avancée (pause, restart,
+ * lock). A window on an iPad or a computer, a sheet with the sections as pills on a phone.
  */
 export function ProjectSettings(props: {
   project: Project;
   open: boolean;
-  /** Something of the project is not read yet. */
-  unread: boolean;
-  /** Who coordinates it, in words, once it has a coordinator. */
-  coordinator?: string | undefined;
+  /** The section to open on. */
+  section?: ProjectSection;
+  coordinator: Thread | undefined;
+  /** The project's threads, its coordinator left out. */
+  threads: Thread[];
+  agents: AgentInfo[];
+  favorites: Favorites;
+  settings: CoordinatorSettings;
+  mcpServers: McpServerInfo[];
+  projects: Project[];
   onClose: () => void;
-  onOpenCoordinator: () => void;
-  onOpenUsage: () => void;
-  onOpenPlanner: () => void;
   onLock: () => void;
   onRemove: () => void;
+  onOpenThread: (id: string) => void;
+  onOpenMcp: () => void;
 }) {
-  const { project } = props;
+  const { project, open } = props;
   const projectId = project.id;
-  const [pane, setPane] = useState<Pane>("main");
+  const [section, setSection] = useState<ProjectSection>(props.section ?? "general");
+  const [sub, setSub] = useState<Sub>(null);
   const [setup, setSetup] = useState<ProjectSetup>();
   const [loadError, setLoadError] = useState<string>();
   const [confirm, setConfirm] = useState<Confirmation | null>(null);
   const [cleaning, setCleaning] = useState(false);
-  const [muted, setMuted] = useState(() => projectMuted(projectId));
-  const [name, setName] = useState(project.name);
-  const [rules, setRules] = useState<string>();
-  const [memory, setMemory] = useState<string>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const agents = useSyncExternalStore(connection.subscribe, connection.getState).agents;
-  const fallback = project.quota?.fallback ?? NO_FALLBACK;
-  const setFallback = (next: typeof fallback) =>
-    connection.send({ type: "project.setQuotaRules", projectId, fallback: next });
 
   useEffect(() => {
-    if (!props.open) return;
-    setPane("main");
-    setName(project.name);
-    setRules(undefined);
-    setMemory(undefined);
-    setError(undefined);
+    if (!open) return;
+    setSection(props.section ?? "general");
+    setSub(null);
+    setLoadError(undefined);
     let live = true;
     connection
       .ask({ type: "project.setup", requestId: newId(), projectId })
@@ -114,51 +128,559 @@ export function ProjectSettings(props: {
     return () => {
       live = false;
     };
-    // Read again each time the sheet opens: the folder may have changed meanwhile.
+    // Read again each time it opens: the folder may have changed meanwhile.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.open, projectId]);
+  }, [open, projectId]);
 
   /** Sends a change and shows the folder as the server reads it after. */
   const change: Change = async (message) => {
     const reply = await connection.ask(message);
     setSetup(reply.setup);
   };
+  const pick = (next: ProjectSection) => {
+    setSub(null);
+    setSection(next);
+  };
 
-  const savedRules = setup?.rules.text ?? "";
-  const text = rules ?? savedRules;
-  // Kept by MoonAgentic, not in the folder: shared at once by every agent, thread and branch.
-  const savedMemory = setup?.memory.text ?? "";
-  const notes = memory ?? savedMemory;
-  const memoryChanged =
-    memory !== undefined && memory.replace(/\r\n/g, "\n").trim() !== savedMemory;
-  const newName = name.trim();
-  const dirty =
-    (!!newName && newName !== project.name) ||
-    (rules !== undefined && rules !== savedRules) ||
-    memoryChanged;
-  const canSave = dirty && !busy && fits(text) && memoryFits(notes);
+  let body: ReactNode;
+  if (sub === "fallback") {
+    body = (
+      <>
+        <Back label="Général" onBack={() => setSub(null)} />
+        <h2>Modèle de secours</h2>
+        <FallbackPane
+          agents={props.agents}
+          fallback={project.quota?.fallback ?? NO_FALLBACK}
+          onChange={(fallback) =>
+            connection.send({ type: "project.setQuotaRules", projectId, fallback })
+          }
+        />
+      </>
+    );
+  } else if (sub === "icon") {
+    body = (
+      <>
+        <Back label="Général" onBack={() => setSub(null)} />
+        <IconPane project={project} />
+      </>
+    );
+  } else if (section === "general") {
+    body = (
+      <General
+        {...props}
+        onFallback={() => setSub("fallback")}
+        onIcons={() => setSub("icon")}
+        onConfirm={setConfirm}
+      />
+    );
+  } else if (section === "memory") {
+    body = (
+      <Memory
+        projectId={projectId}
+        setup={setup}
+        loadError={loadError}
+        change={change}
+        onConfirm={setConfirm}
+      />
+    );
+  } else if (section === "env") {
+    body = (
+      <Environment
+        project={project}
+        projects={props.projects}
+        mcpServers={props.mcpServers}
+        onBranches={() => setCleaning(true)}
+        onOpenMcp={props.onOpenMcp}
+      />
+    );
+  } else if (section === "usage") {
+    body = (
+      <Usage
+        project={project}
+        open={open}
+        threads={props.threads}
+        agents={props.agents}
+        onOpenThread={props.onOpenThread}
+      />
+    );
+  } else {
+    body = (
+      <Advanced
+        project={project}
+        coordinator={props.coordinator}
+        threads={props.threads}
+        agents={props.agents}
+        onLock={props.onLock}
+      />
+    );
+  }
+
+  return (
+    <>
+      <SettingsWindow
+        open={open}
+        onClose={props.onClose}
+        title="Paramètres du projet"
+        sections={SECTIONS}
+        section={section}
+        onSection={pick}
+        className="pset"
+      >
+        {body}
+      </SettingsWindow>
+      <BranchCleanup open={cleaning} project={project} onClose={() => setCleaning(false)} />
+      {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
+    </>
+  );
+}
+
+/** A way back from a page of its own to its section. */
+function Back(props: { label: string; onBack: () => void }) {
+  return (
+    <button type="button" className="ppback" onClick={props.onBack}>
+      <I n="back" s={15} />
+      {props.label}
+    </button>
+  );
+}
+
+/** One setting on a line: its name, maybe a second line, and what changes it on the right. */
+export function Row(props: {
+  label: ReactNode;
+  sub?: ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+  children?: ReactNode;
+}) {
+  return (
+    <div className={`ppr${props.className ? ` ${props.className}` : ""}`} style={props.style}>
+      <div className="ppl">
+        {props.label}
+        {props.sub && <small>{props.sub}</small>}
+      </div>
+      {props.children}
+    </div>
+  );
+}
+
+/** An on/off switch at the end of a line. */
+export function Toggle(props: { on: boolean; label: string; onChange: (on: boolean) => void }) {
+  return (
+    <button
+      type="button"
+      className="tog"
+      role="switch"
+      aria-checked={props.on}
+      aria-label={props.label}
+      onClick={() => props.onChange(!props.on)}
+    />
+  );
+}
+
+/** The project's name, saved when it is left or on Enter; Escape puts the saved one back. */
+function NameField(props: { project: Project; onIcons: () => void }) {
+  const { project } = props;
+  const { roomy } = useScreen();
+  const [name, setName] = useState(project.name);
+  const [look, setLook] = useState(false);
+  const icon = useRef<HTMLButtonElement>(null);
+  useEffect(() => setName(project.name), [project.name]);
+  const save = () => {
+    const clean = name.replace(/\s+/g, " ").trim();
+    if (!clean) return setName(project.name);
+    if (clean !== project.name) {
+      connection.send({ type: "project.rename", projectId: project.id, name: clean });
+    }
+  };
+  return (
+    <label className={`ppnm${project.color ? ` pc-${project.color}` : ""}`}>
+      <button
+        ref={icon}
+        type="button"
+        className="ppic"
+        aria-label="Icône et couleur"
+        aria-expanded={look}
+        onClick={(e) => {
+          e.preventDefault();
+          if (roomy) setLook((on) => !on);
+          else props.onIcons();
+        }}
+      >
+        <ProjectIcon project={project} size={18} />
+      </button>
+      <input
+        aria-label="Nom du projet"
+        value={name}
+        maxLength={120}
+        autoComplete="off"
+        onChange={(e) => setName(e.target.value)}
+        onBlur={save}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            setName(project.name);
+          }
+        }}
+      />
+      {look && (
+        <LookMenu
+          anchor={icon}
+          icon={project.icon ?? ""}
+          color={project.color ?? null}
+          onIcon={(next) => sendLook(project.id, next, project.color)}
+          onColor={(next) => sendLook(project.id, project.icon, next ?? undefined)}
+          onClose={() => setLook(false)}
+        />
+      )}
+    </label>
+  );
+}
+
+function General(props: {
+  project: Project;
+  coordinator: Thread | undefined;
+  agents: AgentInfo[];
+  favorites: Favorites;
+  settings: CoordinatorSettings;
+  onFallback: () => void;
+  onIcons: () => void;
+  onConfirm: (confirm: Confirmation) => void;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  const { project, coordinator, agents, favorites, settings } = props;
+  const { roomy } = useScreen();
+  const projectId = project.id;
+  const [kinds, setKinds] = useState(false);
+  const setCoordinator = useThreadModel(coordinator);
+  const own = settings.projectRoutes?.[projectId] ?? {};
+  const fallback = project.quota?.fallback ?? NO_FALLBACK;
+  const general = (kind: RouteKind) =>
+    routeFor({ routes: settings.routes }, undefined, kind === "default" ? undefined : kind);
+  const coordinatorName = coordinator
+    ? (routeName(agents, coordinator) ?? "Coordinateur")
+    : undefined;
+  const setRoute = (kind: RouteKind, route: Route | undefined) =>
+    connection.send({
+      type: "coordinator.setRoute",
+      kind,
+      projectId,
+      ...(route ? { agentId: route.agentId } : {}),
+      ...(route?.model ? { model: route.model } : {}),
+      ...(route?.settings ? { settings: route.settings } : {}),
+    });
+  const routeChip = (kind: RouteKind, label: string) => {
+    // What applies while the project sets nothing: the general route, or its own default.
+    const inherited =
+      kind === "default"
+        ? (routeName(agents, general("default")) ?? coordinatorName ?? "Coordinateur")
+        : (routeName(agents, own.default ?? general(kind)) ?? coordinatorName ?? "Coordinateur");
+    return (
+      <ModelChip
+        label={label}
+        agents={agents}
+        favorites={favorites}
+        value={own[kind]}
+        unset={inherited}
+        clear={kind === "default" ? "Réglage général" : "Comme les fils"}
+        row={!roomy}
+        onChange={(route) => setRoute(kind, route)}
+      />
+    );
+  };
+  const fallbackText =
+    !fallback.on || !fallback.models.length
+      ? "Non"
+      : modelName(agents, fallback.models[0]!) +
+        (fallback.models.length > 1 ? ` +${fallback.models.length - 1}` : "");
+  const running = coordinator?.status === "running" || coordinator?.status === "waiting";
+  const coordinatorEffort =
+    coordinator &&
+    effortOf(
+      agents.find((a) => a.id === coordinator.agentId),
+      coordinator.model,
+      coordinator.settings,
+    );
+
+  const models = roomy ? (
+    <>
+      <h4>Modèles</h4>
+      <Row label="Coordinateur">
+        {coordinator ? (
+          <ModelChip
+            label="Coordinateur"
+            agents={agents}
+            favorites={favorites}
+            value={{
+              agentId: coordinator.agentId,
+              ...(coordinator.model ? { model: coordinator.model } : {}),
+              ...(coordinatorEffort
+                ? { settings: { [coordinatorEffort.setting.id]: coordinatorEffort.value } }
+                : {}),
+            }}
+            disabled={running}
+            onChange={setCoordinator}
+          />
+        ) : (
+          <span className="ppmu">Pas encore lancé</span>
+        )}
+      </Row>
+      <Row label="Fils de discussion">{routeChip("default", "Fils de discussion")}</Row>
+      <button
+        type="button"
+        className="ppkinds"
+        aria-expanded={kinds}
+        onClick={() => setKinds((on) => !on)}
+      >
+        Par type de travail
+        <span className={`pprc${kinds ? " on" : ""}`}>
+          <I n="right" s={13} />
+        </span>
+      </button>
+      {kinds &&
+        WORK_KINDS.map((kind, i) => (
+          <Row
+            key={kind}
+            label={KIND_LABEL[kind]}
+            className="sub pprt in"
+            style={{ "--i": i } as React.CSSProperties}
+          >
+            {routeChip(kind, `Fils · ${KIND_LABEL[kind]}`)}
+          </Row>
+        ))}
+      <Row label="Modèle de secours">
+        <button
+          type="button"
+          className="ppch"
+          aria-label={`Modèle de secours : ${fallbackText}`}
+          onClick={props.onFallback}
+        >
+          {fallbackText}
+          <span className="pcv">
+            <I n="right" s={13} />
+          </span>
+        </button>
+      </Row>
+      <Row label="Reprendre automatiquement les fils quand les quotas sont remis à zéro">
+        <Toggle
+          on={!!project.quota?.resume}
+          label="Reprendre les fils quand les quotas sont remis à zéro"
+          onChange={(resume) =>
+            connection.send({ type: "project.setQuotaRules", projectId, resume })
+          }
+        />
+      </Row>
+    </>
+  ) : (
+    <>
+      <div className="gl2">Modèles</div>
+      <div className="ins">
+        {coordinator ? (
+          <ModelChip
+            row
+            label="Coordinateur"
+            agents={agents}
+            favorites={favorites}
+            value={{
+              agentId: coordinator.agentId,
+              ...(coordinator.model ? { model: coordinator.model } : {}),
+              ...(coordinatorEffort
+                ? { settings: { [coordinatorEffort.setting.id]: coordinatorEffort.value } }
+                : {}),
+            }}
+            disabled={running}
+            onChange={setCoordinator}
+          />
+        ) : null}
+        {routeChip("default", "Fils de discussion")}
+        <button type="button" className="it" onClick={() => setKinds((on) => !on)}>
+          <span className="tx">Par type de travail</span>
+          <span className={`pprc${kinds ? " on" : ""}`}>
+            <I n="right" s={15} />
+          </span>
+        </button>
+        {kinds &&
+          WORK_KINDS.map((kind) => <div key={kind}>{routeChip(kind, KIND_LABEL[kind])}</div>)}
+        <button type="button" className="it" onClick={props.onFallback}>
+          <span className="tx">Modèle de secours</span>
+          <span className="rt">
+            {fallbackText}
+            <I n="right" s={15} />
+          </span>
+        </button>
+        <div className="it ro">
+          <span className="tx">Reprendre les fils quand les quotas sont remis à zéro</span>
+          <Toggle
+            on={!!project.quota?.resume}
+            label="Reprendre les fils quand les quotas sont remis à zéro"
+            onChange={(resume) =>
+              connection.send({ type: "project.setQuotaRules", projectId, resume })
+            }
+          />
+        </div>
+      </div>
+    </>
+  );
+
+  const archive = () =>
+    connection.send({ type: "project.setArchived", projectId, archived: !project.archived });
+  const discussions = isDiscussionsProject(project);
+  return (
+    <>
+      {roomy && <h2>Général</h2>}
+      {roomy ? (
+        <Row label="Nom et icône">
+          <NameField project={project} onIcons={props.onIcons} />
+        </Row>
+      ) : (
+        <>
+          <div className="gl2">Nom et icône</div>
+          <NameField project={project} onIcons={props.onIcons} />
+        </>
+      )}
+      {models}
+      {roomy ? (
+        <>
+          <div className="pphr" />
+          {!discussions && (
+            <Row label={project.archived ? "Sortir des archives" : "Archiver le projet"}>
+              <button type="button" className="ppbt" onClick={archive}>
+                <I n="archive" s={15} />
+                {project.archived ? "Sortir" : "Archiver"}
+              </button>
+            </Row>
+          )}
+          <h4>Zone de danger</h4>
+          <Row label="Retirer de MoonAgentic">
+            <button
+              type="button"
+              className="ppbt red"
+              onClick={() => {
+                props.onClose();
+                props.onRemove();
+              }}
+            >
+              <I n="x" s={14} />
+              Retirer
+            </button>
+          </Row>
+        </>
+      ) : (
+        <div className="ins">
+          {!discussions && (
+            <button type="button" className="it" onClick={archive}>
+              <span className="ic">
+                <I n="archive" s={17} />
+              </span>
+              <span className="tx">
+                {project.archived ? "Sortir des archives" : "Archiver le projet"}
+              </span>
+            </button>
+          )}
+          <button
+            type="button"
+            className="it dng"
+            onClick={() => {
+              props.onClose();
+              props.onRemove();
+            }}
+          >
+            <span className="ic">
+              <I n="x" s={17} />
+            </span>
+            <span className="tx">Retirer de MoonAgentic</span>
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** A text kept by MoonAgentic or in the folder, saved by its own button once changed. */
+function TextSetting(props: {
+  title: string;
+  /** On the right of its title: its file, or when it was last written. */
+  aside?: ReactNode;
+  label: string;
+  saved: string;
+  disabled: boolean;
+  placeholder: string;
+  max: number;
+  onSave: (text: string) => Promise<void>;
+}) {
+  const [text, setText] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const now = text ?? props.saved;
+  const bytes = utf8Bytes(now);
+  const dirty = text !== undefined && text.replace(/\r\n/g, "\n").trim() !== props.saved.trim();
   const save = async () => {
-    if (!canSave) return;
+    if (text === undefined || busy || bytes > props.max) return;
     setBusy(true);
     setError(undefined);
     try {
-      if (newName && newName !== project.name) {
-        connection.send({ type: "project.rename", projectId, name: newName });
-      }
-      if (rules !== undefined && rules !== savedRules) {
-        await change({ type: "project.saveRules", requestId: newId(), projectId, text: rules });
-        setRules(undefined);
-      }
-      if (memory !== undefined && memoryChanged) {
-        await change({ type: "project.saveMemory", requestId: newId(), projectId, text: memory });
-        setMemory(undefined);
-      }
+      await props.onSave(text);
+      setText(undefined);
     } catch (e) {
       setError(why(e));
     } finally {
       setBusy(false);
     }
   };
+  return (
+    <>
+      <h4>
+        {props.title}
+        {props.aside && <span className="pps">{props.aside}</span>}
+      </h4>
+      <textarea
+        className="ppta"
+        aria-label={props.label}
+        value={now}
+        disabled={props.disabled}
+        placeholder={props.placeholder}
+        spellCheck={false}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <div className="ppct">
+        {error && <span className="mer">{error}</span>}
+        <span className={bytes > props.max ? "mer" : undefined}>
+          {kb(bytes)} / {kb(props.max)} Ko
+        </span>
+        {dirty && (
+          <>
+            <button type="button" className="ppbt sm" onClick={() => setText(undefined)}>
+              Annuler
+            </button>
+            <button
+              type="button"
+              className="ppbt sm on"
+              disabled={busy || bytes > props.max}
+              onClick={() => void save()}
+            >
+              Enregistrer
+            </button>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+function Memory(props: {
+  projectId: string;
+  setup: ProjectSetup | undefined;
+  loadError: string | undefined;
+  change: Change;
+  onConfirm: (confirm: Confirmation) => void;
+}) {
+  const { setup, projectId, change } = props;
+  const { roomy } = useScreen();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const waiting = props.loadError ?? "Lecture du dossier…";
   const link = async () => {
     setBusy(true);
     setError(undefined);
@@ -170,340 +692,487 @@ export function ProjectSettings(props: {
       setBusy(false);
     }
   };
-  const close = () => {
-    props.onClose();
-  };
-  const leave = (run: () => void) => () => {
-    close();
-    run();
-  };
-
-  let body: ReactNode;
-  if (pane === "icon") {
-    body = <IconPane project={project} />;
-  } else if (pane === "fallback") {
-    body = <FallbackPane agents={agents} fallback={fallback} onChange={setFallback} />;
-  } else if (pane !== "main") {
-    body = loadError ? (
-      <p className="snone">{loadError}</p>
-    ) : !setup ? (
-      <p className="snone">Lecture du dossier…</p>
-    ) : pane === "commands" ? (
-      <CommandsTab setup={setup} projectId={projectId} change={change} onConfirm={setConfirm} />
-    ) : (
-      <SkillsTab setup={setup} projectId={projectId} change={change} onConfirm={setConfirm} />
-    );
-  } else {
-    body = (
-      <>
-        <div className="gl2">Nom</div>
-        <label className={`fld${project.color ? ` pc-${project.color}` : ""}`}>
-          <ProjectIcon project={project} size={20} />
-          <input
-            aria-label="Nom du projet"
-            value={name}
-            maxLength={120}
-            autoComplete="off"
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && void save()}
-          />
-        </label>
-        <div className="gl2">Apparence</div>
-        <LookTab project={project} onOpenIcons={() => setPane("icon")} />
-        <div className="gl2">Consignes pour les agents</div>
-        {setup?.rules.tooBig ? (
-          <div className="ins">
-            <div className="it ro">
-              <span className="tx">AGENTS.md</span>
-              <span className="rt">Trop gros pour être modifié ici</span>
-            </div>
-          </div>
-        ) : (
-          <label className="fld ta">
-            <textarea
-              aria-label="Contenu de AGENTS.md"
-              value={text}
-              disabled={!setup}
-              placeholder={setup ? "AGENTS.md" : (loadError ?? "Lecture du dossier…")}
-              spellCheck={false}
-              onChange={(e) => setRules(e.target.value)}
-            />
-          </label>
-        )}
-        {setup && !setup.rules.tooBig && (
-          <div className="ins">
-            {!fits(text) && (
-              <div className="it ro">
-                <span className="tx mer">Texte trop long</span>
-              </div>
-            )}
-            <div className="it ro">
-              <span className="tx">
-                Claude Code
-                <small>
-                  {setup.claude === "imports"
-                    ? "Lit AGENTS.md par CLAUDE.md"
-                    : setup.claude === "missing"
-                      ? "Lit CLAUDE.md, pas AGENTS.md"
-                      : "CLAUDE.md n'importe pas AGENTS.md"}
-                </small>
-              </span>
-              {setup.claude === "imports" ? (
-                <span className="okp">Relié</span>
-              ) : (
-                // Linking needs AGENTS.md written first.
-                setup.rules.exists && (
-                  <button
-                    className="mini"
-                    title={claudeAction(setup.claude)}
-                    disabled={busy}
-                    onClick={() => void link()}
-                  >
-                    Relier
-                  </button>
-                )
-              )}
-            </div>
-            {setup.uncommitted && (
-              <div className="it ro">
-                <span className="tx">
-                  Pas encore commité
-                  <small className="mono">{setup.uncommitted.join(", ")}</small>
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-        <div className="gl2">Mémoire partagée</div>
-        <label className="fld ta">
-          <textarea
-            aria-label="Mémoire partagée du projet"
-            value={notes}
-            disabled={!setup}
-            placeholder={
-              setup ? "Décisions, conventions, pièges connus" : (loadError ?? "Lecture du dossier…")
-            }
-            spellCheck={false}
-            onChange={(e) => setMemory(e.target.value)}
-          />
-        </label>
-        {!memoryFits(notes) && (
-          <div className="ins">
-            <div className="it ro">
-              <span className="tx mer">Mémoire trop longue (16 Ko max)</span>
-            </div>
-          </div>
-        )}
-        <div className="gl2">Dépôt</div>
-        <div className="ins">
-          <div className="it ro">
-            <span className="ic">
-              <I n={project.git ? "branch" : "folder"} s={17} />
-            </span>
-            <span className="tx repo">
-              <span>{project.git ? "Dépôt git" : "Dossier"}</span>
-              <span className="mono2">{project.path}</span>
-            </span>
-          </div>
-          {project.git && (
-            <button className="it" onClick={() => setCleaning(true)}>
-              <span className="ic">
-                <I n="branch" s={17} />
-              </span>
-              <span className="tx">Branches</span>
-              <I n="right" s={15} />
-            </button>
-          )}
-        </div>
-        <div className="gl2">Coordinateur</div>
-        <div className="ins">
-          <button className="it" onClick={leave(props.onOpenCoordinator)}>
-            <span className="tx">{props.coordinator ?? "Aucun"}</span>
-            <span className="rt">
-              Régler
-              <I n="right" s={15} />
-            </span>
-          </button>
-          <div className="it ro">
-            <span className="tx">Reprendre les fils quand les quotas sont remis à zéro</span>
-            <button
-              className="tog"
-              role="switch"
-              aria-checked={!!project.quota?.resume}
-              aria-label="Reprendre les fils quand les quotas sont remis à zéro"
-              onClick={() =>
-                connection.send({
-                  type: "project.setQuotaRules",
-                  projectId,
-                  resume: !project.quota?.resume,
-                })
-              }
-            />
-          </div>
-          <button className="it" onClick={() => setPane("fallback")}>
-            <span className="tx">Modèle de secours</span>
-            <span className="rt">
-              {!fallback.on || !fallback.models.length
-                ? "Non"
-                : modelName(agents, fallback.models[0]!) +
-                  (fallback.models.length > 1 ? ` +${fallback.models.length - 1}` : "")}
-              <I n="right" s={15} />
-            </span>
-          </button>
-        </div>
-        <div className="ins">
-          <button className="it" onClick={() => setPane("skills")}>
-            <span className="ic">
-              <span className="key">$</span>
-            </span>
-            <span className="tx">Skills</span>
-            <span className="rt">
-              {setup?.skills.length ?? ""}
-              <I n="right" s={15} />
-            </span>
-          </button>
-          <button className="it" onClick={() => setPane("commands")}>
-            <span className="ic">
-              <span className="key">/</span>
-            </span>
-            <span className="tx">Commandes</span>
-            <span className="rt">
-              {setup?.commands.length ?? ""}
-              <I n="right" s={15} />
-            </span>
-          </button>
-          <button className="it" onClick={leave(props.onOpenPlanner)}>
-            <span className="ic">
-              <I n="grid" s={17} />
-            </span>
-            <span className="tx">Planner du projet</span>
-            <I n="right" s={15} />
-          </button>
-          <button className="it" onClick={leave(props.onOpenUsage)}>
-            <span className="ic">
-              <I n="gauge" s={17} />
-            </span>
-            <span className="tx">Utilisation</span>
-            <I n="right" s={15} />
-          </button>
-        </div>
-        <div className="ins">
-          <div className="it ro">
-            <span className="tx">Épinglé</span>
-            <button
-              className="tog"
-              role="switch"
-              aria-checked={!!project.pinned}
-              aria-label="Épingler le projet"
-              onClick={() =>
-                connection.send({
-                  type: "project.setPinned",
-                  projectId,
-                  pinned: !project.pinned,
-                })
-              }
-            />
-          </div>
-          {/* Only where this device notifies at all: nothing to cut otherwise. */}
-          {notificationsOn() && (
-            <div className="it ro">
-              <span className="tx">Notifications</span>
-              <button
-                className="tog"
-                role="switch"
-                aria-checked={!muted}
-                aria-label="Notifications du projet"
-                onClick={() => {
-                  setProjectMuted(projectId, !muted);
-                  setMuted(!muted);
-                  // The server, which sends Web Push, must know it too.
-                  syncPush();
-                }}
-              />
-            </div>
-          )}
-          {props.unread && (
-            <button
-              className="it acc"
-              onClick={() => void connection.send({ type: "project.markRead", projectId })}
-            >
-              <span className="tx">Tout marquer comme lu</span>
-            </button>
-          )}
-          <button
-            className="it acc"
-            onClick={() => window.open(location.href, "_blank", "noopener")}
-          >
-            <span className="tx">Ouvrir dans une nouvelle fenêtre</span>
-          </button>
-        </div>
-        <div className="ins">
-          {!isDiscussionsProject(project) && (
-            <button
-              className="it"
-              onClick={leave(() =>
-                connection.send({
-                  type: "project.setArchived",
-                  projectId: project.id,
-                  archived: !project.archived,
-                }),
-              )}
-            >
-              <span className="ic">
-                <I n="folder" s={17} />
-              </span>
-              <span className="tx">
-                {project.archived ? "Sortir des archives" : "Archiver le projet"}
-              </span>
-            </button>
-          )}
-          <button className="it" onClick={leave(props.onLock)}>
-            <span className="ic">
-              <I n="lock" s={17} />
-            </span>
-            <span className="tx">Verrouiller par code</span>
-          </button>
-          <button className="it dng" onClick={leave(props.onRemove)}>
-            <span className="ic">
-              <I n="x" s={17} />
-            </span>
-            <span className="tx">Retirer de MoonAgentic</span>
-          </button>
-        </div>
-        {error && <p className="snone mer">{error}</p>}
-      </>
-    );
-  }
-
   return (
     <>
-      <Sheet
-        open={props.open}
-        onClose={close}
-        title={PANE_TITLE[pane]}
-        tall
-        className="pset"
-        right={
-          pane === "main" ? (
-            <button
-              className={`ok2 press${canSave ? " on" : ""}`}
-              aria-label="Enregistrer"
-              disabled={!canSave}
-              onClick={() => void save()}
-            >
-              <I n="check" s={19} />
-            </button>
+      {roomy && <h2>Mémoire</h2>}
+      {setup?.rules.tooBig ? (
+        <>
+          <h4>Consignes pour les agents</h4>
+          <Row label="AGENTS.md" sub="Trop gros pour être modifié ici" />
+        </>
+      ) : (
+        <TextSetting
+          key={`rules${setup ? "" : "-wait"}`}
+          title="Consignes pour les agents"
+          aside={
+            <span className="ppfile">
+              <I n="file" s={13} />
+              AGENTS.md
+            </span>
+          }
+          label="Contenu de AGENTS.md"
+          saved={setup?.rules.text ?? ""}
+          disabled={!setup}
+          placeholder={setup ? "AGENTS.md" : waiting}
+          max={MAX_SETUP_FILE}
+          onSave={(text) =>
+            change({ type: "project.saveRules", requestId: newId(), projectId, text })
+          }
+        />
+      )}
+      {setup && !setup.rules.tooBig && (
+        <Row
+          label="Claude Code"
+          sub={
+            setup.claude === "imports"
+              ? "Lit AGENTS.md par CLAUDE.md"
+              : setup.claude === "missing"
+                ? "Lit CLAUDE.md, pas AGENTS.md"
+                : "CLAUDE.md n'importe pas AGENTS.md"
+          }
+        >
+          {setup.claude === "imports" ? (
+            <span className="ppok">Relié</span>
           ) : (
-            <button className="hmore press" onClick={() => setPane("main")}>
-              Retour
-            </button>
-          )
+            setup.rules.exists && (
+              <button
+                type="button"
+                className="ppbt"
+                title={claudeAction(setup.claude)}
+                disabled={busy}
+                onClick={() => void link()}
+              >
+                Relier
+              </button>
+            )
+          )}
+        </Row>
+      )}
+      {setup?.uncommitted && (
+        <Row
+          label="Pas encore commité"
+          sub={<span className="mono">{setup.uncommitted.join(", ")}</span>}
+        />
+      )}
+      {error && <p className="snone mer">{error}</p>}
+      <TextSetting
+        key={`memory${setup ? "" : "-wait"}`}
+        title="Mémoire partagée"
+        aside={
+          setup?.memory.updatedAt ? `Mise à jour ${agoText(setup.memory.updatedAt)}` : undefined
         }
-      >
-        <div className="sbody">{body}</div>
-      </Sheet>
-      <BranchCleanup open={cleaning} project={project} onClose={() => setCleaning(false)} />
-      {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
+        label="Mémoire partagée du projet"
+        saved={setup?.memory.text ?? ""}
+        disabled={!setup}
+        placeholder={setup ? "Décisions, conventions, pièges connus" : waiting}
+        max={MAX_PROJECT_MEMORY}
+        onSave={(text) =>
+          change({ type: "project.saveMemory", requestId: newId(), projectId, text })
+        }
+      />
+      <h4>Skills</h4>
+      {setup ? (
+        <SkillsTab
+          setup={setup}
+          projectId={projectId}
+          change={change}
+          onConfirm={props.onConfirm}
+        />
+      ) : (
+        <p className="snone">{waiting}</p>
+      )}
+      <h4>Commandes</h4>
+      {setup ? (
+        <CommandsTab
+          setup={setup}
+          projectId={projectId}
+          change={change}
+          onConfirm={props.onConfirm}
+        />
+      ) : (
+        <p className="snone">{waiting}</p>
+      )}
+    </>
+  );
+}
+
+/** « il y a 2 h », « hier »… */
+const agoText = (at: number) => {
+  const said = shortAgo(at, Date.now());
+  return /^\d/.test(said) ? `il y a ${said}` : said;
+};
+
+/** Whether the server reaches this project's threads, and the scope to send to change that. */
+const inProject = (server: McpServerInfo, projectId: string) =>
+  !server.projectIds || server.projectIds.includes(projectId);
+
+function Environment(props: {
+  project: Project;
+  projects: Project[];
+  mcpServers: McpServerInfo[];
+  onBranches: () => void;
+  onOpenMcp: () => void;
+}) {
+  const { project } = props;
+  const { roomy } = useScreen();
+  const folder = project.path.split(/[\\/]/).filter(Boolean).pop() ?? project.path;
+  const toggle = (server: McpServerInfo, on: boolean) => {
+    const others = (server.projectIds ?? props.projects.map((p) => p.id)).filter(
+      (id) => id !== project.id,
+    );
+    connection.send({
+      type: "mcp.setScope",
+      id: server.id,
+      projectIds: on ? [...others, project.id] : others,
+      allRoles: !!server.allRoles,
+    });
+  };
+  const scope = (server: McpServerInfo) =>
+    !server.projectIds
+      ? "Tous les projets"
+      : server.projectIds.length === 1 && server.projectIds[0] === project.id
+        ? "Ce projet"
+        : `${server.projectIds.length} projets`;
+  return (
+    <>
+      {roomy && <h2>Environnement</h2>}
+      <h4>Dépôt</h4>
+      <div className="ppbox">
+        <div className="ppi">
+          <span className="ppii">
+            <I n={project.git ? "branch" : "folder"} s={16} />
+          </span>
+          <span className="ppit">
+            {folder}
+            <small className="mono">{project.path}</small>
+          </span>
+        </div>
+        {project.git && (
+          <button type="button" className="ppi" onClick={props.onBranches}>
+            <span className="ppii">
+              <I n="branch" s={16} />
+            </span>
+            <span className="ppit">Branches</span>
+            <span className="ppir">
+              <I n="right" s={13} />
+            </span>
+          </button>
+        )}
+        {project.git && (
+          <div className="ppi">
+            <span className="ppii">
+              <I n="merge" s={16} />
+            </span>
+            <span className="ppit">Supprimer la branche après la fusion</span>
+            <Toggle
+              on={project.deleteMerged !== false}
+              label="Supprimer la branche après la fusion"
+              onChange={(on) =>
+                connection.send({ type: "project.setDeleteMerged", projectId: project.id, on })
+              }
+            />
+          </div>
+        )}
+      </div>
+      <h4>Serveurs MCP</h4>
+      <div className="ppbox">
+        {props.mcpServers.map((server) => (
+          <div className="ppi" key={server.id}>
+            <span className="ppii">
+              <I n="plug" s={16} />
+            </span>
+            <span className="ppit">
+              {server.name}
+              <small>{server.enabled ? scope(server) : `${scope(server)} · désactivé`}</small>
+            </span>
+            {server.enabled ? (
+              <Toggle
+                on={inProject(server, project.id)}
+                label={`${server.name} dans ce projet`}
+                onChange={(on) => toggle(server, on)}
+              />
+            ) : (
+              <span className="ppir">
+                <span className="ppst off" />
+                Désactivé
+              </span>
+            )}
+          </div>
+        ))}
+        <button type="button" className="ppi add" onClick={props.onOpenMcp}>
+          <span className="ppii">
+            <I n="plus" s={16} />
+          </span>
+          <span className="ppit">Ajouter un serveur</span>
+        </button>
+      </div>
+    </>
+  );
+}
+
+/** What a thread is at, in a word, and its dot's tint. */
+const stateOf = (t: Thread): [string, string] =>
+  t.archived
+    ? ["terminé", "ok"]
+    : t.status === "waiting"
+      ? ["t'attend", "w"]
+      : t.status === "running"
+        ? ["en cours", "ac"]
+        : t.status === "error"
+          ? ["erreur", "er"]
+          : ["au repos", ""];
+
+/** How many threads the table shows before « Afficher les autres ». */
+const SHOWN_THREADS = 5;
+
+function Usage(props: {
+  project: Project;
+  open: boolean;
+  threads: Thread[];
+  agents: AgentInfo[];
+  onOpenThread: (id: string) => void;
+}) {
+  const { threads, agents } = props;
+  const { roomy } = useScreen();
+  const [all, setAll] = useState(false);
+  const [artifacts, setArtifacts] = useState<Artifact[] | null>(null);
+  useEffect(() => {
+    if (!props.open) return;
+    let live = true;
+    connection
+      .ask({ type: "artifacts.list", requestId: newId() })
+      .then((reply) => live && setArtifacts(reply.artifacts))
+      .catch(() => live && setArtifacts(null));
+    return () => {
+      live = false;
+    };
+  }, [props.open]);
+  const mine = artifacts?.filter((a) => a.projectId === props.project.id);
+  const done = threads.filter((t) => t.archived).length;
+  const atWork = threads.filter(
+    (t) => !t.archived && (t.status === "running" || t.status === "waiting"),
+  ).length;
+  const prs = threads.filter((t) => t.pr);
+  const added = prs.reduce((n, t) => n + (t.pr?.additions ?? 0), 0);
+  const removed = prs.reduce((n, t) => n + (t.pr?.deletions ?? 0), 0);
+  const counted = prs.some((t) => t.pr?.additions !== undefined);
+  const made = (t: Thread) => {
+    const parts: string[] = [];
+    if (t.pr) {
+      parts.push(`PR #${t.pr.number}${t.pr.state === "merged" ? " fusionnée" : ""}`);
+      if (t.pr.additions !== undefined) parts.push(`+${t.pr.additions} −${t.pr.deletions ?? 0}`);
+    }
+    const files = mine?.filter((a) => a.threadId === t.id).length ?? 0;
+    if (files) parts.push(`${files} artefact${files > 1 ? "s" : ""}`);
+    return parts.join(" · ") || "—";
+  };
+  // The threads at work first, then the most recent.
+  const sorted = [...threads].sort(
+    (a, b) => Number(!!a.archived) - Number(!!b.archived) || b.updatedAt - a.updatedAt,
+  );
+  const shown = all ? sorted : sorted.slice(0, SHOWN_THREADS);
+  const modelOf = (t: Thread) =>
+    routeName(agents, { agentId: t.agentId, ...(t.model ? { model: t.model } : {}) }) ?? "";
+  return (
+    <>
+      {roomy && <h2>Utilisation</h2>}
+      <div className="ppstats">
+        <div>
+          <b>{done}</b>
+          <span>Fils terminés</span>
+        </div>
+        <div>
+          <b>{atWork}</b>
+          <span>Fils en cours</span>
+        </div>
+        <div>
+          <b>{prs.length}</b>
+          <span>Pull requests</span>
+        </div>
+        {counted && (
+          <div className="wide2">
+            <b>
+              <span className="pl">+{thousands(added)}</span>{" "}
+              <span className="mn">−{thousands(removed)}</span>
+            </b>
+            <span>Modifications du code</span>
+          </div>
+        )}
+        {mine && (
+          <div>
+            <b>{mine.length}</b>
+            <span>Artefacts</span>
+          </div>
+        )}
+      </div>
+      {threads.length > 0 && (
+        <>
+          <h4>Fils de discussion</h4>
+          {roomy ? (
+            <table className="pptb">
+              <thead>
+                <tr>
+                  <th>Fil</th>
+                  <th>Réalisations</th>
+                  <th>Modèle</th>
+                  <th>État</th>
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map((t) => {
+                  const [state, tint] = stateOf(t);
+                  return (
+                    <tr key={t.id}>
+                      <td>
+                        <a
+                          href={`#/thread/${t.id}`}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            props.onOpenThread(t.id);
+                          }}
+                        >
+                          {t.title}
+                        </a>
+                      </td>
+                      <td className="mu">{made(t)}</td>
+                      <td className="mu">{modelOf(t)}</td>
+                      <td>
+                        <span className={`st ${tint}`}>
+                          <i />
+                          {state}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          ) : (
+            <div className="ins ppthr">
+              {shown.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  className="it"
+                  onClick={() => props.onOpenThread(t.id)}
+                >
+                  <span className="tx">
+                    {t.title}
+                    <small>
+                      {[made(t), modelOf(t), stateOf(t)[0]]
+                        .filter((x) => x && x !== "—")
+                        .join(" · ")}
+                    </small>
+                  </span>
+                  <I n="right" s={15} />
+                </button>
+              ))}
+            </div>
+          )}
+          {!all && sorted.length > SHOWN_THREADS && (
+            <button type="button" className="ppmore" onClick={() => setAll(true)}>
+              Afficher les {sorted.length - SHOWN_THREADS} autres
+            </button>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+function Advanced(props: {
+  project: Project;
+  coordinator: Thread | undefined;
+  threads: Thread[];
+  agents: AgentInfo[];
+  onLock: () => void;
+}) {
+  const { project, coordinator } = props;
+  const { roomy } = useScreen();
+  const [restarting, setRestarting] = useState(false);
+  const [error, setError] = useState<string>();
+  const atWork = props.threads.filter((t) => !t.archived && t.status === "running").length;
+  const coordinatorBusy = coordinator?.status === "running" || coordinator?.status === "waiting";
+  const restart = async () => {
+    setRestarting(true);
+    setError(undefined);
+    try {
+      await connection.ask(
+        { type: "coordinator.restart", requestId: newId(), projectId: project.id },
+        30_000,
+      );
+    } catch (e) {
+      setError(why(e));
+    } finally {
+      setRestarting(false);
+    }
+  };
+  return (
+    <>
+      {roomy && <h2>Avancée</h2>}
+      <div className="ppbox ppadv">
+        <div className="ppi">
+          <span className="ppii">
+            <I n={project.paused ? "play" : "pause"} s={16} />
+          </span>
+          <span className="ppit">
+            {project.paused ? "Reprendre le projet" : "Mettre le projet en pause"}
+            <small>
+              <span className={`ppst${project.paused ? " off" : ""}`} />{" "}
+              {project.paused
+                ? "En pause"
+                : `Actif${atWork ? ` · ${atWork} fil${atWork > 1 ? "s" : ""} au travail` : ""}`}
+            </small>
+          </span>
+          <button
+            type="button"
+            className={`ppbt act${project.paused ? " on" : ""}`}
+            onClick={() =>
+              connection.send({
+                type: "project.setPaused",
+                projectId: project.id,
+                paused: !project.paused,
+              })
+            }
+          >
+            {project.paused ? "Reprendre" : "Pause"}
+          </button>
+        </div>
+        <div className="ppi">
+          <span className="ppii">
+            <I n="refresh" s={16} />
+          </span>
+          <span className="ppit">
+            Redémarrer le coordinateur
+            <small>
+              {coordinator
+                ? `${routeName(props.agents, coordinator) ?? "Coordinateur"} · ${coordinatorBusy ? "au travail" : "au repos"}`
+                : "Pas encore lancé"}
+            </small>
+          </span>
+          <button
+            type="button"
+            className="ppbt act"
+            disabled={!coordinator || restarting}
+            onClick={() => void restart()}
+          >
+            {restarting ? "Redémarrage…" : "Redémarrer"}
+          </button>
+        </div>
+        <div className="ppi">
+          <span className="ppii">
+            <I n="lock" s={16} />
+          </span>
+          <span className="ppit">
+            Verrouiller par code
+            <small>Code de l'app</small>
+          </span>
+          <button type="button" className="ppbt act" onClick={props.onLock}>
+            Verrouiller
+          </button>
+        </div>
+      </div>
+      {error && <p className="snone mer">{error}</p>}
     </>
   );
 }
@@ -664,28 +1333,6 @@ function Swatches({ project }: { project: Project }) {
           }
         />
       ))}
-    </div>
-  );
-}
-
-function LookTab({ project, onOpenIcons }: { project: Project; onOpenIcons: () => void }) {
-  return (
-    <div className={`ins${project.color ? ` pc-${project.color}` : ""}`}>
-      <button className="ico-pick" onClick={onOpenIcons}>
-        <span className="pv">
-          <ProjectIcon project={project} size={20} />
-        </span>
-        <span className="tx">
-          Icône
-          <small>
-            {iconName(project.icon)}
-            {project.color ? ` · ${COLOR_NAME[project.color]}` : ""}
-          </small>
-        </span>
-        <I n="right" s={15} />
-      </button>
-      <div className="sep" />
-      <Swatches project={project} />
     </div>
   );
 }

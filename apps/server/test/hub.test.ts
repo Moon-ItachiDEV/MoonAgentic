@@ -3022,3 +3022,79 @@ describe("an action a screen sends again", () => {
     expect(said).toEqual(["Un", "Depuis le téléphone", "Depuis l'ordinateur"]);
   });
 });
+
+describe("Hub: a project on hold", () => {
+  const said = (store: Store, id: string) => lastTurnSaid(store.listItems(id));
+
+  it("stops its turns, holds what starts on its own, lets the user's messages and other projects through", async () => {
+    const { hub, store, client, projectId, dir } = setup({ forceStopMs: 200 });
+    const otherDir = path.join(dir, "autre");
+    mkdirSync(otherDir);
+    const other = hub.createProject("autre", otherDir);
+    const create = (project: string, text: string, auto?: boolean) =>
+      hub.createThread({ projectId: project, agentId: "demo", permissionMode: "full", text, auto });
+
+    const frozen = create(projectId, "/fige");
+    await expect.poll(() => said(store, frozen), { timeout: 10_000 }).toContain("Je réfléchis");
+
+    await hub.handle(client, { type: "project.setPaused", projectId, paused: true });
+    expect(hub.snapshot().projects.find((p) => p.id === projectId)?.paused).toBe(true);
+    // Its turn at work is stopped.
+    await hub.whenIdle(frozen);
+    expect(store.getThread(frozen)?.status).not.toBe("running");
+
+    // A planned task of it waits, even with every place free.
+    const held = create(projectId, "/compact", true);
+    expect(store.getThread(held)).toMatchObject({ status: "running", inLine: true });
+    // Another project's goes at once, past the one on hold.
+    const elsewhere = create(other, "/compact", true);
+    await hub.whenIdle(elsewhere);
+    expect(said(store, elsewhere)).toContain("Contexte compacté.");
+    // What the user writes goes too.
+    const mine = create(projectId, "/compact");
+    await hub.whenIdle(mine);
+    expect(said(store, mine)).toContain("Contexte compacté.");
+    expect(store.getThread(held)?.inLine).toBe(true);
+
+    // Going on lets it through.
+    await hub.handle(client, { type: "project.setPaused", projectId, paused: false });
+    expect(hub.snapshot().projects.find((p) => p.id === projectId)?.paused).toBeUndefined();
+    await hub.whenIdle(held);
+    expect(store.getThread(held)?.inLine).toBeUndefined();
+    expect(said(store, held)).toContain("Contexte compacté.");
+  });
+});
+
+describe("Hub: models per project", () => {
+  it("keeps a project's own routes apart from the general ones, and the model of new discussions", async () => {
+    const { hub, client, projectId } = setup();
+    await hub.handle(client, {
+      type: "coordinator.setRoute",
+      kind: "default",
+      agentId: "demo",
+      model: "precis",
+      settings: { effort: "high" },
+      projectId,
+    });
+    expect(hub.coordinatorSettings().routes).toEqual({});
+    expect(hub.coordinatorSettings().projectRoutes).toEqual({
+      [projectId]: { default: { agentId: "demo", model: "precis", settings: { effort: "high" } } },
+    });
+    // Back to the general route: nothing of the project is kept.
+    await hub.handle(client, { type: "coordinator.setRoute", kind: "default", projectId });
+    expect(hub.coordinatorSettings().projectRoutes).toBeUndefined();
+    await expect(
+      hub.handle(client, {
+        type: "coordinator.setRoute",
+        kind: "bug",
+        agentId: "demo",
+        projectId: "parti",
+      }),
+    ).rejects.toThrow("n'existe plus");
+
+    await hub.handle(client, { type: "discussions.setModel", agentId: "demo", model: "precis" });
+    expect(hub.coordinatorSettings().loose).toEqual({ agentId: "demo", model: "precis" });
+    await hub.handle(client, { type: "discussions.setModel" });
+    expect(hub.coordinatorSettings().loose).toBeUndefined();
+  });
+});

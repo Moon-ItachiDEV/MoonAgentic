@@ -1,4 +1,4 @@
-// « Réglages du projet » in the built app against a real server: the icon and tint show in
+// « Paramètres du projet » in the built app against a real server: the icon and tint show in
 // the sidebar, AGENTS.md, CLAUDE.md, a command and a skill are written to the project's
 // folder, and the composer then offers the command.
 import { execFileSync } from "node:child_process";
@@ -79,10 +79,10 @@ describe("a project's settings", () => {
     await addProject(page, repo, false);
     const menu = page.getByRole("complementary", { name: "Menu" });
 
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    const dialog = page.getByRole("dialog", { name: "Réglages du projet" });
-    await dialog.getByRole("button", { name: /^Icône/ }).click();
-    const icons = page.getByRole("dialog", { name: "Icône" });
+    await page.getByRole("button", { name: "Paramètres du projet" }).click();
+    const dialog = page.getByRole("dialog", { name: "Paramètres du projet" });
+    await dialog.getByRole("button", { name: "Icône et couleur" }).click();
+    const icons = page.getByRole("dialog", { name: "Icône et couleur" });
     expect(await icons.getByRole("radiogroup", { name: "Icône" }).getByRole("radio").count()).toBe(
       121,
     );
@@ -100,8 +100,14 @@ describe("a project's settings", () => {
       )
       .toBe("true");
     if (shots) await page.screenshot({ path: path.join(shots, "projet-apparence.png") });
-    await icons.getByRole("button", { name: "Retour", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect.poll(() => icons.count()).toBe(0);
 
+    // The instructions, the shared memory, the skills and the commands are under « Mémoire ».
+    await dialog
+      .getByRole("navigation", { name: "Sections" })
+      .getByRole("button", { name: "Mémoire" })
+      .click();
     await dialog.getByLabel("Contenu de AGENTS.md").fill("## Projet\n- Lance les tests.\n");
     await dialog.getByRole("button", { name: "Enregistrer" }).click();
     // Not committed yet: said, since a thread on its own branch would not see it.
@@ -123,10 +129,9 @@ describe("a project's settings", () => {
       .toBe(true);
     expect(existsSync(path.join(repo, ".moonagentic/memory.md"))).toBe(false);
 
-    await dialog.getByRole("button", { name: /^\/ Commandes/ }).click();
-    const commands = page.getByRole("dialog", { name: "Commandes" });
+    const commands = dialog;
     await commands.getByRole("button", { name: "Nouvelle commande" }).click();
-    await commands.getByLabel("Nom").fill("deploy");
+    await commands.getByLabel("Nom", { exact: true }).fill("deploy");
     await commands.getByLabel("Description").fill("Déployer en préproduction");
     await commands
       .getByLabel("Message envoyé à l'agent")
@@ -136,12 +141,10 @@ describe("a project's settings", () => {
     expect(readFileSync(path.join(repo, ".moonagentic/commands/deploy.md"), "utf8")).toBe(
       "---\ndescription: Déployer en préproduction\n---\n\nDéploie $ARGUMENTS en préproduction.\n",
     );
-    await commands.getByRole("button", { name: "Retour", exact: true }).click();
 
-    await dialog.getByRole("button", { name: /^\$ Skills/ }).click();
-    const skills = page.getByRole("dialog", { name: "Skills" });
+    const skills = dialog;
     await skills.getByRole("button", { name: "Nouvelle skill" }).click();
-    await skills.getByLabel("Nom").fill("tests-vitest");
+    await skills.getByLabel("Nom", { exact: true }).fill("tests-vitest");
     await skills.getByLabel("Description").fill("Écrire des tests avec Vitest");
     await skills.getByLabel("Instructions").fill("Lance pnpm test.");
     await skills.getByRole("button", { name: "Enregistrer" }).click();
@@ -154,7 +157,7 @@ describe("a project's settings", () => {
       .poll(() => skills.getByRole("button", { name: "Modifier tests-vitest" }).count())
       .toBe(0);
     expect(existsSync(path.join(repo, ".agents/skills/tests-vitest"))).toBe(false);
-    await skills.getByRole("button", { name: "Fermer", exact: true }).click();
+    await dialog.getByRole("button", { name: "Fermer", exact: true }).click();
 
     // The composer of the project's folder offers the command.
     await directThread(page);
@@ -175,9 +178,9 @@ describe("a project's settings", () => {
     const menu = page.getByRole("complementary", { name: "Menu" });
     const row = menu.getByRole("button", { name: /^demo/ });
     await row.click();
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    const dialog = page.getByRole("dialog", { name: "Réglages du projet" });
-    await dialog.getByRole("button", { name: "Archiver le projet" }).click();
+    // From the project's menu, dropped from its name.
+    await page.getByRole("button", { name: "Projet demo" }).click();
+    await page.getByRole("menuitem", { name: "Archiver" }).click();
     // Out of the list, folded under « Archivés ».
     const folded = menu.getByRole("button", { name: /^Archivés/ });
     await folded.waitFor();
@@ -195,8 +198,8 @@ describe("a project's settings", () => {
       .waitFor();
     await other.close();
     await row.click();
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    await dialog.getByRole("button", { name: "Sortir des archives" }).click();
+    await page.getByRole("button", { name: "Projet demo" }).click();
+    await page.getByRole("menuitem", { name: "Sortir des archives" }).click();
     await expect.poll(() => folded.count()).toBe(0);
     await row.waitFor();
     await page.close();

@@ -32,7 +32,21 @@ export const isAgentSetting = (value: unknown): value is AgentSetting =>
   value.choices.every(isModelChoice);
 
 export const isTeamMember = (value: unknown): value is TeamMember =>
-  isRecord(value) && isText(value.agentId) && isOptionalText(value.model);
+  isRecord(value) &&
+  isText(value.agentId) &&
+  isOptionalText(value.model) &&
+  (value.settings === undefined ||
+    (isRecord(value.settings) && Object.values(value.settings).every(isText)));
+
+/** The routes kept for one place, without those that do not read as they should. */
+const routesOf = (saved: unknown): Record<string, TeamMember> =>
+  isRecord(saved)
+    ? Object.fromEntries(
+        Object.entries(saved).flatMap(([kind, member]) =>
+          isTeamMember(member) ? [[kind, member] as const] : [],
+        ),
+      )
+    : {};
 
 const isMemberOrNone = (value: unknown): boolean =>
   value === undefined || value === null || isTeamMember(value);
@@ -69,11 +83,18 @@ const isTeamSetup = (value: unknown): value is TeamSetup =>
 /** How coordinators route work, without what does not read as it should. */
 export function coordinatorSettingsOf(saved: unknown): CoordinatorSettings {
   if (!isRecord(saved)) return { routes: {} };
-  const routes = isRecord(saved.routes)
-    ? Object.fromEntries(Object.entries(saved.routes).filter(([, member]) => isTeamMember(member)))
+  const routes = routesOf(saved.routes);
+  const projectRoutes = isRecord(saved.projectRoutes)
+    ? Object.fromEntries(
+        Object.entries(saved.projectRoutes)
+          .map(([projectId, own]) => [projectId, routesOf(own)] as const)
+          .filter(([, own]) => Object.keys(own).length),
+      )
     : {};
   return {
     routes,
+    ...(Object.keys(projectRoutes).length ? { projectRoutes } : {}),
+    ...(isTeamMember(saved.loose) ? { loose: saved.loose } : {}),
     ...(isTeamSetup(saved.team) ? { team: saved.team } : {}),
     ...(Array.isArray(saved.review) && saved.review.every(isMemberOrNone)
       ? { review: saved.review as (TeamMember | null)[] }

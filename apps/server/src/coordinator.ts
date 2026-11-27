@@ -6,6 +6,7 @@ import {
   MAX_PROJECT_MEMORY,
   ORIGIN_MARK,
   REPLY_MARK,
+  routeFor,
   VERDICT_FENCE,
   type TeamPreset,
   teamPresets,
@@ -740,8 +741,11 @@ export class Coordinators {
           );
         // Asked by name, else where the settings send this kind of work, else where they
         // send any work, else its own agent.
-        const routes = this.coordinatorSettings().routes;
-        const route = (kind ? routes[kind as WorkKind] : undefined) ?? routes.default;
+        const route = routeFor(
+          this.coordinatorSettings(),
+          scope.projectId,
+          kind as WorkKind | undefined,
+        );
         const asked = str("agent", 200);
         const agentId = asked ?? route?.agentId ?? coordinator.agentId;
         const model =
@@ -757,6 +761,8 @@ export class Coordinators {
           projectId: scope.projectId,
           agentId,
           model,
+          // The route's effort comes with its model, not with one asked by name.
+          ...(!asked && route?.settings ? { settings: route.settings } : {}),
           permissionMode: coordinator.permissionMode,
           isolated: true,
           title,

@@ -201,7 +201,13 @@ export function Composer(props: {
   /** Files are being dragged over the page: the composer shows it takes them. */
   const [dropping, setDropping] = useState(false);
 
-  const looseOn = !thread && props.loose ? (loosePick ?? looseDefault(agents)) : undefined;
+  // What new conversations outside any project start with, as set in their settings.
+  const looseSaved = useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().coordinator.loose,
+  );
+  const looseOn =
+    !thread && props.loose ? (loosePick ?? looseSaved ?? looseDefault(agents)) : undefined;
   const looseAgent = looseOn && agents.find((a) => a.id === looseOn.agentId && a.available);
   const agentId =
     thread?.agentId ??
@@ -227,7 +233,12 @@ export function Composer(props: {
       const key = `${agent?.id}.${s.id}`;
       const picked = thread
         ? thread.settings?.[s.id]
-        : (settingPicks[key] ?? readPref(`setting.${key}`));
+        : (settingPicks[key] ??
+          // A new conversation outside any project starts on the reflection set for them.
+          (looseOn && !loosePick && looseOn === looseSaved
+            ? looseSaved.settings?.[s.id]
+            : undefined) ??
+          readPref(`setting.${key}`));
       return [s.id, picked && s.choices.some((c) => c.id === picked) ? picked : s.current];
     }),
   );
