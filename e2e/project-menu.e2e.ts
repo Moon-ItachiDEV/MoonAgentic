@@ -193,10 +193,10 @@ describe("the project's menu", () => {
       .click();
     await where.waitFor({ state: "hidden" });
     await composer.fill("Bonjour");
-    // Sent once the composer can: its agent known, outside a project.
+    // On a phone Enter goes to a new line (N32): sent with the button, once it can send.
     const send = page.getByRole("button", { name: "Envoyer", exact: true });
     await expect.poll(() => send.isEnabled()).toBe(true);
-    await composer.press("Enter");
+    await send.click();
     await page.waitForURL(/\/t\//);
     await page.getByRole("button", { name: "Paramètres de la discussion" }).click();
     await page.getByRole("menuitem", { name: /^Accès/ }).click();
