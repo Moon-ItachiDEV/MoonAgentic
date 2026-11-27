@@ -3235,11 +3235,12 @@ export class Hub {
   /**
    * Puts the earlier run of a planned task in the archive, its folder given back to the disk,
    * once the next run has started: it can be taken out again, its files with it. Not one
-   * still at work, or one already put away.
+   * still at work, pinned, or already put away.
    */
   private putAwayRun(earlier: string, next: string): void {
     const thread = this.store.getThread(earlier);
-    if (!thread || thread.archived || thread.kind === "coordinator") return;
+    // One the user pinned stays where they want it.
+    if (!thread || thread.archived || thread.pinned || thread.kind === "coordinator") return;
     if (this.turns.has(earlier) || this.busy.has(earlier) || this.groupActive(earlier)) return;
     const step = this.setArchived(earlier, true).catch((error: unknown) =>
       console.error(

@@ -151,7 +151,8 @@ export class Scheduler {
     const moved = patch.at !== undefined || repeat !== before.repeat;
     const on = patch.enabled ?? (moved ? true : before.enabled);
     // Given a new time, or turned back on after its time passed, it goes to its next time.
-    const at = patch.at ?? before.at ?? before.nextAt;
+    // A one-time task takes its next time, never the long-past one a series was set for.
+    const at = patch.at ?? (repeat === "once" ? before.nextAt : (before.at ?? before.nextAt));
     const nextAt =
       moved || (on && !before.enabled && before.nextAt <= now)
         ? this.firstTime(repeat, at, now)

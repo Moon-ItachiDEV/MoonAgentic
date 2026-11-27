@@ -7,6 +7,7 @@ import {
   nextHour,
   repeatLabel,
   scheduleState,
+  timeChange,
   titleFromText,
   toField,
 } from "./schedule.ts";
@@ -98,5 +99,34 @@ describe("planned tasks", () => {
   it("names a task after its first line", () => {
     expect(titleFromText("  Lance les tests\net corrige")).toBe("Lance les tests");
     expect(titleFromText("x".repeat(100))).toHaveLength(80);
+  });
+});
+
+describe("the time of a task when the clocks change", () => {
+  it("says the time it was set for, not its next run moved by the clocks", () => {
+    // Its next run is at 3:30 the night 2:30 does not exist.
+    const moved = schedule({ at: at(1, 2, 30), nextAt: at(29, 3, 30) });
+    expect(repeatLabel(moved)).toBe("Tous les jours à 02:30");
+    expect(repeatLabel(schedule({ nextAt: at(29, 3, 30) }))).toBe("Tous les jours à 03:30");
+  });
+
+  it("a new repetition alone sends no time, which would move the one it was set for", () => {
+    const task = schedule({ at: at(1, 2, 30), nextAt: at(29, 3, 30) });
+    expect(timeChange(task, { timeChanged: false, repeat: "weekdays", at: at(29, 3, 30) })).toEqual(
+      { repeat: "weekdays" },
+    );
+    expect(timeChange(task, { timeChanged: true, repeat: "daily", at: at(29, 8) })).toEqual({
+      at: at(29, 8),
+      repeat: "daily",
+    });
+    expect(timeChange(task, { timeChanged: false, repeat: "daily", at: at(29, 3, 30) })).toEqual(
+      {},
+    );
+    // A one-time task that has run is planned again, at the time shown.
+    const ran = schedule({ repeat: "once", enabled: false });
+    expect(timeChange(ran, { timeChanged: false, repeat: "once", at: at(30) })).toEqual({
+      at: at(30),
+      repeat: "once",
+    });
   });
 });

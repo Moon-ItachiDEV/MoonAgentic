@@ -1,6 +1,7 @@
 // Audit N10: a planned task keeps its hour through the change of the clocks, and its runs
 // do not pile up, each with its thread and its copy of the repository.
-// The server's calendar is Paris's here, set before any date is made.
+// The server's calendar is Paris's here, set before any date is made, and given back after.
+const zone = process.env.TZ;
 process.env.TZ = "Europe/Paris";
 
 import { execFileSync } from "node:child_process";
@@ -8,7 +9,7 @@ import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Schedule, ServerMessage } from "@moonagentic/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { Hub } from "../src/hub.ts";
 import { nextRun, Scheduler } from "../src/scheduler.ts";
@@ -17,6 +18,10 @@ import { Store } from "../src/store.ts";
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
+});
+afterAll(() => {
+  if (zone === undefined) delete process.env.TZ;
+  else process.env.TZ = zone;
 });
 
 /** Paris time as [month, day, hour, minute]. */
@@ -121,6 +126,40 @@ describe("the hour of a planned task when the clocks change", () => {
     expect(started).toHaveLength(2);
   });
 
+  it("a repeating task made a one-time one, without a new time, keeps its next time", () => {
+    const { plan, clock } = planner(paris(3, 2, 12));
+    const task = plan.add({
+      projectId: "p",
+      text: "t",
+      agentId: "demo",
+      permissionMode: "full",
+      repeat: "daily",
+      at: paris(3, 3, 9),
+    });
+    // Days later, the time it was set for is long past; its next one is tomorrow.
+    clock.now = paris(3, 20, 12);
+    plan.update(task.id, { enabled: false });
+    plan.update(task.id, { enabled: true });
+    const once = plan.update(task.id, { repeat: "once" });
+    expect(once.repeat).toBe("once");
+    expect(stamp(once.nextAt)).toEqual([3, 21, 9, 0]);
+  });
+
+  it("a new repetition alone keeps the time it was set for, not its moved next run", () => {
+    const { plan, runNext } = planner(paris(3, 27, 12));
+    const task = plan.add({
+      projectId: "p",
+      text: "t",
+      agentId: "demo",
+      permissionMode: "full",
+      repeat: "daily",
+      at: paris(3, 28, 2, 30),
+    });
+    expect(stamp(runNext(task.id))).toEqual([3, 29, 3, 30]);
+    const weekdays = plan.update(task.id, { repeat: "weekdays" });
+    expect(stamp(weekdays.nextAt)).toEqual([3, 30, 2, 30]);
+  });
+
   it("a task given a new time counts from it; one saved before keeps working", () => {
     const { plan, store, runNext } = planner(paris(3, 26, 12));
     const task = plan.add({
@@ -220,6 +259,25 @@ describe("what the runs of a planned task leave", { timeout: 60_000 }, () => {
     await hub.whenIdle(second);
     expect(store.getThread(first)!.archived).toBe(true);
     expect(store.getThread(second)!.archived).toBeFalsy();
+  });
+
+  it("an earlier run the user pinned stays in sight", async () => {
+    const { hub, store, projectId } = repoHub();
+    await hub.recovered;
+    const task = hub.scheduler.add({
+      projectId,
+      text: "Résume la journée",
+      agentId: "demo",
+      permissionMode: "full",
+      repeat: "daily",
+      at: Date.now() + 3_600_000,
+    });
+    const first = hub.scheduler.runNow(task.id);
+    await hub.whenIdle(first);
+    store.updateThread(first, { pinned: true });
+    const second = hub.scheduler.runNow(task.id);
+    await hub.whenIdle(second);
+    expect(store.getThread(first)!.archived).toBeFalsy();
   });
 
   it("an earlier run the user deleted, or put away already, is left as it is", async () => {
