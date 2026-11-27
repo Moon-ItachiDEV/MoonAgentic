@@ -1,7 +1,7 @@
 // A new thread starts from what GitHub has of the project's branch, not from the copy the
 // project's folder was last pulled at; the folder itself catches up when nothing is lost.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import { freshStart } from "../src/git.ts";
 import { Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
 import type { Client } from "../src/hub.ts";
+import { removeTempDir } from "./temp-dir.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -32,7 +33,7 @@ const identity = (dir: string) => {
 /** A project's folder pushed to a bare remote, then a pull request merged on the remote. */
 function mergedElsewhere() {
   const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-fresh-"));
-  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  cleanups.push(() => removeTempDir(root));
   const repo = path.join(root, "repo");
   const remote = path.join(root, "remote.git");
   mkdirSync(repo);

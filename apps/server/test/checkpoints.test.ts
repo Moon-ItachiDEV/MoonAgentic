@@ -64,9 +64,14 @@ describe("the copy of the write-ahead log", () => {
 describe("a closed database", () => {
   it("lets go of all its files at once, even just after a copy of its log", async () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-closed-"));
-    cleanups.push(() => rmSync(dir, { recursive: true, force: true, maxRetries: 10 }));
     const file = path.join(dir, "state.sqlite");
     const store = new Store(file);
+    let open = true;
+    // Failed before its close, the test still closes the database before removing its folder.
+    cleanups.push(() => {
+      if (open) store.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10 });
+    });
     const inside = (store as unknown as { checkpoints: Checkpoints }).checkpoints as unknown as {
       timer: NodeJS.Timeout;
       busy: boolean;
@@ -84,6 +89,7 @@ describe("a closed database", () => {
     expect(inside.worker).toBeDefined();
     while (inside.busy) await new Promise((resolve) => setTimeout(resolve, 10));
     store.close();
+    open = false;
     // No retry: on Windows, one file still open anywhere in the process refuses this.
     rmSync(dir, { recursive: true, force: true });
     expect(existsSync(dir)).toBe(false);
