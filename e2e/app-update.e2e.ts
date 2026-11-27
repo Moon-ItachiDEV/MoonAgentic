@@ -388,6 +388,42 @@ describe("the update's capsule and card, once reviewed", () => {
     await page.close();
   });
 
+  it("reopens at once after a brisk pull-down on a phone with reduced motion", async () => {
+    shell.say({ ...LATER, state: "ready" });
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+      reducedMotion: "reduce",
+    });
+    const page = await context.newPage();
+    await told(page);
+    await page.goto(url);
+    await capsule(page).tap();
+    const card = page.getByRole("dialog", { name: "Mise à jour 0.1.17" });
+    await page.locator(".sheet.upw.on").waitFor();
+    await expect
+      .poll(async () => (await card.locator(".grab").boundingBox())?.y ?? 999)
+      .toBeLessThan(700);
+    const at = (await card.locator(".grab").boundingBox())!;
+    const cdp = await context.newCDPSession(page);
+    const finger = (type: string, dy = 0) =>
+      cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints:
+          type === "touchEnd" ? [] : [{ x: at.x + at.width / 2, y: at.y + at.height / 2 + dy }],
+      });
+    await finger("touchStart");
+    for (let dy = 20; dy <= 220; dy += 20) await finger("touchMove", dy);
+    await finger("touchEnd");
+    await expect.poll(() => card.count()).toBe(0);
+    // The sheet left immediately; the next tap must still reach the page, not be swallowed by a
+    // phantom touch fling.
+    await capsule(page).tap();
+    await card.waitFor({ timeout: 5_000 });
+    await context.close();
+  });
+
   it("is pulled down by its handle on a phone, and has no handle while it installs", async () => {
     shell.say({ ...LATER, state: "ready" });
     const context = await browser.newContext({
