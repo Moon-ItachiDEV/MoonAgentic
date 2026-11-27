@@ -322,6 +322,8 @@ type ProjectLook = Pick<Project, "icon" | "color">;
 const SETTLED_REVIEWS = "settledReviews";
 /** The projects that keep a thread's branch once its pull request is merged. */
 const KEEP_MERGED_BRANCHES = "keepMergedBranches";
+/** The projects whose folder is not brought up to GitHub's copy by itself. */
+const NO_AUTO_PULL = "noAutoPull";
 /** The projects put on hold from their settings. */
 const PAUSED_PROJECTS = "pausedProjects";
 /** Each project's rules for a quota that runs out, by project id. */
@@ -1596,6 +1598,16 @@ export class Hub {
           .getSetting<string[]>(KEEP_MERGED_BRANCHES, [])
           .filter((p) => p !== project.id && this.store.getProject(p));
         this.store.setSetting(KEEP_MERGED_BRANCHES, message.on ? others : [...others, project.id]);
+        this.broadcast({ type: "project", project: this.withGit(project) });
+        return;
+      }
+      case "project.setAutoPull": {
+        const project = this.store.getProject(message.projectId);
+        if (!project) throw new Error("Ce projet n'existe plus.");
+        const others = this.store
+          .getSetting<string[]>(NO_AUTO_PULL, [])
+          .filter((p) => p !== project.id && this.store.getProject(p));
+        this.store.setSetting(NO_AUTO_PULL, message.on ? others : [...others, project.id]);
         this.broadcast({ type: "project", project: this.withGit(project) });
         return;
       }
@@ -5024,6 +5036,12 @@ export class Hub {
       }
       // A pooled session whose connection already closed is replaced, not continued.
       const continuing = this.pool.has(thread.id) && !this.pool.isDead(thread.id);
+      await this.catchUpFolder(thread.id);
+      // Stopped meanwhile, the server too: no agent is started for it.
+      if (this.closed || this.cancelled.has(thread.id)) {
+        this.settleTurn(thread.id, { status: "idle" });
+        return;
+      }
       session = await this.session(thread);
       await this.checkpoint(thread.id, itemId);
       if (this.cancelled.has(thread.id)) {
@@ -5207,20 +5225,38 @@ export class Hub {
   }
 
   /**
-   * True while an agent works right in the project's folder (a thread without a folder of its
-   * own): the folder is not brought up to GitHub's copy under it.
+   * True while a turn works right in the project's folder (the coordinator, or a thread
+   * without a folder of its own), `except` that one: the folder is not moved under it.
    */
-  private agentInFolder(projectId: string): boolean {
+  private agentInFolder(projectId: string, except?: string): boolean {
     return this.store
       .listThreads()
       .some(
         (t) =>
           t.projectId === projectId &&
-          t.status === "running" &&
+          t.id !== except &&
+          this.turns.has(t.id) &&
           !t.workspace &&
-          !t.worksIn &&
-          t.kind !== "coordinator",
+          !t.worksIn,
       );
+  }
+
+  /** Whether the project's folder follows GitHub by itself; see {@link Project.autoPull}. */
+  private autoPull(projectId: string): boolean {
+    return !this.store.getSetting<string[]>(NO_AUTO_PULL, []).includes(projectId);
+  }
+
+  /**
+   * Brings the project's folder up to GitHub's copy of its branch before a turn that works
+   * right in it, so the coordinator reads what was merged. Never holds the turn on a failure.
+   */
+  private async catchUpFolder(threadId: string): Promise<void> {
+    const thread = this.store.getThread(threadId);
+    const project = thread && this.store.getProject(thread.projectId);
+    if (this.closed || !thread || !project || thread.workspace || thread.worksIn) return;
+    if (this.isDiscussions(project.id) || !this.withGit(project).git) return;
+    if (!this.autoPull(project.id) || this.agentInFolder(project.id, threadId)) return;
+    await freshStart(project.path, true).catch(() => undefined);
   }
 
   /** Makes the thread's worktree on first use; returns the folder the agent works in. */
@@ -5232,7 +5268,10 @@ export class Hub {
     if (!workspace.base) {
       // Where the branch starts is written down before git makes anything, so a stop in
       // between is finished next time. A branch made before that rule keeps its own start.
-      const start = await freshStart(project.path, !this.agentInFolder(project.id));
+      const start = await freshStart(
+        project.path,
+        this.autoPull(project.id) && !this.agentInFolder(project.id),
+      );
       if (await branchExists(project.path, workspace.branch)) {
         start.base = await forkPoint(project.path, workspace.branch);
       }
@@ -5314,7 +5353,8 @@ export class Hub {
     const keep = this.store.getSetting<string[]>(KEEP_MERGED_BRANCHES, []).includes(project.id);
     const archived = this.store.getSetting<string[]>(ARCHIVED_PROJECTS, []).includes(project.id);
     const paused = this.paused(project.id);
-    return git || pinned || locked || look || quota || keep || archived || paused
+    const manual = !this.autoPull(project.id);
+    return git || pinned || locked || look || quota || keep || archived || paused || manual
       ? {
           ...project,
           ...(git ? { git } : {}),
@@ -5326,6 +5366,7 @@ export class Hub {
           ...(keep ? { deleteMerged: false as const } : {}),
           ...(archived ? { archived } : {}),
           ...(paused ? { paused } : {}),
+          ...(manual ? { autoPull: false as const } : {}),
         }
       : project;
   }

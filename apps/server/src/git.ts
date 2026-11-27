@@ -1409,16 +1409,27 @@ async function unmergedFiles(dir: string): Promise<string[]> {
 
 /** How long asking the remote for its branch may take, before the last known copy is used. */
 const FETCH_TIMEOUT_MS = 30_000;
+/**
+ * How long a new thread or a turn waits on the remote before it goes on with the folder's own
+ * copy: GitHub slow or the computer offline must not hold the user's message.
+ */
+export const START_FETCH_TIMEOUT_MS = 8_000;
 /** A remote asked less than this long ago is not asked again: the panel asks often. */
 const FETCH_EVERY_MS = 60_000;
 const fetchedAt = new Map<string, number>();
+/** The fetch under way for each remote branch: one asked meanwhile waits for it. */
+const fetching = new Map<string, Promise<unknown>>();
 
 /**
  * The branch to compare a thread's branch with: `baseBranch` itself, or its copy on the
  * remote when that one is ahead (a pull request merged on GitHub), asked for again first.
  * When the remote cannot be reached, its last known copy is used.
  */
-export async function syncTarget(dir: string, baseBranch: string): Promise<string> {
+export async function syncTarget(
+  dir: string,
+  baseBranch: string,
+  fetchTimeout = FETCH_TIMEOUT_MS,
+): Promise<string> {
   const upstream = await gitCode(dir, [
     "rev-parse",
     "--abbrev-ref",
@@ -1431,15 +1442,30 @@ export async function syncTarget(dir: string, baseBranch: string): Promise<strin
   const remote = remoteRef.slice(0, slash);
   const key = `${dir}\0${remoteRef}`;
   const last = fetchedAt.get(key) ?? 0;
-  if (Date.now() - last > FETCH_EVERY_MS) {
+  if (!fetching.has(key) && Date.now() - last > FETCH_EVERY_MS) {
     fetchedAt.set(key, Date.now());
-    const auth = await githubGitAuth().catch(() => ({ args: [] as string[], env: {} }));
-    await git(
-      dir,
-      [...auth.args, "fetch", "-q", "--no-tags", remote, remoteRef.slice(slash + 1)],
-      auth.env,
-      FETCH_TIMEOUT_MS,
-    ).catch(() => undefined);
+    const run = (async () => {
+      const auth = await githubGitAuth().catch(() => ({ args: [] as string[], env: {} }));
+      await git(
+        dir,
+        [...auth.args, "fetch", "-q", "--no-tags", remote, remoteRef.slice(slash + 1)],
+        auth.env,
+        fetchTimeout,
+      ).catch(() => undefined);
+    })().finally(() => fetching.delete(key));
+    fetching.set(key, run);
+  }
+  // A fetch started by another thread a moment ago is waited for, within this one's own time.
+  const under = fetching.get(key);
+  if (under) {
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      under,
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, fetchTimeout);
+      }),
+    ]);
+    clearTimeout(timer);
   }
   if ((await gitCode(dir, ["rev-parse", "-q", "--verify", `${remoteRef}^{commit}`])).code !== 0) {
     return baseBranch;
@@ -1458,9 +1484,9 @@ export async function syncTarget(dir: string, baseBranch: string): Promise<strin
 /**
  * Where a new thread's branch starts: the folder's branch, or its copy on the remote when
  * that one is ahead (pull requests merged on GitHub since the folder was last pulled), so a
- * thread never starts from an old copy. When `moveFolder`, the folder itself is brought up to
- * it as well, the way `git pull --ff-only` would, but only when that is all it does: on its
- * branch, no tracked file changed, no commit of its own. Anything else leaves it as it is.
+ * thread never starts from an old copy. The remote is given a few seconds, then the folder's
+ * own copy is used. When `moveFolder`, the folder itself is brought up to it as well, the way
+ * `git pull --ff-only` would, but only when that is all it does; see {@link fastForward}.
  */
 export async function freshStart(
   projectDir: string,
@@ -1468,31 +1494,55 @@ export async function freshStart(
 ): Promise<{ base: string; baseBranch?: string; subdir?: string }> {
   const start = await worktreeStart(projectDir);
   if (!start.baseBranch) return start;
-  const target = await syncTarget(projectDir, start.baseBranch);
+  const target = await syncTarget(projectDir, start.baseBranch, START_FETCH_TIMEOUT_MS);
   if (target === start.baseBranch) return start;
   const ahead = (
     await gitCode(projectDir, ["rev-parse", "-q", "--verify", `${target}^{commit}`])
   ).stdout.trim();
   if (!ahead) return start;
-  if (moveFolder) await fastForward(projectDir, start.baseBranch, start.base, ahead);
+  if (moveFolder) await fastForward(projectDir, start.baseBranch, target, start.base, ahead);
   return { ...start, base: ahead };
 }
 
 /**
- * Moves the folder's branch forward to `to`, when it is still on `branch` at `from` and no
- * tracked file is changed. Run with the worktree changes, so no `git worktree add` runs at
- * the same time. Never fails: a folder it cannot move is simply left where it was.
+ * Whether `remoteRef` (« origin/main ») is the remote's default branch: the one its `HEAD`
+ * names, or `main` or `master` when the clone never learned it.
  */
-function fastForward(dir: string, branch: string, from: string, to: string): Promise<void> {
+async function isDefaultBranch(dir: string, remoteRef: string): Promise<boolean> {
+  const remote = remoteRef.slice(0, remoteRef.indexOf("/"));
+  const named = await gitCode(dir, [
+    "symbolic-ref",
+    "-q",
+    "--short",
+    `refs/remotes/${remote}/HEAD`,
+  ]);
+  const head = named.code === 0 ? named.stdout.trim() : "";
+  return head ? head === remoteRef : [`${remote}/main`, `${remote}/master`].includes(remoteRef);
+}
+
+/**
+ * Moves the folder's branch forward to `to`, its copy `remoteRef` on the remote, when that is
+ * the remote's default branch, the folder is still on `branch` at `from`, and nothing in it is
+ * the user's: no changed file, no file git does not track. Run with the worktree changes, so
+ * no `git worktree add` runs at the same time. Never fails: a folder it cannot move is simply
+ * left where it was.
+ */
+function fastForward(
+  dir: string,
+  branch: string,
+  remoteRef: string,
+  from: string,
+  to: string,
+): Promise<void> {
   return oneAtATime(dir, async () => {
+    if (!(await isDefaultBranch(dir, remoteRef))) return;
     const [on, at, changed] = await Promise.all([
       gitCode(dir, ["branch", "--show-current"]),
       gitCode(dir, ["rev-parse", "HEAD"]),
-      gitCode(dir, ["status", "--porcelain", "--untracked-files=no"]),
+      gitCode(dir, ["status", "--porcelain"]),
     ]);
     if (on.code || at.code || changed.code) return;
     if (on.stdout.trim() !== branch || at.stdout.trim() !== from || changed.stdout.trim()) return;
-    // git itself refuses when an untracked file would be overwritten: left as it is then.
     await gitCode(dir, ["merge", "--ff-only", "-q", to]);
   });
 }

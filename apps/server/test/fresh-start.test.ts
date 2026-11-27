@@ -4,11 +4,12 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { freshStart } from "../src/git.ts";
 import { Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
+import type { Client } from "../src/hub.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -55,19 +56,26 @@ function mergedElsewhere() {
   return { root, repo, old, merged: git(other, "rev-parse", "HEAD") };
 }
 
+/** A hub on that folder, closed after the test. */
+function hubOn(root: string, repo: string) {
+  const store = new Store(path.join(root, "state.sqlite"));
+  const hub = new Hub(store, new Agents({ demo: true }), {
+    worktreesDir: path.join(root, "worktrees"),
+  });
+  cleanups.unshift(async () => {
+    await hub.close();
+    store.close();
+  });
+  return { hub, store, projectId: hub.createProject("demo", repo) };
+}
+
+const client: Client = { send: () => undefined };
+
 // Many git commands each: Windows runners are slow at them.
 describe("where a new thread starts", { timeout: 40_000 }, () => {
   it("starts from GitHub's copy and brings the project's folder up to it", async () => {
     const { root, repo, merged } = mergedElsewhere();
-    const store = new Store(path.join(root, "state.sqlite"));
-    const hub = new Hub(store, new Agents({ demo: true }), {
-      worktreesDir: path.join(root, "worktrees"),
-    });
-    cleanups.unshift(async () => {
-      await hub.close();
-      store.close();
-    });
-    const projectId = hub.createProject("demo", repo);
+    const { hub, store, projectId } = hubOn(root, repo);
     const threadId = hub.createThread({
       projectId,
       agentId: "demo",
@@ -114,5 +122,114 @@ describe("where a new thread starts", { timeout: 40_000 }, () => {
     git(repo, "checkout", "-q", "-b", "seule");
     const here = git(repo, "rev-parse", "HEAD");
     expect(await freshStart(repo, true)).toEqual({ base: here, baseBranch: "seule" });
+  });
+
+  it("leaves a folder with an untracked file as it is", async () => {
+    const { repo, old, merged } = mergedElsewhere();
+    writeFileSync(path.join(repo, "brouillon.md"), "pas encore ajouté\n");
+    expect(await freshStart(repo, true)).toMatchObject({ base: merged });
+    expect(git(repo, "rev-parse", "HEAD")).toBe(old);
+  });
+
+  it("only moves the default branch, never another one", async () => {
+    const { root, repo } = mergedElsewhere();
+    git(repo, "checkout", "-q", "-b", "travail");
+    git(repo, "push", "-q", "-u", "origin", "travail");
+    const mine = git(repo, "rev-parse", "HEAD");
+    const other = path.join(root, "autre");
+    git(other, "fetch", "-q", "origin");
+    git(other, "checkout", "-q", "-b", "travail", "origin/travail");
+    writeFileSync(path.join(other, "travail.md"), "poussé ailleurs\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-q", "-m", "ailleurs");
+    git(other, "push", "-q", "origin", "travail");
+    const ahead = git(other, "rev-parse", "HEAD");
+    // The thread still starts from the remote's copy of the branch it was on.
+    expect(await freshStart(repo, true)).toMatchObject({ base: ahead, baseBranch: "travail" });
+    expect(git(repo, "rev-parse", "HEAD")).toBe(mine);
+  });
+
+  it("gives up on a remote that does not answer within a few seconds", async () => {
+    const { repo, old } = mergedElsewhere();
+    // A remote that hangs: the fetch is cut short and the folder's own copy is used.
+    git(repo, "config", "remote.origin.uploadpack", "sleep 12; git-upload-pack");
+    const startedAt = Date.now();
+    expect(await freshStart(repo, true)).toMatchObject({ base: old });
+    expect(Date.now() - startedAt).toBeLessThan(20_000);
+    expect(git(repo, "rev-parse", "HEAD")).toBe(old);
+    // The remote's side sleeps on after the cut: its folder is removed once it is done.
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.max(0, 13_000 - (Date.now() - startedAt))),
+    );
+  });
+
+  it("does not move the folder under a turn that works in it", async () => {
+    const { root, repo, old, merged } = mergedElsewhere();
+    const { hub, store, projectId } = hubOn(root, repo);
+    // Its own turn would bring the folder up first: off while it starts.
+    await hub.handle(client, { type: "project.setAutoPull", projectId, on: false });
+    // A thread right in the folder, its turn held on a permission.
+    const inFolder = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      isolated: false,
+      text: "Modifie le README",
+    });
+    await vi.waitFor(() => expect(store.getThread(inFolder)?.status).toBe("waiting"), {
+      timeout: 15_000,
+    });
+    await hub.handle(client, { type: "project.setAutoPull", projectId, on: true });
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: true,
+      text: "Bonjour",
+    });
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)!.workspace!.base).toBe(merged);
+    expect(git(repo, "rev-parse", "HEAD")).toBe(old);
+    await hub.cancel(inFolder);
+  });
+
+  it("gives two threads started at once the same fresh copy", async () => {
+    const { repo, merged } = mergedElsewhere();
+    const [a, b] = await Promise.all([freshStart(repo, false), freshStart(repo, false)]);
+    expect(a.base).toBe(merged);
+    expect(b.base).toBe(merged);
+  });
+
+  it("brings the folder up before a turn of a thread that works right in it", async () => {
+    const { root, repo, merged } = mergedElsewhere();
+    const { hub, projectId } = hubOn(root, repo);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: false,
+      text: "Bonjour",
+    });
+    await hub.whenIdle(threadId);
+    expect(git(repo, "rev-parse", "HEAD")).toBe(merged);
+  });
+
+  it("leaves the folder alone when the project says so, threads still start fresh", async () => {
+    const { root, repo, old, merged } = mergedElsewhere();
+    const { hub, store, projectId } = hubOn(root, repo);
+    await hub.handle(client, { type: "project.setAutoPull", projectId, on: false });
+    expect(hub.snapshot().projects.find((p) => p.id === projectId)?.autoPull).toBe(false);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "full",
+      isolated: true,
+      text: "Bonjour",
+    });
+    await hub.whenIdle(threadId);
+    expect(store.getThread(threadId)!.workspace!.base).toBe(merged);
+    expect(git(repo, "rev-parse", "HEAD")).toBe(old);
+    await hub.handle(client, { type: "project.setAutoPull", projectId, on: true });
+    expect(hub.snapshot().projects.find((p) => p.id === projectId)?.autoPull).toBeUndefined();
   });
 });
