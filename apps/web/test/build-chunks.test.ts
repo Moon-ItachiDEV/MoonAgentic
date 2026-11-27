@@ -109,5 +109,26 @@ describe("web production build chunks", () => {
         : Buffer.from(htmlAsset!.source).toString("utf8");
     expect(html).not.toContain(planner.fileName);
     expect(html).not.toContain(settings.fileName);
+
+    // The update's card comes on demand with its own styles: the page's stylesheet holds the
+    // capsule that announces a version (on every page), not the card.
+    const styles = outputs
+      .filter((item) => item.type === "asset" && item.fileName.endsWith(".css"))
+      .map((item) => ({
+        fileName: item.fileName,
+        css:
+          item.type === "asset" && typeof item.source === "string"
+            ? item.source
+            : Buffer.from((item as { source: Uint8Array }).source).toString("utf8"),
+      }));
+    const pageStyles = styles
+      .filter((style) => html.includes(style.fileName))
+      .map((style) => style.css)
+      .join("\n");
+    expect(pageStyles).toContain(".useg");
+    expect(pageStyles).not.toContain(".ucard");
+    const cardStyles = styles.filter((style) => style.css.includes(".ucard"));
+    expect(cardStyles).toHaveLength(1);
+    expect(html).not.toContain(cardStyles[0]!.fileName);
   });
 });

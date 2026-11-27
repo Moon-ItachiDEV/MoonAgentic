@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium, type Page } from "playwright";
-import { addProject } from "./ui.ts";
+import { addProject, directThread, pickAgent } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -56,7 +56,8 @@ class Shell {
     child.on("message", (message) => {
       const asked = (message as { moon?: unknown } | null)?.moon;
       if (asked === "hello" || asked === "check") this.report();
-      if (asked === "install") void this.replace();
+      // Stopped by the end of the checks while it comes back: nobody waits for it then.
+      if (asked === "install") void this.replace().catch(() => undefined);
     });
     this.url = new Promise<string>((resolve, reject) => {
       let out = "";
@@ -255,5 +256,179 @@ describe("a newer version of MoonAgentic", () => {
     // The page's own errors only: a socket cut by the restart is the restart itself.
     expect(errors).toEqual([]);
     await page.close();
+  });
+});
+
+// Neon's review of the card and its capsule (PR 200), each point seen in the built app.
+describe("the update's capsule and card, once reviewed", () => {
+  const LATER = { ...NEWER, version: "0.1.17" };
+  const ANNOUNCED = "moonagentic.update.announced";
+
+  /** A page that already announced this version: its capsule only shows the small moon. */
+  async function told(page: Page, version = LATER.version) {
+    await page.addInitScript(
+      ([key, value]) => localStorage.setItem(key!, value!),
+      [ANNOUNCED, version],
+    );
+  }
+
+  it("does not draw the capsule again for each word an agent writes", async () => {
+    shell.say({ ...LATER, state: "ready" });
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await told(page);
+    // Each drawing of the capsule reads what this device announced: counted.
+    await page.addInitScript((key) => {
+      const counted = { reads: 0 };
+      (window as unknown as { counted: typeof counted }).counted = counted;
+      const read = Storage.prototype.getItem;
+      Storage.prototype.getItem = function (name: string) {
+        if (name === key) counted.reads += 1;
+        return read.call(this, name);
+      };
+    }, ANNOUNCED);
+    await page.goto(url);
+    await directThread(page);
+    await pickAgent(page);
+    const composer = page.getByRole("combobox", { name: "Message" });
+    await composer.fill("/flux");
+    await composer.press("Enter");
+    await page.waitForURL(/\/t\//);
+    await capsule(page).waitFor();
+    const reads = () =>
+      page.evaluate(() => (window as unknown as { counted: { reads: number } }).counted.reads);
+    const before = await reads();
+    // Nearly nine hundred words, one at a time.
+    await expect.poll(() => page.locator(".md h2").count(), { timeout: 30_000 }).toBe(12);
+    await expect.poll(() => page.locator(".working").count(), { timeout: 30_000 }).toBe(0);
+    expect((await reads()) - before).toBeLessThanOrEqual(2);
+    await page.close();
+  });
+
+  it("announces as soon as the small moon has risen, not half a second after", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // When the capsule's button shows, when its moon has risen, when it stretches.
+    await page.addInitScript(() => {
+      const seen = { shown: 0, risen: 0, announced: 0 };
+      (window as unknown as { seen: typeof seen }).seen = seen;
+      const look = () => {
+        const now = performance.now();
+        const button = document.querySelector(".useg");
+        if (button && !seen.shown) seen.shown = now;
+        if (seen.shown && !seen.risen && button && !button.classList.contains("rise"))
+          seen.risen = now;
+        if (!seen.announced && document.querySelector(".gcap.upc.ann")) seen.announced = now;
+      };
+      new MutationObserver(look).observe(document, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["class"],
+      });
+    });
+    await page.goto(url);
+    await page.locator(".gcap.upc.ann").waitFor();
+    await page.waitForTimeout(300);
+    const seen = await page.evaluate(
+      () =>
+        (window as unknown as { seen: { shown: number; risen: number; announced: number } }).seen,
+    );
+    // The rise lasts 1.3 s; the announcement was set 100 ms after it, and must not be set
+    // again, half a second later, by the end of the rise.
+    expect(seen.risen - seen.shown).toBeGreaterThan(1200);
+    expect(seen.announced - seen.risen).toBeLessThan(450);
+    await page.close();
+  });
+
+  it("opens in the middle from the settings, and from the capsule when pressed there", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await told(page);
+    await page.goto(url);
+    await capsule(page).click();
+    const card = page.getByRole("dialog", { name: "Mise à jour 0.1.17" });
+    await card.waitFor();
+    expect(await card.getAttribute("data-from")).toBe("cap");
+    await card.getByRole("button", { name: "Fermer" }).click();
+    await expect.poll(() => card.count()).toBe(0);
+
+    await page.getByRole("button", { name: "Réglages" }).click();
+    await page.locator(".sver .upbg").click();
+    await card.waitFor();
+    expect(await card.getAttribute("data-from")).toBeNull();
+    await page.close();
+  });
+
+  it("leaves no height written on the card when it is closed while it changes height", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await told(page);
+    await page.goto(url);
+    shell.say({
+      ...LATER,
+      state: "ready",
+      notes: [...NOTES, ...Array.from({ length: 6 }, (_, i) => ({ title: `Note ${i + 4}` }))],
+    });
+    await capsule(page).click();
+    const card = page.getByRole("dialog", { name: "Mise à jour 0.1.17" });
+    await card.getByRole("button", { name: /de plus/ }).waitFor();
+    await page.waitForTimeout(1800);
+    // The list opens (the card glides to its new height), and the card is closed, then
+    // opened again, before the glide is over.
+    await card.getByRole("button", { name: /de plus/ }).click();
+    await page.waitForTimeout(80);
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(120);
+    const during = await page.evaluate(
+      () => document.querySelector<HTMLElement>(".sheet.upw")?.style.height ?? "absent",
+    );
+    await capsule(page).click();
+    await page.waitForTimeout(1500);
+    const after = await page.evaluate(
+      () => document.querySelector<HTMLElement>(".sheet.upw")?.style.height ?? "absent",
+    );
+    expect({ during: during !== "", after }).toEqual({ during: true, after: "" });
+    await page.close();
+  });
+
+  it("is pulled down by its handle on a phone, and has no handle while it installs", async () => {
+    shell.say({ ...LATER, state: "ready" });
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+    await told(page);
+    await page.goto(url);
+    await capsule(page).tap();
+    const card = page.getByRole("dialog", { name: "Mise à jour 0.1.17" });
+    await card.waitFor();
+    await page.waitForTimeout(700);
+    const handle = card.locator(".grab");
+    expect(await handle.isVisible()).toBe(true);
+    const at = (await handle.boundingBox())!;
+    const cdp = await context.newCDPSession(page);
+    const finger = (type: string, dy = 0) =>
+      cdp.send("Input.dispatchTouchEvent", {
+        type,
+        touchPoints:
+          type === "touchEnd" ? [] : [{ x: at.x + at.width / 2, y: at.y + at.height / 2 + dy }],
+      });
+    await finger("touchStart");
+    for (let dy = 20; dy <= 220; dy += 20) await finger("touchMove", dy);
+    await finger("touchEnd");
+    await expect.poll(() => card.count()).toBe(0);
+
+    // Installing: nothing to pull, and the page's own « Reconnexion » stays out of the way.
+    await capsule(page).tap();
+    await card.getByRole("button", { name: "Installer", exact: true }).tap();
+    const steps = page.getByRole("dialog", { name: "Installation de MoonAgentic 0.1.17" });
+    await steps.waitFor();
+    expect(await steps.locator(".grab").count()).toBe(0);
+    const reconnecting = page.locator(".offp:not(.unsaved)");
+    await reconnecting.waitFor({ state: "attached" });
+    expect(await reconnecting.isVisible()).toBe(false);
+    await page
+      .getByRole("dialog", { name: "MoonAgentic 0.1.17 installée" })
+      .waitFor({ timeout: 30_000 });
+    await context.close();
   });
 });

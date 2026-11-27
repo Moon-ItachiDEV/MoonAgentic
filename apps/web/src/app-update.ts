@@ -218,6 +218,53 @@ export function stopwatch(ms: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+/** What a download was last seen at, and the pace measured so far (share per second). */
+export interface DownloadPace {
+  at: number;
+  progress: number;
+  pace: number;
+}
+
+/**
+ * The pace of a download after a new figure: smoothed while it goes up (one fast packet does
+ * not promise the rest), measured anew when it starts again from lower (another version, or a
+ * download tried again).
+ */
+export function downloadPace(last: DownloadPace, progress: number, now: number): DownloadPace {
+  if (progress === last.progress) return last;
+  if (progress < last.progress) return { at: now, progress, pace: 0 };
+  const pace = (progress - last.progress) / Math.max(0.05, (now - last.at) / 1000);
+  return { at: now, progress, pace: last.pace ? last.pace * 0.6 + pace * 0.4 : pace };
+}
+
+/** How close the moon's lit share comes to its figure before it is simply set to it. */
+const GLIDE_END = 0.002;
+
+/**
+ * The lit share one frame later, on its way from what is shown to its figure: a part of the
+ * gap each frame, then the figure itself. A share already there is returned as it is.
+ */
+export function glideStep(shown: number, target: number): number {
+  const gap = target - shown;
+  return Math.abs(gap) < GLIDE_END ? target : shown + gap * 0.09;
+}
+
+/** The small moon's rise in the capsule, the first time it shows on a page. */
+export const RISE_MS = 1300;
+/** A version newly ready waits this long, on a page already at rest, before it is announced. */
+const ANNOUNCE_AFTER_MS = 500;
+
+/**
+ * How long the capsule still waits before it stretches: until 100 ms after its moon's rise
+ * when it rose (`rose`) `sinceShown` ms ago and still rises, else the usual pause. Worked out
+ * from when the capsule showed, so that setting the wait again during the rise keeps the same
+ * moment.
+ */
+export function announceDelay(rose: boolean, sinceShown: number): number {
+  const left = RISE_MS + 100 - sinceShown;
+  return rose && left > 0 ? left : ANNOUNCE_AFTER_MS;
+}
+
 /** The capsule's two lines while it announces, and what its small moon says the rest of the time. */
 export function capsuleOf(app: AppInfo): {
   title: string;
@@ -325,16 +372,17 @@ export function memoFate(
 /** The command that brings a clone up to date, as the user runs it to start MoonAgentic. */
 export const PULL_COMMAND = "git pull; pnpm install; pnpm build; pnpm start";
 
-// Which card is open: one for the whole page, opened from the side bar or the home page.
-let card: { top?: number; left?: number } | null = null;
+// Which card is open: one for the whole page. `from`: pressed on the capsule, the window is
+// born from it; opened from elsewhere (the settings), it comes in the middle as any window.
+let card: { from?: "capsule" } | null = null;
 const listeners = new Set<() => void>();
 export const readUpdateCard = () => card;
 export function subscribeUpdateCard(listener: () => void): () => void {
   listeners.add(listener);
   return () => listeners.delete(listener);
 }
-export function openUpdateCard(at?: { top: number; left: number }): void {
-  card = at ? { ...at } : {};
+export function openUpdateCard(from?: "capsule"): void {
+  card = from ? { from } : {};
   for (const l of listeners) l();
 }
 export function closeUpdateCard(): void {

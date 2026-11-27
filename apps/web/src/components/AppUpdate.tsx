@@ -15,6 +15,7 @@ import {
 import {
   cardState,
   closeUpdateCard,
+  downloadPace,
   etaLabel,
   formatSize,
   type InstallMemo,
@@ -42,8 +43,20 @@ import { expectNewBuild } from "../update.ts";
 import { Glyph, I } from "../v2/I.tsx";
 import { DrawnCheck, MoonPhase } from "../v2/MoonPhase.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
+import { useScrFlag } from "../v2/scr.ts";
+// The card's own sheet of styles comes with it; the capsule's is in the page's (maj.css).
+import "../v2/maj-carte.css";
 
-export const useApp = () => useSyncExternalStore(connection.subscribe, connection.getState);
+/** The app's own lines of the state: nothing here is drawn again for each word an agent writes. */
+export function useApp() {
+  const app = useSyncExternalStore(connection.subscribe, () => connection.getState().app);
+  const status = useSyncExternalStore(connection.subscribe, () => connection.getState().status);
+  return { app, status };
+}
+
+/** How many threads are at work: a number, the same until one starts or ends. */
+const runningThreads = () =>
+  connection.getState().threads.filter((t) => t.status === "running").length;
 
 /** How many notes show before « n de plus ». */
 const NOTES_SHOWN = 6;
@@ -183,17 +196,7 @@ function Download({ app }: { app: AppInfo }) {
   const progress = app.update.progress ?? 0;
   const size = app.update.size;
   const last = useRef({ at: Date.now(), progress, pace: 0 });
-  if (progress > last.current.progress) {
-    const now = Date.now();
-    const pace =
-      (progress - last.current.progress) / Math.max(0.05, (now - last.current.at) / 1000);
-    // Smoothed: one fast packet does not promise the rest.
-    last.current = {
-      at: now,
-      progress,
-      pace: last.current.pace ? last.current.pace * 0.6 + pace * 0.4 : pace,
-    };
-  }
+  last.current = downloadPace(last.current, progress, Date.now());
   const percent = Math.round(progress * 100);
   return (
     <div className="uprog">
@@ -265,6 +268,8 @@ function Card(props: {
   memo?: InstallMemo;
   connected: boolean;
   running: number;
+  /** Opened by a press on the capsule: the window is born from it and goes back to it. */
+  fromCapsule: boolean;
   onClose: () => void;
 }) {
   const { app, memo } = props;
@@ -280,12 +285,19 @@ function Card(props: {
     return () => clearTimeout(done);
   }, []);
 
-  // On a wide screen the window is born from the capsule and goes back to it.
+  // On a wide screen the window is born from the capsule and goes back to it, while there is
+  // one on the page to go back to: not once the version is in or being installed, nor when
+  // the card was opened from elsewhere (the settings, which cover the capsule).
+  const toCapsule = props.fromCapsule && look !== "done" && look !== "installing";
   useLayoutEffect(() => {
     const sheet = root.current?.closest<HTMLElement>(".sheet");
-    const capsule = document.querySelector(".mtop .gcap.upc");
-    const parent = sheet?.offsetParent;
-    if (!sheet || !capsule || !parent || !sheet.closest(".scr.roomy")) return;
+    if (!sheet) return;
+    const capsule = toCapsule ? document.querySelector(".mtop .gcap.upc") : null;
+    const parent = sheet.offsetParent;
+    if (!capsule || !parent || !sheet.closest(".scr.roomy")) {
+      delete sheet.dataset.from;
+      return;
+    }
     const from = capsule.getBoundingClientRect();
     const box = parent.getBoundingClientRect();
     sheet.style.setProperty(
@@ -297,7 +309,7 @@ function Card(props: {
       `${from.top + from.height / 2 - (box.top + sheet.offsetTop)}px`,
     );
     sheet.dataset.from = "cap";
-  }, []);
+  }, [toCapsule]);
 
   // The card changes height between two looks: it glides there.
   const height = useRef(0);
@@ -322,6 +334,8 @@ function Card(props: {
     return () => {
       clearTimeout(done);
       sheet.classList.remove("hgt");
+      // Left before the glide ended: the sheet keeps no height of the card's.
+      sheet.style.height = "";
     };
   }, [look, allNotes]);
 
@@ -563,7 +577,6 @@ function Card(props: {
         role={look === "installing" ? "status" : undefined}
         aria-live={look === "installing" ? "polite" : undefined}
       >
-        <div className="grab" />
         <div className="uhd">
           <span className={`umw${bloom ? " bloom" : ""}`}>
             <MoonPhase
@@ -636,10 +649,10 @@ let watch: InstallWatch = { saw: false, lost: false };
  * of the database until the app is back, then what the version brought.
  */
 export function AppUpdateHost() {
-  const state = useApp();
+  const { app, status } = useApp();
+  const running = useSyncExternalStore(connection.subscribe, runningThreads);
   const at = useSyncExternalStore(subscribeUpdateCard, readUpdateCard);
-  const app = state.app;
-  const connected = state.status === "open";
+  const connected = status === "open";
   const installing = !!app?.update.phase;
   const phase = app?.update.phase;
   // Read during the drawing, kept after it: a drawing React throws away changes nothing.
@@ -675,7 +688,8 @@ export function AppUpdateHost() {
   const overlay = !!app && (installing || waitingBack);
   const done = fate === "show";
   const open = overlay || done || (!!at && updateShown(app));
-  const running = state.threads.filter((t) => t.status === "running").length;
+  // The page's own « Reconnexion » stays out while the card says it.
+  useScrFlag("upi", overlay);
   const close = () => {
     if (done) {
       saveMemo(undefined);
@@ -697,14 +711,17 @@ export function AppUpdateHost() {
             : `Mise à jour ${shown.update.version ?? ""}`
       }
       className="upw"
-      // The install itself is not left: it shows on every screen until the app is back.
+      // The install itself is not left: it shows on every screen until the app is back, with
+      // no handle to pull it down by.
       modal={overlay}
+      grab={!overlay}
     >
       <Card
         app={shown}
         memo={done ? memo : undefined}
         connected={connected}
         running={running}
+        fromCapsule={at?.from === "capsule"}
         onClose={close}
       />
     </Sheet>

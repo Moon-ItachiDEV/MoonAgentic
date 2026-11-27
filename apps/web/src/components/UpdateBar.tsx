@@ -5,7 +5,8 @@ import { lazy, Suspense, useSyncExternalStore } from "react";
 import { loadMemo, updateShown } from "../app-update.ts";
 import { connection } from "../connection.ts";
 
-const useApp = () => useSyncExternalStore(connection.subscribe, connection.getState);
+// The app's own line of the state: a page is not drawn again for each word an agent writes.
+const useApp = () => useSyncExternalStore(connection.subscribe, () => connection.getState().app);
 
 const Host = lazy(() => import("./AppUpdate.tsx").then((m) => ({ default: m.AppUpdateHost })));
 
@@ -14,7 +15,7 @@ let hostWanted = !!loadMemo();
 
 /** The card and the steps of an install, loaded only once there is a version to speak of. */
 export function AppUpdateHostOnDemand() {
-  const { app } = useApp();
+  const app = useApp();
   // Once loaded it stays: back from an install, the server says there is nothing newer, and
   // the host must still see it come back to load the new build.
   if (updateShown(app)) hostWanted = true;

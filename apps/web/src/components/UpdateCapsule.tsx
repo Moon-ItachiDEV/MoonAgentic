@@ -3,6 +3,7 @@
 // ready, then folds back. It opens the card (AppUpdate.tsx), loaded on demand.
 import type { AppInfo } from "@moonagentic/protocol";
 import {
+  memo,
   type ReactNode,
   useEffect,
   useLayoutEffect,
@@ -11,9 +12,11 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
+  announceDelay,
   announceDue,
   capsuleOf,
   openUpdateCard,
+  RISE_MS,
   readUpdateCard,
   subscribeUpdateCard,
   updateShown,
@@ -22,13 +25,13 @@ import { connection } from "../connection.ts";
 import { readPref, writePref } from "../prefs.ts";
 import { MoonPhase } from "../v2/MoonPhase.tsx";
 
-const useApp = () => useSyncExternalStore(connection.subscribe, connection.getState);
+// The app's own line of the state, nothing else: the capsule is on every page, a thread being
+// written included, and must not be drawn again for each word.
+const useApp = () => useSyncExternalStore(connection.subscribe, () => connection.getState().app);
 
 /** How long the capsule stays stretched, then how long it takes to fold back. */
 const ANNOUNCE_MS = 4800;
 const FOLD_MS = 900;
-/** The small moon's rise, the first time it shows: the announcement waits for it. */
-const RISE_MS = 1300;
 /** The version this device announced, kept across reloads: once per version and device. */
 const ANNOUNCED = "update.announced";
 
@@ -71,15 +74,20 @@ export function resetCapsule(): void {
 export const capsuleShown = (app: AppInfo | null | undefined): app is AppInfo =>
   updateShown(app) && !app.update.phase;
 
-/** The small moon and, while it announces, its two lines. */
-function Segment({ app }: { app: AppInfo }) {
+/**
+ * The small moon and, while it announces, its two lines. Drawn again only when what the server
+ * says of the app changes: the bar that holds it is drawn again far more often.
+ */
+const Segment = memo(function Segment({ app }: { app: AppInfo }) {
   const now = useSyncExternalStore(subscribeBeat, readBeat);
   const button = useRef<HTMLButtonElement>(null);
-  const [rising, setRising] = useState(() => {
-    const first = !risen;
+  // The small moon rises the first time it shows on this page. Read here, written once it
+  // is on the page: drawing twice (React's strict mode) must give the same answer.
+  const [shown] = useState(() => ({ rose: !risen, at: performance.now() }));
+  const [rising, setRising] = useState(shown.rose);
+  useEffect(() => {
     risen = true;
-    return first;
-  });
+  }, []);
   useEffect(() => {
     if (!rising) return;
     const done = setTimeout(() => setRising(false), RISE_MS);
@@ -100,7 +108,12 @@ function Segment({ app }: { app: AppInfo }) {
     const start = () => {
       if (document.visibilityState !== "visible") return;
       clearTimeout(wait);
-      wait = setTimeout(() => announce(due), rising ? RISE_MS + 100 : 500);
+      // After the rise, counted from when the capsule showed: the end of the rise draws the
+      // capsule again, and must not set this wait back.
+      wait = setTimeout(
+        () => announce(due),
+        announceDelay(shown.rose, performance.now() - shown.at),
+      );
     };
     start();
     document.addEventListener("visibilitychange", start);
@@ -108,7 +121,7 @@ function Segment({ app }: { app: AppInfo }) {
       clearTimeout(wait);
       document.removeEventListener("visibilitychange", start);
     };
-  }, [due, rising, reading]);
+  }, [due, reading, shown]);
 
   const says = capsuleOf(app);
   // Stretched to what it says exactly: a width in pixels is what lets it spring.
@@ -128,7 +141,7 @@ function Segment({ app }: { app: AppInfo }) {
       aria-haspopup="dialog"
       onClick={() => {
         foldCapsule();
-        openUpdateCard();
+        openUpdateCard("capsule");
       }}
     >
       <span className="um2">
@@ -150,7 +163,7 @@ function Segment({ app }: { app: AppInfo }) {
       <span className="nd" />
     </button>
   );
-}
+});
 
 /**
  * A capsule of the top bar. With a newer version to speak of, the small moon comes first and
@@ -158,7 +171,7 @@ function Segment({ app }: { app: AppInfo }) {
  * without a version.
  */
 export function UpdCap(props: { children?: ReactNode; solo?: boolean }) {
-  const { app } = useApp();
+  const app = useApp();
   const now = useSyncExternalStore(subscribeBeat, readBeat);
   // Drawn while already stretched (another page was opened): it is, at once, without playing.
   const [still, setStill] = useState(() => readBeat() === "ann");

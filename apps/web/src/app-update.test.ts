@@ -1,11 +1,14 @@
 import type { AppInfo, AppUpdate } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import {
+  announceDelay,
   announceDue,
   capsuleOf,
   cardState,
+  downloadPace,
   etaLabel,
   formatSize,
+  glideStep,
   installMemo,
   installSteps,
   litPath,
@@ -348,5 +351,57 @@ describe("what a screen keeps of an install", () => {
     expect(memoFate(memo, after, true)).toBe("show");
     // The install did not go: the server still runs the version of before.
     expect(memoFate(memo, app({ state: "ready", version: "0.1.6" }), true)).toBe("drop");
+  });
+});
+
+describe("what Neon's review of the card found", () => {
+  it("measures a download anew when it starts again from lower", () => {
+    const start = { at: 0, progress: 0, pace: 0 };
+    // 10 % a second, then faster: smoothed, one fast packet does not promise the rest.
+    const first = downloadPace(start, 0.1, 1000);
+    expect(first).toEqual({ at: 1000, progress: 0.1, pace: 0.1 });
+    const second = downloadPace(first, 0.5, 2000);
+    expect(second.pace).toBeCloseTo(0.1 * 0.6 + 0.4 * 0.4);
+    // The same figure told again changes nothing.
+    expect(downloadPace(second, 0.5, 2500)).toBe(second);
+    // Another version, or the download tried again: it starts from that figure, with no pace
+    // kept from the first, instead of waiting to pass the 50 % of before.
+    const again = downloadPace(second, 0.02, 3000);
+    expect(again).toEqual({ at: 3000, progress: 0.02, pace: 0 });
+    expect(etaLabel(0.02, again.pace)).toBe("");
+    const then = downloadPace(again, 0.12, 5000);
+    expect(then.pace).toBeCloseTo(0.05);
+    expect(etaLabel(0.12, then.pace)).toBe("≈ 18 s");
+  });
+
+  it("leaves a moon already at its share alone, and brings another there", () => {
+    // A full moon drawn full: nothing to glide, no frame to ask for.
+    expect(glideStep(1, 1)).toBe(1);
+    expect(glideStep(0.4, 0.4)).toBe(0.4);
+    expect(glideStep(0.3995, 0.4)).toBe(0.4);
+    // On its way: a part of the gap each frame, up or down, never past the figure.
+    expect(glideStep(0, 1)).toBeCloseTo(0.09);
+    expect(glideStep(1, 0)).toBeCloseTo(0.91);
+    let shown = 0;
+    let frames = 0;
+    while (shown !== 0.42 && frames < 200) {
+      shown = glideStep(shown, 0.42);
+      expect(shown).toBeLessThanOrEqual(0.42);
+      frames++;
+    }
+    expect(shown).toBe(0.42);
+    expect(frames).toBeLessThan(80);
+  });
+
+  it("announces 100 ms after the moon's rise, whenever the wait is set again", () => {
+    // The capsule just showed and its moon rises for 1.3 s.
+    expect(announceDelay(true, 0)).toBe(1400);
+    // Set again during the rise or as it ends: the same moment, not half a second more.
+    expect(announceDelay(true, 900)).toBe(500);
+    expect(announceDelay(true, 1300)).toBe(100);
+    // No rise (another page was opened), or a version ready long after: the usual pause.
+    expect(announceDelay(false, 0)).toBe(500);
+    expect(announceDelay(true, 1400)).toBe(500);
+    expect(announceDelay(true, 60_000)).toBe(500);
   });
 });

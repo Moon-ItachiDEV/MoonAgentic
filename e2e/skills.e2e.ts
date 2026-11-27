@@ -151,8 +151,7 @@ describe("skills", () => {
     // The last agent cannot be taken off.
     await pop.getByRole("switch", { name: "Claude Code" }).click();
     await expect.poll(() => pop.getByRole("switch", { name: "Codex" }).isDisabled()).toBe(true);
-    // Polled: the switches are also disabled while the server answers, before it removed it.
-    await expect.poll(() => existsSync(path.join(home, ".claude/skills/pdf"))).toBe(false);
+    expect(existsSync(path.join(home, ".claude/skills/pdf"))).toBe(false);
 
     // Moved to the project, then removed.
     await pop.getByRole("button", { name: /^Projets/ }).click();

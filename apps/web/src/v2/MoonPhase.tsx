@@ -1,7 +1,5 @@
-import { useEffect, useRef } from "react";
-import { litPath } from "../app-update.ts";
-
-let count = 0;
+import { useEffect, useId, useRef } from "react";
+import { glideStep, litPath } from "../app-update.ts";
 
 /**
  * The moon of the updates: its lit share follows a real figure (what is downloaded), a small
@@ -20,10 +18,12 @@ export function MoonPhase(props: {
   away?: boolean;
   done?: boolean;
 }) {
-  const id = useRef(`moon-${++count}`).current;
+  const id = useId();
   const svg = useRef<SVGSVGElement>(null);
   const shown = useRef(props.lit);
   useEffect(() => {
+    // Already at its share (a full moon drawn full): nothing to glide, no frame asked for.
+    if (shown.current === props.lit) return;
     const paint = () => {
       const d = litPath(shown.current);
       for (const path of svg.current?.querySelectorAll(".lit, .litc") ?? [])
@@ -36,15 +36,9 @@ export function MoonPhase(props: {
     }
     let frame = 0;
     const step = () => {
-      const gap = props.lit - shown.current;
-      if (Math.abs(gap) < 0.002) {
-        shown.current = props.lit;
-        paint();
-        return;
-      }
-      shown.current += gap * 0.09;
+      shown.current = glideStep(shown.current, props.lit);
       paint();
-      frame = requestAnimationFrame(step);
+      if (shown.current !== props.lit) frame = requestAnimationFrame(step);
     };
     frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
