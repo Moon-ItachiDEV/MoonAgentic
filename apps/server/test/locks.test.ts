@@ -637,43 +637,68 @@ describe("a locked project on the wire", () => {
     await hub.handle(client, { type: "mcp.remove", id: openId });
   });
 
-  it("lets a global MCP server be cut from an open project while another is locked, the locked one keeping it", async () => {
-    // Neon's review of PR #192: « Paramètres du projet › Environnement » sends every project
-    // but this one, the locked one included; refused, the switch could not cut anything.
-    const { hub, client, secret, open } = setup();
+  // Neon's reviews of PR #192 and #193: a locked project neither loses nor gains a server,
+  // and its own servers are out of reach, whatever the steps taken to get there.
+  describe("an MCP server's projects while one is locked", () => {
     const stdio = { type: "stdio" as const, command: "node", args: [], env: [] };
-    await hub.handle(client, {
-      type: "mcp.add",
-      requestId: "g1",
-      server: { name: "global-srv", transport: stdio },
-    });
-    const id = client.last("created").id;
-    await hub.handle(client, { type: "lock.setPin", requestId: "l1", pin: "123456" });
-    await hub.handle(client, { type: "lock.project", requestId: "l2", projectId: secret });
+    const ready = async (scoped?: "secret" | "both") => {
+      const ctx = setup();
+      const { hub, client, secret, open } = ctx;
+      const projectIds =
+        scoped === "secret" ? [secret] : scoped === "both" ? [secret, open] : undefined;
+      await hub.handle(client, {
+        type: "mcp.add",
+        requestId: "a",
+        server: { name: "srv", transport: stdio, ...(projectIds ? { projectIds } : {}) },
+      });
+      const id = client.last("created").id;
+      await hub.handle(client, { type: "lock.setPin", requestId: "l1", pin: "123456" });
+      await hub.handle(client, { type: "lock.project", requestId: "l2", projectId: secret });
+      const scope = (projectIds: string[] | null, exceptProjectIds?: string[], allRoles = false) =>
+        hub.handle(client, {
+          type: "mcp.setScope",
+          id,
+          projectIds,
+          allRoles,
+          ...(exceptProjectIds ? { exceptProjectIds } : {}),
+        });
+      const info = () => ctx.hub.catalog.mcpServerInfos().find((s) => s.id === id)!;
+      return { ...ctx, id, scope, info };
+    };
 
-    // Cut from `open`: the locked project had it, still has it.
-    await hub.handle(client, {
-      type: "mcp.setScope",
-      id,
-      projectIds: [secret],
-      allRoles: false,
+    it("cuts a global server from an open project, the locked one keeping it, then gives it back", async () => {
+      const { scope, info, open } = await ready();
+      await scope(null, [open]);
+      expect(info().projectIds).toBeUndefined();
+      expect(info().exceptProjectIds).toEqual([open]);
+      await scope(null);
+      expect(info().exceptProjectIds).toBeUndefined();
     });
-    // Given back to `open`: the locked project keeps it again.
-    await hub.handle(client, {
-      type: "mcp.setScope",
-      id,
-      projectIds: [secret, open],
-      allRoles: false,
+
+    it("never takes a global server from the locked project", async () => {
+      const { scope, secret, open } = await ready();
+      await expect(scope([open])).rejects.toThrow(/verrouillé/);
+      await expect(scope(null, [secret])).rejects.toThrow(/verrouillé/);
+      await expect(scope([])).rejects.toThrow(/verrouillé/);
     });
-    // Taking it from the locked project, or giving it one more time, stays refused.
-    await expect(
-      hub.handle(client, { type: "mcp.setScope", id, projectIds: [open], allRoles: false }),
-    ).rejects.toThrow(/verrouillé/);
-    await hub.handle(client, { type: "mcp.setScope", id, projectIds: null, allRoles: false });
-    await hub.handle(client, { type: "mcp.setScope", id, projectIds: [open], allRoles: false });
-    await expect(
-      hub.handle(client, { type: "mcp.setScope", id, projectIds: [open, secret], allRoles: false }),
-    ).rejects.toThrow(/verrouillé/);
+
+    it("never hands the locked project's own server to another project", async () => {
+      const { hub, client, id, scope, secret, open } = await ready("secret");
+      await expect(scope([secret, open])).rejects.toThrow(/verrouillé/);
+      await expect(scope(null)).rejects.toThrow(/verrouillé/);
+      await expect(scope([secret], undefined, true)).rejects.toThrow(/verrouillé/);
+      await expect(hub.handle(client, { type: "mcp.remove", id })).rejects.toThrow(/verrouillé/);
+    });
+
+    it("lets a shared server leave an open project, but not become global, so that it stays guarded", async () => {
+      const { hub, client, id, scope, info, secret, open } = await ready("both");
+      await expect(scope(null)).rejects.toThrow(/verrouillé/);
+      await expect(scope(null, [open])).rejects.toThrow(/verrouillé/);
+      await expect(scope([open])).rejects.toThrow(/verrouillé/);
+      await scope([secret]);
+      expect(info().projectIds).toEqual([secret]);
+      await expect(hub.handle(client, { type: "mcp.remove", id })).rejects.toThrow(/verrouillé/);
+    });
   });
 
   it("excludes locked projects in SQL search before LIMIT so visible hits are never crowded out", async () => {

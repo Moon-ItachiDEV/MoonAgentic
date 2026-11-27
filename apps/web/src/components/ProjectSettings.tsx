@@ -9,6 +9,7 @@ import {
   MAX_PROJECT_MEMORY,
   MAX_SETUP_FILE,
   type McpServerInfo,
+  mcpReaches,
   PROJECT_COLORS,
   type Project,
   type ProjectColor,
@@ -51,7 +52,7 @@ import { type Section, SettingsWindow } from "../v2/SettingsWindow.tsx";
 import { useScreen } from "../v2/use-screen.ts";
 import { BranchCleanup } from "./BranchCleanup.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
-import { scopeSwitched } from "../mcp-switch.ts";
+import { lockedOnly, scopeSwitched } from "../mcp-switch.ts";
 import { LookMenu } from "./NewProjectDialog.tsx";
 import {
   findProjectIcons,
@@ -826,10 +827,6 @@ const agoText = (at: number) => {
   return /^\d/.test(said) ? `il y a ${said}` : said;
 };
 
-/** Whether the server reaches this project's threads, and the scope to send to change that. */
-const inProject = (server: McpServerInfo, projectId: string) =>
-  !server.projectIds || server.projectIds.includes(projectId);
-
 function Environment(props: {
   project: Project;
   projects: Project[];
@@ -844,17 +841,29 @@ function Environment(props: {
     connection.send({
       type: "mcp.setScope",
       id: server.id,
-      projectIds: scopeSwitched(server, project.id, on, props.projects),
+      ...scopeSwitched(server, project.id, on),
       allRoles: !!server.allRoles,
     });
-  const scope = (server: McpServerInfo) =>
-    !server.projectIds
-      ? "Tous les projets"
-      : server.projectIds.length === 0
-        ? "Aucun projet"
-        : server.projectIds.length === 1 && server.projectIds[0] === project.id
-          ? "Ce projet"
-          : `${server.projectIds.length} projets`;
+  const scope = (server: McpServerInfo) => {
+    const except = server.exceptProjectIds ?? [];
+    if (!server.projectIds) {
+      return !except.length
+        ? "Tous les projets"
+        : except.length === 1 && except[0] === project.id
+          ? "Tous sauf ce projet"
+          : `Tous sauf ${except.length} projet${except.length > 1 ? "s" : ""}`;
+    }
+    const n = server.projectIds.length;
+    return n === 0
+      ? "Aucun projet"
+      : n === 1 && server.projectIds[0] === project.id
+        ? "Ce projet"
+        : `${n} projet${n > 1 ? "s" : ""}`;
+  };
+  // A locked project's own servers are not shown here.
+  const servers = props.mcpServers.filter(
+    (s) => mcpReaches(s, project.id) || !lockedOnly(s, props.projects),
+  );
   return (
     <>
       {roomy && <h2>Environnement</h2>}
@@ -898,7 +907,7 @@ function Environment(props: {
       </div>
       <h4>Serveurs MCP</h4>
       <div className="ppbox">
-        {props.mcpServers.map((server) => (
+        {servers.map((server) => (
           <div className="ppi" key={server.id}>
             <span className="ppii">
               <I n="plug" s={16} />
@@ -909,7 +918,7 @@ function Environment(props: {
             </span>
             {server.enabled ? (
               <Toggle
-                on={inProject(server, project.id)}
+                on={mcpReaches(server, project.id)}
                 label={`${server.name} dans ce projet`}
                 onChange={(on) => toggle(server, on)}
               />

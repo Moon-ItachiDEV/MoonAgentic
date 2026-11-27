@@ -1,13 +1,13 @@
 // The project's menu, dropped from its name, in the built app against a real server: its
 // « Notifications » line says what this device does now, and on a phone it leaves on the page
-// it was closed from.
+// it was closed from, like a discussion's menu.
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { type Browser, chromium } from "playwright";
-import { addProject } from "./ui.ts";
+import { type Browser, type Page, chromium } from "playwright";
+import { addProject, whereChoices } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -42,6 +42,11 @@ beforeAll(async () => {
     server.once("exit", (code) => reject(new Error(`Le serveur s'est arrêté (code ${code}).`)));
   });
   browser = await chromium.launch();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+  await page.goto(url);
+  await addProject(page, repo, false);
+  projectUrl = page.url();
+  await page.close();
 });
 
 afterAll(async () => {
@@ -71,8 +76,37 @@ async function notifying(viewport: { width: number; height: number }, touch = fa
   return context;
 }
 
-/** The project made by the first check, which the second opens on a phone. */
+/** The project every check opens, made before them. */
 let projectUrl: string;
+
+/**
+ * Presses the page under a phone's menu, which closes it, and says which of its pages each
+ * frame showed while it left. The frames are watched from before the press.
+ */
+async function closedSeeing(page: Page, menu: string, sub: string) {
+  await page.evaluate(
+    ([menu, sub]) => {
+      const pick = (p: Element) => (p.classList.contains("fwd") ? sub : "main");
+      const pages: string[] = [];
+      (window as unknown as { seen: Promise<string[]> }).seen = new Promise((resolve) => {
+        let was = false;
+        const look = () => {
+          const el = document.querySelector(menu);
+          if (!el && was) return resolve(pages);
+          if (el) {
+            was = true;
+            pages.push(pick(el.querySelector(".pjp")!));
+          }
+          requestAnimationFrame(look);
+        };
+        look();
+      });
+    },
+    [menu, sub] as const,
+  );
+  await page.mouse.click(195, 760);
+  return page.evaluate(() => (window as unknown as { seen: Promise<string[]> }).seen);
+}
 
 describe("the project's menu", () => {
   // Neon's review of PR #192: the menu read the mute once, and kept it ever after.
@@ -80,8 +114,7 @@ describe("the project's menu", () => {
     const context = await notifying({ width: 1280, height: 820 });
     const page = await context.newPage();
     await page.goto(url);
-    await addProject(page, repo, false);
-    projectUrl = page.url();
+    await page.goto(projectUrl);
     const menuOf = (p: typeof page) => p.getByRole("button", { name: /^Projet / });
     const line = (p: typeof page) => p.getByRole("menuitem", { name: /^Notifications/ });
     await menuOf(page).click();
@@ -132,22 +165,39 @@ describe("the project's menu", () => {
     await page.getByRole("menuitem", { name: /^Notifications/ }).click();
     await page.getByRole("menuitemradio", { name: "Activées" }).waitFor();
     // The page under the menu takes the press that closes it.
-    await page.mouse.click(195, 760);
-    const seen = await page.evaluate(
-      () =>
-        new Promise<string[]>((resolve) => {
-          const pages: string[] = [];
-          const look = () => {
-            const menu = document.querySelector(".ddm.pjm");
-            if (!menu) return resolve(pages);
-            pages.push(menu.querySelector(".pjp")?.classList.contains("fwd") ? "notif" : "main");
-            requestAnimationFrame(look);
-          };
-          look();
-        }),
-    );
+    const seen = await closedSeeing(page, ".ddm.pjm", "notif");
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.every((p) => p === "notif")).toBe(true);
+    await context.close();
+  });
+
+  // Neon's review of PR #193: the discussion's menu on a phone did the same.
+  it("leaves a discussion's menu on a phone with the page it was closed from", async () => {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 780 },
+      hasTouch: true,
+      isMobile: true,
+    });
+    const page = await context.newPage();
+    await page.goto(url);
+    const composer = page.getByRole("combobox", { name: "Message" });
+    await composer.waitFor();
+    await expect.poll(() => composer.isEnabled()).toBe(true);
+    await composer.click();
+    await page.getByRole("button", { name: "Ajouter", exact: true }).click();
+    await page.getByRole("menuitem", { name: /^Projet/ }).click();
+    await whereChoices(page)
+      .getByText(/^Hors projet/)
+      .first()
+      .click();
+    await composer.fill("Bonjour");
+    await composer.press("Enter");
+    await page.getByRole("button", { name: "Paramètres de la discussion" }).click();
+    await page.getByRole("menuitem", { name: /^Accès/ }).click();
+    await page.getByRole("menuitemradio", { name: /^Demande d'abord/ }).waitFor();
+    const seen = await closedSeeing(page, ".ddm.dsm", "access");
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((p) => p === "access")).toBe(true);
     await context.close();
   });
 });

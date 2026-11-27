@@ -1,19 +1,27 @@
 // A project switched on or off for an MCP server, from that project's settings.
-import type { McpServerInfo, Project } from "@moonagentic/protocol";
+import type { McpServerInfo } from "@moonagentic/protocol";
 
 /**
- * The projects a server reaches once one project is switched on or off for it: every project
- * but that one when it reached them all, the locked ones included so that they keep it, and
- * back to `null` once it reaches them all again, so the projects made later get it too.
+ * Who a server is for once one project is switched on or off for it: a server for every
+ * project stays one, that project left out or let back in, so that the others (a locked one
+ * among them) keep it and the projects made later get it too; a server for some projects
+ * only gains or loses that one.
  */
 export function scopeSwitched(
   server: McpServerInfo,
   projectId: string,
   on: boolean,
-  projects: Project[],
-): string[] | null {
-  const all = projects.map((p) => p.id);
-  const others = (server.projectIds ?? all).filter((id) => id !== projectId);
-  const next = on ? [...others, projectId] : others;
-  return all.every((id) => next.includes(id)) ? null : next;
+): { projectIds: string[] | null; exceptProjectIds?: string[] } {
+  if (server.projectIds) {
+    const others = server.projectIds.filter((id) => id !== projectId);
+    return { projectIds: on ? [...others, projectId] : others };
+  }
+  const others = (server.exceptProjectIds ?? []).filter((id) => id !== projectId);
+  const except = on ? others : [...others, projectId];
+  return { projectIds: null, ...(except.length ? { exceptProjectIds: except } : {}) };
 }
+
+/** A server for locked projects alone: theirs, not to be shown nor offered elsewhere. */
+export const lockedOnly = (server: McpServerInfo, projects: { id: string; locked?: boolean }[]) =>
+  !!server.projectIds?.length &&
+  server.projectIds.every((id) => projects.find((p) => p.id === id)?.locked);

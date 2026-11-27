@@ -30,6 +30,7 @@ import {
   GOAL_MORE_TURNS,
   GOAL_TURNS,
   MAX_QUEUED_MESSAGES,
+  mcpReaches,
   PR_WATCH_TRIES,
   RESUME_TEXT,
   spentUntil,
@@ -1130,15 +1131,24 @@ export class Hub {
       return false;
     }
     if (message.type === "mcp.setScope") {
-      // A locked project neither loses a server listed for it nor gains one it had not: a
-      // server that reaches it (by name, or every project) may still change for the others.
-      const before = this.catalog.mcpServerInfos().find((s) => s.id === message.id)?.projectIds;
-      const after = message.projectIds;
-      if (
-        before?.some((p) => this.locks.isLocked(p) && after && !after.includes(p)) ||
-        after?.some((p) => this.locks.isLocked(p) && before && !before.includes(p))
-      ) {
-        lockedError();
+      const current = this.catalog.mcpServerInfos().find((s) => s.id === message.id);
+      if (!current) return false;
+      const locked = this.locks.lockedProjects();
+      const next = message.projectIds
+        ? { projectIds: message.projectIds }
+        : { exceptProjectIds: message.exceptProjectIds };
+      // A locked project never loses a server, and gains one only as every project does.
+      const loses = (p: string) => mcpReaches(current, p) && !mcpReaches(next, p);
+      const named = (p: string) => !mcpReaches(current, p) && !!next.projectIds?.includes(p);
+      if (locked.some((p) => loses(p) || named(p))) lockedError();
+      // A server named for a locked project stays guarded like it (see below): it may leave or
+      // reach open projects, but neither goes to every project nor changes its roles; and one
+      // for locked projects alone is theirs, out of the others' reach.
+      if (current.projectIds?.some((p) => locked.includes(p))) {
+        const others = current.projectIds.filter((p) => !locked.includes(p));
+        if (!message.projectIds || !others.length || message.allRoles !== !!current.allRoles) {
+          lockedError();
+        }
       }
       return false;
     }
@@ -2261,7 +2271,12 @@ export class Hub {
         this.catalog.setMcpEnabled(message.id, message.enabled);
         return;
       case "mcp.setScope":
-        this.catalog.setMcpScope(message.id, message.projectIds, message.allRoles);
+        this.catalog.setMcpScope(
+          message.id,
+          message.projectIds,
+          message.allRoles,
+          message.exceptProjectIds,
+        );
         return;
       case "mcp.remove":
         await this.catalog.removeMcpServer(message.id);

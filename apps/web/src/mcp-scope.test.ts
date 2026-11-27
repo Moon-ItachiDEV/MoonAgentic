@@ -1,7 +1,7 @@
 import type { McpServerInfo, Project } from "@moonagentic/protocol";
 import { describe, expect, it } from "vitest";
 import { mcpCount, mcpInProject, mcpScopeLabel, scopeOf } from "./mcp-scope.ts";
-import { scopeSwitched } from "./mcp-switch.ts";
+import { lockedOnly, scopeSwitched } from "./mcp-switch.ts";
 
 const project = (id: string): Project => ({
   id,
@@ -56,26 +56,30 @@ describe("who gets an MCP server", () => {
 });
 
 describe("a project switched on or off for a server, from its settings", () => {
-  // Neon's review of PR #192: switched off then on again, a server for every project stayed
-  // stuck on the projects of that day, the new ones never getting it.
-  it("goes back to every project once they all have it again", () => {
-    const global = server("s");
-    const cut = scopeSwitched(global, "b", false, projects);
-    expect(cut).toEqual(["a", "c"]);
-    expect(scopeSwitched(server("s", { projectIds: cut! }), "b", true, projects)).toBeNull();
-  });
-
-  it("keeps the other projects, a locked one included, when one is cut", () => {
-    const locked = { ...project("c"), locked: true as const };
-    expect(scopeSwitched(server("s"), "a", false, [project("a"), project("b"), locked])).toEqual([
-      "b",
-      "c",
-    ]);
+  // Neon's reviews of PR #192 and #193: cut from one project, a server for every project
+  // stayed a list of that day's projects, and could no longer be told from one made for them.
+  it("keeps a server for every project one, that project left out, then let back in", () => {
+    const cut = scopeSwitched(server("s"), "b", false);
+    expect(cut).toEqual({ projectIds: null, exceptProjectIds: ["b"] });
+    expect(scopeSwitched(server("s", { exceptProjectIds: ["b"] }), "b", true)).toEqual({
+      projectIds: null,
+    });
+    expect(mcpScopeLabel({ ...cut, allRoles: false }, projects)).toBe("Tous sauf 1 projet");
+    expect(mcpInProject(server("s", { exceptProjectIds: ["b"] }), "b")).toBe(false);
+    expect(mcpInProject(server("s", { exceptProjectIds: ["b"] }), "a")).toBe(true);
   });
 
   it("adds or removes only that project from a list", () => {
     const some = server("s", { projectIds: ["a"] });
-    expect(scopeSwitched(some, "b", true, projects)).toEqual(["a", "b"]);
-    expect(scopeSwitched(some, "a", false, projects)).toEqual([]);
+    expect(scopeSwitched(some, "b", true)).toEqual({ projectIds: ["a", "b"] });
+    expect(scopeSwitched(some, "a", false)).toEqual({ projectIds: [] });
+  });
+
+  it("tells a locked project's own server, not to be offered elsewhere", () => {
+    const locked = [{ ...project("a"), locked: true as const }, project("b")];
+    expect(lockedOnly(server("s", { projectIds: ["a"] }), locked)).toBe(true);
+    expect(lockedOnly(server("s", { projectIds: ["a", "b"] }), locked)).toBe(false);
+    expect(lockedOnly(server("s"), locked)).toBe(false);
+    expect(lockedOnly(server("s", { projectIds: [] }), locked)).toBe(false);
   });
 });

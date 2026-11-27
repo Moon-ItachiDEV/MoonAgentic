@@ -378,7 +378,8 @@ function DiscussionMenu(props: Props) {
   const [all, setAll] = useState(false);
   const setModel = useThreadModel(thread);
   const running = thread.status === "running" || thread.status === "waiting";
-  if (!props.open && (page !== "main" || back || all)) {
+  // Back to its first page once gone, not while it leaves: it goes as it was.
+  if (!shown.mounted && (page !== "main" || back || all)) {
     setPage("main");
     setBack(false);
     setAll(false);

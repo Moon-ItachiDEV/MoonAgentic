@@ -194,4 +194,24 @@ describe("MCP servers by project", () => {
     expect(hub.snapshot().mcpServers).toMatchObject([{ id, name: "pour-a", projectIds: [] }]);
     expect(await given(b)).toBe("");
   });
+
+  // Neon's review of PR #193: cut from one project, a server for every project stays for
+  // every other one, the projects made later included.
+  it("keeps a server for every project but those left out, then for all of them again", async () => {
+    const { hub, client, a, b, given, stdio } = setup();
+    const id = await hub.addMcpServer({ name: "partout", transport: stdio("x") });
+    await hub.handle(client, {
+      type: "mcp.setScope",
+      id,
+      projectIds: null,
+      exceptProjectIds: [a, "inconnu"],
+      allRoles: false,
+    });
+    expect(hub.snapshot().mcpServers[0]).toMatchObject({ exceptProjectIds: [a] });
+    expect(hub.snapshot().mcpServers[0]).not.toHaveProperty("projectIds");
+    expect(await given(a)).toBe("");
+    expect(await given(b)).toBe("partout");
+    await hub.removeProject(a);
+    expect(hub.snapshot().mcpServers[0]).not.toHaveProperty("exceptProjectIds");
+  }, 40_000);
 });

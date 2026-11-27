@@ -1,5 +1,5 @@
 import type { Thread } from "@moonagentic/protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { nextModelStep } from "./thread-model.ts";
 
 const thread = (more: Partial<Thread> = {}): Thread =>
@@ -71,5 +71,47 @@ describe("a thread's model changed from its settings", () => {
     expect(nextModelStep(thread({ status: "running" }), route, [])).toBe("wait");
     expect(nextModelStep(thread(), route, ["model:opus"])).toBe("wait");
     expect(nextModelStep(thread({ model: "opus" }), route, ["model:opus"])).toBe("done");
+  });
+});
+
+// Neon's review of PR #193.
+describe("a thread's model on its way, once something else happens", () => {
+  it("lets the composer's own model stand once the reflection was sent", () => {
+    // The reflection was asked and sent, the model needed no change; the composer then sets
+    // another model straight away: that is not taken back.
+    const route = { agentId: "claude", model: "sonnet", settings: { effort: "max" } };
+    expect(nextModelStep(thread({ model: "haiku" }), route, ["setting:effort:max"])).toBe("done");
+  });
+
+  it("still sets the model after another agent took the thread over", () => {
+    const route = { agentId: "codex", model: "gpt", settings: { effort: "max" } };
+    const step = nextModelStep(thread({ agentId: "codex", model: "x" }), route, ["agent:codex"]);
+    expect(step).toMatchObject({ key: "model:gpt" });
+  });
+});
+
+describe("setThreadModel", () => {
+  it("lets go of what it could not send, offline", async () => {
+    vi.resetModules();
+    const listeners: (() => void)[] = [];
+    const sent: unknown[] = [];
+    vi.doMock("./connection.ts", () => ({
+      connection: {
+        getState: () => ({ threads: [thread()] }),
+        send: (m: unknown) => {
+          sent.push(m);
+          return false;
+        },
+        subscribe: (l: () => void) => {
+          listeners.push(l);
+          return () => listeners.splice(listeners.indexOf(l), 1);
+        },
+      },
+    }));
+    const { setThreadModel } = await import("./thread-model.ts");
+    setThreadModel("t", { agentId: "claude", model: "opus" });
+    expect(sent).toHaveLength(1);
+    expect(listeners).toHaveLength(0);
+    vi.doUnmock("./connection.ts");
   });
 });
