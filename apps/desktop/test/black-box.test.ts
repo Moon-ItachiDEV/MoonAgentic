@@ -103,7 +103,11 @@ describe("the black box across a freeze", () => {
     expect(text).toContain("soit 20 min sans signe de vie avant le redémarrage");
     expect(text).toContain("mémoire presque pleine (3 % libre");
     expect(text).toContain("processeur saturé depuis");
-    expect(opening.unexpected).toEqual({ from: lastAt - 15 * MIN, to: boot + 2 * MIN });
+    expect(opening.unexpected).toEqual({
+      from: lastAt - 15 * MIN,
+      to: boot + 2 * MIN,
+      focus: lastAt,
+    });
     expect(b.log()).toContain("Arrêt précédent INATTENDU");
     // The new run starts its own box.
     expect(b.state()).toMatchObject({ startedAt: boot + 2 * MIN, samples: [] });
@@ -408,4 +412,140 @@ describe.runIf(process.platform === "win32")("on a real Windows", () => {
     expect(top.length).toBeGreaterThan(0);
     expect(top[0]?.mem).toBeGreaterThan(0);
   }, 90_000);
+});
+
+describe("Neon's review of #204", () => {
+  it("1. asks Windows for the known events apart, so a long log cannot push them out", () => {
+    const script = windowsEventsScript(T0, T0 + 3 * 3600_000);
+    // The known events by their ids, filtered by the event log itself, never cut.
+    expect(script).toMatch(/LogName = 'System'; Id = \$ids;/);
+    // Errors and warnings filtered by the event log too, the oldest kept as well as the latest.
+    expect(script).toMatch(/LogName = 'System'; Level = 1,2,3;/);
+    expect(script).toContain("-Oldest");
+    expect(script).not.toContain("Where-Object { $_.Level -in 1,2,3");
+  });
+
+  it("1. keeps the other events nearest the freeze, not only the latest", () => {
+    const freeze = Date.UTC(2026, 10, 27, 13, 40);
+    const at = (min: number) => new Date(freeze + min * MIN).toISOString();
+    const noise = (min: number, i: number) => ({
+      at: at(min),
+      id: 10016,
+      provider: "Microsoft-Windows-DistributedCOM",
+      level: 3,
+      message: `bruit ${i}`,
+    });
+    const json = JSON.stringify([
+      { ...noise(-1, 0), id: 7031, provider: "Service Control Manager", message: "près du gel" },
+      ...Array.from({ length: 50 }, (_, i) => noise(120 + i, i + 1)),
+    ]);
+    const lines = parseWindowsEvents(json, 10, freeze);
+    expect(lines.join("\n")).toContain("près du gel");
+  });
+
+  it("2. a crash in the first minute is not taken for Windows restarting", () => {
+    const boot = T0;
+    const prev: BoxState = {
+      version: "0.1.16",
+      pid: 1,
+      startedAt: boot + 10_000,
+      bootAt: boot,
+      lastAt: boot + 10_000,
+      samples: [],
+    };
+    const opening = explainPrevious(prev, { at: boot + 40_000, bootAt: boot, version: "0.1.16" });
+    expect(opening.report[0]).toContain("MoonAgentic s'est arrêté seul");
+    // The start time read again can move by a second or two: still the same Windows.
+    const again = explainPrevious(prev, {
+      at: boot + 40_000,
+      bootAt: boot + 1_500,
+      version: "0.1.16",
+    });
+    expect(again.report[0]).toContain("MoonAgentic s'est arrêté seul");
+  });
+
+  it("3. stops the other connection once one answers, and counts each one once", async () => {
+    const { EventEmitter } = await import("node:events");
+    const { reachable } = await import("../src/black-box.ts");
+    type Fake = InstanceType<typeof EventEmitter> & { destroyed: boolean; destroy(): void };
+    const made: Fake[] = [];
+    const open = () => {
+      const s = new EventEmitter() as Fake;
+      s.destroyed = false;
+      s.destroy = () => {
+        s.destroyed = true;
+      };
+      made.push(s);
+      return s;
+    };
+    const hosts = [
+      { host: "a", port: 1 },
+      { host: "b", port: 1 },
+    ];
+    const first = reachable(hosts, 1_000, open as never);
+    made[0]?.emit("connect");
+    expect(await first).toBe(true);
+    expect(made[1]?.destroyed).toBe(true);
+
+    made.length = 0;
+    let settled: boolean | undefined;
+    const second = reachable(hosts, 1_000, open as never).then((ok) => {
+      settled = ok;
+      return ok;
+    });
+    // One socket times out, then errors: one failure, not two.
+    made[0]?.emit("timeout");
+    made[0]?.emit("error", new Error("ECONNRESET"));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(settled).toBeUndefined();
+    made[1]?.emit("connect");
+    expect(await second).toBe(true);
+  });
+
+  it("4. measures nothing more once stopped", async () => {
+    const dir = tempDir();
+    const a = boxAt(dir);
+    a.box.open();
+    await a.box.tick();
+    a.clock.now += MIN;
+    a.box.stop("MoonAgentic quitté");
+    const stoppedAt = a.state().lastAt;
+    a.clock.now += MIN;
+    await a.box.tick();
+    expect(a.state().lastAt).toBe(stoppedAt);
+    expect(a.state().samples).toHaveLength(1);
+  });
+
+  it("4. an installer that did not start leaves no update behind", () => {
+    const dir = tempDir();
+    const a = boxAt(dir, "0.1.16");
+    a.box.open();
+    a.box.updating("0.1.17");
+    a.box.updateFailed("l'installeur n'a pas pu démarrer : ENOENT");
+    expect(a.state().updating).toBeUndefined();
+    expect(a.log()).toContain("Mise à jour vers 0.1.17 abandonnée : l'installeur n'a pas pu");
+    a.box.stop("MoonAgentic quitté");
+    const b = boxAt(dir, "0.1.16");
+    b.clock.now += 5 * MIN;
+    expect(b.box.open().report.join("\n")).not.toContain("n'a pas remplacé l'app");
+  });
+
+  it("5. names the lowest memory just before the end, not an old peak", async () => {
+    const { warningSigns } = await import("../src/black-box.ts");
+    const at = (min: number, free: number): Sample => ({
+      ...healthy,
+      at: T0 + min * MIN,
+      freeMem: free * GB,
+    });
+    // A peak 45 minutes before the end, back to half free since.
+    const old = [at(0, 1), ...Array.from({ length: 45 }, (_, i) => at(i + 1, 8))];
+    const signs = warningSigns(old).join(" ; ");
+    expect(signs).not.toContain("mémoire presque pleine (");
+    expect(signs).toContain(`mémoire presque pleine plus tôt (6 % libre à ${clockText(T0)})`);
+    // Low at the end: the lowest one is named.
+    const late = [...old, at(46, 1.5), at(47, 0.3), at(48, 0.9)];
+    expect(warningSigns(late).join(" ; ")).toContain(
+      `mémoire presque pleine (2 % libre à ${clockText(T0 + 47 * MIN)})`,
+    );
+  });
 });

@@ -176,6 +176,7 @@ async function installUpdate(): Promise<void> {
   const child = spawn(file, args, options);
   child.once("error", (error) => {
     installing = false;
+    blackBox.updateFailed(`l'installeur n'a pas pu démarrer : ${error.message}`);
     updater.fail(`L'installeur n'a pas pu démarrer : ${error.message}`);
     server.start();
   });
@@ -210,8 +211,8 @@ function openBlackBox(): void {
   if (opening.unexpected) {
     crashLog.write(`[boîte noire] ${opening.report[0] ?? "arrêt précédent inattendu"}`);
     if (process.platform === "win32") {
-      const { from, to } = opening.unexpected;
-      void windowsEvents(from, to).then((lines) => blackBox.append(lines));
+      const { from, to, focus } = opening.unexpected;
+      void windowsEvents(from, to, focus).then((lines) => blackBox.append(lines));
     }
   }
   blackBox.run();

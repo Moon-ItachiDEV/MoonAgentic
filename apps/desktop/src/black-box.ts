@@ -34,6 +34,10 @@ export const WATCH_MEMORY = 0.15;
 export const BUSY_CPU = 90;
 /** Free disk space under this is noted. */
 export const LOW_DISK = 2 * 1024 ** 3;
+/** The measures this close to the end say what led to it. */
+const RECENT_MS = 15 * 60_000;
+/** Two readings of when Windows started differ by this much at most for the same start. */
+const BOOT_SLACK_MS = 60_000;
 /** The biggest programs are not listed again before this. */
 const TOP_EVERY_MS = 5 * 60_000;
 
@@ -100,7 +104,7 @@ export interface BlackBoxOptions {
 export interface Opening {
   report: string[];
   /** The run before ended without saying so: the time span to look at in Windows' own log. */
-  unexpected?: { from: number; to: number };
+  unexpected?: { from: number; to: number; focus: number };
 }
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -171,10 +175,22 @@ export function warningSigns(samples: Sample[]): string[] {
   const signs: string[] = [];
   const last = samples.at(-1);
   if (!last) return signs;
-  const lowMem = samples.find((s) => freeShare(s) < LOW_MEMORY);
-  if (lowMem) {
+  // The lowest memory of the last 15 minutes says what led to the end; an older low that
+  // passed is named apart, so it is not taken for the cause.
+  const lowest = (list: Sample[]) =>
+    list.reduce<Sample | undefined>(
+      (min, s) => (!min || freeShare(s) < freeShare(min) ? s : min),
+      undefined,
+    );
+  const recent = samples.filter((s) => s.at >= last.at - RECENT_MS);
+  const lowNow = lowest(recent);
+  const lowBefore = lowest(samples.filter((s) => s.at < last.at - RECENT_MS));
+  const pct = (s: Sample) => Math.round(freeShare(s) * 100);
+  if (lowNow && freeShare(lowNow) < LOW_MEMORY) {
+    signs.push(`mémoire presque pleine (${pct(lowNow)} % libre à ${clock(lowNow.at)})`);
+  } else if (lowBefore && freeShare(lowBefore) < LOW_MEMORY) {
     signs.push(
-      `mémoire presque pleine (${Math.round(freeShare(lowMem) * 100)} % libre à ${clock(lowMem.at)})`,
+      `mémoire presque pleine plus tôt (${pct(lowBefore)} % libre à ${clock(lowBefore.at)}), revenue à ${pct(last)} % à la fin`,
     );
   }
   let run = 0;
@@ -239,9 +255,12 @@ export function explainPrevious(
     updatedLine();
     return { report };
   }
-  // A minute of slack: the start time of the computer is known to the second, the box to the
-  // minute.
-  const windowsRestarted = now.bootAt > prev.lastAt - 60_000;
+  // Windows started again when its start time moved: the box written by the run before holds
+  // the start time it saw. Its last sign of life must also come before that new start (a
+  // minute of slack: the start is known to the second, the box to the minute).
+  const sameBoot =
+    typeof prev.bootAt === "number" && Math.abs(now.bootAt - prev.bootAt) <= BOOT_SLACK_MS;
+  const windowsRestarted = !sameBoot && now.bootAt > prev.lastAt - BOOT_SLACK_MS;
   report.push(
     windowsRestarted
       ? "Arrêt précédent INATTENDU : Windows a redémarré sans que MoonAgentic soit prévenu (gel, coupure de courant, bouton maintenu, écran bleu ou redémarrage forcé)."
@@ -272,7 +291,7 @@ export function explainPrevious(
   );
   // From a little before the last sign of life to now, three days at most.
   const from = Math.max(prev.lastAt - 15 * 60_000, now.at - 3 * 24 * 3600_000);
-  return { report, unexpected: { from, to: now.at } };
+  return { report, unexpected: { from, to: now.at, focus: prev.lastAt } };
 }
 
 /** What happened between two measures, in the journal's words. */
@@ -355,11 +374,12 @@ export class BlackBox {
   run(every = SAMPLE_EVERY_MS): void {
     void this.tick();
     this.timer = setInterval(() => void this.tick(), every);
+    this.timer.unref?.();
   }
 
   /** One measure: compared with the last one, then kept. */
   async tick(): Promise<void> {
-    if (!this.state || this.ticking) return;
+    if (!this.state || this.state.stop || this.ticking) return;
     this.ticking = true;
     try {
       let input: SampleInput;
@@ -369,8 +389,11 @@ export class BlackBox {
         return;
       }
       const sample: Sample = { ...input, at: this.now() };
+      // Stopped while the processor or the internet was being asked: nothing more is written.
+      const stopped = () => !this.state || !!this.state.stop;
       if (this.options.online && input.net.length > 0) {
         sample.internet = await this.options.online().catch(() => false);
+        if (stopped()) return;
       }
       if (
         freeShare(sample) < WATCH_MEMORY &&
@@ -381,6 +404,7 @@ export class BlackBox {
         const top = await this.options.topProcesses().catch(() => []);
         if (top.length) sample.top = top.slice(0, 5);
       }
+      if (stopped()) return;
       const lines = compare(this.state.samples.at(-1), sample, this.slept);
       this.slept = false;
       this.busyRun = (sample.cpu ?? 0) >= BUSY_CPU ? this.busyRun + 1 : 0;
@@ -415,9 +439,18 @@ export class BlackBox {
     this.save();
   }
 
+  /** The installer could not start: the app stays as it is, no update is under way. */
+  updateFailed(reason: string): void {
+    if (!this.state?.updating) return;
+    this.log([`Mise à jour vers ${this.state.updating.to} abandonnée : ${reason}`]);
+    delete this.state.updating;
+    this.save();
+  }
+
   /** MoonAgentic ends on purpose: the first reason given stays. */
   stop(reason: string): void {
     if (!this.state || this.state.stop) return;
+    this.close();
     const at = this.now();
     this.state.stop = { at, reason };
     this.state.lastAt = at;
@@ -511,39 +544,51 @@ export function cpuMeter(read: () => os.CpuInfo[] = os.cpus): () => number | und
   };
 }
 
-/** Whether one of these hosts takes a connection within `timeoutMs`. */
+/** What `reachable` needs of a socket: the events it listens to, and to end it. */
+export interface Probe {
+  once(event: "connect" | "timeout", listener: () => void): unknown;
+  once(event: "error", listener: (error: Error) => void): unknown;
+  destroy(): void;
+}
+
+/**
+ * Whether one of these hosts takes a connection within `timeoutMs`. Once one does, or all
+ * failed, every connection still open is ended; each one counts once, whatever it reports.
+ */
 export function reachable(
   hosts: { host: string; port: number }[] = [
     { host: "1.1.1.1", port: 443 },
     { host: "8.8.8.8", port: 443 },
   ],
   timeoutMs = 4_000,
+  open: (to: { host: string; port: number; timeout: number }) => Probe = connect,
 ): Promise<boolean> {
   return new Promise((resolve) => {
+    if (!hosts.length) {
+      resolve(false);
+      return;
+    }
+    const probes: Probe[] = [];
     let left = hosts.length;
     let done = false;
-    const end = (ok: boolean) => {
-      if (done) return;
-      if (ok) {
-        done = true;
-        resolve(true);
-      } else if (--left <= 0) {
-        done = true;
-        resolve(false);
-      }
+    const finish = (ok: boolean) => {
+      done = true;
+      for (const p of probes) p.destroy();
+      resolve(ok);
     };
-    if (!left) resolve(false);
     for (const { host, port } of hosts) {
-      const socket = connect({ host, port, timeout: timeoutMs });
-      socket.once("connect", () => {
-        socket.destroy();
-        end(true);
-      });
-      socket.once("timeout", () => {
-        socket.destroy();
-        end(false);
-      });
-      socket.once("error", () => end(false));
+      const probe = open({ host, port, timeout: timeoutMs });
+      probes.push(probe);
+      let settled = false;
+      const end = (ok: boolean) => {
+        if (settled || done) return;
+        settled = true;
+        if (ok) finish(true);
+        else if (--left <= 0) finish(false);
+      };
+      probe.once("connect", () => end(true));
+      probe.once("timeout", () => end(false));
+      probe.once("error", () => end(false));
     }
   });
 }
@@ -646,9 +691,13 @@ export function windowsEventsScript(from: number, to: number): string {
     `$from = [datetime]::Parse('${iso(from)}').ToLocalTime()`,
     `$to = [datetime]::Parse('${iso(to)}').ToLocalTime()`,
     `$ids = @(${KNOWN_IDS.join(",")})`,
-    "$events = Get-WinEvent -FilterHashtable @{ LogName = 'System'; StartTime = $from; EndTime = $to } |",
-    "  Where-Object { $_.Level -in 1,2,3 -or $ids -contains $_.Id } |",
-    "  Select-Object -First 300",
+    // The known events by their ids, and the errors and warnings, each asked of the event log
+    // with its own filter (fast, and nothing else in the way): the known ones all, the others
+    // the oldest and the latest 200, so a long night cannot push the moment of the freeze out.
+    "$known = Get-WinEvent -FilterHashtable @{ LogName = 'System'; Id = $ids; StartTime = $from; EndTime = $to }",
+    "$bad = @(Get-WinEvent -Oldest -FilterHashtable @{ LogName = 'System'; Level = 1,2,3; StartTime = $from; EndTime = $to })",
+    "$bad = if ($bad.Count -gt 400) { $bad[0..199] + $bad[($bad.Count - 200)..($bad.Count - 1)] } else { $bad }",
+    "$events = @($known) + @($bad) | Sort-Object RecordId -Unique",
     "@($events | ForEach-Object { [pscustomobject]@{",
     "  at = $_.TimeCreated.ToUniversalTime().ToString('o');",
     "  id = $_.Id; provider = $_.ProviderName; level = $_.Level;",
@@ -659,7 +708,7 @@ export function windowsEventsScript(from: number, to: number): string {
 const LEVELS: Record<number, string> = { 1: "critique", 2: "erreur", 3: "avertissement" };
 
 /** Windows' events as journal lines, oldest first, the known ones named. */
-export function parseWindowsEvents(json: string, max = 60): string[] {
+export function parseWindowsEvents(json: string, max = 60, focus?: number): string[] {
   let raw: unknown;
   try {
     raw = JSON.parse(json.trim() || "[]");
@@ -675,9 +724,14 @@ export function parseWindowsEvents(json: string, max = 60): string[] {
     .filter((e) => Number.isFinite(e.time))
     .sort((a, b) => a.time - b.time);
   const known = (e: { provider: string; id: number }) => KNOWN_EVENTS[`${e.provider}:${e.id}`];
-  // Known events always shown; the others fill what is left, the latest kept.
+  // Known events always shown; the others fill what is left, the nearest to the moment looked
+  // at first (the last sign of life), or the latest without one.
   const keep = new Set(events.filter(known));
-  for (const e of [...events].reverse()) {
+  const order =
+    focus === undefined
+      ? [...events].reverse()
+      : [...events].sort((a, b) => Math.abs(a.time - focus) - Math.abs(b.time - focus));
+  for (const e of order) {
     if (keep.size >= max) break;
     keep.add(e);
   }
@@ -695,7 +749,7 @@ export function parseWindowsEvents(json: string, max = 60): string[] {
 }
 
 /** What Windows' System log says between two times, as journal lines. */
-export function windowsEvents(from: number, to: number): Promise<string[]> {
+export function windowsEvents(from: number, to: number, focus?: number): Promise<string[]> {
   return new Promise((resolve) => {
     execFile(
       "powershell.exe",
@@ -706,7 +760,7 @@ export function windowsEvents(from: number, to: number): Promise<string[]> {
           resolve([`  Journal de Windows illisible : ${error.message.split("\n")[0]}`]);
           return;
         }
-        const lines = parseWindowsEvents(stdout);
+        const lines = parseWindowsEvents(stdout, 60, focus);
         resolve([
           `  Journal de Windows (${dateClock(from)} → ${dateClock(to)}) :`,
           ...(lines.length ? lines : ["    aucun événement notable."]),
