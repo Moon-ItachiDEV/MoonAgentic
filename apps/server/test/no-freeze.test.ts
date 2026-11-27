@@ -1,15 +1,7 @@
 // Audit of 2026-11-25, N5, N6, N16, N23: what the server does on a big database or a big
 // file, while its one thread also answers every screen. Nothing may hold it for long.
 import { execFileSync } from "node:child_process";
-import {
-  closeSync,
-  mkdirSync,
-  mkdtempSync,
-  openSync,
-  rmSync,
-  writeFileSync,
-  writeSync,
-} from "node:fs";
+import { closeSync, mkdirSync, mkdtempSync, openSync, writeFileSync, writeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Item, ServerMessage, Thread } from "@moonagentic/protocol";
@@ -19,6 +11,7 @@ import { reviewChanges } from "../src/git.ts";
 import { type Client, Hub } from "../src/hub.ts";
 import { Checkpoints } from "../src/checkpoints.ts";
 import { Store } from "../src/store.ts";
+import { removeTempDir } from "./temp-dir.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 // Closing the database waits, up to 10 s, for the copy of its log under way (checkpoints.ts): after
@@ -150,8 +143,7 @@ function seeded(threads: number, inP0: number, items = 5) {
   cleanups.push(async () => {
     await hub.close();
     store.close();
-    // Windows may hold a file just closed a moment longer.
-    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    removeTempDir(dir);
   });
   return { hub, store };
 }
@@ -250,9 +242,7 @@ const git = (cwd: string, ...args: string[]) =>
 /** A worktree whose tracked `data.csv` became `mb` megabytes of 80-character lines. */
 function worktreeWithBigFile(mb: number) {
   const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-bigfile-"));
-  cleanups.push(() =>
-    rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
-  );
+  cleanups.push(() => removeTempDir(root));
   const repo = path.join(root, "repo");
   mkdirSync(repo);
   git(repo, "init", "-q", "-b", "main");
@@ -297,7 +287,7 @@ describe("reviewing a very big text file (N6)", { timeout: 120_000 }, () => {
 
   it("marks single-line minified files as truncated and bounds wide multi-line patches in bytes", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-widefile-"));
-    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    cleanups.push(() => removeTempDir(root));
     const repo = path.join(root, "repo");
     mkdirSync(repo);
     git(repo, "init", "-q", "-b", "main");

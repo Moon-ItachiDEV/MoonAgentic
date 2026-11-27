@@ -892,6 +892,7 @@ describe("teams", () => {
     expect(store.getThread(leadId)?.team).not.toHaveProperty("shipping");
   }, 40_000);
 
+  // Three rounds of a team, where the tests above have one each: up to 18 s on Windows runners.
   it("leaves a conflict to the user without a merger, and merges on once it is settled", async () => {
     const { hub, store, repo, projectId } = repository();
     const leadId = team(hub, projectId, "Écris en conflit");
@@ -942,7 +943,7 @@ describe("teams", () => {
     expect(
       git(repo, "show", `${store.getThread(again.mergeThreadId!)!.workspace!.branch}:conflit.txt`),
     ).toBe("A\nB");
-  });
+  }, 60_000);
 
   it("has the merger settle conflicts and check the pieces together", async () => {
     const { hub, store, projectId } = repository();
