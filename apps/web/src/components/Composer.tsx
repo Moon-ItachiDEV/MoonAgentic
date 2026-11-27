@@ -1184,6 +1184,8 @@ export function Composer(props: {
         id="cmp"
         ref={card}
       >
+        {/* Its margin makes the composer look taller or shorter while it changes shape. */}
+        <span className="cgrow" aria-hidden />
         <ComposerImages drafts={images.drafts} onRemove={images.remove} />
         {dropping && (
           <div className="cdrop" aria-hidden>

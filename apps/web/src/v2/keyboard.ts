@@ -2,7 +2,9 @@
 // composer is touched: the top bar leaves the screen, the composer ends half way up and the
 // home page's tabs stay stuck above the keyboard. Here the page says where the keyboard is
 // (`--kb`, and `data-kb` on the page's root while it is up), the composer rests on it, the
-// tabs step aside, and what moves is carried there by springs (`spring.ts`).
+// tabs step aside, and what moves is carried there by springs (`spring.ts`). From the
+// keyboard's first move until everything is back in place (`data-kb-tabs`), the tabs' bar
+// stands behind the composer: pushed past the keyboard, the page ends where the bar is.
 //
 // The keyboard's height is only known once it is up. It is remembered, so that from the second
 // time the composer is already drawn above the keyboard at the very moment it takes the focus:
@@ -74,6 +76,8 @@ let asked = false;
 let early = false;
 /** After the keyboard, the system brings the page back down: its top is followed until there. */
 let trail = false;
+/** A finger is on a draft of several lines: nothing moves before the keyboard is there. */
+let handsOff = false;
 let fieldWatch: ReturnType<typeof setInterval> | undefined;
 const listeners = new Set<() => void>();
 
@@ -119,6 +123,7 @@ function apply(next: Shown | null): void {
   const root = document.documentElement;
   if (next) {
     root.dataset.kb = "";
+    root.dataset.kbTabs = "";
     root.style.setProperty("--kb", `${next.inset}px`);
   } else {
     delete root.dataset.kb;
@@ -211,6 +216,8 @@ function rest(): void {
   offsets = new Map();
   depth = still(up ? 1 : 0);
   tabs = tabs.map(() => still(up ? 1 : 0));
+  // The composer is back above the tabs: their bar is in front again.
+  if (!shown) delete document.documentElement.dataset.kbTabs;
 }
 
 /** The page as it is seen before a change: where each part is and how it moves. */
@@ -276,6 +283,7 @@ function land(): void {
     early = false;
     if (!field) {
       apply(null);
+      rest();
       return;
     }
   }
@@ -407,6 +415,17 @@ function leave(): void {
   if (trail) for (const ms of [250, 600, 1200]) setTimeout(look, ms);
 }
 
+/**
+ * A draft of more than one line. Where the caret goes in it is the system's to say, from where
+ * the finger is on the screen: the lines must still be under the finger when it does.
+ */
+function severalLines(text: HTMLTextAreaElement): boolean {
+  const style = getComputedStyle(text);
+  const line = parseFloat(style.lineHeight) || 22;
+  const padding = (parseFloat(style.paddingTop) || 0) + (parseFloat(style.paddingBottom) || 0);
+  return text.scrollHeight - padding > line * 1.5;
+}
+
 function checkField(): void {
   if (field && (!field.isConnected || document.activeElement !== field)) leave();
 }
@@ -427,14 +446,28 @@ export function watchKeyboard(): void {
   document.addEventListener(
     "mousedown",
     (e) => {
+      handsOff = false;
       const target = composerField(e.target);
       if (!target || shown || !touchScreen()) return;
       const height = remembered();
       if (!height) return;
+      if (severalLines(target)) {
+        // The system then shows the caret's line itself, and the page follows once the
+        // keyboard is up, as it does the first time.
+        handsOff = true;
+        return;
+      }
       // Already in the field with the keyboard put away (back from another app): the touch
       // brings the keyboard back, and no focus follows.
       early = document.activeElement !== target;
       anticipate(height, true);
+    },
+    true,
+  );
+  document.addEventListener(
+    "mouseup",
+    () => {
+      handsOff = false;
     },
     true,
   );
@@ -452,7 +485,7 @@ export function watchKeyboard(): void {
       const v = viewport();
       const keyboard = v && keyboardOf(v);
       if (keyboard) change({ inset: keyboard.inset, top: keyboard.top });
-      else if (touchScreen() && navigator.userActivation?.isActive) {
+      else if (!handsOff && touchScreen() && navigator.userActivation?.isActive) {
         // The app gave the focus itself, in answer to a touch (a model picked): a phone then
         // shows its keyboard. A focus given with no touch shows none, and moves nothing.
         const height = remembered();

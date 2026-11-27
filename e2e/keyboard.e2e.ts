@@ -66,10 +66,15 @@ const KEYBOARD = 336;
 const GAP = 8;
 const STORED = "moonagentic.keyboard.p";
 
-/** Where the composer's end is, at a picture drawn at `t` (ms). */
+/** The composer at a picture drawn at `t` (ms). */
 interface Frame {
   t: number;
+  /** Where its end is, down the window. */
   bottom: number;
+  height: number;
+  /** Its text: how far above the composer's end it starts, and how far from its left edge. */
+  up: number;
+  left: number;
 }
 
 /** What the page is given to play a keyboard with, and to film itself. */
@@ -103,11 +108,17 @@ function play() {
   mark.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;visibility:hidden";
   new ResizeObserver(() => {
     const composer = document.querySelector("#bottom .cmp");
-    if (frames && composer)
-      frames.push({
-        t: Number(document.timeline.currentTime),
-        bottom: composer.getBoundingClientRect().bottom,
-      });
+    const text = composer?.querySelector("textarea");
+    if (!frames || !composer || !text) return;
+    const box = composer.getBoundingClientRect();
+    const at = text.getBoundingClientRect();
+    frames.push({
+      t: Number(document.timeline.currentTime),
+      bottom: box.bottom,
+      height: box.height,
+      up: box.bottom - at.top,
+      left: at.left - box.left,
+    });
   }).observe(mark);
   const tick = () => {
     if (frames) {
@@ -164,17 +175,74 @@ const shot = async (page: Page, name: string) => {
   if (shots) await page.screenshot({ path: path.join(shots, `${name}.png`) });
 };
 
-/** Nothing of what the keyboard moves is moving any more. */
+/** Nothing of what the keyboard moves is moving any more, and the composer has its shape. */
 const atRest = (page: Page) =>
   expect
     .poll(() =>
-      page.evaluate(() =>
-        [
-          ...document.querySelectorAll("#top, #gstack, #bottom, #bottom .cmp, .tabbar button"),
-        ].every((el) => el.getAnimations().length === 0),
+      page.evaluate(
+        () =>
+          !document.querySelector(".cmp[data-morph]") &&
+          [
+            ...document.querySelectorAll("#top, #gstack, #bottom, #bottom .cmp, .tabbar button"),
+          ].every((el) => el.getAnimations().length === 0),
       ),
     )
     .toBe(true);
+
+/** The fastest one of these goes from one picture to the next, in px per ms. */
+function fastest(frames: Frame[], ...of: ((f: Frame) => number)[]): number {
+  let most = 0;
+  for (let i = 1; i < frames.length; i++) {
+    const dt = frames[i]!.t - frames[i - 1]!.t;
+    if (dt < 8) continue;
+    for (const value of of)
+      most = Math.max(most, Math.abs(value(frames[i]!) - value(frames[i - 1]!)) / dt);
+  }
+  return most;
+}
+
+/** A few pictures go by. */
+const pictures = (page: Page, count: number) =>
+  page.evaluate(async (n) => {
+    for (let i = 0; i < n; i++) await new Promise((done) => requestAnimationFrame(done));
+  }, count);
+
+/** The composer as it is drawn, in a page the system shows from `top` down: a picture of it. */
+async function picture(page: Page, top: number): Promise<string> {
+  const clip = await page.evaluate((y) => {
+    // What the eye gets: the window shows the page from there.
+    document.documentElement.style.transform = `translateY(${-y}px)`;
+    const r = document.querySelector("#bottom .cmp")!.getBoundingClientRect();
+    return { x: r.left, y: r.top, width: r.width, height: r.height };
+  }, top);
+  const png = await page.screenshot({ clip });
+  await page.evaluate(() => document.documentElement.style.removeProperty("transform"));
+  return png.toString("base64");
+}
+
+/** Whether the tabs' bar draws anything over the composer. */
+async function tabsOverComposer(page: Page, top: number): Promise<boolean> {
+  const show = (seen: boolean) =>
+    page.evaluate((visible) => {
+      const bar = document.querySelector<HTMLElement>(".tabbar")!;
+      if (visible) bar.style.removeProperty("visibility");
+      else bar.style.visibility = "hidden";
+    }, seen);
+  // The caret blinks: two pictures of it are not the same.
+  const still = await page.addStyleTag({ content: "* { caret-color: transparent !important; }" });
+  let over = false;
+  for (let tries = 0; tries < 5; tries++) {
+    const withTabs = await picture(page, top);
+    await show(false);
+    const alone = await picture(page, top);
+    await show(true);
+    over = withTabs !== alone;
+    // Unless something else changed meanwhile (a button that came late): taken again then.
+    if ((await picture(page, top)) === withTabs) break;
+  }
+  await still.evaluate((el) => (el as Element).remove());
+  return over;
+}
 
 /** The page as it is drawn. */
 const look = (page: Page) =>
@@ -194,7 +262,16 @@ const look = (page: Page) =>
       /** The composer is one line: folded. */
       folded: !document.querySelector("#bottom .cmp.open"),
       tabs:
-        bar && tab ? { seen: Number(getComputedStyle(tab).opacity), reached: !bar.inert } : null,
+        bar && tab
+          ? {
+              seen: Number(getComputedStyle(tab).opacity),
+              reached: !bar.inert,
+              /** Their bar is drawn in front of the composer's dock. */
+              front:
+                Number(getComputedStyle(bar).zIndex) >
+                Number(getComputedStyle(document.getElementById("bottom")!).zIndex),
+            }
+          : null,
     };
   });
 
@@ -202,7 +279,7 @@ describe("the phone's keyboard", () => {
   it("rests the composer on the keyboard and puts the tabs away, then gives the page back", async () => {
     const { context, page } = await phone();
     const before = await look(page);
-    expect(before.tabs).toEqual({ seen: 1, reached: true });
+    expect(before.tabs).toEqual({ seen: 1, reached: true, front: true });
     expect(before.folded).toBe(true);
     await shot(page, "clavier-1-repos");
 
@@ -219,7 +296,7 @@ describe("the phone's keyboard", () => {
     expect(up.greeting!.top).toBeGreaterThan(up.top!.bottom);
     expect(up.greeting!.bottom).toBeLessThan(up.composer!.top);
     // The tabs stepped aside: not seen, not reached.
-    expect(up.tabs).toEqual({ seen: 0, reached: false });
+    expect(up.tabs).toEqual({ seen: 0, reached: false, front: false });
     await shot(page, "clavier-2-ouvert");
 
     // Put away: the focus goes first, the window follows. The composer folds with the keyboard.
@@ -294,13 +371,17 @@ describe("the phone's keyboard", () => {
     expect(frames.length).toBeGreaterThan(10);
     // Nothing jumps: from one picture to the next, the composer goes no faster than a spring
     // does (1.4 px/ms at most here). A jump is the whole way in one picture: 15 px/ms.
-    let fastest = 0;
-    for (let i = 1; i < frames.length; i++) {
-      const dt = frames[i]!.t - frames[i - 1]!.t;
-      if (dt >= 8)
-        fastest = Math.max(fastest, Math.abs(frames[i]!.bottom - frames[i - 1]!.bottom) / dt);
-    }
-    expect(fastest).toBeLessThan(3);
+    expect(fastest(frames, (f) => f.bottom)).toBeLessThan(3);
+    // Nor does its shape: the card's height and its text's place change by a spring too (0.25
+    // px/ms at most), from where they are when the mind changes.
+    expect(
+      fastest(
+        frames,
+        (f) => f.height,
+        (f) => f.up,
+        (f) => f.left,
+      ),
+    ).toBeLessThan(1);
     // It stays between its two places: no spring of the page passes its target.
     const bottoms = frames.map((f) => f.bottom);
     expect(Math.min(...bottoms)).toBeGreaterThan(PHONE.height - KEYBOARD - GAP - 1);
@@ -392,14 +473,174 @@ describe("the phone's keyboard", () => {
     expect(up.shell).toEqual({ top: 430, bottom: 430 + PHONE.height - 386 });
     expect(up.top!.top).toBe(430);
     expect(up.composer!.bottom).toBe(up.shell!.bottom - GAP);
-    expect(up.tabs).toEqual({ seen: 0, reached: false });
+    // The composer then rests where the tabs' bar is: nothing of the bar is drawn over it.
+    expect(await tabsOverComposer(page, 430)).toBe(false);
+    expect(up.tabs).toEqual({ seen: 0, reached: false, front: false });
     // The keyboard goes: the page's top stays where the system holds it until it lets go.
     await composer(page).blur();
-    expect((await look(page)).shell!.top).toBe(430);
+    const leaving = await look(page);
+    expect(leaving.shell!.top).toBe(430);
+    // On its way back the composer crosses the bar: it stays in front until all is in place.
+    expect(leaving.keyboard).toBe(false);
+    expect(leaving.tabs!.front).toBe(false);
     await keyboard(page, 0);
     await atRest(page);
     const after = await look(page);
     expect(after).toEqual({ ...before, greeting: after.greeting });
+    await context.close();
+  });
+
+  it("lets what is written grow while the composer changes shape", async () => {
+    const { context, page } = await phone();
+    await film(page);
+    // Three lines are pasted while the line is still growing into the card.
+    const changing = await page.evaluate(async (lines) => {
+      const text = document.querySelector<HTMLTextAreaElement>("#bottom .cmp textarea")!;
+      text.focus();
+      for (let i = 0; i < 3; i++) await new Promise((done) => requestAnimationFrame(done));
+      const shape = document.querySelector<HTMLElement>("#bottom .cmp")!.dataset.morph;
+      // What a paste does: the field's value changes, and it says so.
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+        text,
+        lines,
+      );
+      text.dispatchEvent(new Event("input", { bubbles: true }));
+      return shape;
+    }, "Une ligne\nDeux lignes\nTrois lignes");
+    expect(changing).toBe("open");
+    await atRest(page);
+    const frames = await cut(page);
+    expect(frames.length).toBeGreaterThan(10);
+    // At no picture is the text cut by the composer's top edge: the card has room for all of it
+    // as soon as it is there.
+    expect(Math.max(...frames.map((f) => f.up - f.height))).toBeLessThanOrEqual(0.5);
+    // And the card ends with its three lines, the text in its place.
+    const end = frames.at(-1)!;
+    const now = await page.evaluate(() => {
+      const box = document.querySelector("#bottom .cmp")!.getBoundingClientRect();
+      const at = document.querySelector("#bottom .cmp textarea")!.getBoundingClientRect();
+      return { height: box.height, up: box.bottom - at.top, lines: at.height };
+    });
+    expect(now.lines).toBeGreaterThan(60);
+    expect(end.height).toBeCloseTo(now.height, 0);
+    expect(end.up).toBeCloseTo(now.up, 0);
+    await context.close();
+  });
+
+  it("turns back from where it is when the mind changes while the composer changes shape", async () => {
+    const { context, page } = await phone();
+    await film(page);
+    const turns = await page.evaluate(async () => {
+      const text = document.querySelector<HTMLTextAreaElement>("#bottom .cmp textarea")!;
+      const card = document.querySelector("#bottom .cmp")!;
+      const height = () => card.getBoundingClientRect().height;
+      /** Pictures go by until the card is as said; then, as a finger acts: between two of them. */
+      const until = async (reached: () => boolean) => {
+        for (let i = 0; i < 300 && !reached(); i++)
+          await new Promise((done) => requestAnimationFrame(done));
+        await new Promise((done) => setTimeout(done, 0));
+        return height();
+      };
+      const line = height();
+      text.focus();
+      // The card has started to grow: the focus goes.
+      const first = await until(() => height() > line + 10);
+      text.blur();
+      // It grows a little more on its speed, then comes back down: the focus returns.
+      let most = first;
+      const second = await until(() => {
+        most = Math.max(most, height());
+        return height() < most - 4;
+      });
+      text.focus();
+      return { line, first, second };
+    });
+    await atRest(page);
+    const frames = await cut(page);
+    const whole = frames.at(-1)!.height;
+    expect(whole).toBeGreaterThan(turns.line + 20);
+    // Both changes of mind came on the way: the card was no longer a line, and not yet whole.
+    for (const at of [turns.first, turns.second]) {
+      expect(at).toBeGreaterThan(turns.line + 1);
+      expect(at).toBeLessThan(whole - 1);
+    }
+    // Each time the card and its text go on from where they are, at the speed they have: no
+    // picture shows them further than a spring takes them (0.25 px/ms at most).
+    expect(
+      fastest(
+        frames,
+        (f) => f.height,
+        (f) => f.up,
+        (f) => f.left,
+      ),
+    ).toBeLessThan(0.5);
+    await context.close();
+  });
+
+  it("moves its text from where it was seen, whatever came above the composer", async () => {
+    const { context, page } = await phone();
+    // What the app shows there at times (a warning, a goal, messages waiting) came since the
+    // composer was last drawn.
+    await page.evaluate(() => {
+      const band = document.createElement("div");
+      band.style.height = "64px";
+      document.querySelector("#bottom .cw")!.prepend(band);
+    });
+    await film(page);
+    await pictures(page, 3);
+    await composer(page).tap();
+    await atRest(page);
+    const frames = await cut(page);
+    expect(frames.length).toBeGreaterThan(10);
+    // The text travels to its place in the card: it starts from where it was, and never jumps.
+    expect(
+      fastest(
+        frames,
+        (f) => f.up,
+        (f) => f.left,
+        (f) => f.height,
+      ),
+    ).toBeLessThan(1);
+    expect(frames.at(-1)!.height).toBeGreaterThan(frames[0]!.height + 20);
+    await context.close();
+  });
+
+  it("leaves a draft of several lines where it is until the keyboard shows", async () => {
+    const { context, page } = await phone();
+    await page.evaluate(
+      ([key, tall]) => localStorage.setItem(key!, tall!),
+      [STORED, String(KEYBOARD)],
+    );
+    // A draft of three lines written earlier, the keyboard away.
+    await composer(page).fill("Une ligne\nDeux lignes\nTrois lignes");
+    await composer(page).blur();
+    await atRest(page);
+    const before = await look(page);
+    expect(before.keyboard).toBe(false);
+    // A touch on one of its lines: the system puts the caret where the finger is, so the lines
+    // stay under the finger. The page moves once the keyboard is there.
+    await composer(page).tap();
+    await pictures(page, 2);
+    const touched = await look(page);
+    expect(touched.keyboard).toBe(false);
+    expect(touched.composer).toEqual(before.composer);
+    await keyboard(page, KEYBOARD, 120);
+    await atRest(page);
+    const up = await look(page);
+    expect(up.keyboard).toBe(true);
+    expect(up.shell!.top).toBe(120);
+    expect(up.composer!.bottom).toBe(120 + PHONE.height - KEYBOARD - GAP);
+    await composer(page).blur();
+    await keyboard(page, 0);
+    await atRest(page);
+
+    // With one line there is only one for the caret: the page moves at the touch.
+    await composer(page).fill("Une ligne");
+    await composer(page).blur();
+    await atRest(page);
+    expect((await look(page)).keyboard).toBe(false);
+    await composer(page).tap();
+    expect((await look(page)).keyboard).toBe(true);
     await context.close();
   });
 
@@ -464,7 +705,7 @@ describe("the phone's keyboard", () => {
     await page.evaluate(() => new Promise((done) => requestAnimationFrame(done)));
     const up = await look(page);
     expect(up.composer!.bottom).toBe(PHONE.height - KEYBOARD - GAP);
-    expect(up.tabs).toEqual({ seen: 0, reached: false });
+    expect(up.tabs).toEqual({ seen: 0, reached: false, front: false });
     expect(
       await page.evaluate(() =>
         [
