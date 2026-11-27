@@ -193,10 +193,10 @@ describe("the project's menu", () => {
       .click();
     await where.waitFor({ state: "hidden" });
     await composer.fill("Bonjour");
-    // On a phone Enter goes to a new line (N32): sent with the button, once it can send.
-    const send = page.getByRole("button", { name: "Envoyer", exact: true });
+    // On a touch screen Enter is a new line (N32): the button sends, once it can.
+    const send = page.getByRole("button", { name: "Envoyer", exact: true }).last();
     await expect.poll(() => send.isEnabled()).toBe(true);
-    await send.click();
+    await send.tap();
     await page.waitForURL(/\/t\//);
     await page.getByRole("button", { name: "Paramètres de la discussion" }).click();
     await page.getByRole("menuitem", { name: /^Accès/ }).click();
