@@ -70,6 +70,13 @@ export function historyBefore(
         return [
           { isUser: false, text: `(La conversation a été déplacée dans le projet ${item.name}.)` },
         ];
+      case "artifact":
+        return [
+          {
+            isUser: false,
+            text: `(Artefact publié : « ${item.title} », version ${item.version}, artifact_id ${item.artifactId}.)`,
+          },
+        ];
       default:
         return [];
     }

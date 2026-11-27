@@ -17,6 +17,8 @@ export interface TrayQuota {
   /** Percent of the tightest window used, for the meter. */
   usedPercent: number;
   text: string;
+  /** What a phone shows instead: « 86 % (5 h) ». */
+  brief: string;
   when?: string;
   /** The agent with the most room left, to hand over to. */
   roomier?: { id: string; name: string };

@@ -545,6 +545,32 @@ const app = acp
       await say(said, "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
+    // `/consignes`: what it was told before the message, as it was told.
+    if (ask.trim() === "/consignes") {
+      await say(texts.length > 1 ? (texts[0] ?? "") : "Aucune consigne.", "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
+    // `/publie <titre>`: a page of its own, with a script, published as an artifact; then
+    // `/publie <titre> = <path>` publishes a file of the thread's folder, and
+    // `/publie <titre> # <artifact_id>` a new version of one published before.
+    const publishing = ask.trim().match(/(?:^|\n)\/publie ([^=#\n]+?)(?: = (\S+)| # (\S+))?$/);
+    if (publishing) {
+      const [, title, file, again] = publishing;
+      const call = { toolCallId: `publish-${randomUUID()}`, title: "publish_artifact" };
+      await update({ sessionUpdate: "tool_call", ...call, kind: "other", status: "in_progress" });
+      const said = await callMoonAgentic(sessionId, "publish_artifact", {
+        title,
+        ...(file
+          ? { path: file }
+          : {
+              content: `<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>${title}</title></head><body><h1>${title}</h1><button id="b" onclick="this.textContent='Touché'">Toucher</button><p id="v">${again ? "Version suivante" : "Première version"}</p><script>document.body.insertAdjacentHTML("beforeend", '<p id="lance">script lancé</p>')</script></body></html>`,
+            }),
+        ...(again ? { artifact_id: again } : {}),
+      });
+      await update({ sessionUpdate: "tool_call_update", ...call, status: "completed" });
+      await say(said, "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
     if (/(?:^|\n)\/memoire$/.test(ask.trim())) {
       const said = await callMoonAgentic(sessionId, "read_memory", {});
       await say(said, "agent_message_chunk");

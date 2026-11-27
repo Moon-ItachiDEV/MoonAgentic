@@ -80,7 +80,7 @@
   align-items: center;
   gap: 5px;
   margin-top: 4px;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--faint);
 }
 .uact {
@@ -270,11 +270,26 @@ html[data-dev="touch"] .uact {
   padding-left: 24px;
   margin: 0;
 }
-.evt.earlier {
+.evt.earlier,
+.evt.more-text {
   cursor: pointer;
 }
-.evt.earlier:hover {
+.evt.earlier:hover,
+.evt.more-text:hover {
   color: var(--fg);
+}
+.evt.more-text {
+  display: block;
+  min-height: 44px;
+}
+/*
+ * What is far out of sight is neither laid out nor painted until it comes near: a thread of
+ * thousands of messages stays smooth on a phone (audit N35). Its height is the last one seen.
+ */
+.feed > .item,
+.feed > .det {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
 }
 
 /* What the agent did on the way: one line, which opens on its steps. */
@@ -432,7 +447,7 @@ details.fold {
   padding: 10px 12px;
   border-radius: 14px;
   background: var(--card);
-  font: 400 12.5px/1.55 var(--mono);
+  font: 400 13px/1.55 var(--mono);
   color: var(--fg2);
   overflow-x: auto;
   white-space: pre;
@@ -449,7 +464,7 @@ details.fold {
 }
 .tdb {
   padding: 0 0 8px;
-  font-size: 12.5px;
+  font-size: 13px;
   line-height: 1.55;
   white-space: pre;
   overflow-x: auto;
@@ -505,16 +520,6 @@ details.fold {
   gap: 6px;
   font-size: 13px;
   color: var(--muted);
-}
-.ask .st.w {
-  color: var(--accent);
-}
-.ask .st.w::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
 }
 
 /* A notice in the thread: the agent stopped, went quiet, or its turn failed. */
@@ -693,7 +698,7 @@ button.cqt {
   height: 40px;
   padding: 0 12px;
   color: var(--faint);
-  font-size: 12.5px;
+  font-size: 13px;
   cursor: default;
 }
 
@@ -768,7 +773,7 @@ button.cqt {
   border-radius: 16px;
   background: var(--hover);
   color: var(--faint);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 /* An agent's answer is drawn in a box of its own: nothing it holds shows, or takes a tap,
    outside of it. The few pixels around its text leave room for a focus ring or a soft shadow. */
@@ -930,7 +935,7 @@ button.cqt {
   gap: 8px;
 }
 .opt .ot small {
-  font-size: 13.5px;
+  font-size: 14px;
   line-height: 1.35;
   color: var(--muted);
 }
@@ -947,7 +952,7 @@ button.cqt {
 }
 .opt .pick {
   flex: none;
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--accent);
 }
@@ -1030,7 +1035,7 @@ form.opt.other {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14.5px;
+  font-size: 15px;
   padding: 0 4px 2px;
   min-width: 0;
 }
@@ -1062,7 +1067,7 @@ form.opt.other {
 .dc .pane > span {
   display: block;
   padding: 14px;
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--faint);
 }
 .dc .go {
@@ -1070,7 +1075,7 @@ form.opt.other {
   align-items: center;
   gap: 10px;
   padding: 6px 4px 2px 12px;
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--muted);
 }
 .dc .go span {
@@ -1118,7 +1123,7 @@ form.opt.other {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14.5px;
+  font-size: 15px;
   color: var(--fg);
 }
 .dcf .n {
@@ -1279,4 +1284,65 @@ kbd {
   font-size: 13px;
   color: var(--fg2);
   margin: 4px 0;
+}
+
+/* An artifact the agent published: a card that opens it. */
+.artc {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(360px, 100%);
+  padding: 8px 12px 8px 8px;
+  border-radius: 16px;
+  background: var(--card);
+  text-align: left;
+  min-width: 0;
+  margin: 2px 0;
+  transition: background-color 160ms var(--out);
+}
+.artc:hover {
+  background: var(--hover);
+}
+.artc .thumb {
+  flex: none;
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
+  background: var(--sunken);
+  box-shadow: 0 0 0 0.5px var(--glass-ring);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: var(--muted);
+}
+.artc .thumb.img {
+  padding: 0;
+}
+.artc .thumb.img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.artc .tx {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.artc b {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.artc small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.artc .go {
+  flex: none;
+  color: var(--faint);
 }

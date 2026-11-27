@@ -1091,7 +1091,18 @@ export type Item =
   /** The thread went from one agent to another; agent items before it are `from`'s. */
   | { id: string; kind: "handoff"; from: AgentId; to: AgentId; at: number }
   /** The conversation, started outside any project, moved into this one. */
-  | { id: string; kind: "moved"; projectId: string; name: string; at: number };
+  | { id: string; kind: "moved"; projectId: string; name: string; at: number }
+  /** The agent published a page, an image or a PDF to look at: a card that opens it. */
+  | {
+      id: string;
+      kind: "artifact";
+      artifactId: string;
+      title: string;
+      artifactKind: ArtifactKind;
+      /** The version this publication made. */
+      version: number;
+      at: number;
+    };
 
 export type ItemKind = Item["kind"];
 
@@ -1465,6 +1476,11 @@ export interface Snapshot {
   teamPresets?: TeamPreset[];
   /** The mascot of each role of a team or a review the user changed; the others keep theirs. */
   roleMascots?: RoleMascots;
+  /**
+   * Whether artifact pages may load the few known libraries and fonts from the internet
+   * (`ARTIFACT_LIBRARY_HOSTS`); on unless turned off.
+   */
+  artifactLibraries?: boolean;
   /** This MoonAgentic's version and what it knows of a newer one. */
   app?: AppInfo;
   /**
@@ -1570,21 +1586,57 @@ export interface MoonBranch {
 /** What an artifact is shown as: a page, an image, or a PDF document. */
 export type ArtifactKind = "html" | "image" | "pdf";
 
+/** One version of a published artifact: what it was when the agent published it again. */
+export interface ArtifactVersion {
+  /** 1 for the first, counted up. */
+  n: number;
+  at: number;
+  size: number;
+}
+
 /**
- * A file an agent made or changed in its thread's own branch that can be looked at as it is:
- * an HTML page, an image or a PDF. Found anew each time the list is asked for.
+ * A file an agent made that can be looked at as it is: an HTML page, an image or a PDF.
+ * Either published by the agent (`id` set: kept by MoonAgentic, version by version, whatever
+ * folder the thread works in), or found anew in its thread's own branch each time the list
+ * is asked for.
  */
 export interface Artifact {
   threadId: string;
   threadTitle: string;
   projectId: string;
-  /** Its path in the thread's folder, with `/` separators. */
+  /** Its path in the thread's folder, with `/` separators; a published one's file name. */
   path: string;
   kind: ArtifactKind;
   size: number;
   /** When it was last written, in milliseconds. */
   mtime: number;
+  /** Set for an artifact the agent published. */
+  id?: string;
+  /** The name the agent gave it, when published. */
+  title?: string;
+  /** Its versions, the oldest first, when published. */
+  versions?: ArtifactVersion[];
 }
+
+/** Most versions of one published artifact kept: the oldest go past this. */
+export const MAX_ARTIFACT_VERSIONS = 30;
+
+/**
+ * Where an artifact page may load scripts, styles and fonts from when the user allows it: the
+ * well-known libraries a mockup uses (cdnjs, jsDelivr, unpkg, Tailwind, jQuery) and Google
+ * Fonts. Nothing else, and never with `connect-src`: a page fetches nothing.
+ */
+export const ARTIFACT_LIBRARY_HOSTS = {
+  scripts: [
+    "https://cdnjs.cloudflare.com",
+    "https://cdn.jsdelivr.net",
+    "https://unpkg.com",
+    "https://cdn.tailwindcss.com",
+    "https://code.jquery.com",
+  ],
+  styles: ["https://fonts.googleapis.com"],
+  fonts: ["https://fonts.gstatic.com"],
+} as const;
 
 export type ServerMessage =
   | { type: "snapshot"; snapshot: Snapshot }
@@ -1607,6 +1659,7 @@ export type ServerMessage =
   | { type: "storage"; error: string | null }
   | { type: "teamPresets"; presets: TeamPreset[] | null }
   | { type: "roleMascots"; mascots: RoleMascots }
+  | { type: "artifactLibraries"; on: boolean }
   | { type: "projectSetup"; requestId: string; projectId: string; setup: ProjectSetup }
   /** The skills installed for every project and for each project, after a change too. */
   | { type: "skills"; requestId: string; skills: InstalledSkill[] }
@@ -1703,7 +1756,15 @@ export type ServerMessage =
    * Where one artifact can be shown for a while: an address on this server that works without
    * the token, for the files of that thread's folder alone, and only for some minutes.
    */
-  | { type: "artifactLink"; requestId: string; url: string; expiresAt: number }
+  | {
+      type: "artifactLink";
+      requestId: string;
+      url: string;
+      expiresAt: number;
+      /** For a published artifact: the version shown, and every version kept. */
+      version?: number;
+      versions?: ArtifactVersion[];
+    }
   /**
    * Where a file an answer names can be seen for a while, in the same way as an artifact:
    * an image the agent made, a PDF, a page.
@@ -2607,15 +2668,25 @@ export const ClientMessage = z.discriminatedUnion("type", [
     openAtLogin: z.boolean().optional(),
     preventSleep: z.boolean().optional(),
   }),
-  /** Lists the artifacts of the threads' own branches, of one project when given; see `artifacts`. */
+  /**
+   * Lists the artifacts agents published and those of the threads' own branches, of one
+   * project when given; see `artifacts`.
+   */
   z.object({ type: z.literal("artifacts.list"), requestId: id, projectId: id.optional() }),
-  /** Asks for an address to show one artifact; see `artifactLink`. */
+  /**
+   * Asks for an address to show one artifact; see `artifactLink`. A published one is named by
+   * its id, and shown at its latest version unless one is asked for.
+   */
   z.object({
     type: z.literal("artifacts.open"),
     requestId: id,
     threadId: id,
     path: z.string().min(1).max(4096),
+    artifactId: id.optional(),
+    version: z.number().int().min(1).optional(),
   }),
+  /** Whether pages may load the few known libraries and fonts from the internet. */
+  z.object({ type: z.literal("artifacts.setLibraries"), on: z.boolean() }),
   /**
    * Asks for an address to see a file an answer of this thread names, as the agent wrote it
    * (a path of the computer, `file:///…`, or relative to the thread's folder); see `fileLink`.

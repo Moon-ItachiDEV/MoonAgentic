@@ -295,6 +295,26 @@ function NotificationsRow() {
 }
 
 /**
+ * Whether agents' pages may load the known libraries and fonts (Tailwind, jsDelivr, Google
+ * Fonts…), for every device: a mockup made with them shows as it was meant.
+ */
+function LibrariesRow() {
+  const on = useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().artifactLibraries,
+  );
+  return (
+    <Row title="Bibliothèques en ligne">
+      <Toggle
+        label="Bibliothèques en ligne"
+        on={on}
+        onChange={(next) => connection.send({ type: "artifacts.setLibraries", on: next })}
+      />
+    </Row>
+  );
+}
+
+/**
  * /lock: the code, kept on the computer, and the projects it hides. Locking or opening one
  * here does it for every device.
  */
@@ -683,6 +703,10 @@ function SectionBody(props: PageProps & GithubProps & { section: SettingsSection
           <div className="gl2">Notifications</div>
           <div className="ins">
             <NotificationsRow />
+          </div>
+          <div className="gl2">Artefacts</div>
+          <div className="ins">
+            <LibrariesRow />
           </div>
           <AppUpdateSettings row={Row} toggle={Toggle} />
           <LockGroup projects={props.projects} lockPin={props.lockPin} />

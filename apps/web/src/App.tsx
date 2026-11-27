@@ -24,7 +24,6 @@ import { Composer as PlainComposer } from "./components/Composer.tsx";
 import { Presence } from "./components/Presence.tsx";
 import { type Confirmation, ConfirmDialog } from "./components/ConfirmDialog.tsx";
 import { AppUpdateHostOnDemand, UpdateBar } from "./components/UpdateBar.tsx";
-import { Artifacts } from "./components/Artifacts.tsx";
 import { Home } from "./components/Home.tsx";
 import { LockSheet } from "./components/LockSheet.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
@@ -42,9 +41,7 @@ import { steady, useSame } from "./steady.tsx";
 import { coordinatorOf, listedThreads, waitingCount } from "./project-threads.ts";
 import { Sidebar as PlainSidebar } from "./components/Sidebar.tsx";
 import { TabBar, type TabPop, TabPopover } from "./components/TabBar.tsx";
-import { ScheduleDialog } from "./components/ScheduleDialog.tsx";
 import { teamActive } from "./team-rows.ts";
-import { TeamDialog } from "./components/TeamDialog.tsx";
 import { ReviewDialog } from "./components/ReviewDialog.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { DecisionCard } from "./components/DecisionCard.tsx";
@@ -84,8 +81,18 @@ const DiscussionSettings = lazy(() =>
 const ProjectSettings = lazy(() =>
   import("./components/ProjectSettings.tsx").then((m) => ({ default: m.ProjectSettings })),
 );
+const Artifacts = lazy(() =>
+  import("./components/Artifacts.tsx").then((m) => ({ default: m.Artifacts })),
+);
 const SettingsLayer = lazy(() =>
   import("./components/Settings.tsx").then((m) => ({ default: m.SettingsLayer })),
+);
+// Opened now and then too: loaded the first time, then kept for their closing animation.
+const TeamDialog = lazy(() =>
+  import("./components/TeamDialog.tsx").then((m) => ({ default: m.TeamDialog })),
+);
+const ScheduleDialog = lazy(() =>
+  import("./components/ScheduleDialog.tsx").then((m) => ({ default: m.ScheduleDialog })),
 );
 
 // While an agent writes, the page is told sixty times a second: the side bar and the
@@ -171,6 +178,11 @@ export function App() {
   const [reviewPr, setReviewPr] = useState<string | null>(null);
   // The planning of a task for later: a new one with its text, or one being changed.
   const [scheduling, setScheduling] = useState<{ text: string; schedule?: Schedule } | null>(null);
+  // Loaded the first time they open, then left in place, so they can slide away when closed.
+  const teamOnce = useRef(false);
+  if (teamTask !== null) teamOnce.current = true;
+  const scheduleOnce = useRef(false);
+  if (scheduling !== null) scheduleOnce.current = true;
 
   // Ctrl K (⌘ K on a Mac) opens the quick search from anywhere, even while typing.
   useEffect(() => {
@@ -1342,12 +1354,14 @@ export function App() {
           )
         ) : route.name === "artifacts" ? (
           <ErrorBoundary key="artifacts">
-            <Artifacts
-              threads={state.threads}
-              projects={state.projects}
-              online={state.status === "open"}
-              onOpenThread={(id) => go({ name: "thread", threadId: id })}
-            />
+            <Suspense fallback={<div className="view" />}>
+              <Artifacts
+                threads={state.threads}
+                projects={state.projects}
+                online={state.status === "open"}
+                onOpenThread={(id) => go({ name: "thread", threadId: id })}
+              />
+            </Suspense>
           </ErrorBoundary>
         ) : route.name === "planner" ? (
           <ErrorBoundary key={`planner:${project?.id ?? ""}`}>
@@ -1656,18 +1670,22 @@ export function App() {
           </Suspense>
         </ErrorBoundary>
       )}
-      <TeamDialog
-        open={teamTask !== null && !!project}
-        project={project}
-        agents={state.agents}
-        favorites={state.favorites}
-        task={teamTask ?? ""}
-        onClose={() => setTeamTask(null)}
-        onStarted={(id) => {
-          setTeamTask(null);
-          navigate({ name: "thread", threadId: id });
-        }}
-      />
+      {teamOnce.current && (
+        <Suspense fallback={null}>
+          <TeamDialog
+            open={teamTask !== null && !!project}
+            project={project}
+            agents={state.agents}
+            favorites={state.favorites}
+            task={teamTask ?? ""}
+            onClose={() => setTeamTask(null)}
+            onStarted={(id) => {
+              setTeamTask(null);
+              navigate({ name: "thread", threadId: id });
+            }}
+          />
+        </Suspense>
+      )}
       <ReviewDialog
         open={reviewPr !== null && !!project}
         project={project}
@@ -1683,21 +1701,25 @@ export function App() {
           navigate({ name: "thread", threadId: id });
         }}
       />
-      <ScheduleDialog
-        open={scheduling !== null}
-        projects={openProjects.filter((p) => !p.archived)}
-        projectId={project?.id}
-        agents={state.agents}
-        favorites={state.favorites}
-        text={scheduling?.text ?? ""}
-        schedule={scheduling?.schedule}
-        onClose={() => setScheduling(null)}
-        onSaved={() => {
-          setScheduling(null);
-          // The planned tasks are listed at their own address.
-          go({ name: "planner", view: "planifiees" });
-        }}
-      />
+      {scheduleOnce.current && (
+        <Suspense fallback={null}>
+          <ScheduleDialog
+            open={scheduling !== null}
+            projects={openProjects.filter((p) => !p.archived)}
+            projectId={project?.id}
+            agents={state.agents}
+            favorites={state.favorites}
+            text={scheduling?.text ?? ""}
+            schedule={scheduling?.schedule}
+            onClose={() => setScheduling(null)}
+            onSaved={() => {
+              setScheduling(null);
+              // The planned tasks are listed at their own address.
+              go({ name: "planner", view: "planifiees" });
+            }}
+          />
+        </Suspense>
+      )}
       <NewProjectDialog
         open={creatingProject}
         onClose={() => setCreatingProject(false)}
