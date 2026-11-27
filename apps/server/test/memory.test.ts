@@ -587,8 +587,8 @@ describe("project shared memory & cross-thread context", () => {
       text: "/note Le code du portail est 4521",
     });
     await hub.whenIdle(first);
-    // It has no MoonAgentic tools: nothing is written anywhere.
-    expect(lastReply(first)).toBe("Aucun outil MoonAgentic dans cette session.");
+    // Its only MoonAgentic tool shows what it made: nothing is written anywhere.
+    expect(lastReply(first)).toContain("Outil inconnu : save_memory");
     expect(store.getProjectMemory(discussions).text).toBe("");
     // Even a memory left there before is given to no conversation.
     store.setProjectMemory(discussions, "Le code du portail est 4521");
@@ -601,11 +601,17 @@ describe("project shared memory & cross-thread context", () => {
     await hub.whenIdle(second);
     expect(lastReply(second)).not.toContain("Mémoire reçue");
     expect(lastReply(second)).not.toContain("portail");
-    for (const ask of ["/cherche portail", "/fils", "/memoire", "/mcp-outils"]) {
+    for (const ask of ["/cherche portail", "/fils", "/memoire"]) {
       await hub.handle(client, { type: "thread.send", threadId: second, text: ask });
       await hub.whenIdle(second);
-      expect(lastReply(second), ask).toBe("Aucun outil MoonAgentic dans cette session.");
+      expect(lastReply(second), ask).toMatch(
+        /Outil inconnu : (?:search_threads|list_threads|read_memory)/,
+      );
     }
+    // It may only show what it made.
+    await hub.handle(client, { type: "thread.send", threadId: second, text: "/mcp-outils" });
+    await hub.whenIdle(second);
+    expect(lastReply(second)).toBe("publish_artifact");
   }, 40_000);
 
   it("asks the user before a supervised thread writes the memory, even when its agent does not ask", async () => {

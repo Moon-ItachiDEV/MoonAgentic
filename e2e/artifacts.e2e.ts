@@ -1,6 +1,6 @@
 // « Artefacts » in the built app against a real server: the page, image and PDF an agent left
-// in its thread's branch are listed, and the page is shown with its styles and images but
-// without running its script.
+// in its thread's branch are listed, and the page is shown with its styles and images, its
+// script running in a sandbox of its own.
 import { execFileSync } from "node:child_process";
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -155,8 +155,19 @@ describe("artifacts", () => {
         shown.evaluate(() => (document.getElementById("local") as HTMLImageElement).naturalWidth),
       )
       .toBe(240);
-    // Its script did not run, and nothing was asked of another site.
-    expect(await frame.locator("#lance").count()).toBe(0);
+    // Its script ran, in a sandbox of its own: nothing of the app's is in its reach, and
+    // nothing was asked of another site.
+    await frame.locator("#lance").waitFor();
+    expect(await shown.evaluate(() => window.origin)).toBe("null");
+    expect(
+      await shown.evaluate(() => {
+        try {
+          return String(window.parent.document.title);
+        } catch {
+          return "refusé";
+        }
+      }),
+    ).toBe("refusé");
     expect(outside).toEqual([]);
     if (shots) await page.screenshot({ path: path.join(shots, "artefacts-page.png") });
 

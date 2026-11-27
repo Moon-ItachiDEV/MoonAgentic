@@ -1,6 +1,7 @@
-// « Artefacts »: the pages, images and PDF documents agents made in their threads' own
-// branches, found anew each time they are asked for, and shown from short-lived addresses
-// that serve the files of one thread's folder alone, with no script allowed to run.
+// « Artefacts »: the pages, images and PDF documents agents published, or made in their
+// threads' own branches (found anew each time they are asked for), shown from short-lived
+// addresses that serve the files of one thread's folder alone. A page's scripts run in a
+// sandbox of its own, with nothing of the app's and no way to reach the network.
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -44,6 +45,8 @@ const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".htm": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".mjs": "text/javascript; charset=utf-8",
   ".png": "image/png",
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
@@ -84,11 +87,16 @@ async function eachAtMost<T, R>(items: T[], limit: number, work: (item: T) => Pr
 }
 
 /**
- * The artifacts of the threads that work on a branch of their own and are not resolved: the
- * files of a known kind that changed there since the branch started, the newest first.
+ * The artifacts agents published (`published`), and those of the threads that work on a
+ * branch of their own and are not resolved: the files of a known kind that changed there
+ * since the branch started. The newest first; a file also published is listed once, as
+ * published.
  */
 export async function findArtifacts(
   threads: Thread[],
+  published: Artifact[] = [],
+  /** The real paths of the files those were published from, not listed a second time. */
+  publishedFrom: ReadonlySet<string> = new Set(),
 ): Promise<{ artifacts: Artifact[]; capped: boolean }> {
   const looked = threads
     .filter((t) => !t.archived && t.kind !== "coordinator" && t.workspace?.base)
@@ -103,7 +111,7 @@ export async function findArtifacts(
       const kind = artifactKind(file);
       // A link leading out of the folder is not an artifact of this thread.
       const real = kind && resolveInside(ws.path, file);
-      if (!kind || !real) continue;
+      if (!kind || !real || publishedFrom.has(real)) continue;
       try {
         const found = await stat(real);
         if (!found.isFile()) continue;
@@ -123,8 +131,20 @@ export async function findArtifacts(
     }
     return shown;
   });
-  const all = found.flat().sort((a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path));
+  const all = [...published, ...found.flat()].sort(
+    (a, b) => b.mtime - a.mtime || a.path.localeCompare(b.path),
+  );
   return { artifacts: all.slice(0, MAX_ARTIFACTS), capped: all.length > MAX_ARTIFACTS };
+}
+
+/** What an address of a published artifact serves. */
+export interface PublishedEntry {
+  /** The version's own file, kept by MoonAgentic. */
+  entry: string;
+  /** The name it is served as. */
+  name: string;
+  /** The folder of what the page loads beside it, kept with its version. */
+  assets?: string;
 }
 
 /** The address of a file under a link: each part of its path encoded on its own. */
@@ -145,6 +165,11 @@ export class ArtifactLinks {
       expiresAt: number;
       /** For an address of one file an answer names: that file alone. */
       file?: string;
+      /**
+       * For an address of a published artifact: its version's file under the name it is
+       * served as, and what it loads beside it, kept with that version.
+       */
+      published?: PublishedEntry;
     }
   >();
   private readonly workspaceOf: (threadId: string) => Workspace | undefined;
@@ -191,7 +216,21 @@ export class ArtifactLinks {
     return this.add({ threadId, file, ...(deviceId ? { deviceId } : {}) });
   }
 
-  private add(link: { threadId: string; deviceId?: string; file?: string }) {
+  /** An address for one version of an artifact this thread published, given to that device. */
+  issuePublished(
+    threadId: string,
+    published: PublishedEntry,
+    deviceId?: string,
+  ): { ticket: string; expiresAt: number } {
+    return this.add({ threadId, published, ...(deviceId ? { deviceId } : {}) });
+  }
+
+  private add(link: {
+    threadId: string;
+    deviceId?: string;
+    file?: string;
+    published?: PublishedEntry;
+  }) {
     const now = this.now();
     for (const [key, link] of this.links) if (link.expiresAt <= now) this.links.delete(key);
     while (this.links.size >= MAX_LINKS) {
@@ -235,6 +274,21 @@ export class ArtifactLinks {
     }
     const type = servedType(file);
     if (!type) return undefined;
+    if (link.published) {
+      if (!this.shown(link.threadId)) return undefined;
+      const { entry, name, assets } = link.published;
+      // Its own file under its name; beside it, only what it loaded when it was published.
+      const real = file === name ? entry : assets ? resolveInside(assets, file) : undefined;
+      if (!real || !servedType(real)) return undefined;
+      try {
+        const found = await stat(real);
+        return found.isFile() && found.size <= MAX_SERVED_BYTES
+          ? { file: real, type, size: found.size }
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    }
     if (link.file) {
       // Its own name only, while its thread may be shown.
       if (file !== path.basename(link.file) || !this.shown(link.threadId)) return undefined;

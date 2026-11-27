@@ -18,7 +18,10 @@ const bootstrap = process.env[BRIDGE_BOOTSTRAP_ENV];
 const rawMode = process.env[BRIDGE_MODE_ENV];
 delete process.env[BRIDGE_BOOTSTRAP_ENV];
 delete process.env[BRIDGE_MODE_ENV];
-const mode: BridgeMode = rawMode === "thread" || rawMode === "readonly" ? rawMode : "coordinator";
+const mode: BridgeMode =
+  rawMode === "thread" || rawMode === "readonly" || rawMode === "discussion"
+    ? rawMode
+    : "coordinator";
 const tools = toolsForBridgeMode(mode);
 
 /** The token of this bridge alone, asked for once with what it was started with. */

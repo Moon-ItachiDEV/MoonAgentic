@@ -1,6 +1,6 @@
 import type { Artifact, Project } from "@moonagentic/protocol";
 import { useEffect, useState } from "react";
-import { fileName, KIND_LABEL } from "../artifacts.ts";
+import { artifactKey, artifactName, KIND_LABEL } from "../artifacts.ts";
 import { connection, newId } from "../connection.ts";
 import { codeThreads, tabProjects } from "../project-pick.ts";
 import { waitingCount } from "../project-threads.ts";
@@ -169,15 +169,10 @@ function RecentArtifacts({
   return (
     <>
       {(list ?? []).slice(0, SHOWN).map((a) => (
-        <button
-          key={`${a.threadId}:${a.path}`}
-          className="pi2"
-          role="menuitem"
-          onClick={onOpenArtifacts}
-        >
+        <button key={artifactKey(a)} className="pi2" role="menuitem" onClick={onOpenArtifacts}>
           <I n={a.kind === "pdf" ? "file" : "image"} s={19} />
           <span className="nm">
-            {fileName(a.path)}
+            {artifactName(a)}
             <small>
               {KIND_LABEL[a.kind]} · {seenAgo(a.mtime, now)}
             </small>

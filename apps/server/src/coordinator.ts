@@ -30,6 +30,7 @@ import {
   BRIDGE_URL_ENV,
   type BridgeMode,
   COORDINATOR_TOOLS,
+  MAX_ARTIFACT_TEXT,
   MEMORY_MODES,
   MESSAGE_MODES,
   THREAD_KINDS,
@@ -92,17 +93,20 @@ const WRITES = new Set([
   "message_thread",
   "resolve_thread",
   "save_memory",
+  "publish_artifact",
 ]);
 const BRIDGE = fileURLToPath(new URL("./coordinator-bridge.ts", import.meta.url));
 
 type BridgeScope = { projectId: string; threadId: string; mode: BridgeMode };
 
-const bridgeModeOf = (thread: Thread): BridgeMode =>
+const bridgeModeOf = (thread: Thread, outside: boolean): BridgeMode =>
   thread.kind === "coordinator"
     ? "coordinator"
-    : thread.role && thread.role !== "lead" && thread.role !== "coder"
-      ? "readonly"
-      : "thread";
+    : outside
+      ? "discussion"
+      : thread.role && thread.role !== "lead" && thread.role !== "coder"
+        ? "readonly"
+        : "thread";
 
 /** What a coordinator is told before each message: its part, and how it acts. */
 export const coordinatorPrompt = (project: string) =>
@@ -188,6 +192,11 @@ export interface CoordinatorHost extends Pick<
     replace: boolean,
     signal?: AbortSignal,
   ): Promise<boolean>;
+  /** Publishes an artifact for the thread at work, a card in its timeline; see `publish_artifact`. */
+  publishArtifact(
+    threadId: string,
+    input: { title: string; content?: string; path?: string; artifactId?: string },
+  ): Promise<unknown>;
 }
 
 /**
@@ -333,13 +342,13 @@ export class Coordinators {
    * trades, once, for its token: a command the agent runs later finds nothing to use.
    * Regular threads only receive read-only project context + shared memory tools; read-only
    * team roles only receive read tools; only a project's coordinator can orchestrate threads.
-   * A conversation outside any project gets none: there is no project to share.
+   * Each may publish artifacts. A conversation outside any project may only do that: there
+   * is no project to share.
    */
   coordinatorServer(thread: Thread): McpServerRecord[] {
     if (!this.url) return [];
-    if (thread.kind !== "coordinator" && this.host.outsideProjects(thread.projectId)) return [];
     this.dropCoordinatorAccess(thread.id);
-    const mode = bridgeModeOf(thread);
+    const mode = bridgeModeOf(thread, this.host.outsideProjects(thread.projectId));
     const bootstrap = randomBytes(32).toString("base64url");
     this.bootstraps.set(bootstrap, { projectId: thread.projectId, threadId: thread.id, mode });
     return [
@@ -493,7 +502,7 @@ export class Coordinators {
     const scope = this.tokens.get(token);
     const caller = scope && this.store.getThread(scope.threadId);
     if (!scope || !caller || caller.projectId !== scope.projectId) throw new CoordinatorRefused();
-    const mode = bridgeModeOf(caller);
+    const mode = bridgeModeOf(caller, this.host.outsideProjects(caller.projectId));
     if (mode !== scope.mode) throw new CoordinatorRefused();
     const allowed = toolsForBridgeMode(mode);
     if (!allowed.some((t) => t.name === tool)) {
@@ -501,7 +510,9 @@ export class Coordinators {
         throw new Error(
           mode === "readonly"
             ? `L'outil « ${tool} » n'est pas autorisé en lecture seule.`
-            : `L'outil « ${tool} » est réservé au coordinateur.`,
+            : mode === "discussion"
+              ? `L'outil « ${tool} » n'existe que dans un projet.`
+              : `L'outil « ${tool} » est réservé au coordinateur.`,
         );
       }
       throw new Error(`Outil inconnu : ${tool}`);
@@ -548,6 +559,25 @@ export class Coordinators {
       return thread;
     };
     switch (tool) {
+      case "publish_artifact": {
+        const content = input.content;
+        if (content !== undefined && content !== null && typeof content !== "string")
+          throw new Error("« content » doit être un texte.");
+        if (typeof content === "string" && content.length > MAX_ARTIFACT_TEXT)
+          throw new Error(
+            `« content » dépasse ${MAX_ARTIFACT_TEXT} caractères : écris la page dans un fichier et donne son path.`,
+          );
+        const file = str("path", 4096);
+        const given = typeof content === "string" && content.trim() ? content : undefined;
+        if (!given === !file) throw new Error("Donne soit « content », soit « path ».");
+        const artifactId = str("artifact_id", 200);
+        return this.host.publishArtifact(caller.id, {
+          title: need("title", 120),
+          ...(given ? { content: given } : {}),
+          ...(file ? { path: file } : {}),
+          ...(artifactId ? { artifactId } : {}),
+        });
+      }
       case "list_threads": {
         const all = this.store.listThreads();
         return mine().map((t) => this.threadForCoordinator(t, all, scope.threadId));

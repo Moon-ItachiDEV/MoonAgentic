@@ -1,4 +1,5 @@
 import { splitVerdict } from "../review-verdict.ts";
+import { ArtifactCard } from "./ArtifactCard.tsx";
 import { HERMES_AVATAR } from "../hermes.ts";
 import { VerdictCard } from "./VerdictCard.tsx";
 import { NEW_FOR, newMarkLabel } from "../new-mark.ts";
@@ -766,6 +767,8 @@ const FeedItem = memo(function FeedItem({
         </div>
       );
     }
+    case "artifact":
+      return <ArtifactCard item={item} thread={thread} />;
     case "moved":
       return (
         <div className="mvd">

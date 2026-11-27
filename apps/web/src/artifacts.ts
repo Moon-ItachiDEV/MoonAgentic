@@ -21,6 +21,13 @@ export const KIND_LABEL: Record<ArtifactKind, string> = {
 /** The file's own name, without its folders. */
 export const fileName = (file: string) => file.slice(file.lastIndexOf("/") + 1);
 
+/** What an artifact is called: the name the agent gave it, else its file's. */
+export const artifactName = (artifact: Artifact) => artifact.title ?? fileName(artifact.path);
+
+/** One artifact among the others: a published one by its id, else by its file. */
+export const artifactKey = (artifact: Artifact) =>
+  `${artifact.threadId}:${artifact.id ?? artifact.path}`;
+
 /** The folder it sits in, or nothing at the root. */
 export const folderOf = (file: string) => file.slice(0, Math.max(0, file.lastIndexOf("/")));
 
