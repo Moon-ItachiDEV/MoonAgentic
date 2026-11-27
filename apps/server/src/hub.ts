@@ -627,6 +627,7 @@ export class Hub {
         running: (id) => this.turns.has(id),
         whenIdle: (id) => this.whenIdle(id),
         sendFromHermes: (id, text) => this.sendFromHermes(id, text),
+        planCards: () => this.planner.list(),
         addPlanCard: (input) => this.planner.add(input, { source: "hermes" }),
         addSchedule: (input) => this.hermesSchedule(input),
         pendingRequests: () => this.pendingRequests(),
