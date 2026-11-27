@@ -130,29 +130,30 @@ export function parsePullRequest(json: string, repo: string): PullRequestInfo | 
   return parsePullRequestRecord(raw, repo);
 }
 
-/** Reads what `gh pr list --json` printed, keyed by head branch name (own-repo PRs preferred). */
+/**
+ * Reads what `gh pr list --json` printed, keyed by head branch name. Only pull requests from
+ * the repository's own branches: one from a fork's branch of the same name is not the thread's,
+ * and `gh pr view <branch>` does not find it either.
+ */
 export function parsePullRequestList(json: string, repo: string): Map<string, PullRequestInfo> {
-  const byBranch = new Map<string, { pr: PullRequestInfo; cross: boolean }>();
+  const byBranch = new Map<string, PullRequestInfo>();
   let raw: unknown;
   try {
     raw = JSON.parse(json);
   } catch {
-    return new Map();
+    return byBranch;
   }
-  if (!Array.isArray(raw)) return new Map();
+  if (!Array.isArray(raw)) return byBranch;
   for (const entry of raw) {
-    if (!isRecord(entry)) continue;
+    if (!isRecord(entry) || entry.isCrossRepository === true) continue;
     const branch = text(entry.headRefName);
     if (!branch) continue;
     const pr = parsePullRequestRecord(entry, repo);
     if (!pr) continue;
-    const cross = entry.isCrossRepository === true;
     const prev = byBranch.get(branch);
-    if (!prev || (prev.cross && !cross) || (prev.cross === cross && pr.number > prev.pr.number)) {
-      byBranch.set(branch, { pr, cross });
-    }
+    if (!prev || pr.number > prev.number) byBranch.set(branch, pr);
   }
-  return new Map([...byBranch.entries()].map(([branch, { pr }]) => [branch, pr]));
+  return byBranch;
 }
 
 /** At most this much of one remark: a pasted log says what it needs in far less. */
