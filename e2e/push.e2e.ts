@@ -144,6 +144,22 @@ describe("web push", () => {
     });
     await cdp.send("ServiceWorker.enable");
     const registrationId = await registered;
+    // Chromium forgets a notification for good when its list is read while it is being shown
+    // (see notifications.e2e.ts), which takes longer on Windows: the service worker counts the
+    // ones it has shown, and the list is read once it has shown this one.
+    await expect
+      .poll(() => context.serviceWorkers().some((w) => w.url().startsWith(origin)))
+      .toBe(true);
+    const worker = context.serviceWorkers().find((w) => w.url().startsWith(origin))!;
+    await worker.evaluate(() => {
+      const scope = self as unknown as { __shown: number; registration: ServiceWorkerRegistration };
+      const show = ServiceWorkerRegistration.prototype.showNotification;
+      scope.__shown = 0;
+      ServiceWorkerRegistration.prototype.showNotification = async function (...args) {
+        await show.apply(this, args);
+        scope.__shown++;
+      };
+    });
     await page.close();
     await cdp.send("ServiceWorker.deliverPushMessage", {
       origin,
@@ -155,6 +171,9 @@ describe("web push", () => {
         threadId: "t1",
       }),
     });
+    await expect
+      .poll(() => worker.evaluate(() => (self as unknown as { __shown: number }).__shown))
+      .toBe(1);
     const again = await context.newPage();
     await again.goto(new URL("/reglages", url).href);
     await expect

@@ -230,8 +230,12 @@ describe("longs fils", () => {
     expect(await messages()).toBe(240);
     expect(Math.abs((await top(241)) - before)).toBeLessThanOrEqual(2);
     expect(got("page")).toHaveLength(1);
-    // The button asks for the next one.
-    await page.getByRole("button", { name: "Afficher les messages précédents" }).click();
+    // The button asks for the next one. Pressed without being scrolled to: brought into sight,
+    // it would fetch a page by itself first, and the press, once the button is enabled again,
+    // a second one (seen on Windows, which is slower to press).
+    await page
+      .getByRole("button", { name: "Afficher les messages précédents" })
+      .dispatchEvent("click");
     await question(121).waitFor({ state: "attached" });
     await expect.poll(messages).toBe(360);
     expect(got("page")).toHaveLength(2);
@@ -336,5 +340,42 @@ describe("longs fils", () => {
     await answer.getByText("Fin du rapport : tout est vert.").waitFor();
     expect(await more.count()).toBe(0);
     await context.close();
+  });
+  // Neon's review of #197: going up while the end is still being drawn.
+  it("draws what it holds before asking the server for more, and keeps what it drew in place", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    // The parts above are drawn when the page says so, here when the test does.
+    await page.addInitScript(() => {
+      const held: (() => void)[] = [];
+      const w = window as unknown as Record<string, unknown>;
+      w.requestIdleCallback = (callback: () => void) => held.push(callback);
+      w.cancelIdleCallback = () => undefined;
+      w.drawMore = () => held.splice(0).forEach((callback) => callback());
+    });
+    const sent: string[] = [];
+    page.on("websocket", (socket) =>
+      socket.on("framesent", (frame) => sent.push(String(frame.payload))),
+    );
+    await page.goto(url);
+    await page.getByText("Long fil").first().click();
+    await page.getByText(`Question ${TURNS} ?`, { exact: true }).waitFor();
+    const view = page.locator(".view");
+    const messages = () => page.locator(".feed > .item").count();
+    const pages = () => sent.filter((f) => f.includes('"thread.page"')).length;
+    // Only the end is drawn; the reader goes to the top of it.
+    const drawn = await messages();
+    expect(drawn).toBeLessThanOrEqual(24);
+    await view.evaluate((el) => el.scrollTo(0, 0));
+    await page.waitForTimeout(600);
+    expect(pages()).toBe(0);
+    expect(await messages()).toBe(drawn);
+    // The button draws what is held, rather than ask for more.
+    await page.getByRole("button", { name: "Afficher les messages précédents" }).click();
+    await expect.poll(messages).toBeGreaterThan(100);
+    expect(pages()).toBe(0);
+    // All held is drawn: now going up asks for the page before.
+    await view.evaluate((el) => el.scrollTo(0, 0));
+    await expect.poll(pages).toBe(1);
+    await page.close();
   });
 });

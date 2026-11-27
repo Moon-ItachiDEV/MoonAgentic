@@ -236,6 +236,7 @@ describe("a project's coordinator", () => {
       "read_thread",
       "read_memory",
       "save_memory",
+      "publish_artifact",
       "open_thread",
       "start_team",
       "message_thread",

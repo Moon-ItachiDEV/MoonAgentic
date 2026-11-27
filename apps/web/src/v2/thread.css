@@ -1285,3 +1285,64 @@ kbd {
   color: var(--fg2);
   margin: 4px 0;
 }
+
+/* An artifact the agent published: a card that opens it. */
+.artc {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(360px, 100%);
+  padding: 8px 12px 8px 8px;
+  border-radius: 16px;
+  background: var(--card);
+  text-align: left;
+  min-width: 0;
+  margin: 2px 0;
+  transition: background-color 160ms var(--out);
+}
+.artc:hover {
+  background: var(--hover);
+}
+.artc .thumb {
+  flex: none;
+  width: 52px;
+  height: 52px;
+  border-radius: 10px;
+  background: var(--sunken);
+  box-shadow: 0 0 0 0.5px var(--glass-ring);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  color: var(--muted);
+}
+.artc .thumb.img {
+  padding: 0;
+}
+.artc .thumb.img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.artc .tx {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.artc b {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.artc small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.artc .go {
+  flex: none;
+  color: var(--faint);
+}

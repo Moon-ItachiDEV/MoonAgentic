@@ -1,4 +1,5 @@
 import { splitVerdict } from "../review-verdict.ts";
+import { ArtifactCard } from "./ArtifactCard.tsx";
 import { HERMES_AVATAR } from "../hermes.ts";
 import { VerdictCard } from "./VerdictCard.tsx";
 import { NEW_FOR, newMarkLabel } from "../new-mark.ts";
@@ -165,23 +166,26 @@ function Conversation({
   const pagingState = paging?.threadId === thread.id ? paging.state : undefined;
   const team = isTeamThread(thread);
   const blocks = items ? (team ? teamFeed(thread, items, earlier > 0) : activityFeed(items)) : [];
-  // How many blocks at the start are not drawn yet, while the thread is drawn from its end.
-  const [drawing, setDrawing] = useState<{ threadId: string; hidden: number }>();
-  let hidden = drawing?.threadId === thread.id ? drawing.hidden : undefined;
-  if (items && hidden === undefined) {
-    hidden = Math.max(0, blocks.length - FIRST_DRAWN);
-    setDrawing({ threadId: thread.id, hidden });
+  // While the thread is drawn from its end, the first block drawn: those before it are not
+  // drawn yet. Named, not counted, so a page that comes above leaves what is drawn as it is.
+  const blockKey = (block: (typeof blocks)[number] | undefined) =>
+    !block ? "" : block.kind === "detail" ? block.key : (items?.[block.index]?.id ?? "");
+  const [drawing, setDrawing] = useState<{ threadId: string; from: string }>();
+  let from = drawing?.threadId === thread.id ? drawing.from : undefined;
+  if (items && from === undefined) {
+    from = blockKey(blocks[Math.max(0, blocks.length - FIRST_DRAWN)]);
+    setDrawing({ threadId: thread.id, from });
   }
-  const undrawn = hidden ?? 0;
+  const undrawn = Math.max(0, from ? blocks.findIndex((b) => blockKey(b) === from) : 0);
+  const drawAbove = (count: number) =>
+    setDrawing({ threadId: thread.id, from: blockKey(blocks[Math.max(0, undrawn - count)]) });
+  const drawer = useRef(drawAbove);
+  useLayoutEffect(() => {
+    drawer.current = drawAbove;
+  });
   useEffect(() => {
     if (!undrawn) return;
-    const threadId = thread.id;
-    const more = () =>
-      setDrawing((now) =>
-        now?.threadId === threadId
-          ? { threadId, hidden: Math.max(0, now.hidden - DRAWN_STEP) }
-          : now,
-      );
+    const more = () => drawer.current(DRAWN_STEP);
     if (typeof requestIdleCallback === "function") {
       const asked = requestIdleCallback(more, { timeout: 200 });
       return () => cancelIdleCallback(asked);
@@ -240,13 +244,15 @@ function Conversation({
         : undefined;
   };
   const firstShown = useRef(first);
-  const drawnFrom = useRef(undrawn);
+  const drawnFrom = useRef({ threadId: thread.id, undrawn });
   useLayoutEffect(() => {
     const grewUp = first !== undefined && firstShown.current !== undefined;
     // What is held grew above, or more of it is drawn above.
-    const before = (grewUp && first < firstShown.current!) || undrawn < drawnFrom.current;
+    const drewAbove =
+      drawnFrom.current.threadId === thread.id && undrawn < drawnFrom.current.undrawn;
+    const before = (grewUp && first < firstShown.current!) || drewAbove;
     firstShown.current = first;
-    drawnFrom.current = undrawn;
+    drawnFrom.current = { threadId: thread.id, undrawn };
     const scroller = view.current;
     const was = anchor.current;
     if (before && scroller && was) {
@@ -260,7 +266,11 @@ function Conversation({
   // Going up near the first message shown fetches the page before it.
   const more = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (!earlier || typeof IntersectionObserver === "undefined" || !more.current) return;
+    // What is held is all drawn before more is asked for: a page coming in above blocks not
+    // drawn yet would have them drawn all at once, out of place.
+    if (!earlier || undrawn || typeof IntersectionObserver === "undefined" || !more.current) {
+      return;
+    }
     const near = new IntersectionObserver(
       (entries) => {
         if (entries.some((e) => e.isIntersecting)) void loader.current();
@@ -269,7 +279,7 @@ function Conversation({
     );
     near.observe(more.current);
     return () => near.disconnect();
-  }, [first, earlier > 0, thread.id]);
+  }, [first, earlier > 0, thread.id, undrawn > 0]);
 
   // A message picked in the quick search is shown once the timeline is here.
   const [focusTick, setFocusTick] = useState(0);
@@ -294,7 +304,7 @@ function Conversation({
         // Held but not drawn yet: all of it is drawn, then it is shown.
         if (undrawn) {
           revealing.current = itemId;
-          setDrawing({ threadId: thread.id, hidden: 0 });
+          drawAbove(undrawn);
           return;
         }
         if (itemId !== reveal) {
@@ -469,7 +479,8 @@ function Conversation({
             ref={more}
             className="evt earlier"
             disabled={pagingState === "busy"}
-            onClick={() => void loadEarlier()}
+            // What is held is drawn first; then the page before it is asked for.
+            onClick={() => (undrawn ? drawAbove(undrawn) : void loadEarlier())}
           >
             {pagingState === "busy"
               ? "Chargement des messages précédents…"
@@ -766,6 +777,8 @@ const FeedItem = memo(function FeedItem({
         </div>
       );
     }
+    case "artifact":
+      return <ArtifactCard item={item} thread={thread} />;
     case "moved":
       return (
         <div className="mvd">

@@ -162,6 +162,12 @@ async function firstServed(files: string[], roots: string[]): Promise<ServedFile
   return undefined;
 }
 
+/** Whether `file`, a real path, is inside one of `roots`, once their links are followed. */
+export async function insideAny(file: string, roots: string[]): Promise<boolean> {
+  const reals = await Promise.all(roots.map(real));
+  return reals.some((root) => !!root && isInside(root, file));
+}
+
 /** At most this many folders are looked in for a name alone. */
 const MAX_GENERATED_DIRS = 1500;
 /** A conversation keeps its images right in its folder, or a few folders below. */

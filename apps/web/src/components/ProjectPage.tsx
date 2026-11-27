@@ -12,7 +12,7 @@ import {
   type ThreadGroup,
 } from "@moonagentic/protocol";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fileName } from "../artifacts.ts";
+import { artifactKey, artifactName } from "../artifacts.ts";
 import { connection, newId } from "../connection.ts";
 import { coordinatorDefault, findModel, isNeonOrchestrator } from "../default-models.ts";
 import { baseName, type FileDir, fileTree } from "../file-tree.ts";
@@ -284,9 +284,9 @@ export function ProjectOverview(
         {used.length > 0 && (
           <div className="tarts">
             {used.map((a) => (
-              <button key={a.path} className="tart press" onClick={props.onOpenArtifacts}>
+              <button key={artifactKey(a)} className="tart press" onClick={props.onOpenArtifacts}>
                 <I n={a.kind === "image" ? "image" : a.kind === "html" ? "code" : "file"} s={16} />
-                <span>{fileName(a.path)}</span>
+                <span>{artifactName(a)}</span>
               </button>
             ))}
           </div>
@@ -314,18 +314,14 @@ export function ProjectOverview(
             </button>
             <div className="carou">
               {artifacts.slice(0, 12).map((a) => (
-                <button
-                  key={`${a.threadId}:${a.path}`}
-                  className="art"
-                  onClick={props.onOpenArtifacts}
-                >
+                <button key={artifactKey(a)} className="art" onClick={props.onOpenArtifacts}>
                   <span className="thumb ic">
                     <I
                       n={a.kind === "image" ? "image" : a.kind === "html" ? "code" : "file"}
                       s={26}
                     />
                   </span>
-                  <b>{fileName(a.path)}</b>
+                  <b>{artifactName(a)}</b>
                   <small>{shortAgo(a.mtime, now)}</small>
                 </button>
               ))}

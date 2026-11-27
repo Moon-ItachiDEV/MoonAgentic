@@ -5,6 +5,7 @@ import { isIP } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import {
+  ARTIFACT_LIBRARY_HOSTS,
   ClientMessage,
   MAX_IMAGE_BYTES,
   type RemoteAccess,
@@ -91,6 +92,11 @@ export const ATTACHMENTS_PATH = "/api/attachments";
 const LOCAL = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 /** A coordinator's call is a tool name and a brief: never large. */
 const MAX_COORDINATOR_BODY = 256 * 1024;
+/**
+ * A thread's bridge may also bring the text of a page it publishes (`publish_artifact`), up to
+ * `MAX_ARTIFACT_TEXT` characters, written as JSON.
+ */
+const MAX_BRIDGE_BODY = 8 * 1024 * 1024;
 
 /** Extracts the credential from a strict `Authorization: Bearer <token>` header. */
 export function bearerToken(header: string | undefined): string | null {
@@ -453,23 +459,31 @@ export function securityHeaders(host: string | undefined): Record<string, string
 }
 
 /**
- * How an artifact is served: inside the app's own frame alone, as a sandbox with no script
- * and nothing loaded from elsewhere, so a page an agent wrote can neither run code with the
- * app's rights nor send anything out. A PDF is shown by the browser's own reader, which a
- * sandbox would turn away: nothing in it runs with the app's rights either.
+ * How an artifact is served: inside the app's own frame alone, as a sandbox of its own. A
+ * page's scripts run there with an opaque origin: nothing of the app's (its token, its
+ * storage, its pages) is in reach, nothing can be fetched or sent (no `connect-src`, no
+ * form, no top navigation, no pop-up), and only what sits beside the page is loaded, plus,
+ * when `libraries` is on, the few known libraries and fonts of `ARTIFACT_LIBRARY_HOSTS`.
+ * A PDF is shown by the browser's own reader, which a sandbox would turn away: nothing in it
+ * runs with the app's rights either.
  */
-export function artifactHeaders(type: string): Record<string, string> {
+export function artifactHeaders(type: string, libraries = false): Record<string, string> {
   const pdf = type === "application/pdf";
+  const hosts = (list: readonly string[]) => (libraries ? list.map((h) => ` ${h}`).join("") : "");
   return {
     "content-security-policy": (pdf
       ? ["default-src 'none'", "frame-ancestors 'self'"]
       : [
-          "sandbox",
+          "sandbox allow-scripts",
           "default-src 'none'",
+          `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:${hosts(ARTIFACT_LIBRARY_HOSTS.scripts)}`,
           "img-src 'self' data: blob:",
-          "style-src 'self' 'unsafe-inline'",
-          "font-src 'self' data:",
-          "media-src 'self'",
+          `style-src 'self' 'unsafe-inline'${hosts([...ARTIFACT_LIBRARY_HOSTS.styles, ...ARTIFACT_LIBRARY_HOSTS.scripts])}`,
+          `font-src 'self' data:${hosts([...ARTIFACT_LIBRARY_HOSTS.fonts, ...ARTIFACT_LIBRARY_HOSTS.scripts])}`,
+          "media-src 'self' data: blob:",
+          "connect-src 'none'",
+          "worker-src 'none'",
+          "frame-src 'self' blob: data:",
           "base-uri 'none'",
           "form-action 'none'",
           "frame-ancestors 'self'",
@@ -480,6 +494,8 @@ export function artifactHeaders(type: string): Record<string, string> {
     "cache-control": "no-store",
     // No resource policy: the page, sandboxed, has an origin of its own, and loads its images
     // and styles from here. Only its address, secret and short-lived, lets them be read.
+    // Its modules and fonts are asked for in CORS mode, from that opaque origin (`null`).
+    "access-control-allow-origin": "*",
     "content-disposition": "inline",
   };
 }
@@ -749,7 +765,7 @@ export function createHttpServer(options: {
       let size = 0;
       req.on("data", (chunk: Buffer) => {
         size += chunk.length;
-        if (size > MAX_COORDINATOR_BODY) req.destroy();
+        if (size > MAX_BRIDGE_BODY) req.destroy();
         else chunks.push(chunk);
       });
       req.on("error", () => undefined);
@@ -1053,7 +1069,9 @@ export function createHttpServer(options: {
       void hub.artifactLinks.resolve(ticket, file).then(
         (found) => {
           if (!found) return notFound();
-          for (const [name, value] of Object.entries(artifactHeaders(found.type)))
+          for (const [name, value] of Object.entries(
+            artifactHeaders(found.type, hub.artifactLibraries()),
+          ))
             res.setHeader(name, value);
           res.removeHeader("x-frame-options");
           res.writeHead(200, { "content-type": found.type, "content-length": found.size });

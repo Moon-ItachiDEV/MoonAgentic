@@ -154,8 +154,15 @@ describe("GitHub sign-in", () => {
     // The token stays on the server, sealed there: never in the page.
     const html = await page.content();
     expect(html).not.toContain("gho_e2e");
-    const sealed = readFileSync(path.join(dir, "data", "github-token"), "utf8");
-    expect(sealed).toBe("gho_e2e");
+    if (process.platform === "win32") {
+      // Sealed by Windows for this account: the file does not hold it as it is.
+      const sealed = readFileSync(path.join(dir, "data", "github-token.dpapi"));
+      expect(sealed.length).toBeGreaterThan(0);
+      expect(sealed.includes("gho_e2e")).toBe(false);
+    } else {
+      // No keyring on the test machine: kept in a file of the server's own.
+      expect(readFileSync(path.join(dir, "data", "github-token"), "utf8")).toBe("gho_e2e");
+    }
 
     // Picked, a repository says where its clone goes; picked again, it is let go.
     await list.getByRole("button", { name: /^app/ }).click();

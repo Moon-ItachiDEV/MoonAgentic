@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { reviewChanges } from "../src/git.ts";
 import { type Client, Hub } from "../src/hub.ts";
+import { Checkpoints } from "../src/checkpoints.ts";
 import { Store } from "../src/store.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -29,8 +30,13 @@ afterEach(async () => {
 /** Longer than this, a screen waits on the server for something it can see. */
 const STALL_MS = 200;
 
-/** The longest time a 5 ms timer could not run while `work` went on. */
-async function longestStall<T>(work: () => Promise<T>): Promise<{ result: T; stall: number }> {
+/**
+ * The longest time a 5 ms timer could not run while `work` went on, and the slowest calls to
+ * the database made meanwhile: when a stall is too long, the failure says which step held.
+ */
+async function longestStall<T>(
+  work: () => Promise<T>,
+): Promise<{ result: T; stall: number; slowest: string }> {
   let last = performance.now();
   let stall = 0;
   const timer = setInterval(() => {
@@ -38,13 +44,42 @@ async function longestStall<T>(work: () => Promise<T>): Promise<{ result: T; sta
     stall = Math.max(stall, now - last);
     last = now;
   }, 5);
+  const calls: [string, number][] = [];
+  const restore: (() => void)[] = [];
+  for (const [owner, label] of [
+    [Store.prototype, "Store"],
+    [Checkpoints.prototype, "Checkpoints"],
+  ] as const) {
+    for (const name of Object.getOwnPropertyNames(owner)) {
+      const method = Object.getOwnPropertyDescriptor(owner, name)?.value as unknown;
+      if (name === "constructor" || typeof method !== "function") continue;
+      const timed = function (this: unknown, ...args: unknown[]) {
+        const start = performance.now();
+        try {
+          return (method as (...a: unknown[]) => unknown).apply(this, args);
+        } finally {
+          calls.push([`${label}.${name}`, performance.now() - start]);
+        }
+      };
+      Object.defineProperty(owner, name, { value: timed, configurable: true, writable: true });
+      restore.push(() =>
+        Object.defineProperty(owner, name, { value: method, configurable: true, writable: true }),
+      );
+    }
+  }
   try {
     const result = await work();
     // Once more after the last step, or a stall at the very end goes unseen.
     await new Promise((resolve) => setTimeout(resolve, 30));
-    return { result, stall: Math.round(stall) };
+    const slowest = calls
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, ms]) => `${name} ${Math.round(ms)} ms`)
+      .join(", ");
+    return { result, stall: Math.round(stall), slowest: `les appels les plus lents : ${slowest}` };
   } finally {
     clearInterval(timer);
+    for (const undo of restore) undo();
   }
 }
 
@@ -59,12 +94,12 @@ async function leastStall<S, R>(
   setup: () => S | Promise<S>,
   work: (state: S) => Promise<R>,
   limit = STALL_MS,
-): Promise<S & { stall: number; result: R }> {
-  let best: (S & { stall: number; result: R }) | undefined;
+): Promise<S & { stall: number; result: R; slowest: string }> {
+  let best: (S & { stall: number; result: R; slowest: string }) | undefined;
   for (let tries = 0; tries < 5 && !(best && best.stall < limit); tries++) {
     const state = await setup();
-    const { result, stall } = await longestStall(() => work(state));
-    if (!best || stall < best.stall) best = { ...state, stall, result };
+    const { result, stall, slowest } = await longestStall(() => work(state));
+    if (!best || stall < best.stall) best = { ...state, stall, result, slowest };
   }
   return best!;
 }
@@ -130,7 +165,7 @@ class Screen implements Client {
 
 describe("removing a project or a long thread (N5)", { timeout: 120_000 }, () => {
   it("removes 100 threads among 2 000 without holding the server", async () => {
-    const { store, stall } = await leastStall(
+    const { store, stall, slowest } = await leastStall(
       async () => {
         const made = seeded(2000, 100);
         await made.hub.recovered;
@@ -138,14 +173,14 @@ describe("removing a project or a long thread (N5)", { timeout: 120_000 }, () =>
       },
       ({ hub }) => hub.removeProject("p0"),
     );
-    expect(stall).toBeLessThan(STALL_MS);
+    expect(stall, slowest).toBeLessThan(STALL_MS);
     expect(store.getProject("p0")).toBeUndefined();
     expect(store.listThreads().filter((t) => t.projectId === "p0")).toEqual([]);
     expect(store.listThreads()).toHaveLength(1900);
   });
 
   it("deletes a thread of 20 000 messages without holding the server", async () => {
-    const { store, stall } = await leastStall(
+    const { store, stall, slowest } = await leastStall(
       async () => {
         const made = seeded(2, 0, 20_000);
         await made.hub.recovered;
@@ -153,7 +188,7 @@ describe("removing a project or a long thread (N5)", { timeout: 120_000 }, () =>
       },
       ({ hub }) => hub.deleteThread("fil-0"),
     );
-    expect(stall).toBeLessThan(STALL_MS);
+    expect(stall, slowest).toBeLessThan(STALL_MS);
     expect(store.getThread("fil-0")).toBeUndefined();
     expect(store.listItems("fil-0")).toEqual([]);
     // Its messages are no longer found; the other thread's still are.
@@ -164,17 +199,17 @@ describe("removing a project or a long thread (N5)", { timeout: 120_000 }, () =>
 
 describe("searching a big database (N23)", { timeout: 120_000 }, () => {
   it("answers two letters with nothing, without reading every message", async () => {
-    const { screen, stall } = await leastStall(
+    const { screen, stall, slowest } = await leastStall(
       () => ({ ...seeded(300, 0, 50), screen: new Screen() }),
       ({ hub, screen }) => hub.handle(screen, { type: "search", requestId: "r", query: "ré" }),
       50,
     );
     expect(screen.messages.at(-1)).toMatchObject({ type: "searched", hits: [] });
-    expect(stall).toBeLessThan(50);
+    expect(stall, slowest).toBeLessThan(50);
   });
 
   it("finds what was just said while the index is still being filled, without waiting for it", async () => {
-    const { screen, stall } = await leastStall(
+    const { screen, stall, slowest } = await leastStall(
       () => {
         const made = seeded(300, 0, 60);
         // As the first time after the update that brought the index: nothing in it yet.
@@ -190,20 +225,20 @@ describe("searching a big database (N23)", { timeout: 120_000 }, () => {
       ({ hub, screen }) =>
         hub.handle(screen, { type: "search", requestId: "r", query: "zygomatique" }),
     );
-    expect(stall).toBeLessThan(STALL_MS);
+    expect(stall, slowest).toBeLessThan(STALL_MS);
     const reply = screen.messages.at(-1);
     expect(reply).toMatchObject({ type: "searched" });
     expect(reply?.type === "searched" && reply.hits.map((h) => h.itemId)).toEqual(["dernier"]);
   });
 
   it("uses the trigram index even for GLOB metacharacters like ???", async () => {
-    const { screen, stall } = await leastStall(
+    const { screen, stall, slowest } = await leastStall(
       () => ({ ...seeded(300, 0, 50), screen: new Screen() }),
       ({ hub, screen }) => hub.handle(screen, { type: "search", requestId: "r", query: "???" }),
       50,
     );
     expect(screen.messages.at(-1)).toMatchObject({ type: "searched", hits: [] });
-    expect(stall).toBeLessThan(50);
+    expect(stall, slowest).toBeLessThan(50);
   });
 });
 
@@ -238,11 +273,11 @@ function worktreeWithBigFile(mb: number) {
 
 describe("reviewing a very big text file (N6)", { timeout: 120_000 }, () => {
   it("shows the start of a 50 MB file, marked cut, without holding the server", async () => {
-    const { result, stall } = await leastStall(
+    const { result, stall, slowest } = await leastStall(
       () => worktreeWithBigFile(50),
       ({ dir, base }) => reviewChanges(dir, base),
     );
-    expect(stall).toBeLessThan(STALL_MS);
+    expect(stall, slowest).toBeLessThan(STALL_MS);
     const [big, small] = result.files;
     expect(big).toMatchObject({ path: "data.csv", truncated: true, added: 655_350, removed: 1 });
     expect(big!.patch.split("\n").length).toBeLessThanOrEqual(2000);
