@@ -122,11 +122,18 @@ async function openSkills(page: Page) {
  * as on Windows, where its answer comes well after the click.
  */
 async function slowToServer(page: Page, type: string, ms: number) {
+  const held = new Set<ReturnType<typeof setTimeout>>();
+  // A test that stops early sends nothing more on a closed page.
+  page.once("close", () => held.forEach(clearTimeout));
   await page.routeWebSocket(/\/ws/, (ws) => {
     const server = ws.connectToServer();
     ws.onMessage((message) => {
       if (typeof message === "string" && message.includes(`"type":"${type}"`)) {
-        setTimeout(() => server.send(message), ms);
+        const timer = setTimeout(() => {
+          held.delete(timer);
+          server.send(message);
+        }, ms);
+        held.add(timer);
       } else server.send(message);
     });
   });
@@ -141,7 +148,7 @@ const SIZES = {
 describe("skills", () => {
   it("lists the skills of every project and of a project, and gives one to another agent", async () => {
     const page = await browser.newPage({ viewport: SIZES.desk });
-    await slowToServer(page, "skills.setAgents", 1500);
+    await slowToServer(page, "skills.setAgents", 300);
     const region = await openSkills(page);
     const pdf = region.getByRole("button", { name: /^pdf/ });
     await pdf.waitFor();
