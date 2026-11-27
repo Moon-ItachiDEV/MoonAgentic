@@ -78,3 +78,17 @@ export function watchDevice(): void {
   apply();
   mouse.addEventListener("change", apply);
 }
+
+/** Whether a mouse drives the page (`data-dev="desk"`, set by `watchDevice`). */
+export function useMouse(): boolean {
+  return useSyncExternalStore(
+    (l) => {
+      if (typeof matchMedia !== "function") return () => {};
+      const q = matchMedia("(hover: hover) and (pointer: fine)");
+      q.addEventListener("change", l);
+      return () => q.removeEventListener("change", l);
+    },
+    () =>
+      typeof matchMedia === "function" && matchMedia("(hover: hover) and (pointer: fine)").matches,
+  );
+}

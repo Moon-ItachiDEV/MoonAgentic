@@ -320,6 +320,12 @@ export interface Project {
    * MoonAgentic deletes it then, in the project's repository only (« Supprimer après la fusion »).
    */
   deleteMerged?: false;
+  /**
+   * Put on hold from its settings: its running turns were stopped, and what its agents would
+   * start on their own (a coordinator's threads, a team, a planned task) waits until it goes on.
+   * What the user writes still goes.
+   */
+  paused?: true;
 }
 
 /** The tints a project's icon can take; the web app gives each its shade in both themes. */
@@ -448,6 +454,8 @@ export interface TeamEvent {
 export interface TeamMember {
   agentId: AgentId;
   model?: string;
+  /** The agent's settings it starts with, such as its reasoning effort; a route's only. */
+  settings?: Record<string, string>;
 }
 
 /**
@@ -793,6 +801,9 @@ export interface ThreadPullRequest {
   blocked?: true;
   /** Once merged, the commit GitHub merged: its branch still on it is merged. */
   mergedHead?: string;
+  /** Lines it adds and removes, as GitHub counts them. */
+  additions?: number;
+  deletions?: number;
 }
 
 /** What a list of threads keeps of a pull request. */
@@ -812,6 +823,8 @@ export function threadPullRequest(pr: PullRequestInfo): ThreadPullRequest {
     ...(pr.conflicts ? { conflicts: true as const } : {}),
     ...(pr.blocked ? { blocked: true as const } : {}),
     ...(pr.state === "merged" && pr.head ? { mergedHead: pr.head } : {}),
+    ...(pr.additions !== undefined ? { additions: pr.additions } : {}),
+    ...(pr.deletions !== undefined ? { deletions: pr.deletions } : {}),
   };
 }
 
@@ -1117,6 +1130,11 @@ export interface Schedule {
   repeat: ScheduleRepeat;
   /** When it next starts. For one that is off or has run its only time, when it last was due. */
   nextAt: number;
+  /**
+   * The time it was set for, its runs counted from it: a daily task of 2:30 moved to 3:30 on
+   * the night the clocks go forward is back at 2:30 the day after. Older tasks have none.
+   */
+  at?: number;
   /** Off: paused by the user, or a one-time task that has run. */
   enabled: boolean;
   /** How many times it really started a thread. */
@@ -1322,6 +1340,31 @@ export interface CoordinatorSettings {
   parallel?: number;
   /** Turns the whole server runs at once, coordinators or not; 4 when left out. */
   maxTurns?: number;
+  /**
+   * A project's own routes, by its id: each kind set there goes before the general ones, and
+   * its `default` before every general route.
+   */
+  projectRoutes?: Record<string, Partial<Record<RouteKind, TeamMember>>>;
+  /** What a conversation outside any project (« Nouvelle discussion ») starts with. */
+  loose?: TeamMember;
+}
+
+/**
+ * Where a coordinator of `projectId` sends a kind of work: the project's route for that kind,
+ * else the project's default, else the general route for that kind, else the general default.
+ */
+export function routeFor(
+  settings: Pick<CoordinatorSettings, "routes" | "projectRoutes">,
+  projectId: string | undefined,
+  kind: WorkKind | undefined,
+): TeamMember | undefined {
+  const own = projectId ? settings.projectRoutes?.[projectId] : undefined;
+  return (
+    (kind ? own?.[kind] : undefined) ??
+    own?.default ??
+    (kind ? settings.routes[kind] : undefined) ??
+    settings.routes.default
+  );
 }
 
 /** One window of an agent's subscription, as the agent's own service reports it. */
@@ -1886,13 +1929,37 @@ export const ClientMessage = z.discriminatedUnion("type", [
     agentId: id,
     model: id.optional(),
   }),
-  /** Sends a kind of work to an agent and model; without an agent, back to the coordinator's own. */
+  /**
+   * Sends a kind of work to an agent and model; without an agent, back to the coordinator's own
+   * (or, for one project, back to the general route).
+   */
   z.object({
     type: z.literal("coordinator.setRoute"),
     kind: z.enum(ROUTE_KINDS),
     agentId: id.optional(),
     model: id.optional(),
+    settings: z
+      .record(id, id)
+      .refine((r) => Object.keys(r).length <= 20)
+      .optional(),
+    /** Only for this project's coordinator. */
+    projectId: id.optional(),
   }),
+  /** What a conversation outside any project starts with; without an agent, the usual one. */
+  z.object({
+    type: z.literal("discussions.setModel"),
+    agentId: id.optional(),
+    model: id.optional(),
+    settings: z
+      .record(id, id)
+      .refine((r) => Object.keys(r).length <= 20)
+      .optional(),
+  }),
+  /**
+   * Stops the project's coordinator, its turn and its agent: the next message starts a new one,
+   * which resumes its conversation. Answers `done`.
+   */
+  z.object({ type: z.literal("coordinator.restart"), requestId: id, projectId: id }),
   /** How many threads a coordinator runs at once. */
   z.object({
     type: z.literal("coordinator.setParallel"),
@@ -2368,6 +2435,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({ type: z.literal("skills.runInput"), runId: id, text: z.string().max(2000) }),
   /** Stops a running command. */
   z.object({ type: z.literal("skills.runStop"), runId: id }),
+  /** Puts the project on hold, or lets it go on; see {@link Project.paused}. */
+  z.object({ type: z.literal("project.setPaused"), projectId: id, paused: z.boolean() }),
   /** What the project gives its agents, read from its folder: answered with projectSetup. */
   z.object({ type: z.literal("project.setup"), requestId: id, projectId: id }),
   /** Writes `AGENTS.md` at the project's root. */

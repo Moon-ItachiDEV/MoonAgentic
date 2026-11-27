@@ -345,12 +345,72 @@ describe("Hermes · outils", () => {
     expect(schedule!.nextAt).toBe(new Date(2030, 0, 2, 9, 30).getTime());
   });
 
+  it("lit le Planner d'un projet ou de tous, par colonne, sans rien y changer", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    repoAt(path.join(h.root, "boutique"));
+    const other = h.hub.createProject("Boutique", path.join(h.root, "boutique"));
+    const late = h.hub.planner.add({
+      projectId: h.projectId,
+      title: "Refaire le logo",
+      due: new Date(2020, 0, 3).getTime(),
+    });
+    h.hub.planner.update(late.id, { status: "doing" });
+    const contact = h.hub.planner.add({ projectId: h.projectId, title: "Page contact" });
+    // A card a thread works on: its id, to go on with read_thread.
+    h.hub.planner.update(contact.id, { threadId: h.coordinatorId });
+    const shipped = h.hub.planner.add({ projectId: other, title: "Paiement" });
+    h.hub.planner.update(shipped.id, { status: "live" });
+    const before = JSON.stringify(h.hub.planner.list());
+
+    const one = await h.result("read_planner", { project: "Site vitrine" });
+    expect(one.status).toBe(200);
+    const cards = (one.result as { total: number; cards: Record<string, unknown>[] }).cards;
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toMatchObject({
+      project: "Site vitrine",
+      card: `#${late.number}`,
+      title: "Refaire le logo",
+      column: "En cours",
+      due: "2020-01-03",
+      late: true,
+    });
+    expect(cards[1]).toMatchObject({
+      thread_id: h.coordinatorId,
+      thread_state: expect.any(String),
+    });
+    // Its column follows the thread that works on it.
+    expect(cards[1]).toMatchObject({ title: "Page contact", column: "En test" });
+
+    const all = await h.result("read_planner");
+    expect((all.result as { total: number }).total).toBe(3);
+    const delivered = await h.result("read_planner", { column: "livré" });
+    expect((delivered.result as { cards: unknown[] }).cards).toEqual([
+      expect.objectContaining({ project: "Boutique", title: "Paiement", column: "Livré" }),
+    ]);
+    const bad = await h.result("read_planner", { column: "Plus tard" });
+    expect(bad.error).toContain("À faire");
+    // Read only: the Planner is as it was.
+    expect(JSON.stringify(h.hub.planner.list())).toBe(before);
+  });
+
   it("ne voit pas un projet verrouillé ni un projet inconnu", async () => {
     const h = await withHermes();
     await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
     const unknown = await h.result("project_status", { project: "Inexistant" });
     expect(unknown.status).toBe(400);
     expect(unknown.error).toContain("Site vitrine");
+
+    // Its Planner neither, asked by name or with all the others.
+    h.hub.planner.add({ projectId: h.projectId, title: "Carte secrète" });
+    h.hub.locks.setPin("123456");
+    h.hub.locks.lock(h.projectId);
+    const named = await h.result("read_planner", { project: "Site vitrine" });
+    expect(named.status).toBe(400);
+    const all = await h.result("read_planner");
+    expect(JSON.stringify(all.result)).not.toContain("Carte secrète");
+    expect((all.result as { total: number }).total).toBe(0);
   });
 });
 

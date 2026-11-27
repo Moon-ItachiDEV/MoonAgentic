@@ -231,10 +231,13 @@ describe("skills", () => {
     await page.goto(url);
     await page.locator("#scr").waitFor();
     await page.goto(new URL("/p/alpha", url).toString());
-    await page.getByRole("button", { name: "Réglages du projet" }).click();
-    const dialog = page.getByRole("dialog", { name: "Réglages du projet" });
-    await dialog.getByRole("button", { name: /^\$ Skills/ }).click();
-    const skills = page.getByRole("dialog", { name: "Skills" });
+    await page.getByRole("button", { name: "Paramètres du projet" }).click();
+    const dialog = page.getByRole("dialog", { name: "Paramètres du projet" });
+    await dialog
+      .getByRole("navigation", { name: "Sections" })
+      .getByRole("button", { name: "Mémoire" })
+      .click();
+    const skills = dialog;
     await skills.getByRole("button", { name: /^docx/ }).waitFor();
     await skills.getByRole("button", { name: "Installer une skill" }).click();
     await page.getByRole("menuitem", { name: "Par commande" }).click();

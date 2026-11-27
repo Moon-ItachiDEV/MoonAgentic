@@ -47,6 +47,20 @@ export function firstMoment(schedule: Schedule | undefined, now: number): number
     : schedule.nextAt;
 }
 
+/**
+ * What an edit of the task changes in its time: a new time or a new repetition. A new
+ * repetition alone keeps the time the task was set for: the one shown may be its next run
+ * moved by the clocks, which would then stay moved. A one-time task that ran is planned again.
+ */
+export function timeChange(
+  schedule: Pick<Schedule, "repeat" | "enabled">,
+  edit: { timeChanged: boolean; repeat: Schedule["repeat"]; at: number },
+): { at?: number; repeat?: Schedule["repeat"] } {
+  if (edit.timeChanged || (!schedule.enabled && schedule.repeat === "once"))
+    return { at: edit.at, repeat: edit.repeat };
+  return edit.repeat !== schedule.repeat ? { repeat: edit.repeat } : {};
+}
+
 /** What a new task is offered: the next full hour. */
 export function nextHour(now: number): number {
   const d = new Date(now);
@@ -82,8 +96,9 @@ export function momentLabel(at: number, now: number): string {
 }
 
 /** How the task repeats: « Tous les jours à 09:00 », « Tous les lundis à 09:00 ». */
-export function repeatLabel(schedule: Pick<Schedule, "repeat" | "nextAt">): string {
-  const at = schedule.nextAt;
+export function repeatLabel(schedule: Pick<Schedule, "repeat" | "nextAt" | "at">): string {
+  // The time it was set for: its next one is an hour later the night the clocks go forward.
+  const at = schedule.at ?? schedule.nextAt;
   switch (schedule.repeat) {
     case "once":
       return "Une seule fois";

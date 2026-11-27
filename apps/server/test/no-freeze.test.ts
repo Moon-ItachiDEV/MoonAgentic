@@ -49,17 +49,19 @@ async function longestStall<T>(work: () => Promise<T>): Promise<{ result: T; sta
 }
 
 /**
- * The stall of `work` on a fresh `setup`, tried again up to twice when over the limit. A
+ * The stall of `work` on a fresh `setup`, tried again up to four times when over `limit`. A
  * server that holds itself does so on every try; one only kept waiting by the other test
  * files running on the same machine (216 ms once on a CI runner, 324 ms once for a review
- * on Windows, where both stay under 20 ms) does not.
+ * on Windows, 202 ms three times in a row for a deletion and 51 ms for a search, both on a
+ * Windows runner, where they stay far under) does not.
  */
 async function leastStall<S, R>(
   setup: () => S | Promise<S>,
   work: (state: S) => Promise<R>,
+  limit = STALL_MS,
 ): Promise<S & { stall: number; result: R }> {
   let best: (S & { stall: number; result: R }) | undefined;
-  for (let tries = 0; tries < 3 && !(best && best.stall < STALL_MS); tries++) {
+  for (let tries = 0; tries < 5 && !(best && best.stall < limit); tries++) {
     const state = await setup();
     const { result, stall } = await longestStall(() => work(state));
     if (!best || stall < best.stall) best = { ...state, stall, result };
@@ -162,28 +164,31 @@ describe("removing a project or a long thread (N5)", { timeout: 120_000 }, () =>
 
 describe("searching a big database (N23)", { timeout: 120_000 }, () => {
   it("answers two letters with nothing, without reading every message", async () => {
-    const { hub } = seeded(300, 0, 50);
-    const screen = new Screen();
-    const { stall } = await longestStall(() =>
-      hub.handle(screen, { type: "search", requestId: "r", query: "ré" }),
+    const { screen, stall } = await leastStall(
+      () => ({ ...seeded(300, 0, 50), screen: new Screen() }),
+      ({ hub, screen }) => hub.handle(screen, { type: "search", requestId: "r", query: "ré" }),
+      50,
     );
     expect(screen.messages.at(-1)).toMatchObject({ type: "searched", hits: [] });
     expect(stall).toBeLessThan(50);
   });
 
   it("finds what was just said while the index is still being filled, without waiting for it", async () => {
-    const { hub, store } = seeded(300, 0, 60);
-    // As the first time after the update that brought the index: nothing in it yet.
-    store.db.exec("DELETE FROM search_fts; UPDATE search_docs SET stale = 1");
-    store.putItem("fil-299", {
-      id: "dernier",
-      kind: "user",
-      text: "Un mot rarissime : zygomatique",
-      at: Date.now(),
-    });
-    const screen = new Screen();
-    const { stall } = await longestStall(() =>
-      hub.handle(screen, { type: "search", requestId: "r", query: "zygomatique" }),
+    const { screen, stall } = await leastStall(
+      () => {
+        const made = seeded(300, 0, 60);
+        // As the first time after the update that brought the index: nothing in it yet.
+        made.store.db.exec("DELETE FROM search_fts; UPDATE search_docs SET stale = 1");
+        made.store.putItem("fil-299", {
+          id: "dernier",
+          kind: "user",
+          text: "Un mot rarissime : zygomatique",
+          at: Date.now(),
+        });
+        return { ...made, screen: new Screen() };
+      },
+      ({ hub, screen }) =>
+        hub.handle(screen, { type: "search", requestId: "r", query: "zygomatique" }),
     );
     expect(stall).toBeLessThan(STALL_MS);
     const reply = screen.messages.at(-1);
@@ -192,10 +197,10 @@ describe("searching a big database (N23)", { timeout: 120_000 }, () => {
   });
 
   it("uses the trigram index even for GLOB metacharacters like ???", async () => {
-    const { hub } = seeded(300, 0, 50);
-    const screen = new Screen();
-    const { stall } = await longestStall(() =>
-      hub.handle(screen, { type: "search", requestId: "r", query: "???" }),
+    const { screen, stall } = await leastStall(
+      () => ({ ...seeded(300, 0, 50), screen: new Screen() }),
+      ({ hub, screen }) => hub.handle(screen, { type: "search", requestId: "r", query: "???" }),
+      50,
     );
     expect(screen.messages.at(-1)).toMatchObject({ type: "searched", hits: [] });
     expect(stall).toBeLessThan(50);
