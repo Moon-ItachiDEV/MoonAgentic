@@ -133,11 +133,7 @@ html[data-dev="touch"] .uact {
   line-height: 1.55;
   overflow-wrap: anywhere;
 }
-.a .md.md-live > div {
-  display: contents;
-}
-.a .md > *,
-.a .md.md-live > div > * {
+.a .md > * {
   margin: 0;
   min-width: 0;
 }
