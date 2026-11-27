@@ -200,6 +200,7 @@ export function TeamDialog({
   const choose = (role: TeamRole) => (m: TeamMember | undefined) => {
     setChoices((c) => ({ ...c, [role]: m ?? null }));
     setKeptFor(undefined);
+    setMissing(null);
   };
   const lead = member("lead");
   const coder = member("coder");
@@ -217,6 +218,9 @@ export function TeamDialog({
   const [autoShip, setAutoShip] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** What the team still needs, said when « Lancer l'équipe » is tapped without it. */
+  const [missing, setMissing] = useState<string | null>(null);
+  const taskField = useRef<HTMLTextAreaElement | null>(null);
 
   // Each opening starts from the task given and from the teams as saved.
   useEffect(() => {
@@ -226,6 +230,7 @@ export function TeamDialog({
     setKeptFor(undefined);
     setBusy(false);
     setError(null);
+    setMissing(null);
   }, [open, initialTask]);
 
   // The models come from the agents themselves: each is asked once, as the model picker does.
@@ -240,9 +245,20 @@ export function TeamDialog({
     }
   }, [open, agents, project]);
 
-  const ready = !!project && !!lead && !!coder && !!task.trim() && !noGit;
   const submit = async () => {
-    if (!ready || busy || !project || !lead || !coder) return;
+    if (busy || !project || noGit) return;
+    // The button stays live: a tap that cannot launch says why rather than doing nothing. The
+    // task's field is focused within the tap itself, so that the phone's keyboard comes up.
+    if (!task.trim()) {
+      setMissing("Écris d'abord la tâche de l'équipe.");
+      taskField.current?.focus();
+      return;
+    }
+    if (!lead || !coder) {
+      setMissing("Choisis d'abord un chef et un codeur.");
+      return;
+    }
+    setMissing(null);
     setBusy(true);
     setError(null);
     try {
@@ -302,16 +318,26 @@ export function TeamDialog({
             className="sta"
             // Focused when the sheet opens with no task yet, where the keyboard is wanted at once.
             ref={(el) => {
+              taskField.current = el;
               if (el && open && !task && document.activeElement !== el) el.focus();
             }}
             aria-label="Tâche"
-            required
+            aria-required="true"
+            aria-invalid={missing !== null && !task.trim()}
             rows={3}
             value={task}
             placeholder="Ajoute l'export CSV aux rapports"
-            onChange={(e) => setTask(e.target.value)}
+            onChange={(e) => {
+              setTask(e.target.value);
+              setMissing(null);
+            }}
           />
         </div>
+        {missing && (
+          <p className="pcw t-err" role="alert">
+            {missing}
+          </p>
+        )}
         <div className="ins tmrs" key={preset?.id}>
           {ROLES.map(({ role, label, optional }) => (
             <div key={role} className={`it ro tmrow${inTeam(role) ? "" : " off"}`}>
@@ -429,7 +455,7 @@ export function TeamDialog({
           </p>
         )}
         <div className="mga stk">
-          <button className="b2 ink press" disabled={!ready || busy}>
+          <button className="b2 ink press" disabled={busy || noGit}>
             {busy ? "Lancement…" : "Lancer l'équipe"}
           </button>
         </div>
