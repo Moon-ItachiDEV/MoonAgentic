@@ -207,8 +207,12 @@ describe("longs fils", () => {
     expect(await messages()).toBe(240);
     expect(Math.abs((await top(241)) - before)).toBeLessThanOrEqual(2);
     expect(got("page")).toHaveLength(1);
-    // The button asks for the next one.
-    await page.getByRole("button", { name: "Afficher les messages précédents" }).click();
+    // The button asks for the next one. Pressed without being scrolled to: brought into sight,
+    // it would fetch a page by itself first, and the press, once the button is enabled again,
+    // a second one (seen on Windows, which is slower to press).
+    await page
+      .getByRole("button", { name: "Afficher les messages précédents" })
+      .dispatchEvent("click");
     await question(121).waitFor({ state: "attached" });
     await expect.poll(messages).toBe(360);
     expect(got("page")).toHaveLength(2);

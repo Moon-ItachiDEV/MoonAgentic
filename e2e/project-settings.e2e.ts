@@ -124,9 +124,8 @@ describe("a project's settings", () => {
     const memory = dialog.getByLabel("Mémoire partagée du projet");
     await memory.fill("- Toujours lancer pnpm test avant une PR.");
     await dialog.getByRole("button", { name: "Enregistrer" }).click();
-    await expect
-      .poll(() => dialog.getByRole("button", { name: "Enregistrer" }).isDisabled())
-      .toBe(true);
+    // Saved once its button is gone: only disabled, it is still being saved (longer on Windows).
+    await expect.poll(() => dialog.getByRole("button", { name: "Enregistrer" }).count()).toBe(0);
     expect(existsSync(path.join(repo, ".moonagentic/memory.md"))).toBe(false);
 
     const commands = dialog;

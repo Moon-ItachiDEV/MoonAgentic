@@ -41,6 +41,8 @@ beforeAll(async () => {
   git("config", "user.email", "e2e@example.com");
   git("config", "user.name", "E2E");
   git("config", "commit.gpgsign", "false");
+  // Files as written, whatever Git for Windows does with line ends by default.
+  git("config", "core.autocrlf", "false");
   git("add", "-A");
   git("commit", "-q", "-m", "init");
   server = spawn(

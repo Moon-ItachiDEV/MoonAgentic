@@ -8,3 +8,4 @@ dist/
 coverage/
 apps/desktop/stage/
 apps/desktop/release/
+e2e-failures/
