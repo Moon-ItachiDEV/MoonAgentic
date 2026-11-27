@@ -118,17 +118,18 @@ const BIG_FILE = Array.from(
 ).join("\n");
 
 /** A long answer with all that Markdown costs to draw: titles, lists, a table, code. */
-const LONG_ANSWER = Array.from(
-  { length: 12 },
-  (_, n) =>
-    `## Partie ${n + 1}\n\n` +
-    "Voici une explication assez longue pour ressembler à une vraie réponse, avec du **gras**, " +
-    "du `code` en ligne et un [lien](https://example.com). Elle continue sur plusieurs phrases " +
-    "pour que le texte grandisse pendant que tu le lis.\n\n" +
-    "- un premier point, avec quelques mots de plus\n- un deuxième point\n- un troisième\n\n" +
-    "| Fichier | Rôle |\n| --- | --- |\n| `app.ts` | le point d'entrée |\n| `hub.ts` | l'état |\n\n" +
-    "```ts\nexport function answer(): number {\n  return 42;\n}\n```\n\n",
-).join("");
+const longAnswer = (parts: number) =>
+  Array.from(
+    { length: parts },
+    (_, n) =>
+      `## Partie ${n + 1}\n\n` +
+      "Voici une explication assez longue pour ressembler à une vraie réponse, avec du **gras**, " +
+      "du `code` en ligne et un [lien](https://example.com). Elle continue sur plusieurs phrases " +
+      "pour que le texte grandisse pendant que tu le lis.\n\n" +
+      "- un premier point, avec quelques mots de plus\n- un deuxième point\n- un troisième\n\n" +
+      "| Fichier | Rôle |\n| --- | --- |\n| `app.ts` | le point d'entrée |\n| `hub.ts` | l'état |\n\n" +
+      "```ts\nexport function answer(): number {\n  return 42;\n}\n```\n\n",
+  ).join("");
 
 const CONTEXT_SIZE = 200_000;
 /** Characters that are not seen and change how a text reads, for « /trompeur ». */
@@ -623,9 +624,11 @@ const app = acp
       await usage(3_000, false);
       return { stopReason: "end_turn" };
     }
-    if (ask.trim() === "/flux") {
+    const flux = /^\/flux(?: (\d{1,3}))?$/.exec(ask.trim());
+    if (flux) {
       // Stands for a fast model: a long Markdown answer, sent word by word without a pause.
-      await say(LONG_ANSWER, "agent_message_chunk");
+      // « /flux 120 » writes ten times as much, as the longest answers do.
+      await say(longAnswer(Number(flux[1] ?? 12)), "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
     if (ask.trim() === "/fige") {

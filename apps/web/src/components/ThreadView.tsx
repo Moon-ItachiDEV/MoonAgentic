@@ -904,7 +904,7 @@ function Answer({ text, live, threadId }: { text: string; live: boolean; threadI
   );
   return (
     <>
-      <Markdown text={head} threadId={threadId} live={live} />
+      <Markdown text={head} threadId={threadId} />
       {left > 0 && (
         <button className="evt more-text" onClick={() => setWhole(true)}>
           Afficher la suite
