@@ -68,8 +68,7 @@ function plainText(tokens: Token[]): string | undefined {
  * file under it. The image is there already, so that line is only noise: a paragraph that
  * holds nothing but a short label and a link to an image the answer shows is left out.
  */
-function dropLinksToShownImages(all: Token[], images: Tokens.Image[]): void {
-  const shown = images.map(writtenRef);
+function dropLinksToShownImages(all: Token[], shown: readonly string[]): void {
   for (const token of all) {
     if (token.type !== "paragraph") continue;
     const inline = (token as Tokens.Paragraph).tokens;
@@ -89,47 +88,67 @@ function dropLinksToShownImages(all: Token[], images: Tokens.Image[]): void {
   }
 }
 
-/** Marks the links and images of an answer that name local files, to be shown from the server. */
-export const localFiles: MarkedExtension = {
-  hooks: {
-    // An agent that generated an image often only links to it (« [naruto.jpg](naruto.jpg) »):
-    // the image is shown in its place, as it would be had it written `![…](…)`. When the
-    // answer shows an image already, its links stay links, but a line that only repeats the
-    // image's file under it is left out.
-    processAllTokens(tokens) {
-      const all = allTokens(tokens);
-      const images = all.filter((t): t is Tokens.Image => t.type === "image");
-      if (images.length) {
-        dropLinksToShownImages(all, images);
+export interface LocalFilesContext {
+  /** Local image refs already shown in earlier committed streaming blocks. */
+  earlierImages?: () => readonly string[];
+  /** Called with each local image ref rendered in the current parse. */
+  onImage?: (ref: string) => void;
+}
+
+/**
+ * Marks the links and images of an answer that name local files, to be shown from the server.
+ * During incremental streaming, `context` carries image refs from earlier committed blocks so
+ * later duplicate links are still suppressed instead of being promoted into a second image.
+ */
+export function createLocalFiles(context?: LocalFilesContext): MarkedExtension {
+  return {
+    hooks: {
+      // An agent that generated an image often only links to it (« [naruto.jpg](naruto.jpg) »):
+      // the image is shown in its place, as it would be had it written `![…](…)`. When the
+      // answer shows an image already, its links stay links, but a line that only repeats the
+      // image's file under it is left out.
+      processAllTokens(tokens) {
+        const all = allTokens(tokens);
+        const images = all.filter((t): t is Tokens.Image => t.type === "image");
+        const earlier = context?.earlierImages?.() ?? [];
+        if (images.length || earlier.length) {
+          const own = images.map(writtenRef);
+          for (const ref of own) context?.onImage?.(ref);
+          dropLinksToShownImages(all, [...earlier, ...own]);
+          return tokens;
+        }
+        for (const token of all) {
+          if (token.type !== "link") continue;
+          const link = token as Tokens.Link;
+          const ref = writtenRef(link);
+          if (!isLocalRef(ref) || !isImageRef(ref)) continue;
+          context?.onImage?.(ref);
+          const image: Tokens.Image = {
+            type: "image",
+            raw: link.raw,
+            href: link.href,
+            title: link.title ?? null,
+            text: link.text,
+            tokens: link.tokens,
+          };
+          for (const key of Object.keys(link))
+            delete (link as unknown as Record<string, unknown>)[key];
+          Object.assign(link, image);
+        }
         return tokens;
-      }
-      for (const token of all) {
-        if (token.type !== "link") continue;
-        const link = token as Tokens.Link;
-        const ref = writtenRef(link);
-        if (!isLocalRef(ref) || !isImageRef(ref)) continue;
-        const image: Tokens.Image = {
-          type: "image",
-          raw: link.raw,
-          href: link.href,
-          title: link.title ?? null,
-          text: link.text,
-          tokens: link.tokens,
-        };
-        for (const key of Object.keys(link))
-          delete (link as unknown as Record<string, unknown>)[key];
-        Object.assign(link, image);
-      }
-      return tokens;
+      },
     },
-  },
-  walkTokens(token) {
-    if (token.type !== "image" && token.type !== "link") return;
-    const link = token as Tokens.Image | Tokens.Link;
-    const ref = writtenRef(link);
-    if (isLocalRef(ref)) link.href = LOCAL_MARK + encodeURIComponent(ref);
-  },
-};
+    walkTokens(token) {
+      if (token.type !== "image" && token.type !== "link") return;
+      const link = token as Tokens.Image | Tokens.Link;
+      const ref = writtenRef(link);
+      if (isLocalRef(ref)) link.href = LOCAL_MARK + encodeURIComponent(ref);
+    },
+  };
+}
+
+/** Marks the links and images of an answer that name local files, to be shown from the server. */
+export const localFiles: MarkedExtension = createLocalFiles();
 
 /** The local file a marked address names, or nothing for any other address. */
 export function markedRef(href: string | null): string | undefined {

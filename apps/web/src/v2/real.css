@@ -2027,3 +2027,10 @@ html[data-dev="touch"] .kbtabs {
   padding-block: 6px;
   margin-block: -6px;
 }
+/* Hidden in the desktop tray (or minimized): Electron disables backgroundThrottling for
+   notifications, so CSS animations pause explicitly instead of painting an unseen window. */
+html.page-hidden *,
+html.page-hidden *::before,
+html.page-hidden *::after {
+  animation-play-state: paused !important;
+}

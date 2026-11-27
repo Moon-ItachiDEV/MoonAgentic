@@ -976,6 +976,36 @@ export class Store {
   }
 
   /**
+   * Unarchived threads with an open, draft or freshly opened pull request: avoids reading and
+   * parsing every thread row on each PR-watch tick. `CASE` guards `json_extract` against damaged
+   * JSON rows the same way `recoverAfterRestart` and `listThreadPlaces` do.
+   */
+  listWatchedPrThreads(): Thread[] {
+    const rows = this.sql(
+      `SELECT * FROM threads
+         WHERE workspace IS NOT NULL
+           AND CASE WHEN json_valid(extra)
+                    THEN COALESCE(json_extract(extra, '$.archived'), 0) != 1
+                    ELSE 1 END
+           AND (
+             CASE WHEN json_valid(extra)
+                  THEN json_extract(extra, '$.pr.state') IN ('open', 'draft')
+                  ELSE 0 END
+             OR (
+               CASE WHEN json_valid(workspace)
+                    THEN json_extract(workspace, '$.prOpened') = 1
+                    ELSE 0 END
+               AND CASE WHEN json_valid(extra)
+                        THEN json_extract(extra, '$.pr') IS NULL
+                        ELSE 1 END
+             )
+           )
+         ORDER BY updated_at DESC`,
+    ).all() as unknown as ThreadRow[];
+    return rows.flatMap((row) => this.readable(`le fil ${row.id}`, () => toThread(row)) ?? []);
+  }
+
+  /**
    * Where each thread works, without the rest: what a removal looks at, thread by thread.
    * Reading every thread whole held the server 40 ms with 2 000 of them.
    */

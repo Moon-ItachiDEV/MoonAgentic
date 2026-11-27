@@ -11,18 +11,51 @@ import {
   useSyncExternalStore,
 } from "react";
 import {
+  createLocalFiles,
   fileLink,
   forgetFileLink,
   knownLink,
-  localFiles,
   markedRef,
   refName,
 } from "../local-files.ts";
+import { advanceMarkdownBlocks, EMPTY_BLOCKS, type StreamingBlocks } from "../markdown-blocks.ts";
 import { prStates } from "../pr-states.ts";
 import { pullRequestUrl } from "../pull-request.ts";
 import { FileViewer } from "./FileViewer.tsx";
 
-const marked = new Marked(localFiles);
+// Single Marked instance reused across parses; `parseMarkdown` is synchronous so the active
+// streaming image context is scoped strictly around one `marked.parse` call.
+let activeEarlierImages: readonly string[] = [];
+let activeFoundImages: string[] | undefined;
+const marked = new Marked(
+  createLocalFiles({
+    earlierImages: () => activeEarlierImages,
+    onImage: (ref) => activeFoundImages?.push(ref),
+  }),
+);
+
+/** Parses and sanitizes one Markdown chunk, reporting any local image refs it rendered. */
+function renderChunk(
+  text: string,
+  earlierImages: readonly string[] = [],
+): { html: string; images: string[] } {
+  const images: string[] = [];
+  activeEarlierImages = earlierImages;
+  activeFoundImages = images;
+  let rawHtml: string;
+  try {
+    // `fil:` is no address the cleaner keeps: the link is marked as one of the page's own.
+    rawHtml = marked.parse(text.replace(/\]\(fil:/g, "](#fil:"), {
+      async: false,
+      gfm: true,
+      breaks: true,
+    });
+  } finally {
+    activeEarlierImages = [];
+    activeFoundImages = undefined;
+  }
+  return { html: DOMPurify.sanitize(rawHtml, CLEAN), images };
+}
 
 /** What a link to a thread does: set by the app, which knows how to open one. */
 let openThreadLink: (id: string) => void = () => undefined;
@@ -30,32 +63,35 @@ export function onThreadLink(open: (id: string) => void): void {
   openThreadLink = open;
 }
 
+interface StreamCache {
+  blocks: StreamingBlocks;
+  parsed: { html: string; images: string[] }[];
+  shownImages: string[];
+}
+
+const emptyStreamCache = (): StreamCache => ({
+  blocks: EMPTY_BLOCKS,
+  parsed: [],
+  shownImages: [],
+});
+
 /**
- * Renders agent Markdown; links open outside the app. The files of the computer it names,
- * such as an image it generated, are shown from the server when `threadId` is given.
+ * Renders one sanitized HTML chunk and attaches PR state colors and local image boxes.
+ * Memoized on `html` + `threadId` so committed streaming blocks stay untouched in the DOM.
  */
-export const Markdown = memo(function Markdown({
-  text,
+const HtmlChunk = memo(function HtmlChunk({
+  html,
   threadId,
+  className,
+  onClick,
+  onKeyDown,
 }: {
-  text: string;
+  html: string;
   threadId?: string;
+  className?: string;
+  onClick?: (event: MouseEvent) => void;
+  onKeyDown?: (event: KeyboardEvent) => void;
 }) {
-  // Worked out once per text: a pull request's state, when it comes, redraws every answer
-  // on the page, and none of them should be parsed and cleaned again for that.
-  const html = useMemo(
-    () =>
-      DOMPurify.sanitize(
-        // `fil:` is no address the cleaner keeps: the link is marked as one of the page's own.
-        marked.parse(text.replace(/\]\(fil:/g, "](#fil:"), {
-          async: false,
-          gfm: true,
-          breaks: true,
-        }),
-        CLEAN,
-      ),
-    [text],
-  );
   const root = useRef<HTMLDivElement>(null);
   const states = useSyncExternalStore(prStates.subscribe, prStates.version);
   // Links to pull requests take the color of their state on GitHub, once it is known.
@@ -114,6 +150,61 @@ export const Markdown = memo(function Markdown({
       current = false;
     };
   }, [html, threadId]);
+  return (
+    <div
+      ref={root}
+      className={className}
+      onClick={onClick}
+      onKeyDown={onKeyDown}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+});
+
+/**
+ * Renders agent Markdown; links open outside the app. The files of the computer it names,
+ * such as an image it generated, are shown from the server when `threadId` is given.
+ * While `live`, completed top-level blocks stay frozen so only the open tail is re-parsed
+ * and redrawn; once finished, a single full pass resolves document-wide syntax.
+ */
+export const Markdown = memo(function Markdown({
+  text,
+  threadId,
+  live = false,
+}: {
+  text: string;
+  threadId?: string;
+  live?: boolean;
+}) {
+  const stream = useRef<StreamCache>(emptyStreamCache());
+  // Worked out once per text when finished; incrementally per tail chunk while live.
+  const rendered = useMemo(() => {
+    if (!live) {
+      stream.current = emptyStreamCache();
+      return { kind: "whole" as const, html: renderChunk(text).html };
+    }
+    const cache = stream.current;
+    const prev = cache.blocks;
+    const next = advanceMarkdownBlocks(prev, text);
+    if (next.offset < prev.offset || (prev.offset > 0 && !text.startsWith(prev.prefix))) {
+      cache.parsed = [];
+      cache.shownImages = [];
+    }
+    cache.blocks = next;
+    while (cache.parsed.length < next.committed.length) {
+      const blockText = next.committed[cache.parsed.length]!;
+      const chunk = renderChunk(blockText, cache.shownImages);
+      cache.parsed.push(chunk);
+      if (chunk.images.length) cache.shownImages.push(...chunk.images);
+    }
+    const tail = text.slice(next.offset);
+    return {
+      kind: "live" as const,
+      committed: cache.parsed.slice(),
+      tailHtml: tail ? renderChunk(tail, cache.shownImages).html : "",
+    };
+  }, [text, live]);
+
   const [opened, setOpened] = useState<string>();
   const open = (event: MouseEvent | KeyboardEvent) => {
     const target = event.target instanceof Element ? event.target : null;
@@ -139,13 +230,24 @@ export const Markdown = memo(function Markdown({
   };
   return (
     <>
-      <div
-        ref={root}
-        className="md md-own"
-        onClick={open}
-        onKeyDown={open}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+      {rendered.kind === "whole" ? (
+        <HtmlChunk
+          html={rendered.html}
+          threadId={threadId}
+          className="md md-own"
+          onClick={open}
+          onKeyDown={open}
+        />
+      ) : (
+        <div className="md md-own md-live" onClick={open} onKeyDown={open}>
+          {rendered.committed.map((chunk, i) => (
+            <HtmlChunk key={i} html={chunk.html} threadId={threadId} />
+          ))}
+          {rendered.tailHtml && (
+            <HtmlChunk key="tail" html={rendered.tailHtml} threadId={threadId} />
+          )}
+        </div>
+      )}
       {opened && threadId && (
         <FileViewer threadId={threadId} fileRef={opened} onClose={() => setOpened(undefined)} />
       )}

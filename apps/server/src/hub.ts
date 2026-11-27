@@ -214,8 +214,20 @@ const watch = (client: Client, threadId: string): void => {
 type ToolItem = Extract<Item, { kind: "tool" }>;
 type TextItem = Extract<Item, { kind: "agent" | "thought" }>;
 
-/** How often streamed text is written down; viewers get each piece at once. */
+/** How often streamed text is written down at first; viewers get each piece at once. */
 const TEXT_FLUSH_MS = 250;
+const TEXT_FLUSH_MED_MS = 500;
+const TEXT_FLUSH_MAX_MS = 1_000;
+
+/**
+ * Scales the database flush interval with the draft's size so short answers stay crash-safe
+ * within 250 ms while long streaming replies avoid rewriting tens of kilobytes four times a second.
+ */
+export function textFlushDelayMs(length: number): number {
+  if (length >= 16_384) return TEXT_FLUSH_MAX_MS;
+  if (length >= 4_096) return TEXT_FLUSH_MED_MS;
+  return TEXT_FLUSH_MS;
+}
 /**
  * The search's index is filled a short stretch at a time, with a pause in between, so the
  * server keeps answering while a long history is taken in.
@@ -307,8 +319,14 @@ export interface HubOptions {
   maxLiveAgents?: number;
   /** Where pull requests are read and merged; the user's own `gh` unless given. */
   pullRequests?: () => PullRequests | undefined;
+  /** Resolves a folder's GitHub `owner/name`; `githubRemote` unless given. */
+  resolveGithubRemote?: (dir: string) => Promise<string | undefined>;
   /** How often known pull requests are asked about again; 0 for never. */
   prWatchMs?: number;
+  /** How often quiet open pull requests are polled when no client is connected. */
+  prIdleWatchMs?: number;
+  /** How long a project's resolved GitHub `owner/name` is cached before re-checking git remotes. */
+  remoteCacheMs?: number;
   /** How long an agent may take to stop after « Arrêter » before it is killed. */
   forceStopMs?: number;
   /** How each agent's subscription quotas are read; none are read when left out. */
@@ -368,8 +386,12 @@ const OWN_THREAD_TOOL = new RegExp(
   `^(?:Run )?mcp_{1,2}moonagentic_{1,2}(?:${THREAD_TOOLS.map((t) => t.name).join("|")})$`,
 );
 
-/** A known, open pull request is asked about again this often. */
+/** A known, open pull request is asked about again this often while a screen is connected. */
 const PR_WATCH_MS = 60_000;
+/** Quiet open pull requests (no active prWatch or pending checks) poll slower with no clients. */
+const PR_IDLE_WATCH_MS = 5 * 60_000;
+/** How long each project's GitHub remote (`owner/name`) is cached before re-reading git config. */
+const REMOTE_CACHE_MS = 10 * 60_000;
 /** Pull requests turned green at once before the coordinator's conversation says so. */
 const GREEN_AT_ONCE = 2;
 /** The setting that keeps the mascot of each role the user changed. */
@@ -574,6 +596,10 @@ export class Hub {
   private readonly busy = new Map<string, string>();
   /** Whether each project's folder is in a git repository, checked once. */
   private readonly gitProjects = new Map<string, boolean>();
+  /** Each project's resolved GitHub `owner/name`, cached with a TTL to avoid repeated `git` spawns. */
+  private readonly githubRemotes = new Map<string, { repo: string | undefined; at: number }>();
+  /** When quiet open PRs were last polled while no client was connected. */
+  private lastIdlePrWatchAt = 0;
   /** Projects being removed, which take no new thread meanwhile. */
   private readonly removingProjects = new Set<string>();
   /** Threads whose items are being deleted in batches: exports/pages fail instead of returning a half-deleted timeline. */
@@ -616,6 +642,9 @@ export class Hub {
   private readonly skillRuns: SkillRuns;
   private readonly skillsEnv: NodeJS.ProcessEnv;
   private readonly pullRequests: () => PullRequests | undefined;
+  private readonly resolveGithubRemote: (dir: string) => Promise<string | undefined>;
+  private readonly prIdleWatchMs: number;
+  private readonly remoteCacheMs: number;
   /** The tool behind each call of a turn, by thread, for agents that name it. */
   private readonly toolNames = new Map<string, Map<string, string>>();
   /** Optional runtime crash & performance monitor attached by the server. */
@@ -678,9 +707,12 @@ export class Hub {
       this.broadcast({ type: "skillRun", runId, ...part }),
     );
     this.pullRequests = options.pullRequests ?? localPullRequests;
+    this.resolveGithubRemote = options.resolveGithubRemote ?? githubRemote;
+    this.prIdleWatchMs = options.prIdleWatchMs ?? PR_IDLE_WATCH_MS;
+    this.remoteCacheMs = options.remoteCacheMs ?? REMOTE_CACHE_MS;
     const watchMs = options.prWatchMs ?? PR_WATCH_MS;
     if (watchMs > 0) {
-      this.prTimer = setInterval(() => void this.watchPullRequests(), watchMs);
+      this.prTimer = setInterval(() => void this.watchPullRequests({ scheduled: true }), watchMs);
       this.prTimer.unref();
     }
     this.catalog = new AgentCatalog(store, agents, (m) => this.broadcast(m), this.homeDir);
@@ -2807,7 +2839,7 @@ export class Hub {
     number: number,
     asked: string | undefined,
   ): Promise<void> {
-    const repo = await githubRemote(project.path);
+    const repo = await this.githubRemoteFor(project.id, project.path);
     if (!repo) throw new Error("Ce projet n'est pas relié à un dépôt GitHub.");
     if (asked && asked.toLowerCase() !== repo.toLowerCase()) {
       throw new Error(`Cette PR est dans ${asked}, mais ce projet est ${repo}.`);
@@ -3803,6 +3835,27 @@ export class Hub {
     });
   }
 
+  /**
+   * Resolves a project's GitHub `owner/name` once per TTL and shares it across all its worktrees,
+   * since git worktrees share the repository's remotes config.
+   */
+  private async githubRemoteFor(
+    projectId: string,
+    fallbackDir?: string,
+  ): Promise<string | undefined> {
+    const cached = this.githubRemotes.get(projectId);
+    const now = Date.now();
+    if (cached) {
+      const ttl = cached.repo ? this.remoteCacheMs : Math.min(this.remoteCacheMs, PR_WATCH_MS);
+      if (now - cached.at < ttl) return cached.repo;
+    }
+    const projectPath = this.store.getProject(projectId)?.path;
+    const dir = projectPath && existsSync(projectPath) ? projectPath : fallbackDir;
+    const repo = dir ? await this.resolveGithubRemote(dir) : undefined;
+    this.githubRemotes.set(projectId, { repo, at: Date.now() });
+    return repo;
+  }
+
   /** Where a thread's branch is pushed, and what can ask GitHub about it; nothing without both. */
   private async branchOnGithub(
     threadId: string,
@@ -3810,13 +3863,13 @@ export class Hub {
     const thread = this.requireThread(threadId);
     const workspace = thread.workspace;
     if (!workspace?.base) return undefined;
-    // An archived thread has no folder of its own left: its project has the same remotes.
-    const dir = existsSync(workspace.path)
-      ? workspace.path
-      : this.store.getProject(thread.projectId)?.path;
-    const repo = dir ? await githubRemote(dir) : undefined;
-    const github = repo ? this.pullRequests() : undefined;
-    return repo && github ? { github, repo, branch: workspace.branch } : undefined;
+    const github = this.pullRequests();
+    if (!github) return undefined;
+    const repo = await this.githubRemoteFor(
+      thread.projectId,
+      existsSync(workspace.path) ? workspace.path : undefined,
+    );
+    return repo ? { github, repo, branch: workspace.branch } : undefined;
   }
 
   /** The pull request of the thread's branch as GitHub describes it now, whoever opened it. */
@@ -4023,20 +4076,59 @@ export class Hub {
   }
 
   /**
-   * Asks GitHub again about the pull requests already known and not yet closed, one thread
-   * at a time: never about every branch, which would be slow and spend the user's quota.
+   * Asks GitHub again about the pull requests already known and not yet closed:
+   * - reads only candidate threads from SQLite instead of the full threads table;
+   * - slows down quiet open PRs when no screen is connected, while keeping active `prWatch`
+   *   and pending CI checks on the fast cadence;
+   * - batches repositories with multiple due PRs into one `gh pr list` call, falling back to
+   *   `gh pr view` for any tracked PR that disappeared from the open list (merged or closed).
    */
-  async watchPullRequests(): Promise<void> {
+  async watchPullRequests(options: { scheduled?: boolean } = {}): Promise<void> {
     if (this.watching || this.closed) return;
     this.watching = true;
     try {
-      for (const thread of this.store.listThreads()) {
+      const github = this.pullRequests();
+      if (!github) return;
+      const candidates = this.store.listWatchedPrThreads().filter((t) => !!t.workspace?.base);
+      if (!candidates.length) return;
+
+      const idle = options.scheduled === true && this.clients.size === 0;
+      const now = Date.now();
+      const quietDue = !idle || now - this.lastIdlePrWatchAt >= this.prIdleWatchMs;
+      const urgent = (t: Thread): boolean =>
+        !t.pr || t.pr.checks === "pending" || (!!t.prWatch && !t.prWatch.exhausted);
+      const due = idle ? candidates.filter((t) => urgent(t) || quietDue) : candidates;
+      if (!due.length) return;
+      if (quietDue) this.lastIdlePrWatchAt = now;
+
+      const byRepo = new Map<string, Thread[]>();
+      for (const thread of due) {
         if (this.closed) return;
-        const known = thread.pr
-          ? thread.pr.state === "open" || thread.pr.state === "draft"
-          : !!thread.workspace?.prOpened;
-        if (!known || thread.archived || !thread.workspace?.base) continue;
-        await this.pullRequest(thread.id).catch(() => undefined);
+        const fallback = existsSync(thread.workspace!.path) ? thread.workspace!.path : undefined;
+        const repo = await this.githubRemoteFor(thread.projectId, fallback);
+        if (!repo) continue;
+        const group = byRepo.get(repo);
+        if (group) group.push(thread);
+        else byRepo.set(repo, [thread]);
+      }
+
+      for (const [repo, group] of byRepo) {
+        if (this.closed) return;
+        let openByBranch: Map<string, PullRequestInfo> | undefined;
+        if (group.length >= 2 && github.listOpen) {
+          openByBranch = await github.listOpen(repo).catch(() => undefined);
+        }
+        for (const thread of group) {
+          if (this.closed) return;
+          const found = openByBranch?.get(thread.workspace!.branch);
+          if (found) {
+            await this.notePullRequest(thread.id, found).catch(() => undefined);
+          } else {
+            // Either single PR in repo, `listOpen` unavailable/failed, or PR left the open list
+            // (merged, closed, or past the list cap): ask GitHub directly for this branch.
+            await this.pullRequest(thread.id).catch(() => undefined);
+          }
+        }
       }
     } finally {
       this.watching = false;
@@ -4379,6 +4471,7 @@ export class Hub {
       this.store.deleteProject(projectId);
       this.catalog.projectRemoved(projectId);
       this.gitProjects.delete(projectId);
+      this.githubRemotes.delete(projectId);
       this.locks.forget(projectId);
       this.broadcast({ type: "projectRemoved", projectId });
     })();
@@ -5771,7 +5864,10 @@ export class Hub {
     draft.dirty = true;
     const rev = this.log(threadId).touch(draft.item.id);
     this.sendToViewers(threadId, { type: "append", threadId, itemId: draft.item.id, text, rev });
-    draft.timer ??= setTimeout(() => this.flushText(threadId, false), TEXT_FLUSH_MS);
+    draft.timer ??= setTimeout(
+      () => this.flushText(threadId, false),
+      textFlushDelayMs(draft.item.text.length),
+    );
   }
 
   /** Writes down the thread's streamed text; `end` also closes it, so the next text starts anew. */

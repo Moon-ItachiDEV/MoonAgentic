@@ -49,13 +49,14 @@ export function openQuestion(
  */
 export function waits(input: {
   thread: Pick<Thread, "id" | "status" | "archived">;
-  items: Item[] | undefined;
+  items?: Item[] | undefined;
+  asked?: Extract<Item, { kind: "tool" }> | undefined;
   requests: PendingRequest[];
   questions: PendingQuestion[];
   own?: boolean;
 }): Wait[] {
   const { thread } = input;
-  const asked = openQuestion(input.items, thread);
+  const asked = "asked" in input ? input.asked : openQuestion(input.items, thread);
   const all: Wait[] = [
     ...input.requests.map((r): Wait => ({
       kind: "permission",

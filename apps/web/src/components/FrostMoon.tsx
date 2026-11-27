@@ -1,4 +1,5 @@
 import type { GlyphKind } from "../glyphs.ts";
+import { isPageHidden, onPageVisibility } from "../visibility.ts";
 import { useEffect, useId, useRef } from "react";
 
 /*
@@ -890,7 +891,7 @@ export function FrostMoon({
       (smileBurstAt < 0 || time > smileBurstAt + 0.72);
 
     const tick = (now: number) => {
-      if (document.hidden || !visible) {
+      if (isPageHidden() || !visible) {
         frame = 0;
         return;
       }
@@ -983,7 +984,7 @@ export function FrostMoon({
     const between = ([min, max]: readonly [number, number]) => min + Math.random() * (max - min);
     /** Un signe de vie au repos : il réveille la boucle, qui s'arrête de nouveau une fois posée. */
     const wake = (sign: () => void) => {
-      if (!visible || document.hidden) return;
+      if (!visible || isPageHidden()) return;
       sign();
       awake = true;
       start();
@@ -1023,7 +1024,7 @@ export function FrostMoon({
     };
 
     const start = () => {
-      if (still || !visible || document.hidden) return;
+      if (still || !visible || isPageHidden()) return;
       planLife();
       if (frame) return;
       if (resting && !pointer && !awake) return;
@@ -1065,11 +1066,10 @@ export function FrostMoon({
     if (io) io.observe(el);
     else start();
 
-    const onVisibility = () => {
-      if (document.hidden) stop();
+    const offVisibility = onPageVisibility(() => {
+      if (isPageHidden()) stop();
       else start();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
+    });
 
     const onMove = (e: PointerEvent) => {
       if (!followPointer) return;
@@ -1124,7 +1124,7 @@ export function FrostMoon({
       stop();
       window.clearTimeout(stillTimer);
       io?.disconnect();
-      document.removeEventListener("visibilitychange", onVisibility);
+      offVisibility();
       el.removeEventListener("pointermove", onMove);
       el.removeEventListener("pointerleave", onLeave);
       el.removeEventListener("pointerdown", onDown);

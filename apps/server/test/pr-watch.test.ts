@@ -198,10 +198,14 @@ describe("a thread that fixes its pull request", { timeout: 90_000 }, () => {
     await hub.pullRequest(threadId);
     expect(fixes()).toHaveLength(1);
 
-    // A conflict after that, on the new commit, is the next try.
+    // A conflict after that, on the new commit, is the next try (once the previous push ends).
     github.pr = { ...failing(pushed()!), conflicts: true };
-    await hub.pullRequest(threadId);
-    await expect.poll(() => fixes().length, SLOW).toBe(2);
+    await expect
+      .poll(async () => {
+        await hub.pullRequest(threadId);
+        return fixes().length;
+      }, SLOW)
+      .toBe(2);
     expect(fixes()[1]).toContain("conflits avec main");
     await hub.whenIdle(threadId);
     await expect.poll(() => store.getThread(threadId)?.prWatch?.last, SLOW).toBe("conflict");

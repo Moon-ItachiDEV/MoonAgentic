@@ -35,6 +35,7 @@ import { answerHead } from "../long-answer.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
 import { useLiveText } from "../live-text.ts";
 import type { Held } from "../state.ts";
+import { useThreadTimeline } from "../use-store.ts";
 import { AgentPlan } from "./AgentPlan.tsx";
 import { Glyph, I } from "../v2/I.tsx";
 import { GROUP_LABEL, threadLine } from "../project-threads.ts";
@@ -84,10 +85,10 @@ interface ThreadViewProps {
   /** Shown above the conversation, such as a coordinator's ways to start. */
   intro?: ReactNode;
   thread: Thread;
-  /** The end of the thread's timeline, and the pages before it already fetched. */
-  items: Item[] | undefined;
-  /** Where those items start in the timeline, and how many are before them. */
-  held: Held | undefined;
+  /** Optional override for tests; otherwise subscribed directly by thread id. */
+  items?: Item[] | undefined;
+  /** Optional override for tests; otherwise subscribed directly by thread id. */
+  held?: Held | undefined;
   agents: AgentInfo[];
   /** Every thread, for a team's progress and a coder's lead. */
   threads: Thread[];
@@ -108,13 +109,16 @@ export function ThreadView(props: ThreadViewProps) {
 
 function Conversation({
   thread,
-  items,
-  held,
+  items: itemsProp,
+  held: heldProp,
   agents,
   threads,
   onOpenThread: openThread,
   intro,
 }: ThreadViewProps) {
+  const timeline = useThreadTimeline(thread.id);
+  const items = itemsProp ?? timeline.items;
+  const held = heldProp ?? timeline.held;
   const lead = thread.parentId ? threads.find((t) => t.id === thread.parentId) : undefined;
   // The team's timeline, on the lead's thread and on each of its team's threads.
   const strip = thread.team
@@ -900,7 +904,7 @@ function Answer({ text, live, threadId }: { text: string; live: boolean; threadI
   );
   return (
     <>
-      <Markdown text={head} threadId={threadId} />
+      <Markdown text={head} threadId={threadId} live={live} />
       {left > 0 && (
         <button className="evt more-text" onClick={() => setWhole(true)}>
           Afficher la suite

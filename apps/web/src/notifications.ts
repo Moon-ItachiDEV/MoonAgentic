@@ -6,6 +6,7 @@ import { connection } from "./connection.ts";
 import { desktopShell } from "./desktop.ts";
 import { readPref, writePref } from "./prefs.ts";
 import { navigate } from "./router.ts";
+import { isPageHidden } from "./visibility.ts";
 
 /**
  * `insecure`: the page is not served over HTTPS or from this machine, where browsers refuse
@@ -132,8 +133,8 @@ async function closeNotice(tag: string): Promise<void> {
   }
 }
 
-/** True while the user has MoonAgentic in front of them in this tab. */
-const inFront = () => document.visibilityState === "visible" && document.hasFocus();
+/** True while the user has MoonAgentic in front of them in this tab or window. */
+const inFront = () => !isPageHidden() && document.hasFocus();
 
 const ASK_MS = 250;
 const HOLD_MS = 3000;

@@ -1,7 +1,7 @@
 // MoonAgentic's desktop shell: it runs the same server as `pnpm start` and shows the same
 // interface in a window, with an icon by the clock so that it keeps running once closed.
 import { spawn } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,11 +72,17 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(start);
 }
 
+// Packaged builds pre-strip the server's TypeScript into plain JS (scripts/stage.ts) so
+// Electron does not re-strip every module at each start; dev checkouts keep running `.ts`.
+const serverScript = existsSync(path.join(serverDir, "src", "bin.js"))
+  ? path.join(serverDir, "src", "bin.js")
+  : path.join(serverDir, "src", "bin.ts");
+
 const server = new ServerProcess({
   // Electron runs the server as Node would, and so does every process the server starts with
   // its own program (agent adapters), which inherit this variable.
   command: process.execPath,
-  script: path.join(serverDir, "src", "bin.ts"),
+  script: serverScript,
   args: ["--port", String(PORT), "--data-dir", dataDir],
   // Read at each start: on macOS, after the terminal's PATH is adopted. The server leaves
   // updates to the app (it looks at no git clone).
@@ -212,14 +218,16 @@ function keepAwakeDuringUpdate(): void {
 function start(): void {
   process.env.MOONAGENTIC_APP_VERSION = app.getVersion();
   app.setAppUserModelId(APP_ID);
-  openBlackBox();
+  // On macOS, adopt the terminal's PATH first so the server and its agents inherit it.
   adoptLoginShellPath();
+  // Start the server immediately so it boots in parallel with the tray and window.
+  server.start();
+  openBlackBox();
   applySleepSetting();
   createTray();
   const openedAtLogin =
     process.argv.includes(HIDDEN_ARG) || app.getLoginItemSettings().wasOpenedAtLogin;
   createWindow(!openedAtLogin);
-  server.start();
 }
 
 /**
@@ -307,6 +315,20 @@ function createWindow(show: boolean): void {
     if (server.state.kind === "ready") setTimeout(() => showStatus(server.state), 1_000);
     else showStatus(server.state);
   });
+  const sendVisible = (visible: boolean) => {
+    if (!window || window.isDestroyed()) return;
+    if (isServerPage(window.webContents.getURL())) {
+      window.webContents.send("moonagentic.visible", visible);
+    }
+  };
+  // Covers `--hidden` / login-item starts where the window starts hidden without a `hide` event.
+  contents.on("did-finish-load", () =>
+    sendVisible(!!window && window.isVisible() && !window.isMinimized()),
+  );
+  window.on("hide", () => sendVisible(false));
+  window.on("minimize", () => sendVisible(false));
+  window.on("show", () => sendVisible(true));
+  window.on("restore", () => sendVisible(true));
   // Windows ends the session (restart, shutdown, sign-out): an end the box was told of.
   window.on("session-end", () => blackBox.stop("Windows s'arrête, redémarre ou ferme la session"));
   window.on("close", (event) => {

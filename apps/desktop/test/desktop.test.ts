@@ -304,9 +304,12 @@ describe("status page", () => {
 });
 
 describe("renameImports", () => {
-  it("points relative imports at the JavaScript files", () => {
+  it("points relative imports and module URLs at the JavaScript files", () => {
     expect(renameImports(`import { a } from "./a.ts";\nexport { b } from '../b.ts';`)).toBe(
       `import { a } from "./a.js";\nexport { b } from '../b.js';`,
+    );
+    expect(renameImports(`const s = new URL("./server.ts", import.meta.url);`)).toBe(
+      `const s = new URL("./server.js", import.meta.url);`,
     );
     expect(renameImports(`import x from "zod";`)).toBe(`import x from "zod";`);
   });
