@@ -1,10 +1,10 @@
 // Gathers what the installer ships besides the shell, in `stage/`: the server with only the
 // packages it runs with, and the interface already built (`pnpm build`).
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isTest, stripDir } from "./strip.ts";
+import { isTest, stripDir, stripServerSrc } from "./strip.ts";
 
 const root = fileURLToPath(new URL("../../..", import.meta.url));
 const stage = fileURLToPath(new URL("../stage", import.meta.url));
@@ -43,11 +43,7 @@ rmSync(path.join(server, "tsconfig.json"), { force: true });
 
 // Pre-strip the server's TypeScript into plain JS so packaged startups skip Node's runtime
 // type-stripping on every module while keeping relative script paths (bridges, web/dist) intact.
-const serverSrc = path.join(server, "src");
-const serverSrcJs = path.join(server, "src-js");
-stripDir(serverSrc, serverSrcJs, isTest);
-rmSync(serverSrc, { recursive: true, force: true });
-renameSync(serverSrcJs, serverSrc);
+stripServerSrc(path.join(server, "src"));
 
 // The protocol package sits under node_modules now, where Node runs no TypeScript.
 const protocol = path.join(server, "node_modules", "@moonagentic", "protocol");

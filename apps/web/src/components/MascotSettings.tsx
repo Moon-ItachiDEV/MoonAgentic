@@ -8,10 +8,12 @@ import { useState } from "react";
 import { connection } from "../connection.ts";
 import { MASCOT_COLOR_NAMES, MASCOT_SHAPE_NAMES } from "../mascot.ts";
 import { defineMoonMascot } from "../moon-mascot.ts";
+import { pageSight } from "../visibility.ts";
 import { I } from "../v2/I.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
 
-defineMoonMascot();
+// The app's own sight of the page: the desktop window hidden in the tray counts as unseen.
+defineMoonMascot(pageSight);
 
 /**
  * Settings › Mascottes: each agent's moon, its shape and colour, kept by the server for every

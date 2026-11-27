@@ -21,6 +21,30 @@ describe("page visibility with desktop tray bridge", () => {
     expect(seen).toEqual([true, false]);
   });
 
+  it("tells a window the shell already said hidden to the one that starts listening", async () => {
+    // The preload says again, at subscription, what the main process last told it.
+    const shell = globalThis as { moonDesktop?: unknown };
+    shell.moonDesktop = {
+      notify() {},
+      close() {},
+      onOpen() {},
+      onVisible(listener: (visible: boolean) => void) {
+        listener(false);
+      },
+    };
+    vi.resetModules();
+    try {
+      const fresh = await import("./visibility.ts");
+      const seen: boolean[] = [];
+      fresh.onPageVisibility(() => seen.push(fresh.isPageHidden()));
+      expect(seen).toEqual([true]);
+      expect(fresh.isPageHidden()).toBe(true);
+    } finally {
+      delete shell.moonDesktop;
+      vi.resetModules();
+    }
+  });
+
   it("throttles nextFrame to HIDDEN_FRAME_MS when hidden in the desktop tray", () => {
     vi.useFakeTimers();
     const raf = vi.fn(() => 1);

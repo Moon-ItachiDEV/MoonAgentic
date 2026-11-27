@@ -392,6 +392,20 @@ const PR_WATCH_MS = 60_000;
 const PR_IDLE_WATCH_MS = 5 * 60_000;
 /** How long each project's GitHub remote (`owner/name`) is cached before re-reading git config. */
 const REMOTE_CACHE_MS = 10 * 60_000;
+
+/**
+ * What changes whenever a repository's remotes do: its own `config`, as a date and a size.
+ * Nothing for a folder that does not hold that file itself, like a worktree.
+ */
+function remotesConfig(dir: string | undefined): string | undefined {
+  if (!dir) return undefined;
+  try {
+    const config = statSync(path.join(dir, ".git", "config"));
+    return `${config.mtimeMs}:${config.size}`;
+  } catch {
+    return undefined;
+  }
+}
 /** Pull requests turned green at once before the coordinator's conversation says so. */
 const GREEN_AT_ONCE = 2;
 /** The setting that keeps the mascot of each role the user changed. */
@@ -597,7 +611,14 @@ export class Hub {
   /** Whether each project's folder is in a git repository, checked once. */
   private readonly gitProjects = new Map<string, boolean>();
   /** Each project's resolved GitHub `owner/name`, cached with a TTL to avoid repeated `git` spawns. */
-  private readonly githubRemotes = new Map<string, { repo: string | undefined; at: number }>();
+  private readonly githubRemotes = new Map<
+    string,
+    { repo: string | undefined; at: number; config: string | undefined }
+  >();
+  /** Numbers each question put to GitHub about a pull request, in the order they are asked. */
+  private prAsked = 0;
+  /** The question whose answer each thread last kept: an answer asked before it is dropped. */
+  private readonly prKept = new Map<string, number>();
   /** When quiet open PRs were last polled while no client was connected. */
   private lastIdlePrWatchAt = 0;
   /** Projects being removed, which take no new thread meanwhile. */
@@ -3843,16 +3864,24 @@ export class Hub {
     projectId: string,
     fallbackDir?: string,
   ): Promise<string | undefined> {
-    const cached = this.githubRemotes.get(projectId);
-    const now = Date.now();
-    if (cached) {
-      const ttl = cached.repo ? this.remoteCacheMs : Math.min(this.remoteCacheMs, PR_WATCH_MS);
-      if (now - cached.at < ttl) return cached.repo;
-    }
     const projectPath = this.store.getProject(projectId)?.path;
     const dir = projectPath && existsSync(projectPath) ? projectPath : fallbackDir;
+    // `git remote add` and `set-url` rewrite the repository's config: what was read from
+    // another one is asked again at once, a remote just added as much as one that moved.
+    const config = remotesConfig(dir);
+    const cached = this.githubRemotes.get(projectId);
+    if (cached && cached.config === config) {
+      // No remote found: kept for a round where that file says nothing changed, and not at
+      // all where there is no such file to look at (a folder that is itself a worktree).
+      const ttl = cached.repo
+        ? this.remoteCacheMs
+        : config === undefined
+          ? 0
+          : Math.min(this.remoteCacheMs, PR_WATCH_MS);
+      if (Date.now() - cached.at < ttl) return cached.repo;
+    }
     const repo = dir ? await this.resolveGithubRemote(dir) : undefined;
-    this.githubRemotes.set(projectId, { repo, at: Date.now() });
+    this.githubRemotes.set(projectId, { repo, at: Date.now(), config });
     return repo;
   }
 
@@ -3875,9 +3904,10 @@ export class Hub {
   /** The pull request of the thread's branch as GitHub describes it now, whoever opened it. */
   async pullRequest(threadId: string): Promise<PullRequestInfo | undefined> {
     const on = await this.branchOnGithub(threadId);
+    const asked = ++this.prAsked;
     const pr = await on?.github.find(on.repo, on.branch);
     // GitHub may answer after the hub has closed, and its store with it.
-    if (on && !this.closed) await this.notePullRequest(threadId, pr);
+    if (on && !this.closed) await this.notePullRequest(threadId, pr, asked);
     return pr;
   }
 
@@ -3967,11 +3997,21 @@ export class Hub {
 
   /**
    * Keeps what lists of threads show of the pull request. One that has just been merged
-   * resolves its thread, when its folder holds nothing more than what was merged.
+   * resolves its thread, when its folder holds nothing more than what was merged. `asked`:
+   * the number of the question this answers, taken before GitHub was asked.
    */
-  private async notePullRequest(threadId: string, info: PullRequestInfo | undefined) {
+  private async notePullRequest(
+    threadId: string,
+    info: PullRequestInfo | undefined,
+    asked = ++this.prAsked,
+  ) {
     const thread = this.store.getThread(threadId);
     if (!thread) return;
+    // GitHub was asked again since, and that answer is kept already: this one is older. A
+    // round's list read before a merge would else say « ouverte » again, for good once the
+    // thread is resolved and no round looks at it any more.
+    if ((this.prKept.get(threadId) ?? 0) > asked) return;
+    this.prKept.set(threadId, asked);
     if (info) this.watchTick(threadId, info);
     const pr = info && threadPullRequest(info);
     // A team's pull request is its merge thread's, or its only coder's: the lead shows it,
@@ -4115,6 +4155,8 @@ export class Hub {
       for (const [repo, group] of byRepo) {
         if (this.closed) return;
         let openByBranch: Map<string, PullRequestInfo> | undefined;
+        // One question for the whole list: each of its answers is as old as that.
+        const asked = ++this.prAsked;
         if (group.length >= 2 && github.listOpen) {
           openByBranch = await github.listOpen(repo).catch(() => undefined);
         }
@@ -4122,7 +4164,7 @@ export class Hub {
           if (this.closed) return;
           const found = openByBranch?.get(thread.workspace!.branch);
           if (found) {
-            await this.notePullRequest(thread.id, found).catch(() => undefined);
+            await this.notePullRequest(thread.id, found, asked).catch(() => undefined);
           } else {
             // Either single PR in repo, `listOpen` unavailable/failed, or PR left the open list
             // (merged, closed, or past the list cap): ask GitHub directly for this branch.
@@ -4160,8 +4202,9 @@ export class Hub {
       throw new Error("La branche a reçu de nouveaux commits : relis l'état avant de merger.");
     if (pr.conflicts) throw new Error("Cette pull request a des conflits avec sa branche de base.");
     await on.github.merge(on.repo, number, head);
+    const asked = ++this.prAsked;
     const after = await on.github.find(on.repo, String(number));
-    await this.notePullRequest(threadId, after);
+    await this.notePullRequest(threadId, after, asked);
     return after;
   }
 
@@ -4411,6 +4454,7 @@ export class Hub {
         clearTimeout(this.drafts.get(threadId)?.timer);
         this.drafts.delete(threadId);
         this.dropHeld(threadId);
+        this.prKept.delete(threadId);
         // A long timeline goes a stretch at a time, the latest first, so screens are answered
         // meanwhile: in one go, 20 000 messages held the server half a second.
         // Their room goes back to the disk a stretch at a time too.

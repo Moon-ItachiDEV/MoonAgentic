@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import path from "node:path";
 
@@ -35,3 +35,26 @@ export function stripDir(from: string, to: string, skip: (name: string) => boole
 }
 
 export const isTest = (name: string) => name.endsWith(".test.ts");
+
+/**
+ * The server's scripts whose TypeScript path a version before this one wrote outside the app,
+ * where nothing writes it again by itself: Hermes's `config.yaml` starts `src/hermes-bridge.ts`.
+ */
+export const KEPT_PATHS = ["hermes-bridge"];
+
+/**
+ * Turns the server's `src/` into plain JavaScript, in place: a packaged start skips Node's
+ * stripping of the types of every module, and the scripts keep their places (bridges,
+ * `web/dist`). A path written elsewhere by an earlier version stays, as a file that only runs
+ * its JavaScript.
+ */
+export function stripServerSrc(src: string): void {
+  const js = `${src}-js`;
+  rmSync(js, { recursive: true, force: true });
+  stripDir(src, js, isTest);
+  rmSync(src, { recursive: true, force: true });
+  renameSync(js, src);
+  for (const name of KEPT_PATHS) {
+    writeFileSync(path.join(src, `${name}.ts`), `import "./${name}.js";\n`);
+  }
+}

@@ -44,8 +44,10 @@ export function setDesktopVisible(visible: boolean): void {
 
 /** Runs `listener` whenever effective page visibility changes; returns an unsubscribe handle. */
 export function onPageVisibility(listener: () => void): () => void {
-  bind();
+  // Listening before the shell is asked: it says at once what it last said, and a window
+  // already hidden then is told to this listener too.
   listeners.add(listener);
+  bind();
   return () => {
     listeners.delete(listener);
   };
@@ -61,3 +63,6 @@ export function watchPageVisibility(): () => void {
   sync();
   return onPageVisibility(sync);
 }
+
+/** The same, for what takes its sight of the page as a value (`<moon-mascot>`). */
+export const pageSight = { hidden: isPageHidden, watch: onPageVisibility };
