@@ -28,6 +28,7 @@ import {
 } from "../src/git.ts";
 import { Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
+import { canLink } from "./can-link.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -329,7 +330,7 @@ describe("choosing what to ship", () => {
     );
   });
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(!canLink)(
     "keeps a file replaced by a symbolic link in step with the files after it",
     async () => {
       const { store, hub, projectId, repo } = repository();

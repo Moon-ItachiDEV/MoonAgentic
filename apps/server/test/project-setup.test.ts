@@ -24,6 +24,7 @@ import {
   withFrontMatter,
   yamlValue,
 } from "../src/project-setup.ts";
+import { canLink } from "./can-link.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -81,16 +82,13 @@ describe("the project's instructions", () => {
     expect(read(other, "CLAUDE.md")).toBe("@AGENTS.md\n\n# Mes notes\n");
   });
 
-  it.skipIf(process.platform === "win32")(
-    "takes a CLAUDE.md linked to AGENTS.md as read",
-    async () => {
-      const dir = folder({ "AGENTS.md": "Règles" });
-      symlinkSync("AGENTS.md", path.join(dir, "CLAUDE.md"));
-      expect((await readSetup(dir, false)).claude).toBe("imports");
-    },
-  );
+  it.skipIf(!canLink)("takes a CLAUDE.md linked to AGENTS.md as read", async () => {
+    const dir = folder({ "AGENTS.md": "Règles" });
+    symlinkSync("AGENTS.md", path.join(dir, "CLAUDE.md"));
+    expect((await readSetup(dir, false)).claude).toBe("imports");
+  });
 
-  it.skipIf(process.platform === "win32")("never writes through a link leading outside", () => {
+  it.skipIf(!canLink)("never writes through a link leading outside", () => {
     const outside = folder({ "secret.md": "clé" });
     const dir = folder();
     symlinkSync(path.join(outside, "secret.md"), path.join(dir, "AGENTS.md"));
@@ -105,7 +103,7 @@ describe("the project's instructions", () => {
     expect(existsSync(path.join(outside, "commands"))).toBe(false);
   });
 
-  it.skipIf(process.platform === "win32")("writes through a link that stays inside", () => {
+  it.skipIf(!canLink)("writes through a link that stays inside", () => {
     const dir = folder({ "docs/AGENTS.md": "ancien" });
     symlinkSync("docs/AGENTS.md", path.join(dir, "AGENTS.md"));
     saveRules(dir, "nouveau");

@@ -9,6 +9,7 @@ import { Agents } from "../src/agents.ts";
 import { Hub } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
 import { generatedFolders, madeImages, refPath, resolveThreadFile } from "../src/thread-files.ts";
+import { canLink } from "./can-link.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -111,7 +112,7 @@ describe("resolveThreadFile", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(!canLink)(
     "follows links before it looks where a file is, and by what it really is",
     async () => {
       const root = tempDir();

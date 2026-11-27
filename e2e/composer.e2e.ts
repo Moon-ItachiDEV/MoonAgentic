@@ -1,6 +1,6 @@
 // First end-to-end check: the built app, the real server, the demo agent, a real browser.
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,7 @@ import {
   whereChoices,
 } from "./ui.ts";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { standIn } from "./stand-in.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 /** Set to a folder to keep screenshots of each step there. */
@@ -63,18 +64,19 @@ beforeAll(async () => {
   mkdirSync(home);
   // A stand-in for the user's signed-in GitHub CLI: it knows one account and its repositories.
   const bin = path.join(dir, "bin");
-  write(bin, {
-    gh: [
-      "#!/bin/sh",
-      'case "$2" in',
-      "  user) echo moon ;;",
-      `  user/repos*) echo '{"f":"moon/app","p":false,"d":"Une appli","t":null}'; echo '{"f":"moon/site","p":true,"d":null,"t":null}' ;;`,
-      "  *) exit 1 ;;",
-      "esac",
+  standIn(
+    bin,
+    "gh",
+    [
+      "const what = process.argv[3] ?? '';",
+      "if (what === 'user') console.log('moon');",
+      "else if (what.startsWith('user/repos')) {",
+      `  console.log('{"f":"moon/app","p":false,"d":"Une appli","t":null}');`,
+      `  console.log('{"f":"moon/site","p":true,"d":null,"t":null}');`,
+      "} else process.exit(1);",
       "",
     ].join("\n"),
-  });
-  chmodSync(path.join(bin, "gh"), 0o755);
+  );
   const PATH = `${bin}${path.delimiter}${process.env.PATH ?? ""}`;
   server = spawn(
     process.execPath,
@@ -455,39 +457,34 @@ describe("composer", () => {
       .toBe(0);
     await page.close();
   });
-  // The stand-in « gh » is a POSIX shell script that Windows cannot run (the server does not take
-  // a .cmd as the GitHub CLI, on purpose). The canClone rule itself is covered by github.test.ts.
-  it.skipIf(process.platform === "win32")(
-    "lists the user's GitHub repositories to clone, and explains a profile address",
-    async () => {
-      const page = await browser.newPage();
-      await page.goto(url);
-      await page.getByRole("button", { name: "Nouveau projet" }).first().click();
-      const sheet = page.getByRole("dialog", { name: "Nouveau projet" });
-      // Signed in here through the user's own `gh`.
-      await sheet.getByRole("radio", { name: "GitHub" }).click();
-      // The list arrives: it used to stay on « Chargement de tes dépôts… » forever.
-      const list = sheet.getByRole("group", { name: "Tes dépôts GitHub" });
-      await expect.poll(() => list.getByRole("button").count()).toBe(2);
-      // An account's address names no repository: its repositories stay, nothing to clone yet.
-      const repoField = sheet.getByRole("textbox", { name: "Dépôt" });
-      await repoField.fill("https://github.com/moon");
-      await expect.poll(() => list.getByRole("button").count()).toBe(2);
-      expect(await cloneButton(sheet).isDisabled()).toBe(true);
-      await repoField.fill("https://github.com/personne");
-      await list.getByText("Aucun dépôt de @personne").waitFor();
-      await repoField.fill("");
-      await list.getByRole("button", { name: /^site/ }).click();
-      // Picked: where it goes is said, and can be changed.
-      expect(
-        await sheet.getByRole("textbox", { name: "Nom du dossier" }).getAttribute("placeholder"),
-      ).toBe("site");
-      await sheet.getByRole("button", { name: /^Emplacement/ }).click();
-      await expect.poll(() => sheet.getByLabel("Cloner dans").inputValue()).not.toBe("");
-      await expect.poll(() => cloneButton(sheet).isDisabled()).toBe(false);
-      await page.close();
-    },
-  );
+  it("lists the user's GitHub repositories to clone, and explains a profile address", async () => {
+    const page = await browser.newPage();
+    await page.goto(url);
+    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
+    const sheet = page.getByRole("dialog", { name: "Nouveau projet" });
+    // Signed in here through the user's own `gh`.
+    await sheet.getByRole("radio", { name: "GitHub" }).click();
+    // The list arrives: it used to stay on « Chargement de tes dépôts… » forever.
+    const list = sheet.getByRole("group", { name: "Tes dépôts GitHub" });
+    await expect.poll(() => list.getByRole("button").count()).toBe(2);
+    // An account's address names no repository: its repositories stay, nothing to clone yet.
+    const repoField = sheet.getByRole("textbox", { name: "Dépôt" });
+    await repoField.fill("https://github.com/moon");
+    await expect.poll(() => list.getByRole("button").count()).toBe(2);
+    expect(await cloneButton(sheet).isDisabled()).toBe(true);
+    await repoField.fill("https://github.com/personne");
+    await list.getByText("Aucun dépôt de @personne").waitFor();
+    await repoField.fill("");
+    await list.getByRole("button", { name: /^site/ }).click();
+    // Picked: where it goes is said, and can be changed.
+    expect(
+      await sheet.getByRole("textbox", { name: "Nom du dossier" }).getAttribute("placeholder"),
+    ).toBe("site");
+    await sheet.getByRole("button", { name: /^Emplacement/ }).click();
+    await expect.poll(() => sheet.getByLabel("Cloner dans").inputValue()).not.toBe("");
+    await expect.poll(() => cloneButton(sheet).isDisabled()).toBe(false);
+    await page.close();
+  });
   it("archives a thread, brings it back, deletes it, then removes the project", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);

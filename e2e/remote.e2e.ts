@@ -1,19 +1,12 @@
 // Settings → Accès distant in the built app, against a real server and a stand-in `tailscale`.
 import { type ChildProcess, spawn } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Browser, chromium } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { standIn } from "./stand-in.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const shots = process.env.MOONAGENTIC_E2E_SHOTS;
@@ -34,11 +27,17 @@ beforeAll(async () => {
   mkdirSync(bin);
   // Answers `tailscale status --json` and `tailscale serve status --json` from files the
   // test writes, so what it publishes can change while the server runs.
-  writeFileSync(
-    path.join(bin, "tailscale"),
-    `#!/bin/sh\nif [ "$1" = serve ]; then cat "${dir}/serve.json"; else cat "${dir}/status.json"; fi\n`,
+  standIn(
+    bin,
+    "tailscale",
+    [
+      "import { readFileSync } from 'node:fs';",
+      `const dir = ${JSON.stringify(dir)};`,
+      "const file = process.argv[2] === 'serve' ? 'serve.json' : 'status.json';",
+      "process.stdout.write(readFileSync(`${dir}/${file}`));",
+      "",
+    ].join("\n"),
   );
-  chmodSync(path.join(bin, "tailscale"), 0o755);
   writeFileSync(
     path.join(dir, "status.json"),
     JSON.stringify({
@@ -94,131 +93,123 @@ const IPHONE =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
 
 describe("Réglages → Accès distant", () => {
-  // The stand-in « tailscale » is a POSIX shell script that Windows cannot run.
-  it.skipIf(process.platform === "win32")(
-    "pairs a phone with a one-time code, renews the computer's token, and revokes the phone",
-    async () => {
-      const opened = new URL(url);
-      const token = new URLSearchParams(opened.hash.replace(/^#/, "")).get("token") ?? "";
-      const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
-      const page = await context.newPage();
-      const errors: Error[] = [];
-      page.on("pageerror", (err) => errors.push(err));
-      opened.pathname = "/reglages/remote";
-      await page.goto(opened.href);
+  it("pairs a phone with a one-time code, renews the computer's token, and revokes the phone", async () => {
+    const opened = new URL(url);
+    const token = new URLSearchParams(opened.hash.replace(/^#/, "")).get("token") ?? "";
+    const context = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const page = await context.newPage();
+    const errors: Error[] = [];
+    page.on("pageerror", (err) => errors.push(err));
+    opened.pathname = "/reglages/remote";
+    await page.goto(opened.href);
 
-      // Tailscale runs but publishes nothing: no address, nothing to pair with, the command.
-      await page.getByRole("heading", { name: "Accès distant" }).waitFor();
-      await page.getByText("Aucune", { exact: true }).waitFor();
-      await page.getByText(`tailscale serve --bg ${opened.port}`).waitFor();
-      await page.getByText("Aucun", { exact: true }).waitFor();
-      expect(await page.getByRole("button", { name: "Appairer un appareil" }).count()).toBe(0);
-      // The computer's own token is never shown on the page any more.
-      expect(await page.content()).not.toContain(token);
+    // Tailscale runs but publishes nothing: no address, nothing to pair with, the command.
+    await page.getByRole("heading", { name: "Accès distant" }).waitFor();
+    await page.getByText("Aucune", { exact: true }).waitFor();
+    await page.getByText(`tailscale serve --bg ${opened.port}`).waitFor();
+    await page.getByText("Aucun", { exact: true }).waitFor();
+    expect(await page.getByRole("button", { name: "Appairer un appareil" }).count()).toBe(0);
+    // The computer's own token is never shown on the page any more.
+    expect(await page.content()).not.toContain(token);
 
-      // Once `tailscale serve` publishes the port, Actualiser finds the address.
-      writeFileSync(
-        path.join(dir, "serve.json"),
-        JSON.stringify({
-          TCP: { "443": { HTTPS: true } },
-          Web: {
-            "mini.tail1234.ts.net:443": {
-              Handlers: { "/": { Proxy: `http://127.0.0.1:${opened.port}` } },
-            },
+    // Once `tailscale serve` publishes the port, Actualiser finds the address.
+    writeFileSync(
+      path.join(dir, "serve.json"),
+      JSON.stringify({
+        TCP: { "443": { HTTPS: true } },
+        Web: {
+          "mini.tail1234.ts.net:443": {
+            Handlers: { "/": { Proxy: `http://127.0.0.1:${opened.port}` } },
           },
-        }),
+        },
+      }),
+    );
+    await page.getByRole("button", { name: "Actualiser" }).click();
+    await page.getByRole("button", { name: "Appairer un appareil" }).click();
+    const shown = page.getByLabel("Code d'appairage", { exact: true });
+    await shown.waitFor();
+    const code = ((await shown.textContent()) ?? "").replace("-", "");
+    expect(code).toMatch(/^[A-Z2-9]{8}$/);
+    await page.getByRole("img", { name: "QR code d'appairage" }).waitFor();
+    if (shots)
+      await page.screenshot({ path: path.join(shots, "appairer-code.png"), fullPage: true });
+    // Nothing is wider than the phone's screen.
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      390,
+    );
+
+    // The phone opens the pairing link: it gets its own access, and the code leaves the address.
+    const phoneContext = await browser.newContext({
+      viewport: { width: 390, height: 800 },
+      userAgent: IPHONE,
+    });
+    const phone = await phoneContext.newPage();
+    phone.on("pageerror", (err) => errors.push(err));
+    await phone.goto(`${new URL(url).origin}/#pair=${code}`);
+    await phone.getByRole("combobox", { name: "Message" }).waitFor();
+    expect(new URL(phone.url()).hash).toBe("");
+    await page.getByRole("status").getByText("iPhone · Safari appairé").waitFor();
+    await page.getByRole("button", { name: "Fermer", exact: true }).click();
+    const revoke = page.getByRole("button", { name: "Révoquer iPhone · Safari" });
+    await revoke.waitFor();
+    if (shots) await page.screenshot({ path: path.join(shots, "appareils.png"), fullPage: true });
+    // On the phone, the devices are not listed: only the computer manages them.
+    await phone.goto(`${new URL(url).origin}/reglages/remote`);
+    await phone.getByText("Appairé", { exact: true }).waitFor();
+    expect(await phone.getByRole("button", { name: /Renouveler/ }).count()).toBe(0);
+
+    // The same code does not work twice.
+    const again = await (await browser.newContext()).newPage();
+    await again.goto(`${new URL(url).origin}/#pair=${code}`);
+    await again.getByRole("heading", { name: "Appairer cet appareil" }).waitFor();
+    await again.getByText("il a expiré ou a déjà servi").waitFor();
+    if (shots) await again.screenshot({ path: path.join(shots, "appairer-telephone.png") });
+
+    // Already paired, the phone opening a used link stays connected, and is told why.
+    await phone.goto(`${new URL(url).origin}/#pair=${code}`);
+    await phone.getByText("Appairage refusé").waitFor();
+    await phone.getByRole("combobox", { name: "Message" }).waitFor();
+    await phone.goto(`${new URL(url).origin}/reglages/remote`);
+
+    // Renewing the computer's token: the old one is refused, the phone stays connected.
+    // Another tab of the computer goes on with the new token rather than ask to pair.
+    const tab = await context.newPage();
+    await tab.goto(new URL(url).origin);
+    await expect.poll(() => tab.getByRole("combobox", { name: "Message" }).isEnabled()).toBe(true);
+    await page.getByRole("button", { name: "Renouveler le jeton de cet ordinateur" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Renouveler" }).click();
+    await page.getByRole("alertdialog").waitFor({ state: "detached" });
+    const auth = (given: string) =>
+      fetch(new URL("/api/auth", url), { headers: { authorization: `Bearer ${given}` } }).then(
+        (r) => r.status,
       );
-      await page.getByRole("button", { name: "Actualiser" }).click();
-      await page.getByRole("button", { name: "Appairer un appareil" }).click();
-      const shown = page.getByLabel("Code d'appairage", { exact: true });
-      await shown.waitFor();
-      const code = ((await shown.textContent()) ?? "").replace("-", "");
-      expect(code).toMatch(/^[A-Z2-9]{8}$/);
-      await page.getByRole("img", { name: "QR code d'appairage" }).waitFor();
-      if (shots)
-        await page.screenshot({ path: path.join(shots, "appairer-code.png"), fullPage: true });
-      // Nothing is wider than the phone's screen.
-      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-        390,
-      );
+    await expect.poll(() => auth(token)).toBe(401);
+    const renewed = readFileSync(path.join(dir, "data", "token"), "utf8");
+    expect(await auth(renewed)).toBe(204);
+    await phone.reload();
+    await phone.getByText("Appairé", { exact: true }).waitFor();
+    await expect.poll(() => tab.getByRole("combobox", { name: "Message" }).isEnabled()).toBe(true);
+    expect(await tab.getByRole("heading", { name: "Appairer cet appareil" }).count()).toBe(0);
+    await tab.close();
 
-      // The phone opens the pairing link: it gets its own access, and the code leaves the address.
-      const phoneContext = await browser.newContext({
-        viewport: { width: 390, height: 800 },
-        userAgent: IPHONE,
-      });
-      const phone = await phoneContext.newPage();
-      phone.on("pageerror", (err) => errors.push(err));
-      await phone.goto(`${new URL(url).origin}/#pair=${code}`);
-      await phone.getByRole("combobox", { name: "Message" }).waitFor();
-      expect(new URL(phone.url()).hash).toBe("");
-      await page.getByRole("status").getByText("iPhone · Safari appairé").waitFor();
-      await page.getByRole("button", { name: "Fermer", exact: true }).click();
-      const revoke = page.getByRole("button", { name: "Révoquer iPhone · Safari" });
-      await revoke.waitFor();
-      if (shots) await page.screenshot({ path: path.join(shots, "appareils.png"), fullPage: true });
-      // On the phone, the devices are not listed: only the computer manages them.
-      await phone.goto(`${new URL(url).origin}/reglages/remote`);
-      await phone.getByText("Appairé", { exact: true }).waitFor();
-      expect(await phone.getByRole("button", { name: /Renouveler/ }).count()).toBe(0);
+    // Revoked from the computer, the phone is asked to pair again, and told why.
+    await revoke.click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "Révoquer" }).click();
+    await expect.poll(() => revoke.count()).toBe(0);
+    await phone.getByRole("heading", { name: "Appairer cet appareil" }).waitFor();
+    // The failed link from before is not shown as the reason.
+    expect(await phone.getByText("il a expiré").count()).toBe(0);
+    await phone.getByText("Cet appareil a été retiré depuis l'ordinateur").waitFor();
+    await phone.reload();
+    await phone.getByText("Cet appareil a été retiré depuis l'ordinateur").waitFor();
 
-      // The same code does not work twice.
-      const again = await (await browser.newContext()).newPage();
-      await again.goto(`${new URL(url).origin}/#pair=${code}`);
-      await again.getByRole("heading", { name: "Appairer cet appareil" }).waitFor();
-      await again.getByText("il a expiré ou a déjà servi").waitFor();
-      if (shots) await again.screenshot({ path: path.join(shots, "appairer-telephone.png") });
+    // A window still on the old link is shown the door too.
+    const other = await (await browser.newContext()).newPage();
+    await other.goto(url);
+    await other.getByRole("heading", { name: "Appairer cet appareil" }).waitFor();
 
-      // Already paired, the phone opening a used link stays connected, and is told why.
-      await phone.goto(`${new URL(url).origin}/#pair=${code}`);
-      await phone.getByText("Appairage refusé").waitFor();
-      await phone.getByRole("combobox", { name: "Message" }).waitFor();
-      await phone.goto(`${new URL(url).origin}/reglages/remote`);
-
-      // Renewing the computer's token: the old one is refused, the phone stays connected.
-      // Another tab of the computer goes on with the new token rather than ask to pair.
-      const tab = await context.newPage();
-      await tab.goto(new URL(url).origin);
-      await expect
-        .poll(() => tab.getByRole("combobox", { name: "Message" }).isEnabled())
-        .toBe(true);
-      await page.getByRole("button", { name: "Renouveler le jeton de cet ordinateur" }).click();
-      await page.getByRole("alertdialog").getByRole("button", { name: "Renouveler" }).click();
-      await page.getByRole("alertdialog").waitFor({ state: "detached" });
-      const auth = (given: string) =>
-        fetch(new URL("/api/auth", url), { headers: { authorization: `Bearer ${given}` } }).then(
-          (r) => r.status,
-        );
-      await expect.poll(() => auth(token)).toBe(401);
-      const renewed = readFileSync(path.join(dir, "data", "token"), "utf8");
-      expect(await auth(renewed)).toBe(204);
-      await phone.reload();
-      await phone.getByText("Appairé", { exact: true }).waitFor();
-      await expect
-        .poll(() => tab.getByRole("combobox", { name: "Message" }).isEnabled())
-        .toBe(true);
-      expect(await tab.getByRole("heading", { name: "Appairer cet appareil" }).count()).toBe(0);
-      await tab.close();
-
-      // Revoked from the computer, the phone is asked to pair again, and told why.
-      await revoke.click();
-      await page.getByRole("alertdialog").getByRole("button", { name: "Révoquer" }).click();
-      await expect.poll(() => revoke.count()).toBe(0);
-      await phone.getByRole("heading", { name: "Appairer cet appareil" }).waitFor();
-      // The failed link from before is not shown as the reason.
-      expect(await phone.getByText("il a expiré").count()).toBe(0);
-      await phone.getByText("Cet appareil a été retiré depuis l'ordinateur").waitFor();
-      await phone.reload();
-      await phone.getByText("Cet appareil a été retiré depuis l'ordinateur").waitFor();
-
-      // A window still on the old link is shown the door too.
-      const other = await (await browser.newContext()).newPage();
-      await other.goto(url);
-      await other.getByRole("heading", { name: "Appairer cet appareil" }).waitFor();
-
-      expect(errors).toEqual([]);
-      await phoneContext.close();
-      await context.close();
-    },
-  );
+    expect(errors).toEqual([]);
+    await phoneContext.close();
+    await context.close();
+  });
 });

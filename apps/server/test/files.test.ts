@@ -14,6 +14,7 @@ import {
   searchFiles,
   walk,
 } from "../src/files.ts";
+import { canLink } from "./can-link.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -92,7 +93,7 @@ describe("project files for @", () => {
     expect(resolveInside(dir, "missing.ts")).toBeUndefined();
   });
 
-  it.skipIf(process.platform === "win32")("refuses a link that leads outside", () => {
+  it.skipIf(!canLink)("refuses a link that leads outside", () => {
     const outside = folder({ "secret.txt": "x" });
     const dir = folder({ "a.txt": "" });
     symlinkSync(path.join(outside, "secret.txt"), path.join(dir, "lien.txt"));
@@ -172,42 +173,36 @@ describe("skills for $ and project commands", () => {
     expect(frontMatter("pas de bloc").fields).toEqual({});
   });
 
-  it.skipIf(process.platform === "win32")(
-    "reads no skill or command through a link leading out of the project",
-    () => {
-      const outside = folder({
-        "token.md": "---\nname: fuite\ndescription: jeton-secret\n---\n",
-        "commands/vole.md": "jeton-secret",
-        "skills/ext/SKILL.md": "---\nname: ext\ndescription: jeton-secret\n---\n",
-      });
-      const dir = folder({
-        ".claude/skills/ok/SKILL.md": "---\nname: ok\n---\n# Ok\n",
-        "docs/interne.md": "---\nname: interne\n---\n# Interne\n",
-      });
-      mkdirSync(path.join(dir, ".claude/skills/pwn"));
-      symlinkSync(path.join(outside, "token.md"), path.join(dir, ".claude/skills/pwn/SKILL.md"));
-      symlinkSync(path.join(outside), path.join(dir, ".agents"));
-      // A link that stays in the project is fine.
-      mkdirSync(path.join(dir, ".claude/skills/lien"));
-      symlinkSync(
-        path.join(dir, "docs/interne.md"),
-        path.join(dir, ".claude/skills/lien/SKILL.md"),
-      );
-      mkdirSync(path.join(dir, ".moonagentic"));
-      symlinkSync(path.join(outside, "commands"), path.join(dir, ".moonagentic/commands"));
+  it.skipIf(!canLink)("reads no skill or command through a link leading out of the project", () => {
+    const outside = folder({
+      "token.md": "---\nname: fuite\ndescription: jeton-secret\n---\n",
+      "commands/vole.md": "jeton-secret",
+      "skills/ext/SKILL.md": "---\nname: ext\ndescription: jeton-secret\n---\n",
+    });
+    const dir = folder({
+      ".claude/skills/ok/SKILL.md": "---\nname: ok\n---\n# Ok\n",
+      "docs/interne.md": "---\nname: interne\n---\n# Interne\n",
+    });
+    mkdirSync(path.join(dir, ".claude/skills/pwn"));
+    symlinkSync(path.join(outside, "token.md"), path.join(dir, ".claude/skills/pwn/SKILL.md"));
+    symlinkSync(path.join(outside), path.join(dir, ".agents"));
+    // A link that stays in the project is fine.
+    mkdirSync(path.join(dir, ".claude/skills/lien"));
+    symlinkSync(path.join(dir, "docs/interne.md"), path.join(dir, ".claude/skills/lien/SKILL.md"));
+    mkdirSync(path.join(dir, ".moonagentic"));
+    symlinkSync(path.join(outside, "commands"), path.join(dir, ".moonagentic/commands"));
 
-      const skills = findSkills(dir, folder({}));
-      expect(skills.map((s) => s.name)).toEqual(["interne", "ok"]);
-      expect(JSON.stringify(skills)).not.toContain("jeton-secret");
-      expect(findProjectCommands(dir)).toEqual([]);
+    const skills = findSkills(dir, folder({}));
+    expect(skills.map((s) => s.name)).toEqual(["interne", "ok"]);
+    expect(JSON.stringify(skills)).not.toContain("jeton-secret");
+    expect(findProjectCommands(dir)).toEqual([]);
 
-      // In the home folder, links are the user's own, as with dotfile managers.
-      const home = folder({});
-      mkdirSync(path.join(home, ".claude/skills/perso"), { recursive: true });
-      symlinkSync(path.join(outside, "token.md"), path.join(home, ".claude/skills/perso/SKILL.md"));
-      expect(findSkills(dir, home).map((s) => s.name)).toContain("fuite");
-    },
-  );
+    // In the home folder, links are the user's own, as with dotfile managers.
+    const home = folder({});
+    mkdirSync(path.join(home, ".claude/skills/perso"), { recursive: true });
+    symlinkSync(path.join(outside, "token.md"), path.join(home, ".claude/skills/perso/SKILL.md"));
+    expect(findSkills(dir, home).map((s) => s.name)).toContain("fuite");
+  });
 
   it("reads Antigravity's skills, from the project and from the home folder", () => {
     const dir = folder({
