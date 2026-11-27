@@ -491,6 +491,28 @@ describe("composer", () => {
     await expect.poll(() => cloneButton(sheet).isDisabled()).toBe(false);
     await page.close();
   });
+  it("lists them too when the window is opened before the app is connected", async () => {
+    const page = await browser.newPage();
+    // A slow server, or a computer at work: the page is there before its connection is.
+    await page.route("**/api/ws-ticket", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.continue();
+    });
+    await page.goto(url);
+    await page.getByRole("button", { name: "Nouveau projet" }).first().click();
+    const sheet = page.getByRole("dialog", { name: "Nouveau projet" });
+    await sheet.getByRole("radio", { name: "GitHub" }).click();
+    // Asked then, the account was refused as an action that did not leave, for good.
+    const list = sheet.getByRole("group", { name: "Tes dépôts GitHub" });
+    await expect.poll(() => list.getByRole("button").count(), { timeout: 15_000 }).toBe(2);
+    expect(await sheet.getByText("Pas de connexion").count()).toBe(0);
+    // Where it would go comes from the server too.
+    await list.getByRole("button", { name: /^site/ }).click();
+    await sheet.getByRole("button", { name: /^Emplacement/ }).click();
+    await expect.poll(() => sheet.getByLabel("Cloner dans").inputValue()).not.toBe("");
+    expect(await sheet.getByLabel("Cloner dans").inputValue()).not.toContain("~/Projets");
+    await page.close();
+  });
   it("archives a thread, brings it back, deletes it, then removes the project", async () => {
     const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
     await page.goto(url);
