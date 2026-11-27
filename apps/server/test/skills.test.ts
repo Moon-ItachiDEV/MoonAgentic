@@ -287,3 +287,111 @@ describe("commands that install skills", () => {
     expect((await ended).added).toEqual([]);
   });
 });
+
+/** A clone stub that copies `repo` as it is, links included. */
+const cacheOf = (repo: string) => {
+  const cache = new RepoCache(async (_url, dest) => {
+    mkdirSync(path.dirname(dest), { recursive: true });
+    cpSync(repo, dest, { recursive: true, verbatimSymlinks: true });
+  });
+  cleanups.push(() => cache.clear());
+  return cache;
+};
+
+describe("relecture de Neon (PR 191)", () => {
+  it.skipIf(process.platform === "win32")(
+    "1. never copies what a repository's link leads to out of it",
+    async () => {
+      const secret = folder({ id_rsa: "CLE PRIVEE", "SKILL.md": skillMd("vol", "x") });
+      const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF") });
+      symlinkSync(path.join(secret, "id_rsa"), path.join(repo, "skills/pdf/ref.txt"));
+      mkdirSync(path.join(repo, "skills/vol"), { recursive: true });
+      symlinkSync(path.join(secret, "SKILL.md"), path.join(repo, "skills/vol/SKILL.md"));
+      const dir = await cacheOf(repo).get("a/b");
+      // A SKILL.md that leads out of the repository is not read.
+      expect(skillsIn(dir, "b").map((s) => s.name)).toEqual(["pdf"]);
+      const project: SkillPlace = { scope: "project", base: folder() };
+      expect(() => installFromRepo(project, dir, "b", ["skills/pdf"], ["claude"])).toThrow(/lien/);
+      expect(existsSync(path.join(project.base, ".claude/skills/pdf"))).toBe(false);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "1. clones a repository's links as plain files",
+    async () => {
+      const { execFileSync } = await import("node:child_process");
+      const { shallowClone } = await import("../src/github.ts");
+      const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF") });
+      symlinkSync("/etc/hostname", path.join(repo, "skills/pdf/ref.txt"));
+      const git = (...args: string[]) =>
+        execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+      git("init", "-q");
+      git("add", "-A");
+      git("commit", "-qm", "x");
+      const dest = path.join(folder(), "clone");
+      await shallowClone(`file://${repo}`, dest);
+      const { lstatSync } = await import("node:fs");
+      expect(lstatSync(path.join(dest, "skills/pdf/ref.txt")).isSymbolicLink()).toBe(false);
+    },
+  );
+
+  it("2. takes only a GitHub owner/name and a branch name to install from", async () => {
+    const { ClientMessage } = await import("@moonagentic/protocol");
+    const ok = (repo: string, ref?: string) =>
+      ClientMessage.safeParse({
+        type: "skills.install",
+        requestId: "r",
+        repo,
+        ...(ref !== undefined ? { ref } : {}),
+        paths: ["skills/pdf"],
+        agents: ["claude"],
+      }).success;
+    expect(ok("anthropics/skills")).toBe(true);
+    expect(ok("anthropics/skills", "main")).toBe(true);
+    expect(ok("anthropics/skills", "release/1.2")).toBe(true);
+    expect(ok("evil.com:x@github.com/a")).toBe(false);
+    expect(ok("a/b/../../c")).toBe(false);
+    expect(ok("a/..")).toBe(false);
+    expect(ok("anthropics/skills", "--upload-pack=touch x")).toBe(false);
+    expect(ok("anthropics/skills", "a/../b")).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "4. keeps the installed skill when its update cannot be copied",
+    async () => {
+      const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF v1") });
+      const project: SkillPlace = { scope: "project", base: folder() };
+      installFromRepo(project, repo, "b", ["skills/pdf"], ["claude", "codex"]);
+      // The new version holds a link to nowhere: it cannot be copied.
+      writeFileSync(path.join(repo, "skills/pdf/SKILL.md"), skillMd("pdf", "PDF v2"));
+      symlinkSync(path.join(repo, "nulle-part"), path.join(repo, "skills/pdf/casse.txt"));
+      expect(() =>
+        installFromRepo(project, repo, "b", ["skills/pdf"], ["claude"], { replace: true }),
+      ).toThrow();
+      for (const root of [".claude/skills", ".agents/skills"]) {
+        expect(readFileSync(path.join(project.base, root, "pdf/SKILL.md"), "utf8")).toContain(
+          "PDF v1",
+        );
+      }
+      expect(scanSkills(project).map((s) => s.name)).toEqual(["pdf"]);
+    },
+  );
+
+  it("4. updates a skill under its own name, for its agents, when its source renamed it", () => {
+    const repo = folder({ "skills/pdf/SKILL.md": skillMd("pdf", "PDF v1") });
+    const project: SkillPlace = { scope: "project", base: folder() };
+    installFromRepo(project, repo, "b", ["skills/pdf"], ["claude", "codex"]);
+    writeFileSync(path.join(repo, "skills/pdf/SKILL.md"), skillMd("pdf-tools", "PDF v2"));
+    installFromRepo(project, repo, "b", ["skills/pdf"], ["claude"], {
+      replace: true,
+      name: "pdf",
+    });
+    const skills = scanSkills(project);
+    expect(skills.map((s) => [s.name, s.copies.map((c) => c.agent)])).toEqual([
+      ["pdf", ["claude", "codex"]],
+    ]);
+    expect(readFileSync(path.join(project.base, ".agents/skills/pdf/SKILL.md"), "utf8")).toContain(
+      "PDF v2",
+    );
+  });
+});

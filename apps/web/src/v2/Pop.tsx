@@ -4,10 +4,12 @@ import {
   type RefObject,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { Dropdown } from "./Dropdown.tsx";
 import { I } from "./I.tsx";
 import type { IconName } from "./sprite.ts";
 import { scrRoot } from "./scr.ts";
@@ -51,7 +53,7 @@ function useDismiss(
     // window closes alone.
     const escape = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
-      const menu = document.querySelector(".ddm:not(.out)");
+      const menu = document.querySelector(".ddm");
       if (menu && menu !== box.current) return;
       event.preventDefault();
       close.current();
@@ -183,8 +185,9 @@ export type DropItem =
   | { heading: string };
 
 /**
- * A short list of choices hung from its button: under its value when the button shows one
- * on its right, under its start otherwise. A tick marks `value` when it is given.
+ * A short list of choices hung from its button, drawn by the app's one {@link Dropdown}: under
+ * its value when the button shows one on its right, under its start otherwise. A tick marks
+ * `value` when it is given.
  */
 export function DropMenu(props: {
   open: boolean;
@@ -195,65 +198,17 @@ export function DropMenu(props: {
   onPick: (value: string) => void;
   onClose: () => void;
 }) {
-  const box = useRef<HTMLDivElement>(null);
-  const shown = useLeaving(props.open);
-  const [place, setPlace] = useState<{ x: number; y: number; up: boolean; ox: number } | null>(
-    null,
-  );
-  useDismiss(props.open, box, props.anchor, props.onClose, ".ddm");
-
-  useLayoutEffect(() => {
-    if (!props.open) return;
-    const el = box.current;
-    const a = props.anchor;
-    if (!el || !a) return;
-    const r = a.getBoundingClientRect();
-    const rt = a.querySelector(".rt")?.getBoundingClientRect();
-    const w = el.offsetWidth;
-    const h = el.offsetHeight;
-    let x = rt ? rt.right - w : r.left + 8;
-    x = Math.max(8, Math.min(x, innerWidth - w - 8));
-    let y = r.bottom + 4;
-    let up = false;
-    if (y + h > innerHeight - 8) {
-      y = Math.max(8, r.top - h - 4);
-      up = true;
-    }
-    setPlace({ x, y, up, ox: rt ? rt.right - x - 12 : 24 });
-    el.querySelector<HTMLButtonElement>('[aria-checked="true"], button')?.focus({
-      preventScroll: true,
-    });
-  }, [props.open, props.anchor]);
-
-  useEffect(() => {
-    if (!props.open || !props.anchor) return;
-    const a = props.anchor;
-    a.setAttribute("aria-expanded", "true");
-    return () => a.setAttribute("aria-expanded", "false");
-  }, [props.open, props.anchor]);
-
-  if (!shown) return null;
-  const keys = (event: React.KeyboardEvent) => {
-    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
-    event.preventDefault();
-    const all = [...(box.current?.querySelectorAll("button") ?? [])];
-    const at = all.indexOf(document.activeElement as HTMLButtonElement);
-    const next = all[(at + (event.key === "ArrowDown" ? 1 : all.length - 1)) % all.length];
-    next?.focus();
-  };
+  const anchor = useMemo(() => ({ current: props.anchor }), [props.anchor]);
+  if (!props.open || !props.anchor) return null;
   const radio = props.value !== undefined;
-  return createPortal(
-    <div
-      ref={box}
-      className={`ddm${props.open ? "" : " out"}${place?.up ? " up" : ""}`}
-      role="menu"
-      aria-label={props.label}
-      onKeyDown={keys}
-      style={
-        place
-          ? ({ left: place.x, top: place.y, "--ox": `${place.ox}px` } as CSSProperties)
-          : { visibility: "hidden" }
-      }
+  const start = !props.anchor.querySelector(".rt");
+  return (
+    <Dropdown
+      anchor={anchor}
+      start={start}
+      label={props.label}
+      className="skm"
+      onClose={props.onClose}
     >
       {props.items.map((item, i) =>
         "sep" in item ? (
@@ -286,12 +241,6 @@ export function DropMenu(props: {
           </button>
         ),
       )}
-    </div>,
-    scrRoot(),
+    </Dropdown>
   );
-}
-
-/** The element a menu or a popover hangs from, set when its button is pressed. */
-export function useAnchor(): [HTMLElement | null, (el: HTMLElement | null) => void] {
-  return useState<HTMLElement | null>(null);
 }

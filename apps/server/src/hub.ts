@@ -2078,8 +2078,10 @@ export class Hub {
         // Read again from GitHub, not from a clone kept from before.
         this.skillRepos.forget(repo, ref);
         const dir = await this.skillRepos.get(repo, ref);
+        // Under its own name and for its own agents, even when its source renamed it.
         installFromRepo(place, dir, repo.split("/")[1] ?? repo, [at], ["claude"], {
           replace: true,
+          name: message.name,
         });
         this.skillRecords.set({ ...record, installedAt: Date.now() });
         client.send({ type: "skills", requestId: message.requestId, skills: this.allSkills() });

@@ -159,6 +159,10 @@ export async function shallowClone(url: string, dest: string, ref?: string): Pro
       "git",
       [
         ...auth.args,
+        // A link in someone else's repository is written as a plain file: nothing read from
+        // the clone can lead out of it (to ~/.ssh…).
+        "-c",
+        "core.symlinks=false",
         "clone",
         "--quiet",
         "--depth",

@@ -1781,6 +1781,10 @@ const setupName = z
   .string()
   .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/, "Un nom en minuscules, chiffres, - ou _.");
 /** A description: one line. */
+/** A GitHub repository skills are installed from: `owner/name`, nothing else. */
+export const SKILL_REPO = /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/;
+/** A branch or tag of it: no option for git, no `.` or `..` part. */
+export const SKILL_REF = /^(?!.*(?:^|\/)\.\.?(?:\/|$))[A-Za-z0-9][\w./-]{0,199}$/;
 /** An installed skill's name: its folder's. */
 const skillName = z.string().regex(/^[A-Za-z0-9][\w.-]{0,99}$/);
 /** One line, as typed in a terminal. */
@@ -2306,8 +2310,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("skills.install"),
     requestId: id,
-    repo: z.string().min(1).max(200),
-    ref: z.string().max(200).optional(),
+    repo: z.string().regex(SKILL_REPO),
+    ref: z.string().regex(SKILL_REF).optional(),
     paths: z.array(z.string().max(500)).min(1).max(50),
     projectId: id.optional(),
     agents: z.array(z.enum(SKILL_AGENTS)).min(1),

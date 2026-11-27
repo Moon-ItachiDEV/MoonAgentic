@@ -196,4 +196,72 @@ describe("skills", () => {
       await page.close();
     });
   }
+
+  it("starts a command once when « Lancer » is pressed twice, and keeps its window while it runs", async () => {
+    const page = await browser.newPage({ viewport: SIZES.desk });
+    const region = await openSkills(page);
+    const install = region.getByRole("button", { name: "Installer une skill" });
+    await install.click();
+    await page.getByRole("menuitem", { name: "Par commande" }).click();
+    const pop = page.getByRole("dialog", { name: "Par commande" });
+    await pop
+      .getByLabel("Commande")
+      .fill("echo x >> compte.txt; printf 'Encore ? '; read a; echo fin");
+    await pop.getByRole("button", { name: "Voir ce qui va tourner" }).click();
+    await page
+      .getByRole("dialog", { name: "Lancer la commande ?" })
+      .getByRole("button", { name: "Lancer" })
+      .dblclick();
+    const running = page.getByRole("dialog", { name: "Installation" });
+    await running.getByLabel("Réponse au script").waitFor();
+    // Its button pressed again while it runs: the window stays.
+    await install.click();
+    await page.waitForTimeout(400);
+    expect(await running.isVisible()).toBe(true);
+    await running.getByLabel("Réponse au script").fill("n");
+    await running.getByRole("button", { name: "Envoyer" }).click();
+    await page.getByRole("dialog", { name: "Terminée" }).getByText("fin").waitFor();
+    await page.waitForTimeout(300);
+    expect(readFileSync(path.join(home, "compte.txt"), "utf8")).toBe("x\n");
+    await page.close();
+  });
+
+  it("writes from the project's settings a skill just installed there", async () => {
+    const page = await browser.newPage({ viewport: SIZES.desk });
+    await page.goto(url);
+    await page.locator("#scr").waitFor();
+    await page.goto(new URL("/p/alpha", url).toString());
+    await page.getByRole("button", { name: "Réglages du projet" }).click();
+    const dialog = page.getByRole("dialog", { name: "Réglages du projet" });
+    await dialog.getByRole("button", { name: /^\$ Skills/ }).click();
+    const skills = page.getByRole("dialog", { name: "Skills" });
+    await skills.getByRole("button", { name: /^docx/ }).waitFor();
+    await skills.getByRole("button", { name: "Installer une skill" }).click();
+    await page.getByRole("menuitem", { name: "Par commande" }).click();
+    const pop = page.getByRole("dialog", { name: "Par commande" });
+    await pop
+      .getByRole("button", { name: /^Projets/ })
+      .getByText("Alpha")
+      .waitFor();
+    await pop
+      .getByLabel("Commande")
+      .fill(
+        "mkdir -p .claude/skills/neuve && printf -- '---\\nname: neuve\\ndescription: Neuve\\n---\\nFais ceci.\\n' > .claude/skills/neuve/SKILL.md",
+      );
+    await pop.getByRole("button", { name: "Voir ce qui va tourner" }).click();
+    await page
+      .getByRole("dialog", { name: "Lancer la commande ?" })
+      .getByRole("button", { name: "Lancer" })
+      .click();
+    await page
+      .getByRole("dialog", { name: "Terminée" })
+      .getByRole("button", { name: "Terminé" })
+      .click();
+    const row = skills.getByRole("button", { name: /^neuve/ });
+    await row.click();
+    const detail = page.getByRole("dialog", { name: "neuve" });
+    await detail.getByRole("button", { name: "Modifier" }).click();
+    await expect.poll(() => skills.getByLabel("Instructions").inputValue()).toContain("Fais ceci.");
+    await page.close();
+  });
 });

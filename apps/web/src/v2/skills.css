@@ -13,11 +13,8 @@
   flex-direction: column;
   max-height: calc(100% - 24px);
   border-radius: 16px;
-  background: var(--surface);
-  box-shadow:
-    0 0 0 0.5px var(--glass-ring),
-    0 2px 6px rgba(20, 20, 30, 0.04),
-    0 28px 64px -20px rgba(20, 20, 30, 0.26);
+  background: var(--win);
+  box-shadow: var(--win-sh);
   overflow: hidden;
   transform-origin: var(--ox, 50%) 0;
   opacity: 0;
@@ -90,7 +87,7 @@
   gap: 10px;
 }
 .skpop .it:not(.ro):hover {
-  background: var(--hover);
+  background: var(--win-hover);
 }
 .skpop .it .tx {
   padding: 6px 0;
@@ -100,7 +97,7 @@
 }
 .skpop .sep {
   margin: 2px 8px;
-  background: var(--glass-ring);
+  background: var(--win-ring);
 }
 .skpop .gl2 {
   padding: 0 0 4px;
@@ -125,10 +122,10 @@
   position: sticky;
   bottom: -16px;
   z-index: 2;
-  background: var(--surface);
+  background: var(--win);
   margin: 0 -18px -16px;
   padding: 10px 18px 16px;
-  box-shadow: 0 -0.5px 0 var(--glass-ring);
+  box-shadow: 0 -0.5px 0 var(--win-ring);
 }
 .skpop .b2 {
   flex: none;
@@ -139,14 +136,14 @@
   gap: 6px;
 }
 .skpop .b2.soft {
-  background: var(--surface);
+  background: var(--win);
   box-shadow:
-    0 0 0 1px var(--glass-ring),
+    0 0 0 1px var(--win-ring),
     0 1px 2px rgba(20, 20, 30, 0.05);
   color: var(--fg);
 }
 .skpop .b2.soft:hover {
-  background: var(--hover);
+  background: var(--win-hover);
 }
 .skpop .b2.ink[disabled] {
   opacity: 0.3;
@@ -201,7 +198,7 @@
   padding: 8px 10px;
   border-radius: 10px;
   margin-bottom: 12px;
-  background: var(--sunken);
+  background: var(--win-seg);
   overflow-wrap: anywhere;
 }
 .skc .mono {
@@ -231,7 +228,7 @@
 .sklog {
   padding: 10px;
   border-radius: 10px;
-  background: var(--sunken);
+  background: var(--win-seg);
   font: 400 11.5px/1.6 var(--mono);
   color: var(--fg2);
   max-height: 150px;
@@ -274,7 +271,7 @@
   height: 34px;
   border-radius: 9px;
   padding: 0 12px;
-  background: var(--sunken);
+  background: var(--win-seg);
   font: 400 13px var(--mono);
   color: var(--fg);
   outline: none;
@@ -282,84 +279,7 @@
   transition: box-shadow 160ms var(--out);
 }
 .skin input:focus-visible {
-  box-shadow: inset 0 0 0 1px var(--glass-ring);
-}
-
-/* A short list of choices hung from its button. */
-.ddm {
-  position: fixed;
-  z-index: 135;
-  min-width: 220px;
-  max-width: 300px;
-  max-height: min(420px, calc(100vh - 24px));
-  overflow: auto;
-  padding: 5px;
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow:
-    0 0 0 0.5px var(--glass-ring),
-    0 2px 6px rgba(20, 20, 30, 0.04),
-    0 20px 48px -16px rgba(20, 20, 30, 0.24);
-  scrollbar-width: none;
-  transform-origin: var(--ox, 100%) 0;
-  animation: ddin 160ms var(--out) both;
-}
-.ddm.up {
-  transform-origin: var(--ox, 100%) 100%;
-}
-.ddm.out {
-  animation: skout 120ms cubic-bezier(0.4, 0, 1, 1) both;
-  pointer-events: none;
-}
-@keyframes ddin {
-  from {
-    opacity: 0;
-    transform: scale(0.97) translateY(-3px);
-  }
-}
-.ddm .ddh {
-  padding: 7px 10px 4px;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--muted);
-}
-.ddm button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  height: 34px;
-  padding: 0 10px;
-  border-radius: 9px;
-  font-size: 14px;
-  color: var(--fg);
-  text-align: left;
-}
-.ddm button:hover,
-.ddm button:focus-visible {
-  background: var(--hover);
-  outline: none;
-}
-.ddm .ddi {
-  display: grid;
-  color: var(--muted);
-}
-.ddm .ddt {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.ddm .ddk {
-  display: grid;
-  color: var(--fg);
-}
-.ddm hr {
-  border: 0;
-  height: 0.5px;
-  background: var(--glass-ring);
-  margin: 5px 8px;
+  box-shadow: inset 0 0 0 1px var(--win-ring);
 }
 
 /* On a phone: larger lines and buttons for a finger. */
@@ -381,29 +301,23 @@
 .scr:not(.roomy) .skpop .skin .b2 {
   height: 40px;
 }
-.scr:not(.roomy) .ddm {
+/* The skills' menus open on a phone too: a finger's lines there. */
+.scr:not(.roomy) .ddm.skm {
   border-radius: 16px;
   min-width: 240px;
 }
-.scr:not(.roomy) .ddm button {
+.scr:not(.roomy) .ddm.skm button {
   height: 44px;
   font-size: 16px;
-}
-html[data-dev="touch"] .scr.roomy .ddm button {
-  height: 42px;
-  font-size: 15.5px;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .skpop.on,
   .skpop.up.on,
-  .skpop.out,
-  .ddm,
-  .ddm.out {
+  .skpop.out {
     animation-name: skfade;
   }
-  .skpop.out,
-  .ddm.out {
+  .skpop.out {
     animation-direction: reverse;
   }
 }

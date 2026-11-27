@@ -30,6 +30,7 @@ import {
   type SkillCommandPlan,
   type SkillRunEnd,
   type SkillSource,
+  SKILL_REF,
 } from "@moonagentic/protocol";
 import { frontMatter, hermesSkillsDir } from "./files.ts";
 import { shallowClone } from "./github.ts";
@@ -103,9 +104,17 @@ interface Found {
 const MAX_SCAN = 500;
 
 /** The skill a folder holds, with its `SKILL.md` read; undefined when it holds none. */
-function readSkillDir(dir: string): { name?: string; description: string } | undefined {
+function readSkillDir(
+  dir: string,
+  /** A folder the `SKILL.md` must stay in, its links followed (a repository read). */
+  inside?: string,
+): { name?: string; description: string } | undefined {
   const file = path.join(dir, "SKILL.md");
   try {
+    if (inside) {
+      const real = safeReal(file);
+      if (!real || !within(inside, real)) return undefined;
+    }
     if (statSync(file).size > MAX_SETUP_FILE) return undefined;
     const { fields, body } = frontMatter(readFileSync(file, "utf8"));
     const first = (body.split(/\r?\n/).find((l) => l.trim()) ?? "").replace(/^#+\s*/, "").trim();
@@ -259,16 +268,35 @@ function removeCopy(dir: string): void {
   else rmSync(dir, { recursive: true, force: true });
 }
 
-/** Copies a skill's folder, without what git keeps, into `dest`, which must not exist yet. */
+/**
+ * Copies a skill's folder, without what git keeps, into `dest`, which must not exist yet.
+ * A link in it is followed only while it stays in the skill's folder: one leading out of it
+ * (a repository's link to `~/.ssh`…) stops the copy, and nothing is left of it.
+ */
 function copySkill(from: string, dest: string): void {
+  const top = safeReal(from);
+  if (!top) throw new SkillError(`La skill ${path.basename(from)} n'est plus là.`);
   mkdirSync(path.dirname(dest), { recursive: true });
-  cpSync(from, dest, {
-    recursive: true,
-    dereference: true,
-    errorOnExist: true,
-    force: false,
-    filter: (src) => path.basename(src) !== ".git",
-  });
+  try {
+    cpSync(top, dest, {
+      recursive: true,
+      dereference: true,
+      errorOnExist: true,
+      force: false,
+      filter: (src) => {
+        if (path.basename(src) === ".git") return false;
+        if (!lstatSync(src).isSymbolicLink()) return true;
+        const real = safeReal(src);
+        if (real && within(top, real)) return true;
+        throw new SkillError(
+          `La skill ${path.basename(from)} contient un lien qui sort de son dossier (${path.relative(top, src)}) : elle n'est pas copiée.`,
+        );
+      },
+    });
+  } catch (error) {
+    rmSync(dest, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /** Where a new copy for this agent goes. */
@@ -364,7 +392,7 @@ function valid<T extends { owner: string; name: string; ref?: string; path?: str
   if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(r.owner)) return undefined;
   if (!/^[A-Za-z0-9._-]{1,100}$/.test(r.name) || r.name === "." || r.name === "..")
     return undefined;
-  if (r.ref !== undefined && !/^[\w./-]{1,200}$/.test(r.ref)) return undefined;
+  if (r.ref !== undefined && !SKILL_REF.test(r.ref)) return undefined;
   if (r.path !== undefined && r.path.split("/").some((p) => p === ".." || p === "."))
     return undefined;
   return r;
@@ -377,9 +405,11 @@ function valid<T extends { owner: string; name: string; ref?: string; path?: str
 export function skillsIn(dir: string, repoName: string, under = ""): FoundSkill[] {
   const out: FoundSkill[] = [];
   const start = under ? path.join(dir, ...under.split("/")) : dir;
+  const root = safeReal(dir);
+  if (!root) return out;
   const walk = (d: string, rel: string, depth: number) => {
     if (out.length >= 200) return;
-    const here = readSkillDir(d);
+    const here = readSkillDir(d, root);
     if (here) {
       const folder = rel ? rel.split("/").at(-1)! : repoName;
       const name = here.name ?? (NAME.test(folder) ? folder : "skill");
@@ -463,7 +493,11 @@ export function installFromRepo(
   repoName: string,
   paths: string[],
   agents: SkillAgent[],
-  options: { replace?: boolean } = {},
+  options: {
+    replace?: boolean;
+    /** The name it is installed under, whatever its `SKILL.md` now says (an update). */
+    name?: string;
+  } = {},
 ): string[] {
   const target = usable(place, agents);
   if (target.length === 0) throw new SkillError("Choisis au moins un agent.");
@@ -473,18 +507,36 @@ export function installFromRepo(
   for (const rel of paths) {
     const skill = found.find((f) => f.path === rel);
     if (!skill) throw new SkillError(`Pas de skill dans ${rel || "la racine du dépôt"}.`);
+    const name = options.name ?? skill.name;
     const from = rel ? path.join(repoDir, ...rel.split("/")) : repoDir;
-    const already = existing.get(skill.name.toLowerCase());
-    if (already && !options.replace)
-      throw new SkillError(`La skill ${skill.name} est déjà installée.`);
-    if (already) for (const copy of already.copies) removeCopy(copy.dir);
+    const already = existing.get(name.toLowerCase());
+    if (already && !options.replace) throw new SkillError(`La skill ${name} est déjà installée.`);
     const agentsHere = already
       ? usable(place, [...new Set(already.copies.map((c) => c.agent))])
       : target;
-    for (const agent of agentsHere.length > 0 ? agentsHere : target) {
-      copySkill(from, installDir(place, agent, skill.name));
+    const dests = (agentsHere.length > 0 ? agentsHere : target).map((agent) =>
+      installDir(place, agent, name),
+    );
+    // Every new copy is made beside where it goes first: the copies in place are replaced
+    // only once all of them are there, so a failed copy leaves the skill as it was.
+    const fresh: { tmp: string; dest: string }[] = [];
+    try {
+      for (const dest of dests) {
+        // Named with a dot first: no scan takes it for a skill while it is there.
+        const tmp = path.join(
+          path.dirname(dest),
+          `.${path.basename(dest)}.new-${process.pid}-${Date.now()}`,
+        );
+        fresh.push({ tmp, dest });
+        copySkill(from, tmp);
+      }
+    } catch (error) {
+      for (const f of fresh) rmSync(f.tmp, { recursive: true, force: true });
+      throw error;
     }
-    installed.push(skill.name);
+    if (already) for (const copy of already.copies) removeCopy(copy.dir);
+    for (const f of fresh) renameSync(f.tmp, f.dest);
+    installed.push(name);
   }
   return installed;
 }

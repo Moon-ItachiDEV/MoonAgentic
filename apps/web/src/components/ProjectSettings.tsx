@@ -27,6 +27,7 @@ import {
   fits,
   memoryFits,
   oneLine,
+  setupSkillOf,
   skillProblem,
 } from "../project-setup.ts";
 import { notificationsOn, projectMuted, setProjectMuted } from "../notifications.ts";
@@ -193,7 +194,18 @@ export function ProjectSettings(props: {
     ) : pane === "commands" ? (
       <CommandsTab setup={setup} projectId={projectId} change={change} onConfirm={setConfirm} />
     ) : (
-      <SkillsTab setup={setup} projectId={projectId} change={change} onConfirm={setConfirm} />
+      <SkillsTab
+        setup={setup}
+        projectId={projectId}
+        change={change}
+        onReload={() => {
+          connection
+            .ask({ type: "project.setup", requestId: newId(), projectId })
+            .then((reply) => setSetup(reply.setup))
+            .catch(() => {});
+        }}
+        onConfirm={setConfirm}
+      />
     );
   } else {
     body = (
@@ -940,12 +952,21 @@ function SkillsTab(props: {
   setup: ProjectSetup;
   projectId: string;
   change: Change;
+  /** Reads the project's folder again. */
+  onReload: () => void;
   onConfirm: (confirm: Confirmation) => void;
 }) {
   const [editing, setEditing] = useState<{ skill?: ProjectSkill; draft: Draft } | null>(null);
   const projects = useSyncExternalStore(connection.subscribe, connection.getState).projects;
   const { skills: installed, error } = useInstalledSkills();
   const skills = props.setup.skills;
+  // A skill installed, moved or removed here changes the folder: it is read again, so the
+  // skill just installed can be written from here at once.
+  const reload = useRef(props.onReload);
+  reload.current = props.onReload;
+  useEffect(() => {
+    if (installed) reload.current();
+  }, [installed]);
   if (editing) {
     return (
       <Editor
@@ -975,7 +996,7 @@ function SkillsTab(props: {
   }
   // A skill of the project's own folders can be written here.
   const editable = (s: InstalledSkill) => {
-    const own = s.projectId === props.projectId && skills.find((k) => k.name === s.name);
+    const own = setupSkillOf(s, props.projectId, skills);
     if (!own) return undefined;
     return () =>
       setEditing({

@@ -11,6 +11,7 @@ import { connection, newId } from "../connection.ts";
 import { isDiscussionsProject } from "../default-models.ts";
 import { HERMES_AVATAR } from "../hermes.ts";
 import { I } from "../v2/I.tsx";
+import { stillToInstall } from "../skill-pick.ts";
 import { DropMenu, type DropItem, Pop } from "../v2/Pop.tsx";
 
 export const AGENT_NAME: Record<SkillAgent, string> = {
@@ -373,6 +374,9 @@ function FromGithub(props: {
       .filter((s) => (s.projectId ?? ALL) === props.where)
       .map((s) => s.name.toLowerCase()),
   );
+  const list = found && found !== "load" ? found.skills : null;
+  // Another project chosen after picking: what it already holds is not installed again.
+  const chosen = list ? stillToInstall(picked, list, here) : [];
 
   const find = async () => {
     if (!source.trim() || found === "load") return;
@@ -398,7 +402,7 @@ function FromGithub(props: {
     }
   };
   const install = async () => {
-    if (!found || found === "load" || !picked.length || !given.length) return;
+    if (!found || found === "load" || !chosen.length || !given.length) return;
     setBusy(true);
     setError("");
     try {
@@ -408,7 +412,7 @@ function FromGithub(props: {
           requestId: newId(),
           repo: found.repo,
           ...(found.ref ? { ref: found.ref } : {}),
-          paths: picked,
+          paths: chosen,
           ...projectOf(props.where),
           agents: given,
         }),
@@ -421,7 +425,6 @@ function FromGithub(props: {
     }
   };
 
-  const list = found && found !== "load" ? found.skills : null;
   return (
     <>
       <div className="ins">
@@ -503,13 +506,13 @@ function FromGithub(props: {
             </button>
             <button
               className="b2 ink press"
-              disabled={!picked.length || busy}
+              disabled={!chosen.length || busy}
               onClick={() => void install()}
             >
               {busy
                 ? "Installation…"
-                : picked.length
-                  ? `Installer ${picked.length} skill${picked.length > 1 ? "s" : ""}`
+                : chosen.length
+                  ? `Installer ${chosen.length} skill${chosen.length > 1 ? "s" : ""}`
                   : "Installer"}
             </button>
           </div>
@@ -628,6 +631,9 @@ function Run(props: {
   );
   const [answer, setAnswer] = useState("");
   const [error, setError] = useState("");
+  // Pressed twice, it starts once.
+  const [starting, setStarting] = useState(false);
+  const startOnce = useRef(false);
   const { skills } = useInstalledSkills();
   const ended = run?.ended;
   useEffect(() => {
@@ -636,6 +642,9 @@ function Run(props: {
 
   if (!props.runId) {
     const start = async () => {
+      if (startOnce.current) return;
+      startOnce.current = true;
+      setStarting(true);
       const runId = newId();
       setError("");
       try {
@@ -648,7 +657,10 @@ function Run(props: {
         });
         props.onStart(runId);
       } catch (e) {
+        startOnce.current = false;
         setError(errorText(e));
+      } finally {
+        setStarting(false);
       }
     };
     return (
@@ -675,7 +687,7 @@ function Run(props: {
         </div>
         <Problem text={error} />
         <div className="cfa">
-          <button className="b2 ink press" onClick={() => void start()}>
+          <button className="b2 ink press" disabled={starting} onClick={() => void start()}>
             Lancer
           </button>
           <button className="b2 soft press" onClick={props.onBack}>
@@ -875,6 +887,8 @@ export function InstallSkill(props: {
         className="it acc"
         aria-haspopup="menu"
         onClick={(e) => {
+          // A command running keeps its window: only « Arrêter » ends it.
+          if (running && !ended) return;
           setAnchor(e.currentTarget);
           setOpened(opened ? null : { kind: "menu" });
         }}
