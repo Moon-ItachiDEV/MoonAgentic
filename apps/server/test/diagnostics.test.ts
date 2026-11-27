@@ -223,6 +223,12 @@ describe("DiagnosticsMonitor", () => {
       "utf8",
     );
 
+    writeFileSync(
+      path.join(logDir, "boite-noire.log"),
+      "2026-04-15 14:20:00 Arrêt précédent INATTENDU : Windows a redémarré\n",
+      "utf8",
+    );
+
     const unlocked = await monitor.buildReport();
     expect(unlocked.text).toContain("Version : 0.1.5");
     expect(unlocked.text).toContain("RAM totale : 16,0 Go");
@@ -246,6 +252,9 @@ describe("DiagnosticsMonitor", () => {
     expect(withLock.text).not.toContain("moonagentic-2026-04-15.log");
     expect(withLock.text).not.toContain("desktop-2026-04-15.log");
     expect(withLock.text).toContain("Pic multi-agents");
+    // The black box says nothing of a project: it stays, so a freeze can be read while locked.
+    expect(unlocked.text).toContain("--- Boîte noire de l'ordinateur (app de bureau) ---");
+    expect(withLock.text).toContain("Arrêt précédent INATTENDU : Windows a redémarré");
   });
 
   it("rate-limits client error reports to 10 per minute", () => {

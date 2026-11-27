@@ -217,6 +217,20 @@ describe("AppUpdates", () => {
     expect(() => t.app.cancel()).toThrow(/déjà commencé/);
   });
 
+  it("asks to install only once every device was told it is installing", async () => {
+    // The desktop app stops the server as soon as it hears « install ».
+    let left = () => {};
+    const t = setup({ said: () => new Promise<void>((resolve) => (left = resolve)) });
+    t.report(ready());
+    t.app.requestInstall("now", "sur cet ordinateur");
+    await flush();
+    expect(t.sent.at(-1)?.update.phase).toBe("installing");
+    expect(t.toShell).not.toContainEqual({ moon: "install" });
+    left();
+    await flush();
+    expect(t.toShell.at(-1)).toEqual({ moon: "install" });
+  });
+
   it("installs at once when asked, even with threads at work", async () => {
     const t = setup();
     t.report(ready());

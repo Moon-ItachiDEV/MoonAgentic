@@ -1,7 +1,7 @@
 // What the review can do to a thread's branch beyond reading it: drop one file's changes,
 // say where the branch stands against the one it started from, and merge that one in.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,11 +9,14 @@ import { Agents } from "../src/agents.ts";
 import { Hub } from "../src/hub.ts";
 import { syncWithBranch } from "../src/git.ts";
 import { Store } from "../src/store.ts";
+import { removeTempDir } from "./temp-dir.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
+// Closing the database waits up to 10 s for the copy of its log under way (checkpoints.ts), as
+// long as a hook has by default: on a Windows runner held up, the cleanup was cut there.
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
-});
+}, 30_000);
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -56,7 +59,7 @@ async function threadOnBranch() {
   cleanups.push(async () => {
     await hub.close();
     closeStore();
-    rmSync(root, { recursive: true, force: true });
+    removeTempDir(root);
   });
   const projectId = hub.createProject("demo", repo);
   const threadId = hub.createThread({

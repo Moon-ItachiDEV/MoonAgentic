@@ -1,12 +1,13 @@
 // Neon, on the PR 8: the log cut back while the server writes holds its writes, and on a Windows
 // disk a thread's removal failed there with « database is locked ».
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Checkpoints } from "../src/checkpoints.ts";
+import { Store } from "../src/store.ts";
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -56,4 +57,53 @@ describe("the copy of the write-ahead log", () => {
     expect(statSync(`${file}-wal`).size).toBe(0);
     // Real copies on the disk: a Windows runner took more than 15 s for 40 MB of them.
   }, 60_000);
+});
+
+// Main's CI, 2026-11-27: a database folder could not be removed right after its store was
+// closed (EPERM, on a Windows runner held up for a minute). The store itself lets go of it.
+describe("a closed database", () => {
+  it("lets go of all its files at once, even just after a copy of its log", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-closed-"));
+    const file = path.join(dir, "state.sqlite");
+    const store = new Store(file);
+    let open = true;
+    // Failed before its close, the test still closes the database before removing its folder.
+    cleanups.push(() => {
+      if (open) store.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10 });
+    });
+    const inside = (store as unknown as { checkpoints: Checkpoints }).checkpoints as unknown as {
+      timer: NodeJS.Timeout;
+      busy: boolean;
+      worker?: Worker;
+    };
+    clearInterval(inside.timer);
+    store.db.exec("CREATE TABLE big (v TEXT)");
+    const insert = store.db.prepare("INSERT INTO big (v) VALUES (?)");
+    const megabyte = "x".repeat(1024 * 1024);
+    store.db.exec("BEGIN");
+    for (let i = 0; i < 6; i++) insert.run(megabyte);
+    store.db.exec("COMMIT");
+    // The thread that copies the log opens its own connection to the file.
+    (store as unknown as { checkpoints: Checkpoints }).checkpoints.look();
+    expect(inside.worker).toBeDefined();
+    while (inside.busy) await new Promise((resolve) => setTimeout(resolve, 10));
+    store.close();
+    open = false;
+    // No retry: on Windows, one file still open anywhere in the process refuses this.
+    rmSync(dir, { recursive: true, force: true });
+    expect(existsSync(dir)).toBe(false);
+  }, 30_000);
+
+  // What the test above would see if a connection stayed open: Windows refuses the removal.
+  it.runIf(process.platform === "win32")("is told apart from one still open, on Windows", () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-open-"));
+    const db = new DatabaseSync(path.join(dir, "state.sqlite"));
+    db.exec("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('x')");
+    cleanups.push(() => {
+      db.close();
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10 });
+    });
+    expect(() => rmSync(dir, { recursive: true, force: true })).toThrow(/EPERM|EBUSY/);
+  });
 });

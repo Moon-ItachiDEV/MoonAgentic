@@ -481,6 +481,8 @@ function drawEye(
 /** The texture's scale for a canvas of this many device pixels. */
 const surfaceScale = (pixels: number): 1 | 2 => (pixels > size ? 2 : 1);
 
+/** How long a moon trusts the place it last read for itself, when nothing told it that it moved. */
+const RECT_MS = 200;
 const DEFAULT_LABEL = "Faire un clin d’œil à la mascotte";
 
 class MoonMascot extends HTMLElement {
@@ -500,6 +502,7 @@ class MoonMascot extends HTMLElement {
   /** Where the pointer last was on the page, read against a cached bounding box. */
   #client: { x: number; y: number } | undefined;
   #rect: DOMRect | undefined;
+  #rectAt = 0;
   #pointerX = 0;
   #pointerY = 0;
   #gazeX = 0;
@@ -696,7 +699,13 @@ class MoonMascot extends HTMLElement {
     }
     this.#last = now;
     if (this.#client) {
-      const box = (this.#rect ??= this.getBoundingClientRect());
+      // A moon can move with no scroll or resize to say so (a panel opening beside it, a window
+      // sliding): its place is read again a few times a second, not at every frame.
+      if (!this.#rect || now - this.#rectAt > RECT_MS) {
+        this.#rect = this.getBoundingClientRect();
+        this.#rectAt = now;
+      }
+      const box = this.#rect;
       const range = Math.max(110, box.width * 0.65);
       this.#pointerX = clamp((this.#client.x - box.left - box.width * 0.35) / range, -1, 1);
       this.#pointerY = clamp((this.#client.y - box.top - box.height * 0.48) / range, -1, 1);
