@@ -3,6 +3,7 @@ import {
   type Artifact,
   type CoordinatorSettings,
   type FavoriteRef,
+  type InstalledSkill,
   type Favorites,
   MAX_FALLBACK_MODELS,
   MAX_PROJECT_MEMORY,
@@ -19,13 +20,28 @@ import {
   utf8Bytes,
   WORK_KINDS,
 } from "@moonagentic/protocol";
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { connection, newId } from "../connection.ts";
 import { isDiscussionsProject } from "../default-models.ts";
 import { effortOf } from "../effort.ts";
 import { modelLabel, modelNameOf } from "../model-label.ts";
 import { COLOR_NAME } from "../project-colors.ts";
-import { claudeAction, commandProblem, fits, oneLine, skillProblem } from "../project-setup.ts";
+import {
+  claudeAction,
+  commandProblem,
+  fits,
+  oneLine,
+  setupSkillOf,
+  skillProblem,
+} from "../project-setup.ts";
+import { changeSkills, InstallSkill, SkillLists, useInstalledSkills } from "./Skills.tsx";
 import { KIND_LABEL, shortAgo } from "../project-threads.ts";
 import { renameKey } from "../rename.ts";
 import { useThreadModel } from "../thread-model.ts";
@@ -139,6 +155,13 @@ export function ProjectSettings(props: {
     const reply = await connection.ask(message);
     setSetup(reply.setup);
   };
+  /** Reads the folder again, after a skill was installed, moved or removed. */
+  const reload = () => {
+    connection
+      .ask({ type: "project.setup", requestId: newId(), projectId })
+      .then((reply) => setSetup(reply.setup))
+      .catch(() => {});
+  };
   const pick = (next: ProjectSection) => {
     setSub(null);
     setSection(next);
@@ -182,6 +205,7 @@ export function ProjectSettings(props: {
         setup={setup}
         loadError={loadError}
         change={change}
+        onReload={reload}
         onConfirm={setConfirm}
       />
     );
@@ -678,6 +702,7 @@ function Memory(props: {
   setup: ProjectSetup | undefined;
   loadError: string | undefined;
   change: Change;
+  onReload: () => void;
   onConfirm: (confirm: Confirmation) => void;
 }) {
   const { setup, projectId, change } = props;
@@ -776,12 +801,7 @@ function Memory(props: {
       />
       <h4>Skills</h4>
       {setup ? (
-        <SkillsTab
-          setup={setup}
-          projectId={projectId}
-          change={change}
-          onConfirm={props.onConfirm}
-        />
+        <SkillsTab setup={setup} projectId={projectId} change={change} onReload={props.onReload} />
       ) : (
         <p className="snone">{waiting}</p>
       )}
@@ -1588,10 +1608,20 @@ function SkillsTab(props: {
   setup: ProjectSetup;
   projectId: string;
   change: Change;
-  onConfirm: (confirm: Confirmation) => void;
+  /** Reads the project's folder again. */
+  onReload: () => void;
 }) {
   const [editing, setEditing] = useState<{ skill?: ProjectSkill; draft: Draft } | null>(null);
+  const projects = useSyncExternalStore(connection.subscribe, connection.getState).projects;
+  const { skills: installed, error } = useInstalledSkills();
   const skills = props.setup.skills;
+  // A skill installed, moved or removed here changes the folder: it is read again, so the
+  // skill just installed can be written from here at once.
+  const reload = useRef(props.onReload);
+  reload.current = props.onReload;
+  useEffect(() => {
+    if (installed) reload.current();
+  }, [installed]);
   if (editing) {
     return (
       <Editor
@@ -1611,60 +1641,45 @@ function SkillsTab(props: {
             description: draft.description.trim(),
             body: draft.text,
           });
+          // The list of installed skills shows it too.
+          void changeSkills(() => connection.ask({ type: "skills.list", requestId: newId() }));
           setEditing(null);
         }}
         onCancel={() => setEditing(null)}
       />
     );
   }
+  // A skill of the project's own folders can be written here.
+  const editable = (s: InstalledSkill) => {
+    const own = setupSkillOf(s, props.projectId, skills);
+    if (!own) return undefined;
+    return () =>
+      setEditing({
+        skill: own,
+        draft: { name: own.name, description: own.description, text: own.body },
+      });
+  };
   return (
-    <div className="ins">
-      {skills.map((s) => (
-        <div key={s.path} className="it ro">
-          <button
-            className="mpick"
-            aria-label={`Modifier ${s.name}`}
-            onClick={() =>
-              setEditing({
-                skill: s,
-                draft: { name: s.name, description: s.description, text: s.body },
-              })
-            }
-          >
-            <span className="tx">
-              {s.name}
-              <small>{s.description}</small>
-            </span>
-          </button>
-          <button
-            className="mini"
-            aria-label={`Supprimer ${s.name}`}
-            onClick={() =>
-              props.onConfirm({
-                title: `Supprimer ${s.name} ?`,
-                text: "Son SKILL.md est retiré du projet. Les autres fichiers de son dossier restent.",
-                action: "Supprimer",
-                run: () =>
-                  props.change({
-                    type: "project.removeSkill",
-                    requestId: newId(),
-                    projectId: props.projectId,
-                    path: s.path,
-                  }),
-              })
-            }
-          >
-            Supprimer
-          </button>
-        </div>
-      ))}
-      <button
-        className="it acc"
-        onClick={() => setEditing({ draft: { name: "", description: "", text: "" } })}
-      >
-        <I n="plus" s={18} />
-        <span className="tx">Nouvelle skill</span>
-      </button>
-    </div>
+    <>
+      {error && <p className="snone">{error}</p>}
+      {installed && (
+        <SkillLists
+          skills={installed}
+          projects={projects}
+          projectId={props.projectId}
+          editable={editable}
+        />
+      )}
+      <div className="ins">
+        <InstallSkill projects={projects} installed={installed ?? []} projectId={props.projectId} />
+        <button
+          className="it acc"
+          onClick={() => setEditing({ draft: { name: "", description: "", text: "" } })}
+        >
+          <I n="edit" s={18} />
+          <span className="tx">Nouvelle skill</span>
+        </button>
+      </div>
+    </>
   );
 }

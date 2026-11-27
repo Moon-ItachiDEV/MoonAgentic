@@ -169,7 +169,9 @@ describe("la place de ce qui est retiré", () => {
     await store.backup(copy);
     expect(statSync(copy).size).toBeLessThan(before / 3);
     expect(store.listThreads().map((t) => t.id)).toHaveLength(5);
-  });
+    // Tens of megabytes written, deleted and copied: a Windows runner busy with the other test
+    // files once took more than 15 s for it.
+  }, 60_000);
 
   it("supprimer un fil rend sa place aussi", () => {
     const dir = tempDir();

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { MAX_SETUP_FILE, type ProjectSkill } from "@moonagentic/protocol";
-import { claudeAction, commandProblem, fits, oneLine, skillProblem } from "./project-setup.ts";
+import {
+  claudeAction,
+  commandProblem,
+  fits,
+  oneLine,
+  setupSkillOf,
+  skillProblem,
+} from "./project-setup.ts";
 
 describe("project settings checks", () => {
   it("names a command as a file, once", () => {
@@ -37,5 +44,27 @@ describe("project settings checks", () => {
     expect(claudeAction("missing")).toMatch(/Crée CLAUDE.md/);
     expect(claudeAction("separate")).toMatch(/en tête/);
     expect(claudeAction("imports")).toBeUndefined();
+  });
+
+  it("finds the project's skill a listed one is by its folder, renamed or not", () => {
+    const listed = {
+      name: "pdf",
+      description: "",
+      projectId: "p",
+      agents: ["claude" as const, "codex" as const],
+      paths: [".claude/skills/pdf", ".agents/skills/pdf"],
+      files: 1,
+    };
+    // Its SKILL.md now calls it pdf-tools: still the same skill.
+    const own: ProjectSkill = {
+      name: "pdf-tools",
+      description: "",
+      path: ".claude/skills/pdf/SKILL.md",
+      body: "",
+    };
+    expect(setupSkillOf(listed, "p", [own])).toBe(own);
+    // Every project's skills are not written from a project's settings.
+    expect(setupSkillOf({ ...listed, projectId: undefined }, "p", [own])).toBeUndefined();
+    expect(setupSkillOf(listed, "p", [])).toBeUndefined();
   });
 });

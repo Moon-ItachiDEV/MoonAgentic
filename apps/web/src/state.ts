@@ -18,6 +18,7 @@ import type {
   ReviewFile,
   Schedule,
   ServerMessage,
+  SkillRunEnd,
   Thread,
   TimelineMark,
 } from "@moonagentic/protocol";
@@ -92,7 +93,16 @@ export interface State {
     login?: string;
     error?: string;
   } | null;
+  /** Each command that installs skills started here: what it wrote, and how it ended. */
+  skillRuns: Record<string, SkillRunState>;
 }
+
+/** What a command that installs skills wrote, the last {@link SKILL_LOG_MAX} characters. */
+export interface SkillRunState {
+  output: string;
+  ended?: SkillRunEnd;
+}
+export const SKILL_LOG_MAX = 64_000;
 
 /** Applies one server message to the state; pure, so it is easy to test. */
 export function reduce(state: State, message: ServerMessage): State {
@@ -124,6 +134,21 @@ export function reduce(state: State, message: ServerMessage): State {
     }
     case "agents":
       return { ...state, agents: message.agents };
+    case "skillRun": {
+      const run = state.skillRuns[message.runId] ?? { output: "" };
+      const output = (run.output + (message.output ?? "")).slice(-SKILL_LOG_MAX);
+      return {
+        ...state,
+        skillRuns: {
+          ...state.skillRuns,
+          [message.runId]: {
+            output,
+            ...(run.ended ? { ended: run.ended } : {}),
+            ...(message.ended ? { ended: message.ended } : {}),
+          },
+        },
+      };
+    }
     case "favorites":
       return {
         ...state,
@@ -278,6 +303,9 @@ export function reduce(state: State, message: ServerMessage): State {
     case "pullRequest":
     case "prRemarks":
     case "mcpTools":
+    case "skills":
+    case "skillsFound":
+    case "skillCommand":
     case "forecast":
     case "worktreeFiles":
     case "worktreeFile":
@@ -357,4 +385,5 @@ export const initialState: State = {
   reviews: {},
   notice: null,
   githubLogin: null,
+  skillRuns: {},
 };
