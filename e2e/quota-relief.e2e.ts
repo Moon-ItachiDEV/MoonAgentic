@@ -129,7 +129,10 @@ describe("a quota that runs out", () => {
     // The reset is two hours away: « demain à 00:40 » when the test runs late in the evening.
     await bar.getByText(/Quota Démo précis fini · retour (demain )?à \d\d:\d\d/).waitFor();
     // The agent goes on where it stopped, on the fallback model.
-    await page.getByText("Tu as été interrompu : reprends là où tu t'es arrêté.").waitFor();
+    // The agent's answer quotes this sentence: only the message sent is looked for.
+    await page
+      .getByText("Tu as été interrompu : reprends là où tu t'es arrêté.", { exact: true })
+      .waitFor();
     await page.getByText("C'est fait, la réponse vaut 42.").waitFor({ timeout: 20_000 });
     if (shots) await page.screenshot({ path: path.join(shots, "secours-fil.png") });
 
