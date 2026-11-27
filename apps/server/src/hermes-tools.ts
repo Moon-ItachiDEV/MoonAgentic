@@ -68,6 +68,22 @@ export const HERMES_TOOLS: CoordinatorTool[] = [
     },
   },
   {
+    name: "read_planner",
+    description:
+      "Lit le Planner : les cartes d'un projet, ou de tous les projets sans « project », avec leur colonne, leurs dates et le fil qui y travaille. Lecture seule.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project: { ...project, description: `${project.description} Sans lui : tous les projets.` },
+        column: {
+          type: "string",
+          description: "Seulement cette colonne.",
+          enum: ["À faire", "En cours", "Reporté", "En test", "Livré"],
+        },
+      },
+    },
+  },
+  {
     name: "add_plan_card",
     description: "Ajoute une carte « À faire » au Planner d'un projet, avec ses dates si données.",
     inputSchema: {

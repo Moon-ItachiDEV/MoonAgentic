@@ -22,6 +22,7 @@ import {
   type Item,
   type PendingQuestion,
   type PendingRequest,
+  type PlanStatus,
   type PlanTask,
   type Project,
   prReady,
@@ -89,6 +90,8 @@ export interface HermesHost {
   whenIdle(threadId: string): Promise<void>;
   /** Sends a message as the user's, from Discord; queued when the agent is at work. */
   sendFromHermes(threadId: string, text: string): "sent" | "queued";
+  /** Every card of every Planner. */
+  planCards(): PlanTask[];
   addPlanCard(input: {
     projectId: string;
     title: string;
@@ -174,6 +177,21 @@ function sameDay(at: number, m: RegExpExecArray): boolean {
 }
 
 /** A day written AAAA-MM-JJ, at midnight on this computer. */
+/** The Planner's columns, as the app names them. */
+const COLUMNS: Record<PlanStatus, string> = {
+  todo: "À faire",
+  doing: "En cours",
+  report: "Reporté",
+  test: "En test",
+  live: "Livré",
+};
+
+/** A day as AAAA-MM-JJ, in this computer's time. */
+function dayText(at: number): string {
+  const d = new Date(at);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function dayOf(text: string, key: string): number {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text.trim());
   const at = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).getTime() : NaN;
@@ -756,6 +774,48 @@ export class Hermes {
         return how === "sent"
           ? { sent_to: thread.title }
           : { queued_for: thread.title, delivered: "à la fin du tour en cours" };
+      }
+      case "read_planner": {
+        const asked = str("project", 200);
+        const projects = asked ? [projectOf()] : open();
+        const column = str("column", 20);
+        const status = column
+          ? (Object.entries(COLUMNS).find(([, label]) => fold(label) === fold(column))?.[0] as
+              PlanStatus | undefined)
+          : undefined;
+        if (column && !status) {
+          throw new Error(`Colonne inconnue. Colonnes : ${Object.values(COLUMNS).join(", ")}.`);
+        }
+        const today = new Date().setHours(0, 0, 0, 0);
+        const names = new Map(projects.map((p) => [p.id, p.name]));
+        const cards = this.host
+          .planCards()
+          .filter((c) => names.has(c.projectId) && (!status || c.status === status))
+          // What is still to deliver first, the nearest due date first.
+          .sort(
+            (a, b) =>
+              Number(a.status === "live") - Number(b.status === "live") ||
+              (a.due ?? Infinity) - (b.due ?? Infinity) ||
+              b.updatedAt - a.updatedAt,
+          );
+        return {
+          total: cards.length,
+          cards: cards.slice(0, 100).map((c) => {
+            const thread = c.threadId ? this.host.thread(c.threadId) : undefined;
+            return {
+              project: names.get(c.projectId),
+              card: `#${c.number}`,
+              title: c.title,
+              column: COLUMNS[c.status],
+              ...(c.description ? { description: c.description.slice(0, 500) } : {}),
+              ...(c.start ? { start: dayText(c.start) } : {}),
+              ...(c.due ? { due: dayText(c.due) } : {}),
+              ...(c.due && c.due < today && c.status !== "live" ? { late: true } : {}),
+              ...(c.doneAt ? { delivered: dayText(c.doneAt) } : {}),
+              ...(thread ? { thread: thread.title, thread_state: stateOf(thread) } : {}),
+            };
+          }),
+        };
       }
       case "add_plan_card": {
         may("plan", "planifier");
