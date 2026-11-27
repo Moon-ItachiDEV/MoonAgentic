@@ -796,6 +796,14 @@ export class DiagnosticsMonitor {
     }
 
     lines.push("");
+    lines.push("--- Boîte noire de l'ordinateur (app de bureau) ---");
+    // Measures of the computer and how MoonAgentic last stopped: nothing of a project, so shown
+    // even while one is locked.
+    const box = readLogTail(path.join(this.options.logDir, "boite-noire.log"), 80);
+    if (box.length > 0) lines.push(...box);
+    else lines.push("Aucune boîte noire : elle n'est tenue que par l'app de bureau.");
+
+    lines.push("");
     lines.push("--- Extraits des journaux du jour ---");
     if (locked) {
       lines.push(
