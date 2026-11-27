@@ -580,6 +580,22 @@ export class Connection {
 
   getState = () => this.state;
 
+  /**
+   * Resolves once the app is connected to the server, at once when it is. For what a part of
+   * the page reads as it shows, which may show while the app still connects: asked then, it
+   * would be refused as an action that did not leave, and never asked again.
+   */
+  whenOpen(): Promise<void> {
+    if (this.state.status === "open") return Promise.resolve();
+    return new Promise((resolve) => {
+      const stop = this.subscribe(() => {
+        if (this.state.status !== "open") return;
+        stop();
+        resolve();
+      });
+    });
+  }
+
   /** Shows a message to the user, for a failure no part of the page has room to show. */
   notify(message: string): void {
     this.set({ ...this.state, notice: message });

@@ -184,9 +184,9 @@ export function fileLink(threadId: string, ref: string, now = Date.now()): Promi
   if (entry && fresh(entry, now)) return entry.read;
   const next: Kept = {
     // Asked once the app is connected: a thread shown while it connects again waits for it.
-    read: whenOpen().then(() =>
-      connection.ask({ type: "file.open", requestId: newId(), threadId, ref }),
-    ),
+    read: connection
+      .whenOpen()
+      .then(() => connection.ask({ type: "file.open", requestId: newId(), threadId, ref })),
   };
   next.read.then(
     (link) => void (next.link = link),
@@ -209,18 +209,6 @@ export function forgetFileLink(threadId: string, ref: string): void {
  */
 export function forgetFileLinks(): void {
   kept.clear();
-}
-
-/** Resolves once the app is connected to the server. */
-function whenOpen(): Promise<void> {
-  if (connection.getState().status === "open") return Promise.resolve();
-  return new Promise((resolve) => {
-    const stop = connection.subscribe(() => {
-      if (connection.getState().status !== "open") return;
-      stop();
-      resolve();
-    });
-  });
 }
 
 let wasOpen = false;

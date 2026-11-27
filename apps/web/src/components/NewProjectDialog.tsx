@@ -43,9 +43,12 @@ function useGithub() {
     // The status and the list arrive in the same run, so nothing this run sets may be one of its
     // dependencies: a change would cancel the run before the list is in, leaving it loading.
     let live = true;
+    // The window may open while the app still connects: the account is asked for once it has.
     connection
-      .ask({ type: "github.status", requestId: newId() })
-      .then(async (reply) => {
+      .whenOpen()
+      .then(async () => {
+        if (!live) return;
+        const reply = await connection.ask({ type: "github.status", requestId: newId() });
         if (!live) return;
         setStatus(reply.status);
         if (!reply.status.login) return;
@@ -72,8 +75,12 @@ function useLocalClones() {
   useEffect(() => {
     let live = true;
     connection
-      .ask({ type: "local.clones", requestId: newId() }, 60_000)
-      .then((reply) => live && setFound({ parent: reply.parent, clones: reply.clones }))
+      .whenOpen()
+      .then(() => {
+        if (!live) return undefined;
+        return connection.ask({ type: "local.clones", requestId: newId() }, 60_000);
+      })
+      .then((reply) => live && reply && setFound({ parent: reply.parent, clones: reply.clones }))
       .catch(() => live && setFound({ parent: "~/Projets", clones: [] }));
     return () => {
       live = false;
