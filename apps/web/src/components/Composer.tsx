@@ -62,6 +62,8 @@ import { Picker } from "./Picker.tsx";
 import { type Suggestion, Suggestions } from "./Suggestions.tsx";
 import { I } from "../v2/I.tsx";
 import { useScrFlag } from "../v2/scr.ts";
+import { useScreen } from "../v2/use-screen.ts";
+import { touchScreen } from "../touch.ts";
 
 const NARROW = "(max-width: 860px)";
 const narrowQuery = typeof matchMedia === "function" ? matchMedia(NARROW) : undefined;
@@ -74,6 +76,14 @@ export function useNarrow(): boolean {
     },
     () => narrowQuery?.matches ?? false,
   );
+}
+
+/**
+ * Whether Enter sends. On a touch screen it goes to a new line, since the keyboard there has
+ * no other way to make one, and the send button sends (audit N32).
+ */
+export function enterSends(): boolean {
+  return !touchScreen();
 }
 
 /** How long to wait after a key before asking the server for files. */
@@ -134,6 +144,7 @@ export function Composer(props: {
   /** Opens the planning of a task for later, with what was typed so far. */
   onSchedule: (task: string) => void;
 }) {
+  const { roomy } = useScreen();
   const { agents, thread, project } = props;
   // What was typed in this thread and not sent comes back with it, PR chips included.
   const [initialDraft] = useState(() =>
@@ -936,6 +947,7 @@ export function Composer(props: {
           level: warning.level,
           usedPercent: worst.usedPercent,
           text: warning.text,
+          brief: warning.brief,
           ...(warning.when ? { when: warning.when } : {}),
           ...(roomier && !running
             ? {
@@ -1118,8 +1130,8 @@ export function Composer(props: {
           {thread?.quota && <QuotaBar thread={thread} quota={thread.quota} />}
           {trayQuota && !voice && !thread?.quota && (
             <div className={`updb glass qw ${trayQuota.level}`} role="status">
-              <span className="tx">
-                {trayQuota.text}
+              <span className="tx" title={roomy ? undefined : trayQuota.text}>
+                {roomy ? trayQuota.text : trayQuota.brief}
                 {trayQuota.when && <small>{trayQuota.when}</small>}
               </span>
               {trayQuota.roomier && trayQuota.onSwitch ? (
@@ -1292,7 +1304,7 @@ export function Composer(props: {
                 setMode(full ? "supervised" : "full");
                 return;
               }
-              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+              if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && enterSends()) {
                 e.preventDefault();
                 void submit();
               }

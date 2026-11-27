@@ -42,7 +42,7 @@
   max-width: min(420px, 52vw);
   padding: 0 6px 0 8px;
   border-radius: 10px;
-  font: 500 14.5px var(--sans);
+  font: 500 15px var(--sans);
   color: var(--fg);
   transition:
     background-color 150ms var(--out),
@@ -74,7 +74,7 @@
 }
 .phb .phs {
   flex: none;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 400;
   color: var(--muted);
 }
@@ -206,7 +206,7 @@ html:not([data-dev="desk"]) .scr.roomy .phb {
 }
 .ddm .pjv {
   margin-left: auto;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -270,7 +270,7 @@ html[data-dev="touch"] .ddm.big button {
   gap: 14px;
   padding: 0 14px;
   border-radius: 14px;
-  font-size: 16.5px;
+  font-size: 17px;
 }
 .ddm.big button:has(.ddt small) {
   height: 58px;
@@ -278,7 +278,7 @@ html[data-dev="touch"] .ddm.big button {
 .ddm.big .ddt small {
   display: block;
   margin: 1px 0 0;
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -293,7 +293,7 @@ html[data-dev="touch"] .ddm.big button {
   height: 44px;
   gap: 14px;
   padding: 0 14px;
-  font-size: 16.5px;
+  font-size: 17px;
 }
 .ddm.big hr {
   margin: 6px 14px;
@@ -304,7 +304,7 @@ html[data-dev="touch"] .ddm.big button {
 }
 .ddm.big .ddmore {
   height: 30px;
-  font-size: 13.5px;
+  font-size: 14px;
 }
 .ddm .pjhd {
   display: flex;
@@ -324,7 +324,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   margin: 0 6px 0 0;
   padding: 0 12px;
   border-radius: 15px;
-  font-size: 13.5px;
+  font-size: 14px;
 }
 
 /* Le menu d'un fil, sur iPad et bureau : il tombe de son titre, à gauche */
@@ -429,7 +429,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   box-shadow: 0 0.5px 0 var(--pw-line);
 }
 .pph h3 {
-  font-size: 15.5px;
+  font-size: 16px;
   font-weight: 500;
   letter-spacing: -0.01em;
 }
@@ -553,7 +553,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
 }
 .ppc h4,
 .ppm h4 {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 600;
   margin: 22px 0 4px;
   display: flex;
@@ -564,7 +564,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
 .ppc h4 .pps,
 .ppm h4 .pps {
   font-weight: 400;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 .ppr {
@@ -581,7 +581,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
 }
 .ppr > .ppl small {
   display: block;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   margin-top: 1px;
 }
@@ -602,7 +602,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   color: var(--fg);
 }
 .ppmu {
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--muted);
 }
 .pphr {
@@ -676,7 +676,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   padding: 0 10px 0 12px;
   border-radius: 10px;
   background: var(--pw-fill);
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--fg);
   white-space: nowrap;
   transition:
@@ -731,7 +731,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
 .ppbt.sm {
   height: 26px;
   padding: 0 10px;
-  font-size: 12.5px;
+  font-size: 13px;
   border-radius: 8px;
 }
 .ppbt.act {
@@ -780,7 +780,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: 400 12.5px var(--mono);
+  font: 400 13px var(--mono);
   color: var(--muted);
 }
 .ppbox,
@@ -840,7 +840,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
 }
 .ppbox .ppit small {
   display: block;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   margin-top: 1px;
 }
@@ -851,7 +851,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   white-space: nowrap;
 }
 .ppbox .ppir {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   display: flex;
   align-items: center;
@@ -878,7 +878,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
 }
 /* Ce qui vient des feuilles du téléphone (skills, commandes, secours), dans la fenêtre */
 .ppw .gl2 {
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   color: var(--muted);
   margin: 16px 0 6px;
@@ -890,7 +890,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
 }
 .ppw .ins .it .tx small {
   display: block;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 .ppw .ins .it.acc {
@@ -907,7 +907,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   height: 26px;
   padding: 0 10px;
   border-radius: 8px;
-  font-size: 12.5px;
+  font-size: 13px;
   background: var(--pw-fill);
 }
 .ppw .pse .fld {
@@ -938,7 +938,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   line-height: 1.1;
 }
 .ppstats > div > span {
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
 }
 .ppstats b span {
@@ -956,12 +956,12 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
 .pptb {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13.5px;
+  font-size: 14px;
   margin-top: 6px;
 }
 .pptb th {
   font-weight: 500;
-  font-size: 12.5px;
+  font-size: 13px;
   color: var(--muted);
   text-align: left;
   padding: 8px 8px 8px 0;
@@ -1011,7 +1011,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
 }
 .ppmore {
   margin-top: 10px;
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--muted);
   padding: 6px 0;
 }
@@ -1036,7 +1036,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   height: 34px;
   padding: 0 14px;
   border-radius: 17px;
-  font-size: 14.5px;
+  font-size: 15px;
   font-weight: 500;
   color: var(--muted);
   background: var(--group);
@@ -1079,12 +1079,12 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   border-radius: 16px;
   padding: 6px 12px;
   margin-bottom: 10px;
-  font-size: 15.5px;
+  font-size: 16px;
 }
 .ppm .ppta {
   background: var(--group);
   border-radius: 16px;
-  font-size: 15.5px;
+  font-size: 16px;
   min-height: 140px;
 }
 .ppm .ppbox {
@@ -1094,7 +1094,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
 }
 .ppm .ppbox .ppi {
   min-height: 50px;
-  font-size: 15.5px;
+  font-size: 16px;
 }
 .ppm .ppstats {
   grid-template-columns: 1fr 1fr;
@@ -1104,7 +1104,7 @@ html[data-dev="touch"] .ddm.big .pjhd button.ddmore {
   border-radius: 18px;
 }
 .ppm .ppstats b {
-  font-size: 26px;
+  font-size: 24px;
 }
 .ppm .ppthr .tx small {
   display: block;

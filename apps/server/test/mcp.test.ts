@@ -67,6 +67,26 @@ describe("decode", () => {
     expect(decode("{")).toEqual({ error: { type: "error", message: "Message illisible." } });
   });
 
+  it("names the limit of a message too long, instead of calling it invalid (audit N31)", () => {
+    const long = "a".repeat(200_001);
+    for (const message of [
+      { type: "thread.send", requestId: "r2", threadId: "t1", text: long },
+      { type: "thread.create", requestId: "r2", projectId: "p", agentId: "demo", text: long },
+    ]) {
+      expect(decode(JSON.stringify(message))).toEqual({
+        error: {
+          type: "error",
+          requestId: "r2",
+          message: "Message trop long : 200 000 caractères au plus.",
+        },
+      });
+    }
+    expect(
+      "message" in
+        decode(JSON.stringify({ type: "thread.send", threadId: "t1", text: "a".repeat(200_000) })),
+    ).toBe(true);
+  });
+
   it("rejects MCP secrets with names an agent could not use", () => {
     const add = (transport: unknown) =>
       decode(JSON.stringify({ type: "mcp.add", requestId: "r", server: { name: "x", transport } }));

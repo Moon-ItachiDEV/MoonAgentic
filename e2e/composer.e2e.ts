@@ -509,6 +509,9 @@ describe("composer", () => {
     await page.keyboard.press("Escape");
     await expect.poll(() => threadMenu.count()).toBe(0);
     await page.setViewportSize({ width: 1280, height: 820 });
+    // The page takes its computer layout on the next resize event: a click before it lands on
+    // the phone's button, whose menu leaves with it.
+    await page.locator(".scr.xl").waitFor();
 
     await actions.click();
     await threadMenu.getByRole("menuitem", { name: "Marquer résolu" }).click();
