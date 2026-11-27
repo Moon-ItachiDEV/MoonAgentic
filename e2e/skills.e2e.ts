@@ -117,6 +117,28 @@ async function openSkills(page: Page) {
   return region;
 }
 
+/**
+ * Holds what the page sends of this kind a while before the server gets it: a slow server,
+ * as on Windows, where its answer comes well after the click.
+ */
+async function slowToServer(page: Page, type: string, ms: number) {
+  const held = new Set<ReturnType<typeof setTimeout>>();
+  // A test that stops early sends nothing more on a closed page.
+  page.once("close", () => held.forEach(clearTimeout));
+  await page.routeWebSocket(/\/ws/, (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((message) => {
+      if (typeof message === "string" && message.includes(`"type":"${type}"`)) {
+        const timer = setTimeout(() => {
+          held.delete(timer);
+          server.send(message);
+        }, ms);
+        held.add(timer);
+      } else server.send(message);
+    });
+  });
+}
+
 const SIZES = {
   desk: { width: 1280, height: 820 },
   ipad: { width: 1024, height: 768 },
@@ -126,6 +148,7 @@ const SIZES = {
 describe("skills", () => {
   it("lists the skills of every project and of a project, and gives one to another agent", async () => {
     const page = await browser.newPage({ viewport: SIZES.desk });
+    await slowToServer(page, "skills.setAgents", 300);
     const region = await openSkills(page);
     const pdf = region.getByRole("button", { name: /^pdf/ });
     await pdf.waitFor();
@@ -148,10 +171,16 @@ describe("skills", () => {
     await expect
       .poll(() => pdf.locator("small").textContent())
       .toBe("Trouvée sur le PC · Claude Code, Codex");
-    // The last agent cannot be taken off.
+    // Taken off Claude Code. Every switch waits while the server works: only the line it
+    // sends back says the folder is gone.
     await pop.getByRole("switch", { name: "Claude Code" }).click();
-    await expect.poll(() => pop.getByRole("switch", { name: "Codex" }).isDisabled()).toBe(true);
+    await expect.poll(() => pdf.locator("small").textContent()).toBe("Trouvée sur le PC · Codex");
     expect(existsSync(path.join(home, ".claude/skills/pdf"))).toBe(false);
+    // The last agent cannot be taken off.
+    await expect
+      .poll(() => pop.getByRole("switch", { name: "Claude Code" }).isDisabled())
+      .toBe(false);
+    expect(await pop.getByRole("switch", { name: "Codex" }).isDisabled()).toBe(true);
 
     // Moved to the project, then removed.
     await pop.getByRole("button", { name: /^Projets/ }).click();
