@@ -190,10 +190,24 @@ describe("client state", () => {
       seq: 2,
       rev: 1,
     });
+    const beforeAppend = state.items.t!;
     state = reduce(state, { type: "append", threadId: "t", itemId: "a1", text: "jour", rev: 2 });
     expect(state.items.t?.map((i) => ("text" in i ? i.text : ""))).toEqual(["Un", "Bonjour"]);
+    // Untouched items keep their exact reference so memoized rows stay still during streaming.
+    expect(state.items.t?.[0]).toBe(beforeAppend[0]);
     // The mark to come back with follows what was taken in.
     expect(state.held.t).toEqual({ first: 1, earlier: 0, epoch: "e1", rev: 2 });
+    // An append targeting an unknown item still updates rev without cloning the timeline.
+    const itemsBeforeMissing = state.items.t;
+    const afterMissing = reduce(state, {
+      type: "append",
+      threadId: "t",
+      itemId: "unknown",
+      text: "x",
+      rev: 3,
+    });
+    expect(afterMissing.items.t).toBe(itemsBeforeMissing);
+    expect(afterMissing.held.t?.rev).toBe(3);
     // A thread not open here is not tracked item by item.
     expect(
       reduce(state, { type: "item", threadId: "x", item: user("u", "x"), seq: 1, rev: 1 }),

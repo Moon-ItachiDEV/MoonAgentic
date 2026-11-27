@@ -75,7 +75,28 @@ export function Sheet(props: {
 
   // Pulled down by its header, it follows the finger, then closes or springs back.
   const drag = useRef<{ y: number; t: number; id: number } | null>(null);
+  const handle = useRef<HTMLDivElement>(null);
   const [pull, setPull] = useState(0);
+  const handleKind = props.title !== undefined ? "shd" : props.grab ? "sgrab" : null;
+  useEffect(() => {
+    if (!open) {
+      drag.current = null;
+      setPull(0);
+    }
+  }, [open]);
+  useEffect(() => {
+    const el = handle.current;
+    if (!mounted || !el) return;
+    // Pointer events alone do not mark touchmove as consumed: on a brisk pull-down, Chromium's
+    // gesture detector otherwise starts a momentum fling that swallows the next tap (immediate
+    // with reduced motion, when the sheet leaves without sliding). Kept on the handle so `.sbody`
+    // keeps scrolling off the main thread.
+    const hold = (event: TouchEvent) => {
+      if (drag.current && event.cancelable) event.preventDefault();
+    };
+    el.addEventListener("touchmove", hold, { passive: false });
+    return () => el.removeEventListener("touchmove", hold);
+  }, [mounted, handleKind]);
   const down = (event: React.PointerEvent) => {
     if (event.pointerType === "mouse" || (event.target as Element).closest("button, input")) return;
     drag.current = { y: event.clientY, t: event.timeStamp, id: event.pointerId };
@@ -115,6 +136,7 @@ export function Sheet(props: {
       >
         {props.title !== undefined && (
           <div
+            ref={handle}
             className="shd"
             onPointerDown={down}
             onPointerMove={move}
@@ -149,6 +171,7 @@ export function Sheet(props: {
         )}
         {props.title === undefined && props.grab && (
           <div
+            ref={handle}
             className="sgrab"
             onPointerDown={down}
             onPointerMove={move}

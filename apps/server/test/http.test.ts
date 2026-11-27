@@ -1,9 +1,10 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { request } from "node:http";
-import type { AddressInfo } from "node:net";
+import { type AddressInfo, connect, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { brotliDecompressSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { RemoteAccess } from "@moonagentic/protocol";
@@ -17,6 +18,7 @@ import {
   createHttpServer,
   decode,
   DEVICE_REVOKED,
+  pickEncoding,
   rateKey,
   type RateLimitOptions,
   TOKEN_RENEWED,
@@ -40,6 +42,7 @@ async function serve(
     rateLimit?: RateLimitOptions;
     devices?: Devices;
     handle?: Hub["handle"];
+    connect?: Hub["connect"];
   } = {},
 ) {
   const webDir = mkdtempSync(path.join(os.tmpdir(), "moonagentic-web-"));
@@ -55,9 +58,9 @@ async function serve(
     artifactLinks: links,
     push,
     lockedThread: (threadId: string) => threadId === "verrouille",
-    connect: () => {
+    connect: (client: Parameters<Hub["connect"]>[0]) => {
       connected += 1;
-      return () => undefined;
+      return options.connect?.(client) ?? (() => undefined);
     },
     handle: options.handle ?? (async () => undefined),
     coordinatorExchange: () => {
@@ -80,6 +83,8 @@ async function serve(
       return { port, exposed: false, tailscale: "absent", addresses: [] };
     },
   });
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket) => sockets.add(socket));
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   cleanups.push(async () => {
     server.closeAllConnections();
@@ -99,6 +104,8 @@ async function serve(
   return {
     origin,
     webDir,
+    /** As a server stopped on the spot: what it had not written yet is never read. */
+    cut: () => sockets.forEach((socket) => socket.destroy()),
     connections: () => connected,
     renewed,
     asked,
@@ -1048,5 +1055,255 @@ describe("a database that refuses a write behind a route", () => {
     db.release();
 
     expect(ticket.status).toBe(200);
+  });
+});
+
+describe("compression HTTP et WebSocket", () => {
+  it("picks the right content-encoding from Accept-Encoding quality weights", () => {
+    expect(pickEncoding(undefined)).toBeUndefined();
+    expect(pickEncoding("identity")).toBeUndefined();
+    expect(pickEncoding("gzip, deflate, br")).toBe("br");
+    expect(pickEncoding("gzip, deflate")).toBe("gzip");
+    expect(pickEncoding("br;q=0, gzip")).toBe("gzip");
+    expect(pickEncoding("br;q=0.4, gzip;q=0.9")).toBe("gzip");
+    expect(pickEncoding("br;q=0, *;q=1")).toBe("gzip");
+    expect(pickEncoding("*;q=0")).toBeUndefined();
+    expect(pickEncoding("br;q=0, gzip;q=0")).toBeUndefined();
+    expect(pickEncoding("br;q=2, gzip;q=0.5")).toBe("gzip");
+  });
+
+  const rawGet = (
+    origin: string,
+    pathname: string,
+    headers: Record<string, string> = {},
+    method: "GET" | "HEAD" = "GET",
+  ) =>
+    new Promise<{
+      status: number;
+      headers: Record<string, string | string[] | undefined>;
+      body: Buffer;
+    }>((resolve, reject) => {
+      const req = request(`http://${origin}${pathname}`, { method, headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks),
+          }),
+        );
+      });
+      req.on("error", reject);
+      req.end();
+    });
+
+  it("compresses text assets with br/gzip, caches immutable hits, respects HEAD, and skips fonts", async () => {
+    const { origin, webDir } = await serve();
+    mkdirSync(path.join(webDir, "assets"), { recursive: true });
+    const jsBody = `export const payload = ${JSON.stringify("MoonAgentic ".repeat(400))};\n`;
+    const jsPath = path.join(webDir, "assets", "app-abc123.js");
+    const fontBody = Buffer.from([0x77, 0x4f, 0x46, 0x32, 0x00, 0x01, 0x02, 0x03]);
+    writeFileSync(jsPath, jsBody);
+    writeFileSync(path.join(webDir, "assets", "font-xyz.woff2"), fontBody);
+
+    // First Brotli request streams & populates immutable cache
+    const br1 = await rawGet(origin, "/assets/app-abc123.js", { "accept-encoding": "gzip, br" });
+    expect(br1.status).toBe(200);
+    expect(br1.headers["content-encoding"]).toBe("br");
+    expect(br1.headers["vary"]).toBe("Accept-Encoding");
+    expect(br1.body.byteLength).toBeLessThan(jsBody.length / 4);
+    expect(brotliDecompressSync(br1.body).toString("utf8")).toBe(jsBody);
+
+    // Second Brotli request hits memory cache and includes exact compressed content-length
+    const br2 = await rawGet(origin, "/assets/app-abc123.js", { "accept-encoding": "br" });
+    expect(br2.status).toBe(200);
+    expect(br2.headers["content-encoding"]).toBe("br");
+    expect(Number(br2.headers["content-length"])).toBe(br2.body.byteLength);
+    expect(brotliDecompressSync(br2.body).toString("utf8")).toBe(jsBody);
+
+    // Gzip fallback
+    const gz = await rawGet(origin, "/assets/app-abc123.js", { "accept-encoding": "gzip" });
+    expect(gz.status).toBe(200);
+    expect(gz.headers["content-encoding"]).toBe("gzip");
+    expect(gunzipSync(gz.body).toString("utf8")).toBe(jsBody);
+
+    // Explicit refusal keeps Vary header and sends raw bytes
+    const raw = await rawGet(origin, "/assets/app-abc123.js", {
+      "accept-encoding": "br;q=0, gzip;q=0",
+    });
+    expect(raw.status).toBe(200);
+    expect(raw.headers["content-encoding"]).toBeUndefined();
+    expect(raw.headers["vary"]).toBe("Accept-Encoding");
+    expect(raw.body.toString("utf8")).toBe(jsBody);
+
+    // HEAD returns headers with empty body
+    const head = await rawGet(origin, "/assets/app-abc123.js", { "accept-encoding": "br" }, "HEAD");
+    expect(head.status).toBe(200);
+    expect(head.headers["content-encoding"]).toBe("br");
+    expect(head.body.byteLength).toBe(0);
+
+    // Already-compressed binary font is served untouched
+    const font = await rawGet(origin, "/assets/font-xyz.woff2", { "accept-encoding": "br, gzip" });
+    expect(font.status).toBe(200);
+    expect(font.headers["content-encoding"]).toBeUndefined();
+    expect(font.body.equals(fontBody)).toBe(true);
+
+    // Updating the asset invalidates the mtime:size cache key
+    const updatedJs = `export const payload = "updated";\n`;
+    writeFileSync(jsPath, updatedJs);
+    const future = new Date(Date.now() + 5_000);
+    utimesSync(jsPath, future, future);
+    const br3 = await rawGet(origin, "/assets/app-abc123.js", { "accept-encoding": "br" });
+    expect(brotliDecompressSync(br3.body).toString("utf8")).toBe(updatedJs);
+  });
+
+  it("negotiates WebSocket perMessageDeflate while still enforcing maxPayload on inflated frames", async () => {
+    const { origin } = await serve();
+    const wsUrl = `ws://${origin}/ws`;
+
+    // Negotiates permessage-deflate when offered by the client
+    const negotiated = await new Promise<string>((resolve, reject) => {
+      const ws = new WebSocket(wsUrl, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+        perMessageDeflate: true,
+      });
+      ws.on("upgrade", (res) => resolve(String(res.headers["sec-websocket-extensions"] ?? "")));
+      ws.on("open", () => ws.close());
+      ws.on("error", reject);
+    });
+    expect(negotiated).toContain("permessage-deflate");
+
+    // A highly compressible >1 MB frame is still rejected with 1009 (Message Too Big)
+    const closeCode = await new Promise<number>((resolve, reject) => {
+      const ws = new WebSocket(wsUrl, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+        perMessageDeflate: true,
+      });
+      ws.on("open", () => {
+        ws.send(JSON.stringify({ type: "ping", pad: "a".repeat(1_200_000) }));
+      });
+      ws.on("close", (code) => resolve(code));
+      ws.on("error", reject);
+    });
+    expect(closeCode).toBe(1009);
+  });
+
+  it("compresses a WebSocket message only from 1024 characters, and never the reconnect ticket", async () => {
+    const big = { type: "error", message: "MoonAgentic ".repeat(400) } as const;
+    const { origin } = await serve({
+      connect: (client) => {
+        client.send({ type: "pong" });
+        client.send(big);
+        client.send({ type: "pong" });
+        return () => undefined;
+      },
+    });
+    // What a browser reads: every message whole, in order, compressed or not.
+    const read: { type: string }[] = [];
+    await new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(`ws://${origin}/ws`, {
+        headers: { authorization: `Bearer ${TOKEN}` },
+        perMessageDeflate: true,
+      });
+      ws.on("message", (data) => {
+        read.push(JSON.parse(String(data)) as { type: string });
+        if (read.length < 4) return;
+        ws.close();
+        resolve();
+      });
+      ws.on("error", reject);
+    });
+    // What the server puts on the wire for it, frame by frame, to Chrome's own offer.
+    const frames: { compressed: boolean; length: number }[] = [];
+    const extensions = await new Promise<string>((resolve, reject) => {
+      const socket = connect(Number(origin.split(":")[1]), "127.0.0.1");
+      let buf = Buffer.alloc(0);
+      let answered: string | undefined;
+      socket.on("connect", () =>
+        socket.write(
+          [
+            "GET /ws HTTP/1.1",
+            `Host: ${origin}`,
+            "Upgrade: websocket",
+            "Connection: Upgrade",
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+            "Sec-WebSocket-Version: 13",
+            "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits",
+            `Authorization: Bearer ${TOKEN}`,
+            "",
+            "",
+          ].join("\r\n"),
+        ),
+      );
+      socket.on("data", (chunk) => {
+        buf = Buffer.concat([buf, chunk]);
+        if (answered === undefined) {
+          const end = buf.indexOf("\r\n\r\n");
+          if (end < 0) return;
+          answered =
+            /sec-websocket-extensions: (.*)/i.exec(buf.subarray(0, end).toString())?.[1] ?? "";
+          buf = buf.subarray(end + 4);
+        }
+        while (buf.length >= 2) {
+          let length = buf[1]! & 0x7f;
+          let at = 2;
+          if (length === 126) {
+            if (buf.length < 4) return;
+            length = buf.readUInt16BE(2);
+            at = 4;
+          }
+          if (buf.length < at + length) return;
+          if ((buf[0]! & 0x0f) === 1) frames.push({ compressed: (buf[0]! & 0x40) !== 0, length });
+          buf = buf.subarray(at + length);
+          if (frames.length < 4) continue;
+          socket.destroy();
+          resolve(answered);
+          return;
+        }
+      });
+      socket.on("error", reject);
+    });
+    // The compression context is kept between messages, as Chrome asks.
+    expect(extensions).toContain("permessage-deflate");
+    expect(extensions).not.toContain("server_no_context_takeover");
+
+    expect(read.map((m) => m.type)).toEqual(["pong", "error", "pong", "ws.ticket"]);
+    expect(read[1]).toEqual(big);
+    const size = JSON.stringify(big).length;
+    expect(frames.map((f) => f.compressed)).toEqual([false, true, false, false]);
+    // The small ones travel as written, the large one far smaller than written.
+    expect(frames[0]!.length).toBe(JSON.stringify({ type: "pong" }).length);
+    expect(frames[1]!.length).toBeLessThan(size / 10);
+    // The ticket, a secret, is on the wire as written too: it never entered the compressor.
+    expect(frames[3]!.length).toBe(JSON.stringify(read[3]).length);
+    expect(frames[3]!.length).toBeLessThan(1024);
+  });
+
+  it("says when its last words have left: a server stopped right after still delivered them", async () => {
+    const big = { type: "error", message: "MoonAgentic ".repeat(400) } as const;
+    const stopAfter = async (wait: boolean) => {
+      const served = await serve({
+        connect: (client) => {
+          client.send(big);
+          void (wait ? client.flushed!() : Promise.resolve()).then(() => served.cut());
+          return () => undefined;
+        },
+      });
+      const read: unknown[] = [];
+      await new Promise<void>((resolve) => {
+        const ws = new WebSocket(`ws://${served.origin}/ws`, {
+          headers: { authorization: `Bearer ${TOKEN}` },
+          perMessageDeflate: true,
+        });
+        ws.on("message", (data) => read.push(JSON.parse(String(data))));
+        ws.on("close", () => resolve());
+        ws.on("error", () => resolve());
+      });
+      return read;
+    };
+    // Compressed off the thread, the message was not written yet when the server stopped.
+    expect(await stopAfter(false)).toEqual([]);
+    expect((await stopAfter(true))[0]).toEqual(big);
   });
 });

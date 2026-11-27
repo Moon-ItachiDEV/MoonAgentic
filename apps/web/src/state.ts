@@ -257,14 +257,22 @@ export function reduce(state: State, message: ServerMessage): State {
       const items = state.items[message.threadId];
       const held = state.held[message.threadId];
       if (!items || !held) return state;
-      const next = items.map((item) =>
-        item.id === message.itemId && "text" in item
-          ? { ...item, text: item.text + message.text }
-          : item,
-      );
+      let index = -1;
+      for (let i = items.length - 1; i >= 0; i--) {
+        if (items[i]!.id === message.itemId) {
+          index = i;
+          break;
+        }
+      }
+      const target = index >= 0 ? items[index] : undefined;
+      let next = items;
+      if (target && "text" in target) {
+        next = items.slice();
+        next[index] = { ...target, text: target.text + message.text };
+      }
       return {
         ...state,
-        items: { ...state.items, [message.threadId]: next },
+        ...(next !== items ? { items: { ...state.items, [message.threadId]: next } } : {}),
         held: { ...state.held, [message.threadId]: { ...held, rev: message.rev } },
       };
     }

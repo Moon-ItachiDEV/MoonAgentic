@@ -136,13 +136,16 @@ function Conversation({
   const onOpenThread = useCallback((id: string) => opener.current(id), []);
   const agent = agents.find((a) => a.id === thread.agentId);
   // Who wrote each item: the thread's agent, or the one it was handed over from.
-  const authors: string[] = [];
-  let author = thread.agentId;
-  for (let i = (items?.length ?? 0) - 1; i >= 0; i--) {
-    const item = items?.[i];
-    if (item?.kind === "handoff") author = item.from;
-    authors[i] = author;
-  }
+  const authors = useMemo(() => {
+    const out: string[] = [];
+    let author = thread.agentId;
+    for (let i = (items?.length ?? 0) - 1; i >= 0; i--) {
+      const item = items?.[i];
+      if (item?.kind === "handoff") author = item.from;
+      out[i] = author;
+    }
+    return out;
+  }, [items, thread.agentId]);
 
   // Subscribes this client to the thread's timeline on the server.
   useEffect(() => {
@@ -165,7 +168,11 @@ function Conversation({
   const [paging, setPaging] = useState<{ threadId: string; state: "busy" | "failed" }>();
   const pagingState = paging?.threadId === thread.id ? paging.state : undefined;
   const team = isTeamThread(thread);
-  const blocks = items ? (team ? teamFeed(thread, items, earlier > 0) : activityFeed(items)) : [];
+  const hasEarlier = earlier > 0;
+  const blocks = useMemo(
+    () => (items ? (team ? teamFeed(thread, items, hasEarlier) : activityFeed(items)) : []),
+    [items, team, thread, hasEarlier],
+  );
   // While the thread is drawn from its end, the first block drawn: those before it are not
   // drawn yet. Named, not counted, so a page that comes above leaves what is drawn as it is.
   const blockKey = (block: (typeof blocks)[number] | undefined) =>
@@ -379,12 +386,17 @@ function Conversation({
     return () => clearTimeout(timer);
   }, [newAt]);
   const newLabel = newAt === undefined ? "Nouveau" : newMarkLabel(newAt);
-  const relayed = items ? relayedAnswers(items) : new Set<number>();
+  const relayed = useMemo(() => (items ? relayedAnswers(items) : new Set<number>()), [items]);
 
   // What the agent does now, from the last item shown (plan mode switches are not shown).
   const lastItem = items?.findLast((i) => !isPlanModeSwitch(i));
   const lastGlyph = activityGlyph(lastItem);
   const mascot = agent?.mascot;
+  const mascotBadge = useMemo(
+    () => (mascot && agent ? { mascot, name: agent.name } : undefined),
+    [mascot, agent],
+  );
+  const onFold = useCallback(() => setReveal(undefined), []);
 
   const renderItem = (i: number, clamp?: boolean, showBy?: boolean) => {
     const item = items![i]!;
@@ -406,13 +418,7 @@ function Conversation({
           showBy={thread.kind !== "coordinator" && (showBy ?? startsAgentBlock(items!, i))}
           openQuestion={openQuestion}
           live={working && i > lastUser}
-          ask={
-            item.kind === "plan"
-              ? items!
-                  .slice(0, i)
-                  .findLast((it): it is Extract<Item, { kind: "user" }> => it.kind === "user")?.text
-              : undefined
-          }
+          ask={item.kind === "plan" ? lastUserTextBefore(items!, i) : undefined}
           clamp={clamp}
           threads={threads}
           onOpenThread={onOpenThread}
@@ -506,10 +512,20 @@ function Conversation({
                   indices={block.indices}
                   live={live}
                   revealed={!!reveal && block.indices.some((i) => items![i]?.id === reveal)}
-                  onFold={() => setReveal(undefined)}
+                  onFold={onFold}
                   render={renderItem}
-                  mascot={mascot && agent ? { mascot, name: agent.name } : undefined}
+                  mascot={mascotBadge}
                   quiet={thread.kind === "coordinator"}
+                  thread={thread}
+                  agents={agents}
+                  threads={threads}
+                  openQuestion={openQuestion}
+                  working={working}
+                  lastUser={lastUser}
+                  authors={authors}
+                  relayed={relayed}
+                  firstNew={firstNew}
+                  newLabel={newLabel}
                 />
                 {drafting && <ImageDraft since={drafting.at} />}
                 {made.length > 0 && (
@@ -681,13 +697,23 @@ export function relayedAnswers(items: Item[]): Set<number> {
   return relayed;
 }
 
-const startsAgentBlock = (items: Item[], index: number) =>
-  items[index]?.kind === "agent" &&
-  !items
-    .slice(0, index)
-    .reverse()
-    .find((i) => i.kind === "agent" || i.kind === "user" || i.kind === "handoff")
-    ?.kind.startsWith("agent");
+const startsAgentBlock = (items: Item[], index: number) => {
+  if (items[index]?.kind !== "agent") return false;
+  for (let j = index - 1; j >= 0; j--) {
+    const kind = items[j]?.kind;
+    if (kind === "agent") return false;
+    if (kind === "user" || kind === "handoff") return true;
+  }
+  return true;
+};
+
+const lastUserTextBefore = (items: Item[], index: number): string | undefined => {
+  for (let j = index - 1; j >= 0; j--) {
+    const item = items[j];
+    if (item?.kind === "user") return item.text;
+  }
+  return undefined;
+};
 
 const FeedItem = memo(function FeedItem({
   item,
@@ -889,16 +915,7 @@ function Answer({ text, live, threadId }: { text: string; live: boolean; threadI
  * What an agent did on the way, folded into one line: while it works, the line says what
  * it does now. Opened, it is the thread as it ran, the engine's own messages included.
  */
-function ActivityDetail({
-  items,
-  indices,
-  live,
-  revealed,
-  onFold,
-  render,
-  mascot,
-  quiet,
-}: {
+interface ActivityDetailProps {
   items: Item[];
   indices: number[];
   live: boolean;
@@ -913,7 +930,63 @@ function ActivityDetail({
    * line while it works, gone once it answers.
    */
   quiet?: boolean;
-}) {
+  // Passed for memo invalidation when an opened fold renders FeedItem children.
+  thread: Thread;
+  agents: AgentInfo[];
+  threads: Thread[];
+  openQuestion: string | undefined;
+  working: boolean;
+  lastUser: number;
+  authors: string[];
+  relayed: Set<number>;
+  firstNew: number;
+  newLabel: string;
+}
+
+function sameActivityDetail(prev: ActivityDetailProps, next: ActivityDetailProps): boolean {
+  if (
+    prev.live !== next.live ||
+    prev.revealed !== next.revealed ||
+    prev.onFold !== next.onFold ||
+    prev.quiet !== next.quiet ||
+    prev.mascot !== next.mascot ||
+    prev.thread !== next.thread ||
+    prev.agents !== next.agents ||
+    prev.threads !== next.threads ||
+    prev.openQuestion !== next.openQuestion ||
+    prev.working !== next.working ||
+    prev.lastUser !== next.lastUser ||
+    prev.firstNew !== next.firstNew ||
+    prev.newLabel !== next.newLabel ||
+    prev.indices.length !== next.indices.length
+  ) {
+    return false;
+  }
+  for (let k = 0; k < prev.indices.length; k++) {
+    const pi = prev.indices[k]!;
+    const ni = next.indices[k]!;
+    if (
+      pi !== ni ||
+      prev.items[pi] !== next.items[ni] ||
+      prev.authors[pi] !== next.authors[ni] ||
+      prev.relayed.has(pi) !== next.relayed.has(ni)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const ActivityDetail = memo(function ActivityDetail({
+  items,
+  indices,
+  live,
+  revealed,
+  onFold,
+  render,
+  mascot,
+  quiet,
+}: ActivityDetailProps) {
   const [opened, setOpened] = useState(false);
   if (quiet)
     return live ? (
@@ -956,7 +1029,7 @@ function ActivityDetail({
       {open && <div className="detb">{indices.map((i) => render(i))}</div>}
     </div>
   );
-}
+}, sameActivityDetail);
 
 /** The user's message, with a way back to the files as they were just before it. */
 function UserMessage({ item, thread }: { item: Extract<Item, { kind: "user" }>; thread: Thread }) {

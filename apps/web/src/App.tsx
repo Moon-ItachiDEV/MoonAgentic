@@ -252,6 +252,14 @@ export function App() {
     () => ({ ...state, threads: listedThreadsNow }),
     [state, listedThreadsNow],
   );
+  // A locked project is never the one new conversations start in; an archived one is not offered
+  // for new work. Memoized so `steady(PlainComposer)` keeps the same `projects` reference while
+  // an agent streams.
+  const openProjects = useMemo(() => state.projects.filter((p) => !p.locked), [state.projects]);
+  const codeProjects = useMemo(
+    () => openProjects.filter((p) => !isDiscussionsProject(p) && !p.archived),
+    [openProjects],
+  );
   // The side bar shows no message: text being written does not change what it is given.
   const { items: _items, held: _held, reviews: _reviews, ...lists } = state;
   const sideState = useSame({ ...lists, threads: listedThreadsNow });
@@ -313,12 +321,8 @@ export function App() {
     split && pane.threadId
       ? state.threads.find((t) => t.id === pane.threadId && t.projectId === routeProject?.id)
       : undefined;
-  // A locked project is never the one new conversations start in.
-  const openProjects = state.projects.filter((p) => !p.locked);
   const looseHome = loose && route.name === "home";
   const discussions = openProjects.find(isDiscussionsProject);
-  // An archived project is not offered for new work.
-  const codeProjects = openProjects.filter((p) => !isDiscussionsProject(p) && !p.archived);
   // Outside a project, the conversation goes to « Discussions », made on the first message.
   const project =
     routeProject ??

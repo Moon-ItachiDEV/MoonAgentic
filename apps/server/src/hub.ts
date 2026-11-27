@@ -187,12 +187,19 @@ import {
 
 export interface Client {
   send(message: ServerMessage): void;
+  /**
+   * Settles once all that was sent to it has left for the network. A large message is
+   * compressed first, off the thread: a server stopped right after `send` would never write it.
+   */
+  flushed?(): Promise<void>;
   /** The paired device that opened it; none for the computer itself. */
   deviceId?: string;
   /** The threads whose timelines this client is showing: a coordinator's, and one beside it. */
   openThreadIds?: Set<string>;
 }
 
+/** How long the server waits for its last words to leave before it lets itself be replaced. */
+const FLUSH_MS = 1000;
 /** The changed files a result names; the others are counted. */
 const RESULT_FILES = 6;
 /** A widget waits this long at most for quotas read again: iOS gives it a few seconds. */
@@ -737,6 +744,7 @@ export class Hub {
       settings: store,
       broadcast: (m) => this.broadcast(m),
       working: () => this.turns.size,
+      said: () => this.flushed(),
       backup: async (version) => {
         const file = await backupBeforeUpdate(store, backupsDir, version);
         console.log(`Copie de la base avant la mise à jour : ${file}`);
@@ -6642,6 +6650,17 @@ export class Hub {
       ...usualRoots(this.homeDir),
     ];
     return { parent, clones: await findClones(roots, projects) };
+  }
+
+  /** What was said to every window has left, or a second went by: nobody holds the server up. */
+  private async flushed(): Promise<void> {
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, FLUSH_MS);
+    });
+    const all = Promise.all([...this.clients].map((c) => c.flushed?.().catch(() => undefined)));
+    await Promise.race([all, late]);
+    clearTimeout(timer);
   }
 
   private broadcast(message: ServerMessage): void {

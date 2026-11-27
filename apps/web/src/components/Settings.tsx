@@ -320,7 +320,10 @@ function LibrariesRow() {
  */
 function LockGroup(props: { projects: Project[]; lockPin: boolean }) {
   const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
-  const pairedDevice = useSyncExternalStore(connection.subscribe, connection.getState).pairedDevice;
+  const pairedDevice = useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().pairedDevice,
+  );
   const [confirmReset, setConfirmReset] = useState(false);
   const after = useSyncExternalStore(appLock.subscribe, appLock.after);
   const projects = props.projects.filter((p) => !isDiscussionsProject(p));

@@ -22,7 +22,7 @@ const send = (message: Parameters<typeof connection.send>[0]) => {
  */
 export function QuotaBar(props: { thread: Thread; quota: ThreadQuota }) {
   const { thread, quota } = props;
-  const agents = useSyncExternalStore(connection.subscribe, connection.getState).agents;
+  const agents = useSyncExternalStore(connection.subscribe, () => connection.getState().agents);
   if (quota.state === "relief") {
     return (
       <div className="updb glass fbc" role="status">

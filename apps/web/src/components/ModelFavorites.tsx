@@ -32,7 +32,10 @@ const nameOf = (agent: AgentInfo | undefined, model: string) => {
  */
 export function ModelFavorites(props: { agents: AgentInfo[]; favorites: Favorites }) {
   const { agents, favorites } = props;
-  const saved = useSyncExternalStore(connection.subscribe, connection.getState).favoriteOrder;
+  const saved = useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().favoriteOrder,
+  );
   const order = orderedFavorites(favorites, saved);
   // While a line is dragged, the order on screen; sent when it is let go.
   const [moving, setMoving] = useState<{ key: string; order: FavoriteRef[] } | null>(null);

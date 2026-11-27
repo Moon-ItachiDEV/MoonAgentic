@@ -53,17 +53,21 @@ export function withChoice(
 
 /** The defaults, following every change from any device. */
 export function useDefaults(): Defaults {
-  const state = useSyncExternalStore(connection.subscribe, connection.getState);
+  const ready = useSyncExternalStore(connection.subscribe, () => connection.getState().ready);
+  const serverDefaults = useSyncExternalStore(
+    connection.subscribe,
+    () => connection.getState().defaults,
+  );
   const choice = useSyncExternalStore(watch, () => chosen);
   // The server has none yet: this device's own choices become everyone's, once.
   useEffect(() => {
-    if (!state.ready || state.defaults || handedOver) return;
+    if (!ready || serverDefaults || handedOver) return;
     const local = localDefaults();
     if (local.permissionMode === undefined && local.isolated === undefined) return;
     handedOver = true;
     connection.send({ type: "defaults.set", ...local });
-  }, [state.ready, state.defaults]);
-  const server = resolveDefaults(state.defaults, localDefaults());
+  }, [ready, serverDefaults]);
+  const server = serverDefaults ?? resolveDefaults(null, localDefaults());
   // Once the server says what was chosen, its word is the only one again.
   useEffect(() => {
     if (!choice) return;
