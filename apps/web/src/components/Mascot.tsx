@@ -2,8 +2,10 @@ import type { Mascot as MascotChoice } from "@moonagentic/protocol";
 import type { DetailedHTMLProps, HTMLAttributes } from "react";
 import type { MascotExpression } from "../mascot.ts";
 import { defineMoonMascot } from "../moon-mascot.ts";
+import { pageSight } from "../visibility.ts";
 
-defineMoonMascot();
+// The app's own sight of the page: the desktop window hidden in the tray counts as unseen.
+defineMoonMascot(pageSight);
 
 declare module "react" {
   // eslint-disable-next-line @typescript-eslint/no-namespace
