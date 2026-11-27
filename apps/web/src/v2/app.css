@@ -4619,11 +4619,18 @@
 }
 .sgl {
   max-height: 228px;
-  overflow-y: auto;
+  /* Up and down only, and never on to the page at its ends: on an iPhone a long description
+     widened the rows past the card and the list went in every direction. */
+  overflow: hidden auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   scrollbar-width: none;
   display: grid;
+  /* The column is the card's width, not that of the longest row. */
+  grid-template-columns: minmax(0, 1fr);
 }
 .sgr {
+  min-width: 0;
   display: flex;
   align-items: baseline;
   gap: 10px;
