@@ -1,6 +1,7 @@
 // The phone's keyboard, followed (apps/web/src/v2/keyboard.ts): the built app, the real server,
-// on a touch screen the size of an iPhone. The keyboard itself is played: the window keeps its
-// height and what is seen of it shrinks, which is all a page ever learns of a real one.
+// on a touch screen the size of an iPhone. The keyboard itself is played, the two ways a page
+// learns of a real one: what is seen of the window shrinks, and the window's own height either
+// stays (an iPhone until iOS 18, Android) or shrinks with it (an iPhone since iOS 26).
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -60,6 +61,18 @@ afterAll(async () => {
   }
 });
 
+/**
+ * What a phone's window says of its own height while its keyboard is up. An iPhone on iOS 26
+ * shrinks it with what is seen: a page that measured the keyboard against it found none, and
+ * nothing followed (the tabs stayed, the composer was left where the system pushed it).
+ */
+const WINDOWS = [
+  { says: "keeps its height", shrinks: false },
+  { says: "shrinks with the keyboard", shrinks: true },
+];
+/** The one being played. */
+let windowShrinks = false;
+
 const PHONE = { width: 393, height: 852 };
 /** An iPhone's keyboard with the bar above it, and the room the composer keeps over it. */
 const KEYBOARD = 336;
@@ -86,17 +99,26 @@ interface Played {
 /** The page, with them. */
 type Stage = Window & { played: Played };
 
-/** In the page, before the app: a keyboard to show and hide, and a camera. */
-function play() {
+/**
+ * In the page, before the app: a keyboard to show and hide, and a camera. With `shrinks`, the
+ * window says it is no taller than what is seen of it while the keyboard is up.
+ */
+function play(shrinks: boolean) {
   let shown: { height: number; top: number } | null = null;
   const vv = window.visualViewport!;
   const real = (name: "height" | "offsetTop") =>
     Object.getOwnPropertyDescriptor(VisualViewport.prototype, name)!.get!;
   const height = real("height");
   const offsetTop = real("offsetTop");
+  const whole = Object.getOwnPropertyDescriptor(window, "innerHeight")!.get!;
   Object.defineProperty(vv, "height", {
-    get: () => (shown ? innerHeight - shown.height : height.call(vv)),
+    get: () => (shown ? whole.call(window) - shown.height : height.call(vv)),
   });
+  if (shrinks) {
+    Object.defineProperty(window, "innerHeight", {
+      get: () => whole.call(window) - (shown ? shown.height : 0),
+    });
+  }
   Object.defineProperty(vv, "offsetTop", {
     get: () => (shown ? shown.top : offsetTop.call(vv)),
   });
@@ -156,7 +178,7 @@ async function phone(
     deviceScaleFactor: shots ? 3 : 1,
     ...options,
   });
-  await context.addInitScript(play);
+  await context.addInitScript(play, windowShrinks);
   const page = await context.newPage();
   // Once to pair the device, then each page by its address.
   await page.goto(url);
@@ -275,7 +297,11 @@ const look = (page: Page) =>
     };
   });
 
-describe("the phone's keyboard", () => {
+describe.each(WINDOWS)("the phone's keyboard, in a window that $says", ({ shrinks }) => {
+  beforeAll(() => {
+    windowShrinks = shrinks;
+  });
+
   it("rests the composer on the keyboard and puts the tabs away, then gives the page back", async () => {
     const { context, page } = await phone();
     const before = await look(page);
@@ -483,6 +509,34 @@ describe("the phone's keyboard", () => {
     // On its way back the composer crosses the bar: it stays in front until all is in place.
     expect(leaving.keyboard).toBe(false);
     expect(leaving.tabs!.front).toBe(false);
+    await keyboard(page, 0);
+    await atRest(page);
+    const after = await look(page);
+    expect(after).toEqual({ ...before, greeting: after.greeting });
+    await context.close();
+  });
+
+  it("finds the page where it is seen when the window does not say how far it was pushed", async () => {
+    const { context, page } = await phone();
+    const before = await look(page);
+    await composer(page).tap();
+    // On iOS 26 the window has been reported not to say how far the page was pushed, while
+    // the page is found where it was pushed to: it is drawn 430 px up, and the window is silent.
+    await page.evaluate(() => {
+      document.documentElement.style.transform = "translateY(-430px)";
+    });
+    await keyboard(page, 386);
+    await atRest(page);
+    const up = await look(page);
+    expect(up.keyboard).toBe(true);
+    // As it is seen: the page fills the window from its top down to the keyboard.
+    expect(up.shell).toEqual({ top: 0, bottom: PHONE.height - 386 });
+    expect(up.top!.top).toBe(0);
+    expect(up.composer!.bottom).toBe(PHONE.height - 386 - GAP);
+    expect(up.tabs).toEqual({ seen: 0, reached: false, front: false });
+    // The keyboard goes, the system lets the page down: all is back in place.
+    await composer(page).blur();
+    await page.evaluate(() => document.documentElement.style.removeProperty("transform"));
     await keyboard(page, 0);
     await atRest(page);
     const after = await look(page);

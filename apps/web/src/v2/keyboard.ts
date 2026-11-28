@@ -9,6 +9,10 @@
 // The keyboard's height is only known once it is up. It is remembered, so that from the second
 // time the composer is already drawn above the keyboard at the very moment it takes the focus:
 // the system then finds nothing to push, and the page moves together with the keyboard.
+//
+// The keyboard is measured on the page as it is laid out: what of it is no longer seen at its
+// bottom. Never against the window's own height: since iOS 26 an iPhone shrinks that one with
+// its keyboard, and a page that trusted it saw no keyboard at all.
 
 import { useSyncExternalStore } from "react";
 import { touchScreen } from "../touch.ts";
@@ -21,6 +25,8 @@ const MIN = 80;
  * only once it has finished rising, and the first one after the app starts is slow.
  */
 const WAIT = 1500;
+/** When a keyboard on its way is looked for, in ms after the touch or the focus. */
+const RISE = [200, 400, 700, 1100, 1600, 2300, 3200];
 const KEY = "moonagentic.keyboard";
 
 /** The page with its keyboard, the composer and the greeting: one spring, no bounce. */
@@ -29,17 +35,23 @@ const FOLLOW: Spring = { duration: 0.42, bounce: 0 };
 const LEAVE: Spring = { duration: 0.22, bounce: 0 };
 const RETURN: Spring = { duration: 0.5, bounce: 0.2 };
 
-/** The window as the browser gives it: its height, what of it is seen, and how it is seen. */
+/** The page in its window, as the browser gives them. */
 export interface Viewport {
+  /**
+   * The page's own height: what a part held to the window's top and bottom is laid out in. Not
+   * the window's (`innerHeight`): since iOS 26 an iPhone shrinks that one with its keyboard.
+   */
   height: number;
+  /** What is seen of the window. */
   visible: number;
+  /** How far down the page what is seen starts. */
   offsetTop: number;
   scale: number;
 }
 
 /** A keyboard on the screen. */
 export interface Keyboard {
-  /** Its height. */
+  /** Its height: what it hides at the bottom of the page left in place. */
   height: number;
   /** How far the system pushed the page up to show the field. */
   top: number;
@@ -89,19 +101,39 @@ const reduced = () =>
 const composerField = (target: EventTarget | null): HTMLTextAreaElement | null =>
   target instanceof HTMLTextAreaElement && target.closest("#bottom .cmp") ? target : null;
 
+/** A part held to the window's top and bottom, never drawn: where and how tall the page is. */
+let frame: HTMLElement | undefined;
+
 function viewport(): Viewport | null {
   const vv = window.visualViewport;
   if (!vv) return null;
-  return { height: innerHeight, visible: vv.height, offsetTop: vv.offsetTop, scale: vv.scale };
+  if (!frame?.isConnected) {
+    frame = document.createElement("div");
+    frame.style.cssText =
+      "position:fixed;top:0;bottom:0;left:0;width:0;visibility:hidden;pointer-events:none";
+    document.body.append(frame);
+  }
+  const page = frame.getBoundingClientRect();
+  return {
+    height: page.height,
+    visible: vv.height,
+    // Two can tell how far the system pushed the page: the window, and the place the page is
+    // found at. On iOS 26 the window has been reported not to: the further of the two is taken.
+    offsetTop: Math.max(vv.offsetTop, -page.top),
+    scale: vv.scale,
+  };
 }
 
-const key = () => `${KEY}.${innerWidth > innerHeight ? "l" : "p"}`;
+/** The page's own height, keyboard up or not. */
+const tall = () => viewport()?.height ?? innerHeight;
+
+const key = () => `${KEY}.${innerWidth > tall() ? "l" : "p"}`;
 
 /** The keyboard's height the last time it was seen, this way up. */
 function remembered(): number | undefined {
   try {
     const height = Number(localStorage.getItem(key()));
-    return height >= MIN && height < innerHeight * 0.8 ? height : undefined;
+    return height >= MIN && height < tall() * 0.8 ? height : undefined;
   } catch {
     return undefined;
   }
@@ -133,9 +165,10 @@ function apply(next: Shown | null): void {
   const flipped = !next !== !shown;
   shown = next;
   if (!flipped) return;
-  // A field taken off the page while it had the focus says nothing: it is looked for.
+  // A field taken off the page while it had the focus says nothing, and a keyboard put away
+  // or grown is not always told: both are looked for.
   clearInterval(fieldWatch);
-  if (next) fieldWatch = setInterval(checkField, 300);
+  if (next) fieldWatch = setInterval(watch, 300);
   for (const l of listeners) l();
 }
 
@@ -380,10 +413,11 @@ function play(list: Part[], now: number): void {
 
 /** The window changed, or a keyboard that was expected had its time. */
 function look(): void {
+  // Nothing follows the window: it is not measured, as often as it may say it moved.
+  if (!field && !trail) return;
   const v = viewport();
   if (!v) return;
   if (!field) {
-    if (!trail) return;
     // The keyboard is going: the page's top follows the system back down.
     const top = Math.abs(v.scale - 1) > 0.01 ? 0 : Math.max(0, Math.round(v.offsetTop));
     if (top === 0) trail = false;
@@ -430,6 +464,19 @@ function checkField(): void {
   if (field && (!field.isConnected || document.activeElement !== field)) leave();
 }
 
+function watch(): void {
+  checkField();
+  look();
+}
+
+/**
+ * A keyboard may be on its way. The window says when it is there, once: it is also looked at
+ * while the keyboard rises, should that word come before the window has its size, or not come.
+ */
+function lookFor(): void {
+  for (const ms of RISE) setTimeout(look, ms);
+}
+
 /** A keyboard is expected: the page follows the one remembered at once. */
 function anticipate(height: number, byTouch: boolean): void {
   change({ inset: height, top: 0 });
@@ -449,6 +496,7 @@ export function watchKeyboard(): void {
       handsOff = false;
       const target = composerField(e.target);
       if (!target || shown || !touchScreen()) return;
+      lookFor();
       const height = remembered();
       if (!height) return;
       if (severalLines(target)) {
@@ -478,6 +526,7 @@ export function watchKeyboard(): void {
       if (!target) return;
       field = target;
       trail = false;
+      if (touchScreen()) lookFor();
       if (early) {
         early = false;
         return;
@@ -504,4 +553,7 @@ export function watchKeyboard(): void {
   );
   window.visualViewport.addEventListener("resize", look);
   window.visualViewport.addEventListener("scroll", look);
+  // An iPhone that shrinks its window with the keyboard says so there too.
+  window.addEventListener("resize", look);
+  window.addEventListener("scroll", look, { passive: true });
 }
