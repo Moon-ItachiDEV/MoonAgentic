@@ -1166,15 +1166,16 @@ export class Store {
       if (old?.kind !== "coordinator") throw new Error(`Unknown coordinator ${oldId}`);
       const { kind: _kind, queue, inLine: _inLine, quietSince: _quiet, ...kept } = old;
       this.addThread({ ...next, ...(queue?.length ? { queue } : {}) });
-      const write = (thread: Thread) =>
-        this.sql(`UPDATE threads SET status = ?, extra = ? WHERE id = ?`).run(
-          thread.status,
-          extraOf(thread),
-          thread.id,
-        );
-      write({ ...kept, status: "idle", archived: true });
+      // Stripping `kind: "coordinator"` removes COORDINATOR_ALLOWED on the project's root
+      // folder, so the archived thread downgrades to supervised while child threads keep theirs.
+      this.sql(
+        `UPDATE threads SET status = ?, permission_mode = ?, acp_session_id = NULL, extra = ? WHERE id = ?`,
+      ).run("idle", "supervised", extraOf({ ...kept, archived: true }), oldId);
+      const reparent = this.sql(`UPDATE threads SET status = ?, extra = ? WHERE id = ?`);
       for (const t of this.listThreads()) {
-        if (t.openedBy === oldId) write({ ...t, openedBy: next.id });
+        if (t.openedBy === oldId) {
+          reparent.run(t.status, extraOf({ ...t, openedBy: next.id }), t.id);
+        }
       }
       return [
         this.getThread(next.id)!,

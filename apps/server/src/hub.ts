@@ -777,12 +777,14 @@ export class Hub {
         thread: (id) => store.getThread(id),
         items: (id) => this.items(id),
         markRelayed: (threadId, itemId) => {
+          const thread = this.store.getThread(threadId);
+          if (!thread || thread.archived) return;
           const item = this.store.getItem(threadId, itemId);
           if (item?.kind === "user" && !item.relayed) {
             this.putItem(threadId, { ...item, relayed: true });
           }
         },
-        running: (id) => this.turns.has(id),
+        running: (id) => this.turns.has(id) || this.busy.has(id),
         whenIdle: (id) => this.whenIdle(id),
         sendFromHermes: (id, text) => this.sendFromHermes(id, text),
         planCards: () => this.planner.list(),
@@ -3425,6 +3427,8 @@ export class Hub {
    */
   sendQueuedNow(threadId: string, id?: string): void {
     const queue = this.requireLiveThread(threadId).queue ?? [];
+    const busy = this.busy.get(threadId);
+    if (busy) throw new Error(busy);
     if (id) {
       const chosen = queue.find((m) => m.id === id);
       if (!chosen) throw new Error("Ce message est déjà parti.");
@@ -5762,6 +5766,9 @@ export class Hub {
     if (this.locks.isLocked(projectId)) {
       throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
     }
+    if (this.removingProjects.has(projectId)) {
+      throw new Error("Ce projet est en cours de retrait.");
+    }
     const coordinator = this.store
       .listThreads()
       .find((t) => t.projectId === projectId && t.kind === "coordinator");
@@ -5773,7 +5780,8 @@ export class Hub {
   private async stopCoordinator(coordinatorId: string): Promise<void> {
     const turn = this.turns.get(coordinatorId);
     if (turn) {
-      await this.cancel(coordinatorId);
+      // A connection already closed as the agent exits or the server stops needs no cancel.
+      await this.cancel(coordinatorId).catch(() => undefined);
       // Its turn ends as stopped; one frozen past this is stopped with its agent below.
       await Promise.race([
         turn.catch(() => undefined),
@@ -5789,24 +5797,57 @@ export class Hub {
    * The threads the old one opened report to the new one, and what waited for it goes there.
    */
   private async archiveCoordinator(projectId: string): Promise<void> {
+    if (this.closed) throw new Error("MoonAgentic s'arrête.");
     const old = this.projectCoordinator(projectId);
-    await this.stopCoordinator(old.id);
-    // A turn its agent's stop did not end yet: the conversation is not moved under it.
-    const turn = this.turns.get(old.id);
-    if (turn)
-      await Promise.race([
-        turn.catch(() => undefined),
-        new Promise((done) => setTimeout(done, RESTART_WAIT_MS).unref()),
-      ]);
+    if (this.storageDown || this.heldIn(old.id)) {
+      throw new StorageRefused(this.storageDown ?? "Base de données");
+    }
+    const checkStillOpen = () => {
+      if (this.closed) throw new Error("MoonAgentic s'arrête.");
+      if (this.locks.isLocked(projectId)) {
+        throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+      }
+      if (this.removingProjects.has(projectId)) {
+        throw new Error("Ce projet est en cours de retrait.");
+      }
+      if (this.turns.has(old.id)) {
+        throw new Error("Attends la fin de la réponse de l'agent.");
+      }
+    };
+    // Hold `busy` and `steps` across stopping the turn too, so close() awaits us and neither a
+    // concurrent archive nor sendAfterStop / a new message can race with the handover.
     const threads = await this.exclusive(
       old.id,
       "Attends que le coordinateur soit archivé.",
       async () => {
+        this.sendAfterStop.delete(old.id);
+        this.followUps.delete(old.id);
+        await this.stopCoordinator(old.id);
+        if (this.closed) throw new Error("MoonAgentic s'arrête.");
+        // A turn its agent's stop did not end yet: the conversation is not moved under it.
+        const turn = this.turns.get(old.id);
+        if (turn)
+          await Promise.race([
+            turn.catch(() => undefined),
+            new Promise((done) => setTimeout(done, RESTART_WAIT_MS).unref()),
+          ]);
+        checkStillOpen();
+        this.sendAfterStop.delete(old.id);
+        this.followUps.delete(old.id);
         this.settlePermissions(old.id);
-        await this.forgetSession(old.id);
+        // Revoke the old bridge token and make sure no residual process lingers before handover.
+        this.coordinators.dropCoordinatorAccess(old.id);
+        await this.pool.stop(old.id);
+        checkStillOpen();
         this.flushText(old.id);
+        if (this.storageDown || this.heldIn(old.id)) {
+          throw new StorageRefused(this.storageDown ?? "Base de données");
+        }
+        const current = this.store.getThread(old.id);
+        if (current?.kind !== "coordinator") {
+          throw new Error("Ce projet n'a pas encore de coordinateur.");
+        }
         const now = Date.now();
-        const current = this.requireThread(old.id);
         const next: Thread = {
           id: randomUUID(),
           projectId,
@@ -5821,7 +5862,8 @@ export class Hub {
           updatedAt: now,
         };
         const changed = this.store.handOverCoordinator(old.id, next);
-        this.dropHeld(old.id);
+        this.unsettled.delete(old.id);
+        this.threadGrants.delete(old.id);
         this.dropLog(old.id);
         this.coordinators.forget(old.id);
         const told = this.greenTold.get(old.id);
@@ -5829,13 +5871,14 @@ export class Hub {
         if (told) this.greenTold.set(next.id, told);
         return changed;
       },
+      true,
     );
     // The new coordinator is told first: a screen left without one would open another.
     for (const thread of threads) {
       this.broadcast({ type: "thread", thread });
       this.planner.syncThread(thread);
     }
-    this.coordinators.drainLine(threads[0]!.id);
+    if (!this.closed) this.coordinators.drainLine(threads[0]!.id);
   }
 
   private async startSession(
