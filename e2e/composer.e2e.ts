@@ -330,6 +330,43 @@ describe("composer", () => {
     await shot(page, "c6-mobile");
     await page.close();
   });
+  it("scrolls the command list up and down only, on a phone", async () => {
+    // On an iPhone the list went sideways too: a long description widened the rows past the
+    // card, so the list scrolled in every direction, and on to the page at its ends.
+    const page = await browser.newPage({ viewport: { width: 390, height: 780 }, hasTouch: true });
+    await page.goto(url);
+    await composer(page).fill("/");
+    await options(page).first().waitFor();
+    const list = page.locator("#composer-suggest .sgl");
+    const shape = () =>
+      list.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const rows = [...el.querySelectorAll<HTMLElement>("[role=option]")];
+        const edge = el.getBoundingClientRect().right;
+        return {
+          scrolls: el.scrollHeight > el.clientHeight,
+          wider: el.scrollWidth - el.clientWidth,
+          // Every row ends inside the card, its description cut short instead.
+          outside: rows.filter((r) => r.getBoundingClientRect().right > edge + 0.5).length,
+          sideways: style.overflowX,
+          chains: style.overscrollBehaviorY,
+          touch: style.touchAction,
+        };
+      });
+    expect(await shape()).toEqual({
+      scrolls: true,
+      wider: 0,
+      outside: 0,
+      sideways: "hidden",
+      chains: "contain",
+      touch: "pan-y",
+    });
+    // A swipe to the side moves nothing.
+    await list.evaluate((el) => el.scrollBy({ left: 200 }));
+    expect(await list.evaluate((el) => el.scrollLeft)).toBe(0);
+    await shot(page, "c8-mobile-liste");
+    await page.close();
+  });
   it("opens the model sheet inside a phone screen, with or without favorites", async () => {
     const page = await browser.newPage({ viewport: { width: 390, height: 780 }, hasTouch: true });
     await page.goto(url);
