@@ -471,7 +471,7 @@ export interface TeamEvent {
 export interface TeamMember {
   agentId: AgentId;
   model?: string;
-  /** The agent's settings it starts with, such as its reasoning effort; a route's only. */
+  /** The agent's settings it starts with, such as its reasoning effort. */
   settings?: Record<string, string>;
 }
 
@@ -1877,7 +1877,14 @@ const id = z.string().min(1).max(200);
  */
 const sendId = z.string().regex(/^[\w-]{1,64}$/);
 /** Who takes a role in a team: an agent, on one of its models or its own default. */
-const teamMember = z.object({ agentId: id, model: id.optional() }).strict();
+/** An agent's settings a role starts with, such as its reasoning effort. */
+const memberSettings = z
+  .record(id, id)
+  .refine((r) => Object.keys(r).length <= 20)
+  .optional();
+const teamMember = z
+  .object({ agentId: id, model: id.optional(), settings: memberSettings })
+  .strict();
 /** How many bytes a text takes in UTF-8. */
 export function utf8Bytes(text: string): number {
   let bytes = 0;
@@ -2213,13 +2220,13 @@ export const ClientMessage = z.discriminatedUnion("type", [
     requestId: id,
     projectId: id,
     task: text,
-    lead: z.object({ agentId: id, model: id.optional() }),
-    coder: z.object({ agentId: id, model: id.optional() }),
-    reviewer: z.object({ agentId: id, model: id.optional() }).optional(),
-    reviewer2: z.object({ agentId: id, model: id.optional() }).optional(),
-    judge: z.object({ agentId: id, model: id.optional() }).optional(),
-    tester: z.object({ agentId: id, model: id.optional() }).optional(),
-    merger: z.object({ agentId: id, model: id.optional() }).optional(),
+    lead: z.object({ agentId: id, model: id.optional(), settings: memberSettings }),
+    coder: z.object({ agentId: id, model: id.optional(), settings: memberSettings }),
+    reviewer: z.object({ agentId: id, model: id.optional(), settings: memberSettings }).optional(),
+    reviewer2: z.object({ agentId: id, model: id.optional(), settings: memberSettings }).optional(),
+    judge: z.object({ agentId: id, model: id.optional(), settings: memberSettings }).optional(),
+    tester: z.object({ agentId: id, model: id.optional(), settings: memberSettings }).optional(),
+    merger: z.object({ agentId: id, model: id.optional(), settings: memberSettings }).optional(),
     coders: z.number().int().min(1).max(4),
     permissionMode: z.enum(["supervised", "full"]),
     /** Opens the pull request by itself once done; true when left out. */

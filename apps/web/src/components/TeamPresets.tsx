@@ -1,4 +1,4 @@
-import type { AgentInfo, Favorites, TeamPreset, TeamRole } from "@moonagentic/protocol";
+import type { AgentInfo, Favorites, TeamMember, TeamPreset, TeamRole } from "@moonagentic/protocol";
 import { MAX_TEAM_PRESETS } from "@moonagentic/protocol";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { connection, newId } from "../connection.ts";
@@ -12,9 +12,8 @@ import {
   teamPresets,
 } from "../team-presets.ts";
 import { modelNameOf } from "../model-label.ts";
-import { parseRouteValue, routeChoices, routeValue } from "../route-choices.ts";
-import { type Choice, ChoiceRow } from "../v2/ChoiceRow.tsx";
 import { I } from "../v2/I.tsx";
+import { ModelChip } from "../v2/ModelChip.tsx";
 import { Sheet } from "../v2/Sheet.tsx";
 import { type Confirmation, ConfirmDialog } from "./ConfirmDialog.tsx";
 
@@ -29,36 +28,24 @@ const ROLE_VERB: Record<TeamRole, string> = {
   merger: "fusionne",
 };
 
-/** One role of a team: who takes it, and the sheet to pick someone else. */
+/** One role of a team: who takes it and how hard it thinks, and the sheet to pick otherwise. */
 function RoleRow(props: {
   role: TeamRole;
-  team: string;
   agents: AgentInfo[];
   favorites: Favorites;
-  value: { agentId: string; model?: string } | undefined;
-  onChange: (pick: { agentId: string; model?: string } | undefined) => void;
+  value: TeamMember | undefined;
+  onChange: (pick: TeamMember | undefined) => void;
 }) {
-  const [all, setAll] = useState(false);
-  const { groups, favoritesOnly } = routeChoices(props.agents, props.favorites, props.value, all);
   const optional = OPTIONAL_ROLES.has(props.role);
-  const choices: Choice[] = [
-    ...(optional ? [{ value: "", label: "Personne" }] : []),
-    ...groups.flatMap((g) =>
-      g.options.map((o) => ({ value: o.value, label: o.label, group: g.agent.name })),
-    ),
-  ];
-  const value = props.value ? routeValue(props.value.agentId, props.value.model) : "";
   return (
-    <ChoiceRow
-      title={ROLE_LABEL[props.role]}
-      label={`${ROLE_LABEL[props.role]} de ${props.team}`}
-      value={value}
-      shown={choices.find((c) => c.value === value)?.label ?? (optional ? "Personne" : "")}
-      choices={choices}
-      {...(favoritesOnly || all
-        ? { more: { label: all ? "Favoris" : "Tous", on: all, toggle: () => setAll((on) => !on) } }
-        : {})}
-      onPick={(picked) => props.onChange(parseRouteValue(picked))}
+    <ModelChip
+      row
+      label={ROLE_LABEL[props.role]}
+      agents={props.agents}
+      favorites={props.favorites}
+      value={props.value}
+      {...(optional ? { clear: "Personne", unset: "Personne" } : {})}
+      onChange={props.onChange}
     />
   );
 }
@@ -220,7 +207,6 @@ export function TeamPresets(props: { agents: AgentInfo[]; projectId: string | un
                 <RoleRow
                   key={role}
                   role={role}
-                  team={open.label}
                   agents={props.agents}
                   favorites={favorites}
                   value={presetMembers(open, props.agents)[role]}

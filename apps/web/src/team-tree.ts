@@ -4,10 +4,12 @@ import type {
   Item,
   Team,
   TeamLanePhase,
+  TeamMember,
   TeamRole,
   Thread,
 } from "@moonagentic/protocol";
 import { activityGlyph, activityLabel } from "./activity.ts";
+import { effortOf } from "./effort.ts";
 import type { GlyphKind } from "./glyphs.ts";
 import { modelNameOf } from "./model-label.ts";
 
@@ -35,6 +37,8 @@ export interface TreeNode {
   name: string;
   /** The role when the name is the piece's title, then the model. */
   sub: string;
+  /** Its model, with its reasoning level when it has one: « Fable 5.2 · UltraMoon ». */
+  model: string;
   agentId: string;
   /** Its thread, once it has one. */
   threadId?: string;
@@ -265,9 +269,15 @@ const active = (team: Team) =>
 /** The tree, from the team's state as it is now. */
 export function teamTree({ lead, team, threads, agents, items }: Input): TeamTreeModel {
   const byId = (id: string | undefined) => (id ? threads.find((t) => t.id === id) : undefined);
-  const modelOf = (member: { agentId: string; model?: string | undefined }) => {
+  const modelOf = (member: {
+    agentId: string;
+    model?: string | undefined;
+    settings?: Record<string, string> | undefined;
+  }) => {
     const agent = agents.find((a) => a.id === member.agentId);
-    return modelNameOf(agent?.models, member.model) ?? agent?.name ?? member.agentId;
+    const name = modelNameOf(agent?.models, member.model) ?? agent?.name ?? member.agentId;
+    const effort = member.settings && effortOf(agent, member.model, member.settings);
+    return effort ? `${name} · ${effort.name}` : name;
   };
   const running = active(team);
   const lastPhases = new Map<number, TeamLanePhase[]>();
@@ -317,16 +327,24 @@ export function teamTree({ lead, team, threads, agents, items }: Input): TeamTre
 
   const node = (
     base: Pick<TreeNode, "key" | "role" | "name" | "mission"> & { sub?: string },
-    member: { agentId: string; model?: string | undefined },
+    member: TeamMember,
     thread: Thread | undefined,
     rest: Pick<TreeNode, "tone" | "label" | "action">,
   ): TreeNode => {
-    const who = thread ? { agentId: thread.agentId, model: thread.model } : member;
+    const who = thread
+      ? {
+          agentId: thread.agentId,
+          model: thread.model,
+          ...(thread.settings ? { settings: thread.settings } : {}),
+        }
+      : member;
+    const model = modelOf(who);
     const digest = threadDigest(thread ? items[thread.id] : undefined);
     const at = live(thread) ?? rest;
     return {
       ...base,
-      sub: [base.sub, modelOf(who)].filter(Boolean).join(" · "),
+      sub: [base.sub, model].filter(Boolean).join(" · "),
+      model,
       agentId: who.agentId,
       ...(thread ? { threadId: thread.id } : {}),
       ...at,

@@ -1,5 +1,6 @@
 // A team as the lines of its card: one per role, from what its threads really do. Pure.
-import type { AgentInfo, Team, TeamLanePhase } from "@moonagentic/protocol";
+import type { AgentInfo, Team, TeamLanePhase, TeamMember } from "@moonagentic/protocol";
+import { effortOf } from "./effort.ts";
 import type { FrostMoonState } from "./components/FrostMoon.tsx";
 import { modelNameOf } from "./model-label.ts";
 import type { TeamTreeModel, TreeNode } from "./team-tree.ts";
@@ -73,7 +74,7 @@ export interface Row {
   threadId?: string;
 }
 
-const modelOf = (node: TreeNode) => node.sub.split(" · ").at(-1) ?? "";
+const modelOf = (node: TreeNode) => node.model;
 
 /** A line of the list, from one agent of the team as the tree knows it. */
 function rowOf(node: TreeNode, base: Pick<Row, "key" | "job" | "name">, rest: string): Row {
@@ -198,9 +199,11 @@ export function teamRows(
     testsAfter,
   );
   // While the lead plans there is no piece yet: the roles to come are listed all the same.
-  const member = (m: { agentId: string; model?: string }) => {
+  const member = (m: TeamMember) => {
     const agent = agents.find((a) => a.id === m.agentId);
-    return modelNameOf(agent?.models, m.model) ?? agent?.name ?? m.agentId;
+    const name = modelNameOf(agent?.models, m.model) ?? agent?.name ?? m.agentId;
+    const effort = m.settings && effortOf(agent, m.model, m.settings);
+    return effort ? `${name} · ${effort.name}` : name;
   };
   const toCome = (key: string, job: MascJob, name: string, model: string, text: string): Row => ({
     key,

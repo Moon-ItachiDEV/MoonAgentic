@@ -35,6 +35,8 @@ export interface TeamHost {
     projectId: string;
     agentId: string;
     model?: string | undefined;
+    /** The role's settings, such as its reasoning effort. */
+    settings?: Record<string, string> | undefined;
     permissionMode: PermissionMode;
     isolated: boolean;
     text: string;
@@ -658,6 +660,7 @@ export class Teams {
       projectId: input.projectId,
       agentId: input.lead.agentId,
       model: input.lead.model,
+      ...(input.lead.settings ? { settings: input.lead.settings } : {}),
       permissionMode: "supervised",
       isolated: false,
       text: planPrompt(input.task, input.coders),
@@ -1087,6 +1090,7 @@ export class Teams {
         projectId: lead.projectId,
         agentId: member.agentId,
         model: member.model,
+        ...(member.settings ? { settings: member.settings } : {}),
         // The team's access; a reviewer still asks before changing a file (see the hub).
         permissionMode: team.permissionMode,
         isolated: false,
@@ -1134,6 +1138,7 @@ export class Teams {
           projectId: lead.projectId,
           agentId: team.coder.agentId,
           model: team.coder.model,
+          ...(team.coder.settings ? { settings: team.coder.settings } : {}),
           permissionMode: team.permissionMode,
           isolated: true,
           text: coderPrompt(team.task, piece),
@@ -1255,6 +1260,7 @@ export class Teams {
           projectId: state.lead.projectId,
           agentId: member.agentId,
           model: member.model,
+          ...(member.settings ? { settings: member.settings } : {}),
           permissionMode: state.team.permissionMode,
           isolated: true,
           text: "",
