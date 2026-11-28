@@ -19,6 +19,8 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { type Client, Hub } from "../src/hub.ts";
+import { localPullRequests, type PullRequests } from "../src/pull-request.ts";
+import { fakeGithubApi, graphqlPull, signedInAccount } from "./fake-github-api.ts";
 import {
   debatePrompt,
   fresh,
@@ -29,7 +31,6 @@ import {
   reviewStatus,
 } from "../src/pr-review.ts";
 import { fetchPullRequest } from "../src/git.ts";
-import type { PullRequests } from "../src/pull-request.ts";
 import { Store } from "../src/store.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -305,7 +306,11 @@ const git = (cwd: string, ...args: string[]) =>
     .trim();
 
 /** A repository on GitHub with a pull request on a branch of its own, and a stand-in GitHub. */
-function repository() {
+function repository(
+  options: {
+    pullRequests?: () => PullRequests | undefined | Promise<PullRequests | undefined>;
+  } = {},
+) {
   const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-review-"));
   const repo = path.join(root, "repo");
   mkdirSync(repo);
@@ -351,7 +356,7 @@ function repository() {
   const store = new Store(path.join(root, "state.sqlite"));
   const hub = new Hub(store, new Agents({ demo: true }), {
     worktreesDir: path.join(root, "worktrees"),
-    pullRequests: () => pullRequests,
+    pullRequests: options.pullRequests ?? (() => pullRequests),
   });
   cleanups.push(async () => {
     await hub.close();
@@ -617,5 +622,70 @@ describe("fetching a pull request", { timeout: 20_000 }, () => {
     expect(git(repo, "rev-parse", "refs/moonagentic/review/7/base")).toBe(
       git(upstream, "rev-parse", "HEAD"),
     );
+  });
+});
+
+describe("a review without GitHub CLI", { timeout: 40_000 }, () => {
+  it("reads the pull request with MoonAgentic's own GitHub sign-in when gh is not installed", async () => {
+    let head = "";
+    const api = await fakeGithubApi((call) =>
+      call.query?.includes("pullRequest(number: $number)")
+        ? { data: { repository: { pullRequest: graphqlPull({ headRefOid: head }) } } }
+        : { status: 404, body: { message: "Not Found" } },
+    );
+    cleanups.push(api.close);
+    const account = signedInAccount(api.url, "gho_moon");
+    const made = repository({
+      // As on a computer where only MoonAgentic is signed in to GitHub: no `gh` anywhere.
+      pullRequests: () => localPullRequests({ account: () => account, gh: () => undefined }),
+    });
+    head = made.head;
+    const { hub, store, projectId, client } = made;
+    await hub.handle(client, {
+      type: "review.start",
+      requestId: "r1",
+      projectId,
+      pr: "#42",
+      reviewers: [{ agentId: "demo", model: "rapide" }],
+    });
+    const thread = store.listThreads().find((t) => t.prReview)!;
+    const review = () => store.getThread(thread.id)!.prReview as PrReview;
+    await expect.poll(() => review().phase, { timeout: 30_000 }).not.toBe("preparing");
+    expect(review().error).toBeUndefined();
+    expect(review()).toMatchObject({
+      repo: "moon/demo",
+      head,
+      base: "main",
+      title: "Donne la réponse",
+    });
+    // The pull request was asked of GitHub's API, with the account's own token.
+    expect(api.calls[0]).toMatchObject({
+      method: "POST",
+      path: "/graphql",
+      auth: "Bearer gho_moon",
+      variables: { owner: "moon", name: "demo", number: 42 },
+    });
+    // The reviewer reads its changes, fetched by git from the pull request's commit.
+    const workspace = store.getThread(thread.id)!.workspace!;
+    expect(git(workspace.path, "rev-parse", "HEAD")).toBe(head);
+    expect(readFileSync(path.join(workspace.path, "README.md"), "utf8")).toContain("answer = 42");
+  });
+
+  it("says how to make it work when neither MoonAgentic nor gh can ask GitHub", async () => {
+    const { hub, store, projectId, client } = repository({
+      pullRequests: () => localPullRequests({ account: () => undefined, gh: () => undefined }),
+    });
+    await hub.handle(client, {
+      type: "review.start",
+      requestId: "r1",
+      projectId,
+      pr: "#42",
+      reviewers: [{ agentId: "demo", model: "rapide" }],
+    });
+    const thread = store.listThreads().find((t) => t.prReview)!;
+    await expect
+      .poll(() => store.getThread(thread.id)!.prReview?.phase, { timeout: 10_000 })
+      .toBe("failed");
+    expect(store.getThread(thread.id)!.prReview?.error).toContain("Connecte MoonAgentic à GitHub");
   });
 });

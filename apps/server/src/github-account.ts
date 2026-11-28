@@ -36,6 +36,15 @@ interface Flow extends GithubDeviceCode {
 /** What GitHub says when a token no longer works: it was revoked, or the app was removed. */
 class Unauthorized extends Error {}
 
+/** A GraphQL question GitHub could not answer, with its kind: NOT_FOUND, FORBIDDEN… */
+export class GithubQueryError extends Error {
+  readonly type: string | undefined;
+  constructor(message: string, type: string | undefined) {
+    super(message);
+    this.type = type;
+  }
+}
+
 async function asJson(response: Response): Promise<Record<string, unknown>> {
   try {
     return (await response.json()) as Record<string, unknown>;
@@ -106,24 +115,97 @@ export class GithubAccount {
     return this.token ?? undefined;
   }
 
-  private async api(pathAndQuery: string, token: string): Promise<Response> {
+  private async api(
+    pathAndQuery: string,
+    token: string,
+    send?: { method: string; body: unknown; accept?: string },
+  ): Promise<Response> {
     const response = await fetch(`${this.apiUrl}${pathAndQuery}`, {
+      ...(send ? { method: send.method, body: JSON.stringify(send.body) } : {}),
       headers: {
-        accept: "application/vnd.github+json",
+        accept: send?.accept ?? "application/vnd.github+json",
         authorization: `Bearer ${token}`,
         "x-github-api-version": "2022-11-28",
         "user-agent": "MoonAgentic",
+        ...(send ? { "content-type": "application/json" } : {}),
       },
       signal: AbortSignal.timeout(ASK_TIMEOUT_MS),
     });
     if (response.status === 401) throw new Unauthorized("La connexion GitHub n'est plus valable.");
     if (!response.ok) {
       const body = await asJson(response);
+      // A refused pull request says why in `errors`, under a bare « Validation Failed ».
+      const why = [
+        typeof body.message === "string" ? body.message : "",
+        ...(Array.isArray(body.errors)
+          ? body.errors.map((e: unknown) =>
+              typeof e === "object" &&
+              e !== null &&
+              typeof (e as { message?: unknown }).message === "string"
+                ? (e as { message: string }).message
+                : "",
+            )
+          : []),
+      ].filter(Boolean);
       throw new Error(
-        `GitHub a répondu ${response.status}${typeof body.message === "string" ? ` : ${body.message}` : ""}.`,
+        `GitHub a répondu ${response.status}${why.length ? ` : ${why.join(" ; ")}` : ""}.`,
       );
     }
     return response;
+  }
+
+  private async signedIn(): Promise<string> {
+    const token = await this.currentToken();
+    if (!token) throw new Error("MoonAgentic n'est pas connecté à GitHub.");
+    return token;
+  }
+
+  /**
+   * One request to GitHub's REST API with this account: `body` sent as JSON when given. What
+   * GitHub answered, read as JSON.
+   */
+  async rest(method: string, pathAndQuery: string, body?: unknown): Promise<unknown> {
+    const token = await this.signedIn();
+    try {
+      const response = await this.api(
+        pathAndQuery,
+        token,
+        body === undefined && method === "GET" ? undefined : { method, body: body ?? {} },
+      );
+      return await response.json();
+    } catch (error) {
+      return this.forgetIfRevoked(error);
+    }
+  }
+
+  /**
+   * One GraphQL request with this account; its `data`. GitHub answers a question it cannot
+   * answer with 200 and `errors`: the first one is thrown, its `type` kept (NOT_FOUND, say).
+   */
+  async graphql(query: string, variables: Record<string, unknown>): Promise<unknown> {
+    const token = await this.signedIn();
+    let body: Record<string, unknown>;
+    try {
+      // The preview gives a pull request's `mergeStateStatus`, as it does for `gh`.
+      body = await asJson(
+        await this.api("/graphql", token, {
+          method: "POST",
+          body: { query, variables },
+          accept: "application/vnd.github.merge-info-preview+json",
+        }),
+      );
+    } catch (error) {
+      return this.forgetIfRevoked(error);
+    }
+    const errors = Array.isArray(body.errors) ? (body.errors as Record<string, unknown>[]) : [];
+    if (errors.length) {
+      const first = errors[0] ?? {};
+      throw new GithubQueryError(
+        typeof first.message === "string" ? first.message : "GitHub a refusé la requête.",
+        typeof first.type === "string" ? first.type : undefined,
+      );
+    }
+    return body.data;
   }
 
   /** A token GitHub refuses is forgotten, so the user is asked to sign in again. */

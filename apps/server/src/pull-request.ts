@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import type { PullRequestCheck, PullRequestInfo, PullRequestRemark } from "@moonagentic/protocol";
-import { githubAccount } from "./github-account.ts";
+import { type GithubAccount, GithubQueryError, githubAccount } from "./github-account.ts";
 import { findGh } from "./github.ts";
 
 const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never", GH_PROMPT_DISABLED: "1" };
@@ -13,8 +13,8 @@ const LIST_FIELDS = `headRefName,isCrossRepository,${FIELDS}`;
 const LIST_LIMIT = "100";
 
 /**
- * Where pull requests are read and merged. Today the user's own `gh`; a client holding a
- * GitHub token would be another one of these.
+ * Where pull requests are read and merged: MoonAgentic's own GitHub sign-in, through GitHub's
+ * API, or else the user's own `gh`.
  */
 export interface PullRequests {
   /** The pull request `ref` names in `repo`: its number, or its branch. None: undefined. */
@@ -192,6 +192,11 @@ export function parseRemarks(json: string): PullRequestRemark[] {
   } catch {
     return [];
   }
+  return remarksOf(raw);
+}
+
+/** The remarks in GitHub's answer to {@link REMARKS_QUERY}, as {@link parseRemarks} reads them. */
+function remarksOf(raw: unknown): PullRequestRemark[] {
   const pull =
     isRecord(raw) && isRecord(raw.data) && isRecord(raw.data.repository)
       ? raw.data.repository.pullRequest
@@ -366,10 +371,170 @@ export function ghPullRequests(run: GhRun): PullRequests {
   };
 }
 
-/** The user's `gh`, when it is installed, as MoonAgentic's own GitHub account when signed in. */
-export function localPullRequests(): PullRequests | undefined {
-  const gh = findGh();
-  if (!gh) return undefined;
+/** What one pull request is asked for, shaped as `gh` gives it once flattened. */
+const PR_FIELDS = `fragment pr on PullRequest {
+  number url title state isDraft mergeable mergeStateStatus headRefOid baseRefName
+  headRefName isCrossRepository createdAt additions deletions changedFiles
+  author { login }
+  commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+    __typename
+    ... on CheckRun { name status conclusion detailsUrl startedAt
+      checkSuite { workflowRun { workflow { name } } } }
+    ... on StatusContext { context state targetUrl createdAt }
+  } } } } } }
+}`;
+
+const PR_BY_NUMBER = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { ...pr } }
+}
+${PR_FIELDS}`;
+
+const PR_BY_BRANCH = `query($owner: String!, $name: String!, $branch: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(headRefName: $branch, first: 20, orderBy: { field: CREATED_AT, direction: DESC }) {
+      nodes { ...pr }
+    }
+  }
+}
+${PR_FIELDS}`;
+
+const PR_OPEN = `query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: OPEN, first: ${LIST_LIMIT}, orderBy: { field: CREATED_AT, direction: DESC }) {
+      nodes { ...pr }
+    }
+  }
+}
+${PR_FIELDS}`;
+
+const MERGE_INFO = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    mergeCommitAllowed squashMergeAllowed rebaseMergeAllowed
+    pullRequest(number: $number) { id }
+  }
+}`;
+
+const MERGE = `mutation($id: ID!, $head: GitObjectID!, $method: PullRequestMergeMethod!) {
+  mergePullRequest(input: { pullRequestId: $id, expectedHeadOid: $head, mergeMethod: $method }) {
+    pullRequest { state }
+  }
+}`;
+
+const RESOLVE = `mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { isResolved } } }`;
+
+/**
+ * A pull request as GraphQL gives it, in the shape `gh --json` prints: its last commit's
+ * checks as `statusCheckRollup`, each run with its workflow's name.
+ */
+function flatten(node: unknown): unknown {
+  if (!isRecord(node)) return node;
+  const { commits, ...rest } = node;
+  const commit = nodes(commits)[0];
+  const rollup =
+    isRecord(commit) && isRecord(commit.commit) && isRecord(commit.commit.statusCheckRollup)
+      ? nodes(commit.commit.statusCheckRollup.contexts)
+      : [];
+  return {
+    ...rest,
+    statusCheckRollup: rollup.map((check) => {
+      if (!isRecord(check) || check.__typename !== "CheckRun") return check;
+      const { checkSuite, ...run } = check;
+      const workflow =
+        isRecord(checkSuite) &&
+        isRecord(checkSuite.workflowRun) &&
+        isRecord(checkSuite.workflowRun.workflow)
+          ? text(checkSuite.workflowRun.workflow.name)
+          : "";
+      return { ...run, workflowName: workflow };
+    }),
+  };
+}
+
+const ownerAndName = (repo: string) => {
+  const [owner = "", name = ""] = repo.split("/");
+  return { owner, name };
+};
+
+const repositoryOf = (data: unknown) =>
+  isRecord(data) && isRecord(data.repository) ? data.repository : undefined;
+
+/** The one a branch names, the way `gh pr view <branch>` picks it: an open one, else the last. */
+function pickForBranch(found: PullRequestInfo[]): PullRequestInfo | undefined {
+  const last = (list: PullRequestInfo[]) =>
+    list.reduce<PullRequestInfo | undefined>(
+      (a, b) => (!a || b.number > a.number ? b : a),
+      undefined,
+    );
+  return last(found.filter((p) => p.state === "open" || p.state === "draft")) ?? last(found);
+}
+
+/**
+ * Pull requests through MoonAgentic's own GitHub sign-in, with GitHub's GraphQL API: what
+ * `gh` would have printed, read the same way. Needs no program on the machine.
+ */
+export function apiPullRequests(account: Pick<GithubAccount, "graphql">): PullRequests {
+  return {
+    async find(repo, ref) {
+      const { owner, name } = ownerAndName(repo);
+      if (/^\d{1,9}$/.test(ref)) {
+        let data: unknown;
+        try {
+          data = await account.graphql(PR_BY_NUMBER, { owner, name, number: Number(ref) });
+        } catch (error) {
+          // NOT_FOUND also means no such repository, or none this account may read: only a
+          // missing pull request is « none ».
+          const missing =
+            error instanceof GithubQueryError &&
+            error.type === "NOT_FOUND" &&
+            /pull ?request/i.test(error.message);
+          if (missing) return undefined;
+          throw error;
+        }
+        const pull = repositoryOf(data)?.pullRequest;
+        return pull ? parsePullRequestRecord(flatten(pull), repo) : undefined;
+      }
+      const data = await account.graphql(PR_BY_BRANCH, { owner, name, branch: ref });
+      // One from a fork's branch of the same name is not the thread's.
+      const found = nodes(repositoryOf(data)?.pullRequests)
+        .filter((n) => isRecord(n) && n.isCrossRepository !== true)
+        .map((n) => parsePullRequestRecord(flatten(n), repo))
+        .filter((p): p is PullRequestInfo => !!p);
+      return pickForBranch(found);
+    },
+    async listOpen(repo) {
+      const data = await account.graphql(PR_OPEN, ownerAndName(repo));
+      return parsePullRequestList(
+        JSON.stringify(nodes(repositoryOf(data)?.pullRequests).map(flatten)),
+        repo,
+      );
+    },
+    async remarks(repo, number) {
+      const data = await account.graphql(REMARKS_QUERY, { ...ownerAndName(repo), number });
+      return remarksOf({ data });
+    },
+    async resolveRemark(threadId) {
+      await account.graphql(RESOLVE, { id: threadId });
+    },
+    async merge(repo, number, head) {
+      const info = repositoryOf(
+        await account.graphql(MERGE_INFO, { ...ownerAndName(repo), number }),
+      );
+      const id = isRecord(info?.pullRequest) ? text(info.pullRequest.id) : "";
+      if (!id) throw new Error(`La PR #${number} n'existe pas dans ${repo}.`);
+      const method =
+        info?.mergeCommitAllowed === false
+          ? info.squashMergeAllowed === false
+            ? "REBASE"
+            : "SQUASH"
+          : "MERGE";
+      // The branch is left alone: the thread still works on it.
+      await account.graphql(MERGE, { id, head, method });
+    },
+  };
+}
+
+/** The user's `gh`, run with MoonAgentic's own GitHub account when it is signed in. */
+function ghOnMachine(gh: string): PullRequests {
   return ghPullRequests(
     (args, timeout) =>
       new Promise((resolve, reject) => {
@@ -390,4 +555,20 @@ export function localPullRequests(): PullRequests | undefined {
         );
       }),
   );
+}
+
+/**
+ * What reads pull requests here: MoonAgentic's own GitHub sign-in when it has one, which needs
+ * nothing installed, else the user's `gh` when it is installed; else nothing.
+ */
+export async function localPullRequests(
+  options: {
+    account?: () => GithubAccount | undefined;
+    gh?: () => string | undefined;
+  } = {},
+): Promise<PullRequests | undefined> {
+  const account = (options.account ?? githubAccount)();
+  if (await account?.currentToken()) return apiPullRequests(account!);
+  const gh = (options.gh ?? findGh)();
+  return gh ? ghOnMachine(gh) : undefined;
 }

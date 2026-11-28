@@ -8,17 +8,21 @@ import {
   type PullRequestInfo,
   type ServerMessage,
 } from "@moonagentic/protocol";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Agents } from "../src/agents.ts";
 import { type Client, Hub, leadOf, summaryOf } from "../src/hub.ts";
+import { openPullRequestWith } from "../src/git.ts";
 import {
+  apiPullRequests,
   type GhRun,
   ghPullRequests,
+  localPullRequests,
   parsePullRequest,
   parsePullRequestUrl,
   type PullRequests,
 } from "../src/pull-request.ts";
 import { Store } from "../src/store.ts";
+import { fakeGithubApi, graphqlPull, signedInAccount } from "./fake-github-api.ts";
 
 const HEAD = "a".repeat(40);
 
@@ -1109,5 +1113,254 @@ describe("batched PR polling, remote cache and idle cadence", () => {
       .map((t) => t.id)
       .sort();
     expect(ids).toEqual(["t-draft", "t-open", "t-opened"]);
+  });
+});
+
+describe("pull requests through MoonAgentic's own GitHub sign-in", () => {
+  const checks = {
+    nodes: [
+      {
+        commit: {
+          statusCheckRollup: {
+            contexts: {
+              nodes: [
+                {
+                  __typename: "CheckRun",
+                  name: "test",
+                  status: "COMPLETED",
+                  conclusion: "FAILURE",
+                  startedAt: "2026-11-27T10:00:00Z",
+                  detailsUrl: "https://github.com/moon/demo/actions/runs/1/job/1",
+                  checkSuite: { workflowRun: { workflow: { name: "CI" } } },
+                },
+                {
+                  __typename: "CheckRun",
+                  name: "test",
+                  status: "COMPLETED",
+                  conclusion: "SUCCESS",
+                  startedAt: "2026-11-27T11:00:00Z",
+                  detailsUrl: "https://github.com/moon/demo/actions/runs/2/job/1",
+                  checkSuite: { workflowRun: { workflow: { name: "CI" } } },
+                },
+                {
+                  __typename: "StatusContext",
+                  context: "deploy",
+                  state: "PENDING",
+                  targetUrl: "https://example.com/deploy",
+                  createdAt: "2026-11-27T11:00:00Z",
+                },
+              ],
+            },
+          },
+        },
+      },
+    ],
+  };
+
+  async function api(answer: Parameters<typeof fakeGithubApi>[0]) {
+    const fake = await fakeGithubApi(answer);
+    cleanups.push(fake.close);
+    return { ...fake, github: apiPullRequests(signedInAccount(fake.url, "gho_moon")) };
+  }
+
+  it("reads one by its number, its checks as gh gives them, with the account's token", async () => {
+    const { github, calls } = await api(() => ({
+      data: { repository: { pullRequest: graphqlPull({ commits: checks }) } },
+    }));
+    expect(await github.find("moon/demo", "42")).toEqual({
+      repo: "moon/demo",
+      number: 42,
+      url: "https://github.com/moon/demo/pull/42",
+      title: "Donne la réponse",
+      state: "open",
+      head: "a".repeat(40),
+      base: "main",
+      conflicts: false,
+      blocked: false,
+      // The run again counts once, as its last run.
+      checks: [
+        { name: "test", state: "passed", url: "https://github.com/moon/demo/actions/runs/2/job/1" },
+        { name: "deploy", state: "pending", url: "https://example.com/deploy" },
+      ],
+      author: "moon",
+      createdAt: Date.parse("2026-11-27T10:00:00Z"),
+      additions: 3,
+      deletions: 1,
+      files: 1,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ path: "/graphql", auth: "Bearer gho_moon" });
+  });
+
+  it("finds none for a number with no pull request, but says when the repository is out of reach", async () => {
+    let missing = "Could not resolve to a PullRequest with the number of 999.";
+    const { github } = await api(() => ({
+      data: { repository: { pullRequest: null } },
+      errors: [{ type: "NOT_FOUND", message: missing }],
+    }));
+    expect(await github.find("moon/demo", "999")).toBeUndefined();
+    missing = "Could not resolve to a Repository with the name 'moon/secret'.";
+    await expect(github.find("moon/secret", "1")).rejects.toThrow(
+      "Could not resolve to a Repository",
+    );
+  });
+
+  it("finds a branch's pull request: an open one first, never a fork's", async () => {
+    const { github, calls } = await api(() => ({
+      data: {
+        repository: {
+          pullRequests: {
+            nodes: [
+              graphqlPull({ number: 50, isCrossRepository: true }),
+              graphqlPull({ number: 45, state: "MERGED" }),
+              graphqlPull({ number: 44 }),
+              graphqlPull({ number: 40, state: "CLOSED" }),
+            ],
+          },
+        },
+      },
+    }));
+    expect((await github.find("moon/demo", "feature"))?.number).toBe(44);
+    expect(calls[0]?.variables).toEqual({ owner: "moon", name: "demo", branch: "feature" });
+  });
+
+  it("lists the open ones by branch, in one question", async () => {
+    const { github, calls } = await api(() => ({
+      data: {
+        repository: {
+          pullRequests: {
+            nodes: [
+              graphqlPull({ number: 44, headRefName: "a" }),
+              graphqlPull({ number: 45, headRefName: "b", isDraft: true }),
+              graphqlPull({ number: 46, headRefName: "a", isCrossRepository: true }),
+            ],
+          },
+        },
+      },
+    }));
+    const open = await github.listOpen!("moon/demo");
+    expect([...open].map(([branch, pr]) => [branch, pr.number, pr.state])).toEqual([
+      ["a", 44, "open"],
+      ["b", 45, "draft"],
+    ]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("merges the way the repository allows, only if its last commit is still the one seen", async () => {
+    const { github, calls } = await api((call) =>
+      call.query?.includes("mergeCommitAllowed")
+        ? {
+            data: {
+              repository: {
+                mergeCommitAllowed: false,
+                squashMergeAllowed: true,
+                rebaseMergeAllowed: true,
+                pullRequest: { id: "PR_node" },
+              },
+            },
+          }
+        : { data: { mergePullRequest: { pullRequest: { state: "MERGED" } } } },
+    );
+    await github.merge("moon/demo", 42, "b".repeat(40));
+    expect(calls[1]?.query).toContain("mergePullRequest");
+    expect(calls[1]?.variables).toEqual({ id: "PR_node", head: "b".repeat(40), method: "SQUASH" });
+  });
+
+  it("says why GitHub refused a merge", async () => {
+    const { github } = await api((call) =>
+      call.query?.includes("mergeCommitAllowed")
+        ? { data: { repository: { pullRequest: { id: "PR_node" } } } }
+        : { errors: [{ type: "UNPROCESSABLE", message: "Head branch was modified." }] },
+    );
+    await expect(github.merge("moon/demo", 42, "b".repeat(40))).rejects.toThrow(
+      "Head branch was modified.",
+    );
+  });
+
+  it("reads the review remarks and resolves a conversation", async () => {
+    const { github, calls } = await api((call) =>
+      call.query?.includes("resolveReviewThread")
+        ? { data: { resolveReviewThread: { thread: { isResolved: true } } } }
+        : {
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [
+                      {
+                        id: "T1",
+                        isResolved: false,
+                        path: "a.ts",
+                        line: 3,
+                        comments: {
+                          nodes: [{ author: { login: "neon" }, body: "Ça casse ici.", url: "" }],
+                        },
+                      },
+                    ],
+                  },
+                  reviews: { nodes: [] },
+                },
+              },
+            },
+          },
+    );
+    expect(await github.remarks!("moon/demo", 42)).toEqual([
+      { id: "T1", kind: "thread", author: "neon", path: "a.ts", line: 3, body: "Ça casse ici." },
+    ]);
+    await github.resolveRemark!("T1");
+    expect(calls[1]?.variables).toEqual({ id: "T1" });
+  });
+
+  it("is what reads pull requests when MoonAgentic is signed in, gh or not", async () => {
+    const fake = await fakeGithubApi(() => ({ data: {} }));
+    cleanups.push(fake.close);
+    const account = signedInAccount(fake.url);
+    const gh = vi.fn(() => "/usr/bin/gh");
+    await localPullRequests({ account: () => account, gh });
+    expect(gh).not.toHaveBeenCalled();
+    await account.logout();
+    expect(
+      await localPullRequests({ account: () => account, gh: () => undefined }),
+    ).toBeUndefined();
+    expect(await localPullRequests({ account: () => account, gh })).toBeDefined();
+  });
+
+  it("opens the pull request of a branch, or gives back the one already open", async () => {
+    let open: unknown[] = [];
+    const fake = await fakeGithubApi((call) =>
+      call.method === "GET"
+        ? open
+        : call.body?.base === "nope"
+          ? {
+              status: 422,
+              body: {
+                message: "Validation Failed",
+                errors: [{ message: "base nope does not exist" }],
+              },
+            }
+          : { html_url: "https://github.com/moon/demo/pull/43" },
+    );
+    cleanups.push(fake.close);
+    const account = signedInAccount(fake.url);
+    expect(
+      await openPullRequestWith(account, "moon/demo", "feat/x", "main", "Titre", "Corps"),
+    ).toEqual({
+      url: "https://github.com/moon/demo/pull/43",
+    });
+    expect(fake.calls[0]?.path).toBe("/repos/moon/demo/pulls?state=open&head=moon%3Afeat%2Fx");
+    expect(fake.calls[1]).toMatchObject({
+      method: "POST",
+      path: "/repos/moon/demo/pulls",
+      body: { title: "Titre", head: "feat/x", base: "main", body: "Corps" },
+    });
+    expect(
+      await openPullRequestWith(account, "moon/demo", "feat/x", "nope", "Titre", "Corps"),
+    ).toEqual({ error: "GitHub a répondu 422 : Validation Failed ; base nope does not exist." });
+    open = [{ html_url: "https://github.com/moon/demo/pull/41" }];
+    expect(
+      await openPullRequestWith(account, "moon/demo", "feat/x", "main", "Titre", "Corps"),
+    ).toEqual({
+      url: "https://github.com/moon/demo/pull/41",
+    });
   });
 });
