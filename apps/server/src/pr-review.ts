@@ -3,6 +3,7 @@
 import {
   applyRulings,
   applyVotes,
+  reviewAtWork,
   type PrJudge,
   type ReviewRuling,
   type PrReview,
@@ -732,6 +733,16 @@ export function reviewStatus(review: PrReview): string {
       (r, i) => `Relecteur ${i + 1}, ${name(i)} : ${r.status}${r.error ? ` (${r.error})` : ""}.`,
     ),
   ];
+  if (review.phase === "failed" && review.reviewers.every((r) => r.status === "waiting")) {
+    lines.push(
+      `La revue a échoué avant que les relecteurs ne commencent${review.error ? ` : ${review.error}` : "."}`,
+      "Ne relis pas la PR toi-même : ce sont les relecteurs qui la relisent. Dis à l'utilisateur, en une ou deux phrases, que la revue a échoué et pourquoi, et qu'il peut la relancer avec « Relancer la revue » sur la carte une fois le problème réglé.",
+    );
+  } else if (reviewAtWork(review)) {
+    lines.push(
+      "La revue est en cours : ne relis pas la PR toi-même, les relecteurs s'en chargent. Réponds avec ce qu'ils ont déjà trouvé.",
+    );
+  }
   for (const p of review.points ?? []) {
     const where = p.file ? `${p.file}${p.line ? `:${p.line}` : ""}` : "sans fichier";
     lines.push(

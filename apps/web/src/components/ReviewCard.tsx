@@ -49,7 +49,11 @@ export function reviewHeadline(review: PrReview): string {
   }
 }
 
-function reviewerState(r: PrReviewer, thread: Thread | undefined): { text: string; tone: string } {
+export function reviewerState(
+  r: PrReviewer,
+  thread: Thread | undefined,
+  review: PrReview,
+): { text: string; tone: string } {
   if (r.debate === "running") {
     if (thread?.status === "waiting") return { text: "T'attend", tone: "warn" };
     if (thread?.inLine) return { text: "Attend une place", tone: "muted" };
@@ -58,7 +62,10 @@ function reviewerState(r: PrReviewer, thread: Thread | undefined): { text: strin
   if (r.debate === "failed") return { text: "Confrontation en échec", tone: "err" };
   switch (r.status) {
     case "waiting":
-      return { text: "Démarre", tone: "work" };
+      // A review that failed or was stopped before them never starts them.
+      return reviewAtWork(review)
+        ? { text: "Démarre", tone: "work" }
+        : { text: "Pas lancé", tone: "muted" };
     case "running":
       if (thread?.status === "waiting") return { text: "T'attend", tone: "warn" };
       if (thread?.inLine) return { text: "Attend une place", tone: "muted" };
@@ -299,6 +306,8 @@ export function ReviewCard({
   const ruled = points.filter((p) => p.ruling).length;
   const debated = review.phase !== "debating" && points.some((p) => p.outcome);
   const fixable = !atWork && standing.length > 0 && !!owner;
+  // Failed before any reviewer started: the pull request could not be read, say.
+  const restartable = review.phase === "failed" && !thread.workspace;
 
   return (
     <section className="tmc" aria-label={`Revue de la PR #${review.number}`}>
@@ -328,7 +337,7 @@ export function ReviewCard({
       <div className="tml">
         {review.reviewers.map((r, i) => {
           const own = r.threadId ? threads.find((t) => t.id === r.threadId) : undefined;
-          const state = reviewerState(r, own);
+          const state = reviewerState(r, own, review);
           const look = rowLook(state.tone, !!r.findings?.length);
           const failed = (r.status === "failed" || r.status === "stopped") && !!own;
           return (
@@ -501,6 +510,24 @@ export function ReviewCard({
             onClick={() => connection.send({ type: "review.stop", threadId: thread.id })}
           >
             Arrêter la revue
+          </button>
+        </div>
+      ) : restartable ? (
+        <div className="pra">
+          <button
+            type="button"
+            className="b2 ink press"
+            onClick={() =>
+              act(
+                connection.request({
+                  type: "review.restart",
+                  requestId: newId(),
+                  threadId: thread.id,
+                }),
+              )
+            }
+          >
+            Relancer la revue
           </button>
         </div>
       ) : (

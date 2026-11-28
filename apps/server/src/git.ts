@@ -17,7 +17,7 @@ import path from "node:path";
 import type { ReviewFile } from "@moonagentic/protocol";
 import { findOnPath } from "./agents.ts";
 import { GIT_QUIET, gitQuietEnv } from "./git-own.ts";
-import { githubAccount } from "./github-account.ts";
+import { type GithubAccount, githubAccount } from "./github-account.ts";
 import { githubGitAuth } from "./github.ts";
 
 const MAX_PATCH_LINES = 2000;
@@ -1050,18 +1050,20 @@ export async function ship(
 
   const base = options.baseBranch ?? "main";
   const compare = `https://github.com/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(options.branch)}?expand=1`;
+  const title = prTitle(options.title);
+  const body = options.body ?? "Ouverte depuis MoonAgentic.";
+  // MoonAgentic's own GitHub sign-in first, which needs nothing installed; else the user's `gh`.
+  const own = githubAccount();
   const gh = findOnPath("gh");
-  // A `.cmd` could only run through cmd.exe, which would read the thread's title as a script.
-  if (!gh || /\.(cmd|bat)$/i.test(gh)) return { ...result, url: compare };
-  const opened = await openPullRequest(
-    gh,
-    dir,
-    repo,
-    options.branch,
-    base,
-    prTitle(options.title),
-    options.body ?? "Ouverte depuis MoonAgentic.",
-  );
+  let opened: { url?: string; error?: string };
+  if (own && (await own.currentToken())) {
+    opened = await openPullRequestWith(own, repo, options.branch, base, title, body);
+  } else if (gh && !/\.(cmd|bat)$/i.test(gh)) {
+    // A `.cmd` could only run through cmd.exe, which would read the thread's title as a script.
+    opened = await openPullRequest(gh, dir, repo, options.branch, base, title, body);
+  } else {
+    return { ...result, url: compare };
+  }
   if (opened.url) return { ...result, url: opened.url, prOpened: true };
   return { ...result, url: compare, ...(opened.error ? { prError: opened.error } : {}) };
 }
@@ -1109,6 +1111,45 @@ async function commitOnly(
     ]);
     return (await git(dir, ["rev-parse", "HEAD"])).trim();
   });
+}
+
+/**
+ * Opens the pull request with MoonAgentic's own GitHub sign-in, through GitHub's API, or finds
+ * the one already open from this branch.
+ */
+export async function openPullRequestWith(
+  account: Pick<GithubAccount, "rest">,
+  repo: string,
+  branch: string,
+  base: string,
+  title: string,
+  body: string,
+): Promise<{ url?: string; error?: string }> {
+  const owner = repo.split("/")[0] ?? "";
+  const urlOf = (pull: unknown) =>
+    typeof pull === "object" &&
+    pull !== null &&
+    typeof (pull as { html_url?: unknown }).html_url === "string"
+      ? (pull as { html_url: string }).html_url
+      : undefined;
+  try {
+    const open = await account.rest(
+      "GET",
+      `/repos/${repo}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branch}`)}`,
+    );
+    const url = Array.isArray(open) ? urlOf(open[0]) : undefined;
+    if (url) return { url };
+  } catch {
+    // asked again below: GitHub says why if it refuses to open one
+  }
+  try {
+    const url = urlOf(
+      await account.rest("POST", `/repos/${repo}/pulls`, { title, head: branch, base, body }),
+    );
+    return url ? { url } : { error: "GitHub n'a pas donné l'adresse de la pull request." };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /** Opens the pull request with the user's own `gh` sign-in, or finds the one already open. */

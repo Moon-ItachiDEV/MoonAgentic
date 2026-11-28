@@ -199,6 +199,9 @@ export interface Client {
 }
 
 /** How long the server waits for its last words to leave before it lets itself be replaced. */
+/** Why nothing here can ask GitHub about pull requests, and what makes it work. */
+const NO_GITHUB = (to: string) =>
+  `Connecte MoonAgentic à GitHub (Connexions › GitHub) pour ${to}, ou installe GitHub CLI (gh).`;
 const FLUSH_MS = 1000;
 /** The changed files a result names; the others are counted. */
 const RESULT_FILES = 6;
@@ -318,7 +321,7 @@ export interface HubOptions {
   idleMs?: number;
   maxLiveAgents?: number;
   /** Where pull requests are read and merged; the user's own `gh` unless given. */
-  pullRequests?: () => PullRequests | undefined;
+  pullRequests?: () => PullRequests | undefined | Promise<PullRequests | undefined>;
   /** Resolves a folder's GitHub `owner/name`; `githubRemote` unless given. */
   resolveGithubRemote?: (dir: string) => Promise<string | undefined>;
   /** How often known pull requests are asked about again; 0 for never. */
@@ -662,7 +665,7 @@ export class Hub {
   private readonly skillRepos: RepoCache;
   private readonly skillRuns: SkillRuns;
   private readonly skillsEnv: NodeJS.ProcessEnv;
-  private readonly pullRequests: () => PullRequests | undefined;
+  private readonly pullRequests: () => PullRequests | undefined | Promise<PullRequests | undefined>;
   private readonly resolveGithubRemote: (dir: string) => Promise<string | undefined>;
   private readonly prIdleWatchMs: number;
   private readonly remoteCacheMs: number;
@@ -727,7 +730,7 @@ export class Hub {
     this.skillRuns = new SkillRuns((runId, part) =>
       this.broadcast({ type: "skillRun", runId, ...part }),
     );
-    this.pullRequests = options.pullRequests ?? localPullRequests;
+    this.pullRequests = options.pullRequests ?? (() => localPullRequests());
     this.resolveGithubRemote = options.resolveGithubRemote ?? githubRemote;
     this.prIdleWatchMs = options.prIdleWatchMs ?? PR_IDLE_WATCH_MS;
     this.remoteCacheMs = options.remoteCacheMs ?? REMOTE_CACHE_MS;
@@ -2144,6 +2147,10 @@ export class Hub {
         this.reviews.retry(message.threadId, message.index);
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "review.restart":
+        this.restartPrReview(message.threadId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "team.ship":
         await this.teams.ship(message.threadId);
         client.send({ type: "done", requestId: message.requestId });
@@ -2840,7 +2847,13 @@ export class Hub {
         startedAt: Date.now(),
       },
     });
-    const step = this.prepareReview(id, project, number, at?.repo).catch((error: unknown) => {
+    this.prepareInBackground(id, project, number, at?.repo);
+    return id;
+  }
+
+  /** Fetches the pull request, then starts the reviewers; what goes wrong is kept on the review. */
+  private prepareInBackground(id: string, project: Project, number: number, asked?: string) {
+    const step = this.prepareReview(id, project, number, asked).catch((error: unknown) => {
       const review = this.store.getThread(id)?.prReview;
       if (!review || this.closed) return;
       this.updateThread(id, {
@@ -2854,7 +2867,36 @@ export class Hub {
     });
     this.steps.add(step);
     void step.finally(() => this.steps.delete(step));
-    return id;
+  }
+
+  /**
+   * « Relancer la revue »: a review that failed before any reviewer started (the pull request
+   * could not be read, say) starts over in its own thread, with the same reviewers.
+   */
+  restartPrReview(threadId: string): void {
+    const thread = this.requireThread(threadId);
+    const review = thread.prReview;
+    if (!review || review.phase !== "failed" || thread.workspace) {
+      throw new Error("Seule une revue qui a échoué avant de commencer peut être relancée ici.");
+    }
+    const project = this.store.getProject(thread.projectId);
+    if (!project) throw new Error("Projet introuvable.");
+    for (const r of review.reviewers) this.agents.launch(r.agentId);
+    if (review.judge) this.agents.launch(review.judge.agentId);
+    const { error: _error, endedAt: _endedAt, ...rest } = review;
+    this.updateThread(threadId, {
+      prReview: {
+        ...rest,
+        phase: "preparing",
+        reviewers: review.reviewers.map((r) => ({
+          agentId: r.agentId,
+          ...(r.model ? { model: r.model } : {}),
+          status: "waiting" as const,
+        })),
+        startedAt: Date.now(),
+      },
+    });
+    this.prepareInBackground(threadId, project, review.number, review.repo || undefined);
   }
 
   /** Fetches the pull request into a folder of the review's own, then starts its reviewers. */
@@ -2869,8 +2911,8 @@ export class Hub {
     if (asked && asked.toLowerCase() !== repo.toLowerCase()) {
       throw new Error(`Cette PR est dans ${asked}, mais ce projet est ${repo}.`);
     }
-    const github = this.pullRequests();
-    if (!github) throw new Error("GitHub CLI (gh) est requis pour lire la PR.");
+    const github = await this.pullRequests();
+    if (!github) throw new Error(NO_GITHUB("lire la PR"));
     const pr = await github.find(repo, String(number));
     if (!pr) throw new Error(`La PR #${number} n'existe pas dans ${repo}.`);
     const { head, mergeBase } = await fetchPullRequest(project.path, number, pr.head, pr.base);
@@ -3896,7 +3938,7 @@ export class Hub {
     const thread = this.requireThread(threadId);
     const workspace = thread.workspace;
     if (!workspace?.base) return undefined;
-    const github = this.pullRequests();
+    const github = await this.pullRequests();
     if (!github) return undefined;
     const repo = await this.githubRemoteFor(
       thread.projectId,
@@ -3951,8 +3993,7 @@ export class Hub {
     if (remark.settled) return found;
     if (remark.kind === "thread") {
       const on = await this.branchOnGithub(threadId);
-      if (!on?.github.resolveRemark)
-        throw new Error("GitHub CLI (gh) est requis pour régler une remarque.");
+      if (!on?.github.resolveRemark) throw new Error(NO_GITHUB("régler une remarque"));
       await on.github.resolveRemark(remark.id);
     } else {
       const all = this.store.getSetting<Record<string, string[]>>(SETTLED_REVIEWS, {});
@@ -4131,7 +4172,7 @@ export class Hub {
     if (this.watching || this.closed) return;
     this.watching = true;
     try {
-      const github = this.pullRequests();
+      const github = await this.pullRequests();
       if (!github) return;
       const candidates = this.store.listWatchedPrThreads().filter((t) => !!t.workspace?.base);
       if (!candidates.length) return;
@@ -4191,7 +4232,7 @@ export class Hub {
     head: string,
   ): Promise<PullRequestInfo | undefined> {
     const on = await this.branchOnGithub(threadId);
-    if (!on) throw new Error("GitHub CLI (gh) est requis pour merger depuis MoonAgentic.");
+    if (!on) throw new Error(NO_GITHUB("merger depuis MoonAgentic"));
     const pr = await on.github.find(on.repo, on.branch);
     if (!pr || pr.number !== number)
       throw new Error("Cette pull request n'est plus celle de la branche du fil.");
@@ -4216,7 +4257,7 @@ export class Hub {
   async pullRequestAt(url: string): Promise<PullRequestInfo | undefined> {
     const at = parsePullRequestUrl(url);
     if (!at) throw new Error("Ce n'est pas l'adresse d'une pull request GitHub.");
-    return this.pullRequests()?.find(at.repo, String(at.number));
+    return (await this.pullRequests())?.find(at.repo, String(at.number));
   }
 
   /**
