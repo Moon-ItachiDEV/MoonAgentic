@@ -40,6 +40,7 @@ import type { Hub } from "./hub.ts";
 import type { McpServerRecord } from "./mcp.ts";
 import { coordinatorSettingsOf, isTeamPreset } from "./saved-shapes.ts";
 import { fold, type Store } from "./store.ts";
+import { workerModel } from "./worker-model.ts";
 
 /** Threads a coordinator may open while answering one message, so a mistake cannot flood. */
 const MAX_OPENED_PER_TURN = 4;
@@ -122,7 +123,7 @@ Ce que tu fais :
 
 Si un outil échoue, dis-le tout de suite à l'utilisateur en une phrase, avec ce qu'il peut faire, au lieu de chercher longtemps un autre chemin. N'utilise pas le mode plan : tu ne codes pas, tu ouvres des fils.
 
-Après un outil, dis en une phrase ce que tu as fait : l'interface montre déjà le fil ouvert et son état juste en dessous, ne le décris pas. Reste bref : pas de plan, pas de récapitulatif, pas de liste des outils utilisés. Réponds dans la langue de l'utilisateur.
+Après un outil, dis en une phrase ce que tu as fait, en nommant l'agent qui reçoit la mission (agent_name dans la réponse de l'outil), par exemple « J'ai confié la retouche à Gemini 4 Neon. » : l'interface montre déjà le fil ouvert et son état juste en dessous, ne le décris pas. Reste bref : pas de plan, pas de récapitulatif, pas de liste des outils utilisés. Réponds dans la langue de l'utilisateur.
 
 Comment écrire :
 - Commence par la réponse en une ou deux phrases simples.
@@ -437,6 +438,26 @@ export class Coordinators {
     }
   }
 
+  /** See `workerModel`: the agent's models as last listed. */
+  workerModel(agentId: string, model: string | undefined): string | undefined {
+    return workerModel(
+      this.host.catalog.list().find((a) => a.id === agentId),
+      model,
+    );
+  }
+
+  /**
+   * Who works the thread, as its answers are signed: the model's name (« Gemini 4 Neon »),
+   * else the agent's.
+   */
+  private speaker(t: Thread): string {
+    const agent = this.host.catalog.list().find((a) => a.id === t.agentId);
+    if (!agent) return t.agentId;
+    const id = t.model ?? agent.defaultModel;
+    const name = agent.models?.find((m) => m.id === id)?.name.trim();
+    return name && !/^default\b/i.test(name) ? name : agent.name;
+  }
+
   /** What a bridge caller is shown of a thread: its real state, nothing made up. */
   private threadForCoordinator(
     t: Thread,
@@ -458,6 +479,7 @@ export class Coordinators {
           ],
       agent: t.agentId,
       ...(t.model ? { model: t.model } : {}),
+      agent_name: this.speaker(t),
       ...(asking ? { waits_on: "une réponse de l'utilisateur" } : {}),
       ...(t.error ? { error: t.error } : {}),
       ...(t.team
@@ -778,15 +800,16 @@ export class Coordinators {
         );
         const asked = str("agent", 200);
         const agentId = asked ?? route?.agentId ?? coordinator.agentId;
+        // The coordinator's own model, when the thread falls back on it: never its orchestrator,
+        // which hands work out rather than doing it.
+        const inherited = asked ? asked === coordinator.agentId : !route;
         const model =
           str("model", 200) ??
-          (asked
-            ? asked === coordinator.agentId
-              ? coordinator.model
-              : undefined
-            : route
-              ? route.model
-              : coordinator.model);
+          (inherited
+            ? this.workerModel(coordinator.agentId, coordinator.model)
+            : asked
+              ? undefined
+              : route?.model);
         const id = this.host.createThread({
           projectId: scope.projectId,
           agentId,
