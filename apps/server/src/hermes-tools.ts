@@ -1,5 +1,6 @@
 // What Hermes Agent can do in MoonAgentic from Discord, as the MCP tools of the small bridge it
 // starts. Kept apart from the server so that bridge loads nothing else.
+import type { PlanStatus } from "@moonagentic/protocol";
 import type { CoordinatorTool } from "./coordinator-tools.ts";
 
 /** Where the bridge calls this MoonAgentic, on this computer only. */
@@ -7,6 +8,17 @@ export const HERMES_PATH = "/api/hermes";
 
 /** How long `ask_coordinator` waits for the coordinator's answer before saying it still works. */
 export const ASK_WAIT_MS = 13 * 60_000;
+
+/** The Planner's columns, in order, as the app names them. */
+export const PLAN_COLUMNS: Record<PlanStatus, string> = {
+  todo: "À faire",
+  doing: "En cours",
+  report: "Reporté",
+  test: "En test",
+  live: "Livré",
+};
+
+const columns = Object.values(PLAN_COLUMNS);
 
 const project = {
   type: "string",
@@ -78,24 +90,63 @@ export const HERMES_TOOLS: CoordinatorTool[] = [
         column: {
           type: "string",
           description: "Seulement cette colonne.",
-          enum: ["À faire", "En cours", "Reporté", "En test", "Livré"],
+          enum: columns,
         },
       },
     },
   },
   {
     name: "add_plan_card",
-    description: "Ajoute une carte « À faire » au Planner d'un projet, avec ses dates si données.",
+    description:
+      "Ajoute une carte au Planner d'un projet, dans la colonne voulue (« À faire » sans « column »), avec ses dates si données : l'échéance la place dans la Timeline.",
     inputSchema: {
       type: "object",
       properties: {
         project,
         title: { type: "string", description: "Titre court de la tâche." },
         description: { type: "string", description: "Le détail, si l'utilisateur en donne." },
+        column: { type: "string", description: "Sa colonne.", enum: columns },
         start: { type: "string", description: "Jour de début, AAAA-MM-JJ." },
         due: { type: "string", description: "Jour d'échéance, AAAA-MM-JJ." },
       },
       required: ["project", "title"],
+    },
+  },
+  {
+    name: "update_plan_card",
+    description:
+      "Déplace une carte du Planner vers une autre colonne, ou change son titre, sa description, ses dates. Seuls les champs donnés changent ; une chaîne vide efface la description ou une date. Une carte liée à un fil ou à une équipe suit son travail : elle ne se déplace pas à la main.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project,
+        card: {
+          type: "string",
+          description: "Le numéro de la carte, comme « #12 » (read_planner).",
+        },
+        column: { type: "string", description: "Sa nouvelle colonne.", enum: columns },
+        title: { type: "string", description: "Nouveau titre." },
+        description: { type: "string", description: "Nouvelle description." },
+        start: { type: "string", description: "Jour de début, AAAA-MM-JJ." },
+        due: { type: "string", description: "Jour d'échéance, AAAA-MM-JJ." },
+      },
+      required: ["project", "card"],
+    },
+  },
+  {
+    name: "remove_plan_card",
+    description:
+      "Supprime une carte du Planner. Seulement sur demande explicite de l'utilisateur. Son fil, s'il en a un, reste.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        project,
+        card: {
+          type: "string",
+          description: "Le numéro de la carte, comme « #12 » (read_planner).",
+        },
+      },
+      required: ["project", "card"],
     },
   },
   {

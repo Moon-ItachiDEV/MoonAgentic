@@ -767,6 +767,8 @@ export class Hub {
         sendFromHermes: (id, text) => this.sendFromHermes(id, text),
         planCards: () => this.planner.list(),
         addPlanCard: (input) => this.planner.add(input, { source: "hermes" }),
+        updatePlanCard: (id, patch) => this.planner.update(id, patch),
+        removePlanCard: (id) => this.planner.remove(id),
         addSchedule: (input) => this.hermesSchedule(input),
         pendingRequests: () => this.pendingRequests(),
         pendingQuestions: () => this.pendingQuestions(),
