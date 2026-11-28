@@ -92,6 +92,7 @@ function setup(over: Partial<AppUpdatesOptions> = {}) {
     advance: (ms: number) => {
       clock += ms;
     },
+    now: () => clock,
     tick: () => (app as unknown as { tick(): void }).tick(),
   };
 }
@@ -339,6 +340,53 @@ describe("AppUpdates", () => {
     t.tick();
     expect(t.toShell.filter((m) => m.moon === "check")).toHaveLength(1);
     t.app.setSettings({ checks: false });
+    t.advance(60 * 60_000);
+    t.tick();
+    expect(t.toShell.filter((m) => m.moon === "check")).toHaveLength(1);
+  });
+
+  it("looks every half hour by default: a release published after a look is seen the same hour", () => {
+    const t = setup();
+    t.report(ready({ state: "none", checkedAt: 1_000 }));
+    t.advance(29 * 60_000);
+    t.tick();
+    expect(t.toShell.filter((m) => m.moon === "check")).toHaveLength(0);
+    t.advance(60_000);
+    t.tick();
+    expect(t.toShell.filter((m) => m.moon === "check")).toHaveLength(1);
+  });
+
+  it("looks again when a device opens the app and the last look is not fresh", () => {
+    const t = setup({ everyMs: 6 * 60 * 60_000 });
+    t.report(ready({ state: "none", checkedAt: 1_000 }));
+    // Just looked: opening the app does not ask GitHub again.
+    t.advance(5 * 60_000);
+    t.app.onClientConnect();
+    expect(t.toShell.filter((m) => m.moon === "check")).toHaveLength(0);
+    t.advance(5 * 60_000);
+    t.app.onClientConnect();
+    expect(t.toShell.filter((m) => m.moon === "check")).toHaveLength(1);
+    // Two devices at once: one look, not one each.
+    t.app.onClientConnect();
+    expect(t.toShell.filter((m) => m.moon === "check")).toHaveLength(1);
+    // Not when the user turned looking off.
+    t.report(ready({ state: "none", checkedAt: 1_000 }));
+    t.app.setSettings({ checks: false });
+    t.advance(60 * 60_000);
+    t.app.onClientConnect();
+    expect(t.toShell.filter((m) => m.moon === "check")).toHaveLength(1);
+  });
+
+  it("tries a look that did not reach GitHub again soon, not a failed download", () => {
+    const t = setup({ everyMs: 6 * 60 * 60_000 });
+    t.report(
+      ready({ state: "failed", checkedAt: 1_000, version: undefined, error: "fetch failed" }),
+    );
+    t.advance(10 * 60_000);
+    t.tick();
+    expect(t.toShell.filter((m) => m.moon === "check")).toHaveLength(1);
+    // A download that failed is not fetched again every ten minutes.
+    t.report(ready({ state: "failed", checkedAt: t.now(), error: "Empreinte" }));
     t.advance(60 * 60_000);
     t.tick();
     expect(t.toShell.filter((m) => m.moon === "check")).toHaveLength(1);
