@@ -116,6 +116,7 @@ import {
   isSameOrInside,
   pathsOverlap,
   matchesCheckpoint,
+  prTitle,
   restoreCheckpoint,
   reviewChanges,
   samePath,
@@ -270,6 +271,13 @@ const titleFrom = (text: string, images = 0) => {
  */
 export const ARTIFACT_HINT =
   "Pour montrer à l'utilisateur quelque chose à regarder (maquette, design, présentation de code, schéma, rapport), publie-le avec l'outil publish_artifact de MoonAgentic : il l'ouvre d'un geste sur son téléphone, son iPad ou son ordinateur.";
+
+/**
+ * What the agent of a thread with a branch of its own is told when it starts: its work reaches
+ * GitHub through MoonAgentic's own sign-in, so it never needs `gh` nor sends the user to do it.
+ */
+export const PULL_REQUEST_HINT =
+  "Pour committer, pousser ta branche et ouvrir une pull request, utilise l'outil open_pull_request de MoonAgentic : il passe par la connexion GitHub de l'application, sans gh ni identifiants git. Ne renvoie pas l'utilisateur vers le panneau Code pour ça.";
 
 /** What an agent is told when the message is images alone: it needs some words to answer. */
 const IMAGES_ONLY = "(Message sans texte : regarde l'image jointe.)";
@@ -930,6 +938,8 @@ export class Hub {
       confirmMemoryWrite: (threadId, content, replace, signal) =>
         this.confirmMemoryWrite(threadId, content, replace, signal),
       publishArtifact: (threadId, input) => this.publishArtifact(threadId, input),
+      openPullRequest: (threadId, input, signal) =>
+        this.openPullRequestForAgent(threadId, input, signal),
     });
     store.recoverAfterRestart();
     // Messages the index does not have yet: all of them, the first time after an update.
@@ -3875,6 +3885,8 @@ export class Hub {
     /** The pull request's title; otherwise the thread's. */
     title?: string,
     body?: string,
+    /** Asked by the thread's own agent in the middle of its turn, which it does not wait for. */
+    byItsAgent = false,
   ): Promise<ShipResult> {
     const thread = this.requireLiveThread(threadId);
     const workspace = thread.workspace;
@@ -3882,7 +3894,7 @@ export class Hub {
       throw new Error("Ce fil travaille dans le dossier du projet, sans branche à lui.");
     if (thread.prReview)
       throw new Error("Cette discussion relit une PR : elle n'a rien à pousser.");
-    return this.exclusive(threadId, "Attends la fin de l'envoi de la branche.", async () => {
+    const sent = async () => {
       const result = await ship(workspace.path, {
         branch: workspace.branch,
         message,
@@ -3899,7 +3911,13 @@ export class Hub {
         });
       }
       return result;
-    }).then((result) => {
+    };
+    return this.exclusive(
+      threadId,
+      "Attends la fin de l'envoi de la branche.",
+      sent,
+      byItsAgent,
+    ).then((result) => {
       // Its pull request shows on the lists at once, without waiting for the next round.
       if (result.prOpened && !this.closed) {
         const asked = this.pullRequest(threadId).catch(() => undefined);
@@ -5029,9 +5047,18 @@ export class Hub {
     return this.pool.live;
   }
 
-  /** Runs a step that no turn and no other such step may overlap. */
-  private async exclusive<T>(threadId: string, reason: string, work: () => Promise<T>): Promise<T> {
-    if (this.turns.has(threadId)) throw new Error("Attends la fin de la réponse de l'agent.");
+  /**
+   * Runs a step that no turn and no other such step may overlap. `duringTurn` is for a step
+   * the thread's own agent asks for while it answers: its turn is the one that waits for it.
+   */
+  private async exclusive<T>(
+    threadId: string,
+    reason: string,
+    work: () => Promise<T>,
+    duringTurn = false,
+  ): Promise<T> {
+    if (!duringTurn && this.turns.has(threadId))
+      throw new Error("Attends la fin de la réponse de l'agent.");
     const busy = this.busy.get(threadId);
     if (busy) throw new Error(busy);
     this.busy.set(threadId, reason);
@@ -5357,7 +5384,10 @@ export class Hub {
         !continuing && session.fresh && this.coordinatorUrl && thread.kind !== "coordinator"
           ? ARTIFACT_HINT
           : undefined;
-      const preamble = [memory, history, showing].filter(Boolean).join("\n\n") || undefined;
+      // And how its work reaches GitHub, when the thread has a branch of its own to send.
+      const sending = showing && this.sendsItsBranch(thread.id) ? PULL_REQUEST_HINT : undefined;
+      const preamble =
+        [memory, history, showing, sending].filter(Boolean).join("\n\n") || undefined;
       const said = text.trim() || !images.length ? text : IMAGES_ONLY;
       const prompt = context ? `${context}\n\n${said}` : said;
       const stopReason = await session.prompt(prompt, preamble, [
@@ -6292,8 +6322,9 @@ export class Hub {
     const readOnlyDenied = !!allowed && !allowed.has(request.toolCall.kind ?? "");
     // MoonAgentic's own tools are already limited by the server: asking the user before each
     // one would make them useless. The server itself asks before a thread outside full access
-    // writes the shared memory (`confirmMemoryWrite`), whether its agent asked first or not:
-    // the agent's own request for it is let through here, so the user is asked once.
+    // writes the shared memory (`confirmMemoryWrite`) or sends its branch to GitHub
+    // (`openPullRequestForAgent`), whether its agent asked first or not: the agent's own
+    // request for it is let through here, so the user is asked once.
     this.noteToolName(threadId, request.toolCall);
     // An agent that does not name the tool is taken at its title, for a call of no known kind:
     // never a change of files nor a command.
@@ -6604,6 +6635,92 @@ export class Hub {
     };
   }
 
+  /** Whether the thread has a branch of its own that its agent may send to GitHub itself. */
+  private sendsItsBranch(threadId: string): boolean {
+    const thread = this.store.getThread(threadId);
+    return (
+      !!thread?.workspace?.base &&
+      !thread.prReview &&
+      !thread.parentId &&
+      !thread.team &&
+      !this.isDiscussions(thread.projectId)
+    );
+  }
+
+  /**
+   * `open_pull_request`: what « Envoyer » does in the Code panel, asked by the thread's own
+   * agent while it answers. Outside full access the user agrees first, as for a `git push`
+   * the agent would run itself. What comes back says what really happened, and what to tell
+   * the user when the pull request could not be opened here.
+   */
+  private async openPullRequestForAgent(
+    threadId: string,
+    input: { title: string; body?: string; message?: string },
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const thread = this.requireLiveThread(threadId);
+    // A team merges its members' branches and sends one pull request itself, at the end.
+    if (thread.parentId || thread.team) {
+      throw new Error(
+        "L'équipe envoie elle-même sa pull request quand toutes ses parties sont prêtes : n'en ouvre pas une toi-même.",
+      );
+    }
+    const workspace = thread.workspace;
+    if (!workspace?.base) {
+      throw new Error(
+        "Ce fil travaille directement dans le dossier du projet, sans branche à lui : MoonAgentic ne peut pas en ouvrir de pull request. Dis-le à l'utilisateur.",
+      );
+    }
+    if (thread.prReview)
+      throw new Error("Cette discussion relit une PR : elle n'a rien à pousser.");
+    const title = plainLabel(input.title);
+    if (!title) throw new Error("« title » est requis.");
+    if (thread.permissionMode !== "full") {
+      const agreed = await this.confirmWithUser(
+        threadId,
+        workspace.prOpened
+          ? `Pousser la branche ${workspace.branch} sur sa pull request`
+          : `Pousser la branche ${workspace.branch} et ouvrir la pull request « ${prTitle(title, 80)} »`,
+        signal,
+      );
+      if (!agreed) throw new Error("L'utilisateur a refusé d'envoyer la branche sur GitHub.");
+    }
+    const result = await this.ship(
+      threadId,
+      input.message?.trim() || title,
+      true,
+      undefined,
+      title,
+      input.body,
+      true,
+    );
+    const sent = {
+      branch: workspace.branch,
+      pushed: true,
+      ...(result.commit ? { commit: result.commit } : {}),
+    };
+    if (result.prOpened) {
+      return {
+        ...sent,
+        pull_request: result.url,
+        next: "La pull request est ouverte et l'utilisateur la voit dans le fil. Écris son adresse complète dans ta réponse.",
+      };
+    }
+    if (!result.url) {
+      return {
+        ...sent,
+        next: "La branche est poussée. Ce dépôt n'est pas sur GitHub : il n'y a pas de pull request à ouvrir.",
+      };
+    }
+    return {
+      ...sent,
+      open_here: result.url,
+      next: result.prError
+        ? `La branche est poussée, mais GitHub a refusé d'ouvrir la pull request : ${result.prError} Donne open_here à l'utilisateur pour qu'il l'ouvre lui-même.`
+        : "La branche est poussée, mais MoonAgentic n'est pas connecté à GitHub : la pull request n'est pas ouverte. Dis à l'utilisateur de se connecter dans Connexions › GitHub puis de te le redemander, ou donne-lui open_here pour qu'il l'ouvre lui-même.",
+    };
+  }
+
   /**
    * Asks the user before a thread outside full access writes the project's shared memory:
    * every later session of the project starts with what is written there. Same card and
@@ -6615,7 +6732,6 @@ export class Hub {
     replace: boolean,
     signal?: AbortSignal,
   ): Promise<boolean> {
-    if (signal?.aborted) return Promise.resolve(false);
     // The words to be written, on one line, with nothing in them that is not seen.
     const flat = content
       .replace(/[\p{Cc}\p{Cf}]/gu, " ")
@@ -6623,15 +6739,28 @@ export class Hub {
       .trim();
     const shown = [...flat];
     const preview = shown.length > 80 ? `${shown.slice(0, 79).join("").trimEnd()}…` : flat;
-    const id = `permission:${randomUUID()}`;
-    this.putItem(threadId, {
-      id,
-      kind: "permission",
-      title: !preview
+    return this.confirmWithUser(
+      threadId,
+      !preview
         ? "Vider la mémoire du projet"
         : replace
           ? `Remplacer la mémoire du projet par : ${preview}`
           : `Ajouter à la mémoire du projet : ${preview}`,
+      signal,
+    );
+  }
+
+  /**
+   * Asks the user to allow what one of MoonAgentic's own tools is about to do, with the same
+   * card and « À traiter » queue as an agent's own requests. False when refused or cancelled.
+   */
+  private confirmWithUser(threadId: string, title: string, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return Promise.resolve(false);
+    const id = `permission:${randomUUID()}`;
+    this.putItem(threadId, {
+      id,
+      kind: "permission",
+      title,
       options: [
         { optionId: "allow", name: "Autoriser", kind: "allow_once" },
         { optionId: "reject", name: "Refuser", kind: "reject_once" },

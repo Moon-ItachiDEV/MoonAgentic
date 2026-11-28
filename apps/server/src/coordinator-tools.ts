@@ -151,11 +151,46 @@ export const MEMORY_WRITE_TOOL: CoordinatorTool = {
   },
 };
 
-/** Tools available to a regular project thread (read-only project context + shared memory). */
+/**
+ * Commits what the thread's agent changed, pushes the thread's branch and opens its pull
+ * request, as « Envoyer » does in the Code panel: with MoonAgentic's own GitHub sign-in, so
+ * the agent needs neither `gh` nor git credentials of its own.
+ */
+export const OPEN_PULL_REQUEST_TOOL: CoordinatorTool = {
+  name: "open_pull_request",
+  description:
+    "Enregistre ton travail dans une pull request, sans gh ni identifiants git : commite ce qui n'est pas encore commité dans ton dossier de travail, pousse la branche de ce fil et ouvre sa pull request sur GitHub avec la connexion GitHub de MoonAgentic. À utiliser dès que l'utilisateur demande une PR, de committer ou de pousser, au lieu de le renvoyer vers le panneau Code ou de chercher gh. Si la pull request de la branche existe déjà, il y pousse seulement les nouveaux commits et rend son adresse. Rend l'adresse de la pull request : écris-la en entier dans ta réponse.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description: "Titre de la pull request, une ligne courte qui dit ce qui change.",
+      },
+      body: {
+        type: "string",
+        description:
+          "Description de la pull request en Markdown : ce qui change, pourquoi, et ce qui a été vérifié.",
+      },
+      commit_message: {
+        type: "string",
+        description:
+          "Message du commit pour ce qui n'est pas encore commité. Par défaut, le titre de la pull request.",
+      },
+    },
+    required: ["title"],
+  },
+};
+
+/**
+ * Tools available to a regular project thread: read-only project context, the shared memory,
+ * what it shows the user and the pull request of its own branch.
+ */
 export const THREAD_TOOLS: CoordinatorTool[] = [
   ...PROJECT_READ_TOOLS,
   MEMORY_WRITE_TOOL,
   PUBLISH_ARTIFACT_TOOL,
+  OPEN_PULL_REQUEST_TOOL,
 ];
 
 /** Tools available to read-only team members (reviewer, tester, merger): they may still show. */
