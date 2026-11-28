@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { inlinePreviewActive } from "./ArtifactCard.tsx";
+import { inlinePreviewActive } from "./Artifacts.tsx";
 
 describe("inlinePreviewActive", () => {
   it("loads only visible, unfolded HTML artifacts", () => {
