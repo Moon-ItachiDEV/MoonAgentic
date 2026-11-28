@@ -34,6 +34,7 @@ import {
   MEMORY_MODES,
   MESSAGE_MODES,
   THREAD_KINDS,
+  THREAD_TOOLS,
   toolsForBridgeMode,
 } from "./coordinator-tools.ts";
 import type { Hub } from "./hub.ts";
@@ -94,6 +95,7 @@ const WRITES = new Set([
   "resolve_thread",
   "save_memory",
   "publish_artifact",
+  "open_pull_request",
 ]);
 const BRIDGE = fileURLToPath(new URL("./coordinator-bridge.ts", import.meta.url));
 
@@ -196,6 +198,15 @@ export interface CoordinatorHost extends Pick<
   publishArtifact(
     threadId: string,
     input: { title: string; content?: string; path?: string; artifactId?: string },
+  ): Promise<unknown>;
+  /**
+   * Commits, pushes the branch of the thread at work and opens its pull request; see
+   * `open_pull_request`. Outside full access the user agrees first.
+   */
+  openPullRequest(
+    threadId: string,
+    input: { title: string; body?: string; message?: string },
+    signal?: AbortSignal,
   ): Promise<unknown>;
 }
 
@@ -340,9 +351,9 @@ export class Coordinators {
   /**
    * The MCP server given to a thread's agent. Its environment only holds what the bridge
    * trades, once, for its token: a command the agent runs later finds nothing to use.
-   * Regular threads only receive read-only project context + shared memory tools; read-only
-   * team roles only receive read tools; only a project's coordinator can orchestrate threads.
-   * Each may publish artifacts. A conversation outside any project may only do that: there
+   * Regular threads only receive read-only project context + shared memory tools, and what
+   * opens the pull request of their own branch; read-only team roles only receive read tools;
+   * only a project's coordinator can orchestrate threads. Each may publish artifacts. A conversation outside any project may only do that: there
    * is no project to share.
    */
   coordinatorServer(thread: Thread): McpServerRecord[] {
@@ -506,13 +517,16 @@ export class Coordinators {
     if (mode !== scope.mode) throw new CoordinatorRefused();
     const allowed = toolsForBridgeMode(mode);
     if (!allowed.some((t) => t.name === tool)) {
-      if (COORDINATOR_TOOLS.some((t) => t.name === tool)) {
+      const coordinators = COORDINATOR_TOOLS.some((t) => t.name === tool);
+      if (coordinators || THREAD_TOOLS.some((t) => t.name === tool)) {
         throw new Error(
           mode === "readonly"
             ? `L'outil « ${tool} » n'est pas autorisé en lecture seule.`
             : mode === "discussion"
               ? `L'outil « ${tool} » n'existe que dans un projet.`
-              : `L'outil « ${tool} » est réservé au coordinateur.`,
+              : coordinators
+                ? `L'outil « ${tool} » est réservé au coordinateur.`
+                : `L'outil « ${tool} » est réservé aux fils qui travaillent : ouvre un fil pour ça.`,
         );
       }
       throw new Error(`Outil inconnu : ${tool}`);
@@ -577,6 +591,19 @@ export class Coordinators {
           ...(file ? { path: file } : {}),
           ...(artifactId ? { artifactId } : {}),
         });
+      }
+      case "open_pull_request": {
+        const body = str("body", 60_000);
+        const message = str("commit_message", 2_000);
+        return this.host.openPullRequest(
+          caller.id,
+          {
+            title: need("title", 300),
+            ...(body ? { body } : {}),
+            ...(message ? { message } : {}),
+          },
+          signal,
+        );
       }
       case "list_threads": {
         const all = this.store.listThreads();
