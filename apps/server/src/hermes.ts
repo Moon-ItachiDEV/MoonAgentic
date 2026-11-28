@@ -241,6 +241,16 @@ export function discordNotices(
   return lines;
 }
 
+/** Whether Hermes's entry starts the same bridge, the same way, as MoonAgentic would write it. */
+function sameEntry(has: Record<string, unknown>, want: ReturnType<Hermes["entry"]>): boolean {
+  const env = has.env as Record<string, unknown> | undefined;
+  return (
+    has.command === want.command &&
+    JSON.stringify(has.args) === JSON.stringify(want.args) &&
+    !!env?.ELECTRON_RUN_AS_NODE === !!want.env
+  );
+}
+
 /** Hermes: its access, what it may do, what it did, and the notices sent to Discord. */
 export class Hermes {
   private readonly host: HermesHost;
@@ -261,6 +271,8 @@ export class Hermes {
   private installAfter = false;
   private gateway: { running: boolean; at: number; reason?: string } | undefined;
   private watching: Promise<void> | undefined;
+  /** MoonAgentic's entry in Hermes's `config.yaml` was looked at since this server started. */
+  private entryChecked = false;
   private readonly gatewayTimer: NodeJS.Timeout | undefined;
 
   constructor(
@@ -389,6 +401,8 @@ export class Hermes {
     if (!cli) return Promise.resolve();
     this.watching = (async () => {
       try {
+        // Its entry written again when missing or out of date: that restarts the gateway too.
+        if (await this.checkEntry(cli)) return;
         const found = await cli.ensureGateway();
         const before = this.gateway;
         this.gateway = { ...found, at: Date.now() };
@@ -400,6 +414,22 @@ export class Hermes {
       }
     })();
     return this.watching;
+  }
+
+  /**
+   * Once per start, looks at MoonAgentic's entry in Hermes's `config.yaml`, and writes it again
+   * when it is missing or not this MoonAgentic's: connected before MoonAgentic could set Hermes
+   * up itself, or by a version whose server lived elsewhere, Hermes would never see its tools.
+   * True when it is being written again.
+   */
+  private async checkEntry(cli: HermesCli): Promise<boolean> {
+    if (this.entryChecked || !this.host.url()) return false;
+    this.entryChecked = true;
+    const has = await cli.installed();
+    if (!this.saved().tokenHash || this.applying) return false;
+    if (has && sameEntry(has, this.entry())) return false;
+    this.install();
+    return true;
   }
 
   /**
