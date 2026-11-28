@@ -621,6 +621,90 @@ describe("a project's coordinator", () => {
     expect(store.getThread(routed.id)!.settings).toEqual({ effort: "bas" });
   }, 90_000);
 
+  it("round-trips list_agents effort labels and refuses explicit models on unknown or undiscovered agents", async () => {
+    const { hub, store, tokens, post, say, hold } = await coordinated();
+    await say("/fils");
+    await hold();
+    const call = async (tool: string, args: unknown = {}) =>
+      (await (await post(tokens[0]!, { tool, args })).json()) as {
+        result?: unknown;
+        error?: string;
+      };
+    const before = store.listThreads().length;
+
+    // Unknown agent id fails with its own error rather than a misleading "pas encore connus".
+    const unknownAgent = await call("open_thread", {
+      task_key: "inconnu",
+      title: "Inconnu",
+      brief: "B",
+      agent: "Inconnu",
+      effort: "high",
+    });
+    expect(unknownAgent.error).toContain("Agent inconnu");
+
+    // Undiscovered agent (`demo-2` has never started): an explicit model (bogus or display name)
+    // is refused without opening a thread instead of silently falling back to the agent's default.
+    for (const [key, model] of [
+      ["d2-bogus", "Neon"],
+      ["d2-display", "Démo précis"],
+    ]) {
+      const refused = await call("open_thread", {
+        task_key: key,
+        title: "Modèle",
+        brief: "B",
+        agent: "demo-2",
+        model,
+      });
+      expect(refused.error).toContain("ne sont pas encore connus");
+    }
+    expect(store.listThreads()).toHaveLength(before);
+
+    // Discovered agent with no model choices (`models: []`) refuses an explicit model cleanly.
+    const previous = process.env.MOONAGENTIC_DEMO_MODELS;
+    process.env.MOONAGENTIC_DEMO_MODELS = "none";
+    try {
+      await hub.discover("demo-2");
+    } finally {
+      if (previous === undefined) delete process.env.MOONAGENTIC_DEMO_MODELS;
+      else process.env.MOONAGENTIC_DEMO_MODELS = previous;
+    }
+    const noChoice = await call("open_thread", {
+      task_key: "d2-none",
+      title: "Sans modèle",
+      brief: "B",
+      agent: "demo-2",
+      model: "Neon",
+    });
+    expect(noChoice.error).toContain("ne propose pas de choix de modèle");
+    expect(store.listThreads()).toHaveLength(before);
+
+    // The exact « (UltraMoon) » label returned by `list_agents` round-trips into `open_thread`.
+    const agents = (await call("list_agents")).result as {
+      id: string;
+      models: { id: string; efforts?: string[] }[];
+    }[];
+    const rapideMax = agents
+      .find((a) => a.id === "demo")!
+      .models.find((m) => m.id === "rapide")!
+      .efforts!.at(-1)!;
+    expect(rapideMax).toBe("Haut (UltraMoon)");
+    const opened = await call("open_thread", {
+      task_key: "ultramoon-label",
+      title: "UltraMoon label",
+      brief: "B",
+      agent: "demo",
+      model: "rapide",
+      effort: rapideMax,
+    });
+    expect(opened.error).toBeUndefined();
+    const tid = (opened.result as { opened: { id: string } }).opened.id;
+    expect(store.getThread(tid)).toMatchObject({
+      agentId: "demo",
+      model: "rapide",
+      settings: { effort: "haut" },
+    });
+  }, 90_000);
+
   it("archives its conversation, readable on its own, and goes on with an empty one", async () => {
     const { hub, store, projectId, otherId, coordinatorId, say, hold } = await coordinated();
     const client: Client = { send: () => undefined };

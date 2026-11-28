@@ -517,16 +517,25 @@ export class Coordinators {
    */
   private modelAsked(agentId: string, asked: string): string {
     const agent = this.host.catalog.list().find((a) => a.id === agentId);
-    const models = agent?.models;
-    // Not listed yet: the agent says at its start whether it has it.
-    if (!models?.length) return asked;
+    if (!agent?.models) {
+      throw new Error(
+        `Les modèles de ${agent?.name ?? agentId} ne sont pas encore connus : il doit avoir démarré une fois dans MoonAgentic. Dis-le à l'utilisateur sans ouvrir le fil.`,
+      );
+    }
+    if (!agent.models.length) {
+      throw new Error(
+        `${agent.name} ne propose pas de choix de modèle. Dis-le à l'utilisateur sans ouvrir le fil.`,
+      );
+    }
     const lower = asked.toLowerCase();
     const found =
-      models.find((m) => m.id === asked) ??
-      models.find((m) => m.id.toLowerCase() === lower || m.name.trim().toLowerCase() === lower);
+      agent.models.find((m) => m.id === asked) ??
+      agent.models.find(
+        (m) => m.id.toLowerCase() === lower || m.name.trim().toLowerCase() === lower,
+      );
     if (!found) {
       throw new Error(
-        `${agent?.name ?? agentId} ne propose pas le modèle « ${asked} ». Modèles disponibles : ${models.map((m) => m.name).join(", ")}. Dis-le à l'utilisateur sans ouvrir le fil ni choisir un autre modèle à sa place.`,
+        `${agent.name} ne propose pas le modèle « ${asked} ». Modèles disponibles : ${agent.models.map((m) => m.name).join(", ")}. Dis-le à l'utilisateur sans ouvrir le fil ni choisir un autre modèle à sa place.`,
       );
     }
     return found.id;
@@ -948,6 +957,9 @@ export class Coordinators {
         );
         const asked = str("agent", 200);
         const agentId = asked ?? route?.agentId ?? coordinator.agentId;
+        // Validate the agent before reading its models or effort so unknown or uninstalled
+        // agents fail with their real reason rather than "pas encore connus".
+        this.host.checkAgent(agentId);
         // The coordinator's own model, when the thread falls back on it: never its orchestrator,
         // which hands work out rather than doing it.
         const inherited = asked ? asked === coordinator.agentId : !route;

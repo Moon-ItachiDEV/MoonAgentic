@@ -46,14 +46,17 @@ export function pickEffort(
     );
   }
   const wanted = plain(asked);
-  const named = (c: ModelChoice) => plain(c.id) === wanted || plain(c.name) === wanted;
+  // Accept every label `effortLevels()` returns (such as « Max (UltraMoon) »), never empty input.
+  const named = (c: ModelChoice) =>
+    plain(c.id) === wanted || plain(c.name) === wanted || plain(effortLabel(setting, c)) === wanted;
   const same = SAME_LEVEL.find((level) => level.test(wanted));
-  const choice =
-    setting.choices.find(named) ??
-    (same
-      ? setting.choices.find((c) => same.test(plain(c.id)) || same.test(plain(c.name)))
-      : undefined) ??
-    (wanted === "ultramoon" && setting.choices.length > 1 ? setting.choices.at(-1) : undefined);
+  const choice = !wanted
+    ? undefined
+    : (setting.choices.find(named) ??
+      (same
+        ? setting.choices.find((c) => same.test(plain(c.id)) || same.test(plain(c.name)))
+        : undefined) ??
+      (wanted === "ultramoon" && setting.choices.length > 1 ? setting.choices.at(-1) : undefined));
   if (!choice) {
     throw new Error(
       `${who} ne propose pas l'effort « ${asked} ». Niveaux disponibles : ${effortLevels(settings).join(", ")}. Dis-le à l'utilisateur sans ouvrir le fil ni choisir un autre niveau à sa place.`,
