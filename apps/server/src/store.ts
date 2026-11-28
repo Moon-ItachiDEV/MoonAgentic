@@ -1155,6 +1155,51 @@ export class Store {
     return this.getThread(id)!;
   }
 
+  /**
+   * Hands a project's coordinator over to `next`, a new and empty one: the old conversation
+   * stays as an archived thread of its own, and the threads it opened, with what waited to
+   * be sent to it, go to `next`. All together, or nothing. Returns every thread it changed.
+   */
+  handOverCoordinator(oldId: string, next: Thread): Thread[] {
+    return this.transaction(() => {
+      const old = this.getThread(oldId);
+      if (old?.kind !== "coordinator") throw new Error(`Unknown coordinator ${oldId}`);
+      const { kind: _kind, queue, quota, inLine: _inLine, quietSince: _quiet, ...kept } = old;
+      // A fallback model goes on with the new one, and goes back as it would have: a wait for a
+      // quota would only restart a turn of the old conversation.
+      const relief = quota?.state === "relief" ? { quota } : {};
+      this.addThread({ ...next, ...relief, ...(queue?.length ? { queue } : {}) });
+      // Stripping `kind: "coordinator"` removes COORDINATOR_ALLOWED on the project's root
+      // folder, so the archived thread downgrades to supervised while child threads keep theirs.
+      this.sql(
+        `UPDATE threads SET status = ?, permission_mode = ?, acp_session_id = NULL, error = NULL, extra = ? WHERE id = ?`,
+      ).run("idle", "supervised", extraOf({ ...kept, archived: true }), oldId);
+      const reparent = this.sql(`UPDATE threads SET extra = ? WHERE id = ?`);
+      const opened: string[] = [];
+      for (const t of this.listThreads()) {
+        if (t.openedBy !== oldId) continue;
+        reparent.run(extraOf({ ...t, openedBy: next.id }), t.id);
+        opened.push(t.id);
+      }
+      return [next.id, ...opened, oldId].map((id) => this.getThread(id)!);
+    });
+  }
+
+  /**
+   * The green pull requests the project's coordinators have said, as their messages hold
+   * them: those of a conversation put in the archive count too.
+   */
+  greenNotes(projectId: string): string[] {
+    const rows = this.sql(
+      `SELECT i.data FROM items i JOIN threads t ON t.id = i.thread_id
+         WHERE t.project_id = ? AND i.id LIKE 'green:%'`,
+    ).all(projectId) as { data: string }[];
+    return rows.flatMap((r) => {
+      const item = this.readItem(r.data);
+      return item?.kind === "agent" ? [item.text] : [];
+    });
+  }
+
   /** Puts the thread in another project: it then works in that project's folder. */
   moveThread(id: string, projectId: string): Thread {
     this.sql(`UPDATE threads SET project_id = ? WHERE id = ?`).run(projectId, id);

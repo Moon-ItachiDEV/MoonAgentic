@@ -349,6 +349,15 @@ export class Coordinators {
     return asked.slice(-ASKED_MESSAGES).join("\n\n");
   }
 
+  /**
+   * After a wait in one of its tools: its conversation may have gone to the archive meanwhile,
+   * and what it was about to do is no longer its to do.
+   */
+  private stillCoordinator(id: string): void {
+    if (this.store.getThread(id)?.kind !== "coordinator")
+      throw new Error("Cette conversation du coordinateur a été archivée.");
+  }
+
   /** The first preset's team on the agents at hand, their models asked for if need be. */
   private async presetTeam(
     projectId: string,
@@ -1010,6 +1019,7 @@ export class Coordinators {
         const saved = this.coordinatorSettings().team;
         // Never set up by hand: the first preset, on the agents at hand, rather than failing.
         const setup = saved ?? (await this.presetTeam(scope.projectId, coordinator.permissionMode));
+        this.stillCoordinator(coordinator.id);
         if (!setup)
           throw new Error(
             "Aucun agent n'est prêt pour former une équipe. Dis-le tout de suite à l'utilisateur, en une phrase, sans réessayer.",
@@ -1029,6 +1039,7 @@ export class Coordinators {
             throw new Error("L'utilisateur a refusé de lancer l'équipe en accès complet.");
           }
           permissionMode = chosen;
+          this.stillCoordinator(coordinator.id);
         } else if (
           coordinator.permissionMode === "supervised" &&
           setup.permissionMode === "edits"
@@ -1088,6 +1099,7 @@ export class Coordinators {
         if (thread.team) throw new Error("Une équipe ne se coupe pas : utilise le mode queue.");
         await this.host.cancel(thread.id);
         await this.host.whenIdle(thread.id);
+        this.stillCoordinator(coordinator.id);
         this.sendFromCoordinator(thread.id, text);
         return { sent_to: thread.title, interrupted: true };
       }

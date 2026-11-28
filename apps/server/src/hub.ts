@@ -492,8 +492,9 @@ const workFolder = (workspace: Workspace) =>
 
 /**
  * What a coordinator may do on its own when granted full access: only strictly read-only
- * inspection (`read`, `search`, `think`). Commands (`execute`), file edits, network fetches
- * and unknown/unspecified (`other`) tools wait on the user.
+ * inspection (`read`, `search`, `think`), plus a command (`execute`) that `readOnlyCall`
+ * proves only reads. Every other command, file edits, network fetches and unknown or
+ * unspecified (`other`) tools wait on the user.
  */
 export const COORDINATOR_ALLOWED = new Set(["read", "search", "think"]);
 /**
@@ -568,6 +569,8 @@ export class Hub {
       resolve: (r: acp.RequestPermissionResponse) => void;
       /** « Autoriser pour ce fil »: what it remembers, and the agent's own option it answers. */
       grant?: { key: string; optionId: string };
+      /** The agent's own request, weighed again when the thread's access changes. */
+      asked?: { request: acp.RequestPermissionRequest; folder?: string };
     }
   >();
   /**
@@ -777,12 +780,14 @@ export class Hub {
         thread: (id) => store.getThread(id),
         items: (id) => this.items(id),
         markRelayed: (threadId, itemId) => {
+          const thread = this.store.getThread(threadId);
+          if (!thread || thread.archived) return;
           const item = this.store.getItem(threadId, itemId);
           if (item?.kind === "user" && !item.relayed) {
             this.putItem(threadId, { ...item, relayed: true });
           }
         },
-        running: (id) => this.turns.has(id),
+        running: (id) => this.turns.has(id) || this.busy.has(id),
         whenIdle: (id) => this.whenIdle(id),
         sendFromHermes: (id, text) => this.sendFromHermes(id, text),
         planCards: () => this.planner.list(),
@@ -2100,6 +2105,10 @@ export class Hub {
       }
       case "coordinator.restart":
         await this.restartCoordinator(message.projectId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "coordinator.archive":
+        await this.archiveCoordinator(message.projectId);
         client.send({ type: "done", requestId: message.requestId });
         return;
       case "coordinator.setParallel":
@@ -3421,6 +3430,8 @@ export class Hub {
    */
   sendQueuedNow(threadId: string, id?: string): void {
     const queue = this.requireLiveThread(threadId).queue ?? [];
+    const busy = this.busy.get(threadId);
+    if (busy) throw new Error(busy);
     if (id) {
       const chosen = queue.find((m) => m.id === id);
       if (!chosen) throw new Error("Ce message est déjà parti.");
@@ -3654,11 +3665,15 @@ export class Hub {
     const summary = last?.kind === "agent" ? leadOf(last.text, 2, RESULT_LIMIT) : "";
     if (!summary) return;
     const changed = await this.review(threadId).catch(() => undefined);
-    // Meanwhile the thread may have started again, or gone with its coordinator.
-    if (this.closed || this.turns.has(threadId) || !this.store.getThread(thread.openedBy)) return;
+    // Meanwhile the thread may have started again, or gone with its coordinator, or its
+    // coordinator's conversation gone to the archive: the result goes to the one now.
+    if (this.closed || this.turns.has(threadId)) return;
+    const coordinatorId = this.store.getThread(threadId)?.openedBy;
+    if (!coordinatorId) return;
+    if (this.store.getThread(coordinatorId)?.kind !== "coordinator") return;
     const files = changed?.files.map((f) => f.path) ?? [];
     const more = Math.max(0, files.length - RESULT_FILES) + (changed?.omitted ?? 0);
-    this.putItem(thread.openedBy, {
+    this.putItem(coordinatorId, {
       id: `result:${threadId}:${asked.id}`,
       kind: "result",
       threadId,
@@ -4166,9 +4181,9 @@ export class Hub {
     let told = this.greenTold.get(coordinatorId);
     if (!told) {
       told = new Set<string>();
-      for (const item of this.store.listItems(coordinatorId)) {
-        if (item.kind !== "agent" || !item.id.startsWith("green:")) continue;
-        for (const m of item.text.matchAll(/\]\(fil:([\w-]+)\) : sa PR (\S+) /g))
+      // Its conversations put in the archive said some too.
+      for (const text of this.store.greenNotes(thread.projectId)) {
+        for (const m of text.matchAll(/\]\(fil:([\w-]+)\) : sa PR (\S+) /g))
           told.add(`${m[1]} ${m[2]}`);
       }
       this.greenTold.set(coordinatorId, told);
@@ -4417,7 +4432,7 @@ export class Hub {
   async setArchived(threadId: string, archived: boolean): Promise<void> {
     if (archived && this.requireThread(threadId).kind === "coordinator")
       throw new Error(
-        "Le coordinateur ne se résout pas : supprime sa conversation pour repartir de zéro.",
+        "Le coordinateur ne se résout pas : archive sa conversation dans Paramètres du projet › Avancée.",
       );
     if (archived) this.refuseGroupAtWork(threadId);
     // A team goes to the archive whole, and comes back whole: never its lead alone.
@@ -5141,12 +5156,33 @@ export class Hub {
   setPermissionMode(threadId: string, permissionMode: PermissionMode): void {
     const thread = this.requireThread(threadId);
     this.updateThread(threadId, { permissionMode });
+    const changed = [threadId];
     // A team's lead speaks for its team: its agents, and those it starts later, follow.
-    if (thread.role !== "lead" || !thread.team) return;
-    this.teams.setPermissionMode(threadId, permissionMode);
-    for (const member of this.store.listThreads()) {
-      if (member.parentId === threadId && member.permissionMode !== permissionMode)
-        this.updateThread(member.id, { permissionMode });
+    if (thread.role === "lead" && thread.team) {
+      this.teams.setPermissionMode(threadId, permissionMode);
+      for (const member of this.store.listThreads()) {
+        if (member.parentId === threadId && member.permissionMode !== permissionMode) {
+          this.updateThread(member.id, { permissionMode });
+          changed.push(member.id);
+        }
+      }
+    }
+    // What already waits is weighed again: a request the new access lets through is answered
+    // now, as it would have been had it been asked after the change, instead of being shown
+    // to the user again.
+    this.answerWhatNowPasses(changed);
+  }
+
+  /** Answers the open requests of these threads that their access now lets through. */
+  private answerWhatNowPasses(threadIds: string[]): void {
+    for (const [itemId, pending] of this.pendingPermissions) {
+      if (!pending.asked || !threadIds.includes(pending.threadId)) continue;
+      const thread = this.store.getThread(pending.threadId);
+      if (!thread) continue;
+      const optionId = this.passesOnItsOwn(thread, pending.asked.request, pending.asked.folder);
+      // An agent's option spelled like « Autoriser pour ce fil » must not grant anything.
+      if (optionId && optionId !== THREAD_GRANT_OPTION)
+        this.respondToPermission(pending.threadId, itemId, optionId);
     }
   }
 
@@ -5749,23 +5785,135 @@ export class Hub {
    * message starts a new agent that resumes the conversation.
    */
   private async restartCoordinator(projectId: string): Promise<void> {
+    const coordinator = this.projectCoordinator(projectId);
+    await this.stopCoordinator(coordinator.id);
+  }
+
+  /** The project's coordinator, for a step the user asks on it. */
+  private projectCoordinator(projectId: string): Thread {
     if (this.locks.isLocked(projectId)) {
       throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    }
+    if (this.removingProjects.has(projectId)) {
+      throw new Error("Ce projet est en cours de retrait.");
     }
     const coordinator = this.store
       .listThreads()
       .find((t) => t.projectId === projectId && t.kind === "coordinator");
     if (!coordinator) throw new Error("Ce projet n'a pas encore de coordinateur.");
-    const turn = this.turns.get(coordinator.id);
+    return coordinator;
+  }
+
+  /** Stops the coordinator's turn, then its agent. */
+  private async stopCoordinator(coordinatorId: string): Promise<void> {
+    const turn = this.turns.get(coordinatorId);
     if (turn) {
-      await this.cancel(coordinator.id);
+      // A connection already closed as the agent exits or the server stops needs no cancel.
+      await this.cancel(coordinatorId).catch(() => undefined);
       // Its turn ends as stopped; one frozen past this is stopped with its agent below.
       await Promise.race([
         turn.catch(() => undefined),
         new Promise((done) => setTimeout(done, RESTART_WAIT_MS).unref()),
       ]);
     }
-    await this.pool.stop(coordinator.id);
+    await this.pool.stop(coordinatorId);
+  }
+
+  /**
+   * Puts the coordinator's conversation in the archive, as a thread of its own that stays
+   * readable, and gives the project a new coordinator, empty, on the same agent and model.
+   * The threads the old one opened report to the new one, and what waited for it goes there.
+   */
+  private async archiveCoordinator(projectId: string): Promise<void> {
+    if (this.closed) throw new Error("MoonAgentic s'arrête.");
+    const old = this.projectCoordinator(projectId);
+    if (this.storageDown || this.heldIn(old.id)) {
+      throw new StorageRefused(this.storageDown ?? "Base de données");
+    }
+    const checkStillOpen = () => {
+      if (this.closed) throw new Error("MoonAgentic s'arrête.");
+      if (this.locks.isLocked(projectId)) {
+        throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+      }
+      if (this.removingProjects.has(projectId)) {
+        throw new Error("Ce projet est en cours de retrait.");
+      }
+      if (this.turns.has(old.id)) {
+        throw new Error("Attends la fin de la réponse de l'agent.");
+      }
+    };
+    // Hold `busy` and `steps` across stopping the turn too, so close() awaits us and neither a
+    // concurrent archive nor sendAfterStop / a new message can race with the handover.
+    const threads = await this.exclusive(
+      old.id,
+      "Attends que le coordinateur soit archivé.",
+      async () => {
+        this.sendAfterStop.delete(old.id);
+        this.followUps.delete(old.id);
+        await this.stopCoordinator(old.id);
+        if (this.closed) throw new Error("MoonAgentic s'arrête.");
+        // A turn its agent's stop did not end yet: the conversation is not moved under it.
+        const turn = this.turns.get(old.id);
+        if (turn)
+          await Promise.race([
+            turn.catch(() => undefined),
+            new Promise((done) => setTimeout(done, RESTART_WAIT_MS).unref()),
+          ]);
+        checkStillOpen();
+        this.sendAfterStop.delete(old.id);
+        this.followUps.delete(old.id);
+        this.settlePermissions(old.id);
+        // Revoke the old bridge token and make sure no residual process lingers before handover.
+        this.coordinators.dropCoordinatorAccess(old.id);
+        await this.pool.stop(old.id);
+        checkStillOpen();
+        this.flushText(old.id);
+        if (this.storageDown || this.heldIn(old.id)) {
+          throw new StorageRefused(this.storageDown ?? "Base de données");
+        }
+        const current = this.store.getThread(old.id);
+        if (current?.kind !== "coordinator") {
+          throw new Error("Ce projet n'a pas encore de coordinateur.");
+        }
+        const now = Date.now();
+        const next: Thread = {
+          id: randomUUID(),
+          projectId,
+          title: current.title,
+          agentId: current.agentId,
+          status: "idle",
+          permissionMode: current.permissionMode,
+          ...(current.model ? { model: current.model } : {}),
+          ...(current.settings ? { settings: current.settings } : {}),
+          kind: "coordinator",
+          createdAt: now,
+          updatedAt: now,
+        };
+        const changed = this.store.handOverCoordinator(old.id, next);
+        this.unsettled.delete(old.id);
+        this.threadGrants.delete(old.id);
+        this.quotaThreads.delete(old.id);
+        const retryAt = this.quotaRetryAt.get(old.id);
+        this.quotaRetryAt.delete(old.id);
+        if (changed[0]!.quota) {
+          this.quotaThreads.add(next.id);
+          if (retryAt !== undefined) this.quotaRetryAt.set(next.id, retryAt);
+        }
+        this.dropLog(old.id);
+        this.coordinators.forget(old.id);
+        const told = this.greenTold.get(old.id);
+        this.greenTold.delete(old.id);
+        if (told) this.greenTold.set(next.id, told);
+        return changed;
+      },
+      true,
+    );
+    // The new coordinator is told first: a screen left without one would open another.
+    for (const thread of threads) {
+      this.broadcast({ type: "thread", thread });
+      this.planner.syncThread(thread);
+    }
+    if (!this.closed) this.coordinators.drainLine(threads[0]!.id);
   }
 
   private async startSession(
@@ -6323,60 +6471,17 @@ export class Hub {
     // got, as ACP asks, instead of waiting for the user until the agent is killed.
     if (this.cancelled.has(threadId)) return Promise.resolve({ outcome: { outcome: "cancelled" } });
     if (request.toolCall.title) this.upsertTool(threadId, request.toolCall);
-    // A coordinator only reads and routes; a team reviewer may also run read-only shell checks
-    // (Codex reads files via execute), while file edits, fetches and unknown tools wait on the user.
-    const allowed =
-      thread.kind === "coordinator"
-        ? COORDINATOR_ALLOWED
-        : thread.role === "reviewer" || thread.role === "reviewer2" || thread.role === "judge"
-          ? REVIEWER_ALLOWED
-          : undefined;
-    const readOnlyDenied = !!allowed && !allowed.has(request.toolCall.kind ?? "");
-    // MoonAgentic's own tools are already limited by the server: asking the user before each
-    // one would make them useless. The server itself asks before a thread outside full access
-    // writes the shared memory (`confirmMemoryWrite`) or sends its branch to GitHub
-    // (`openPullRequestForAgent`), whether its agent asked first or not: the agent's own
-    // request for it is let through here, so the user is asked once.
     this.noteToolName(threadId, request.toolCall);
-    // An agent that does not name the tool is taken at its title, for a call of no known kind:
-    // never a change of files nor a command.
-    const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
-    const ownPattern = thread.kind === "coordinator" ? OWN_TOOL : OWN_THREAD_TOOL;
-    const own =
-      !!this.coordinatorUrl &&
-      (named !== undefined
-        ? ownPattern.test(named)
-        : ownPattern.test(request.toolCall.title ?? "") &&
-          (!request.toolCall.kind || request.toolCall.kind === "other"));
+    const passes = this.passesOnItsOwn(thread, request, folder);
+    if (passes) return Promise.resolve({ outcome: { outcome: "selected", optionId: passes } });
     const allow =
       request.options.find((o) => o.kind === "allow_once") ??
       request.options.find((o) => o.kind === "allow_always");
-    // In « Demande d'abord », a call that only reads passes (a review reads thirty files),
-    // and so does one like a call the user allowed « pour ce fil ». In « Éditions auto »,
-    // edits whose every target stays inside the thread's folder pass too (never commands,
-    // never `.git`, never outside a project). A coordinator runs no command, even one that reads.
-    const keys = grantKeys(request.toolCall, named);
-    const reads = readOnlyCall(request.toolCall) && !readOnlyDenied;
-    const grants = this.threadGrants.get(threadId);
-    const granted = !readOnlyDenied && !!keys?.length && keys.every((k) => grants?.has(k));
-    const autoEdit =
-      thread.permissionMode === "edits" &&
-      !readOnlyDenied &&
-      !this.isDiscussions(thread.projectId) &&
-      editInsideFolder(
-        request.toolCall,
-        folder ?? thread.workspace?.path ?? this.store.getProject(thread.projectId)?.path,
-      );
-    if (
-      (thread.permissionMode === "full" && !readOnlyDenied) ||
-      autoEdit ||
-      own ||
-      reads ||
-      granted
-    ) {
-      if (allow)
-        return Promise.resolve({ outcome: { outcome: "selected", optionId: allow.optionId } });
-    }
+    const readOnlyDenied = this.readOnlyDenied(thread, request);
+    const keys = grantKeys(
+      request.toolCall,
+      this.toolNames.get(threadId)?.get(request.toolCall.toolCallId),
+    );
     // Only offer « Autoriser pour ce fil » for a single non-read-only action so a chained
     // command (`npm test && rm -rf dist`) cannot silently grant multiple programs at once.
     const grant =
@@ -6422,10 +6527,79 @@ export class Hub {
         threadId,
         resolve,
         ...(grant ? { grant } : {}),
+        asked: { request, ...(folder !== undefined ? { folder } : {}) },
       });
       this.broadcastRequests();
       signal.addEventListener("abort", () => this.settlePermission(id), { once: true });
     });
+  }
+
+  /**
+   * A coordinator only reads and routes; a team reviewer may also run read-only shell checks
+   * (Codex reads files via execute). For them, what is not in their list waits on the user.
+   */
+  private readOnlyDenied(thread: Thread, request: acp.RequestPermissionRequest): boolean {
+    const allowed =
+      thread.kind === "coordinator"
+        ? COORDINATOR_ALLOWED
+        : thread.role === "reviewer" || thread.role === "reviewer2" || thread.role === "judge"
+          ? REVIEWER_ALLOWED
+          : undefined;
+    return !!allowed && !allowed.has(request.toolCall.kind ?? "");
+  }
+
+  /**
+   * The agent's own option that answers this request without asking the user, given the
+   * thread's access as it is now; `undefined` when the user decides.
+   */
+  private passesOnItsOwn(
+    thread: Thread,
+    request: acp.RequestPermissionRequest,
+    folder?: string,
+  ): string | undefined {
+    const threadId = thread.id;
+    const readOnlyDenied = this.readOnlyDenied(thread, request);
+    // MoonAgentic's own tools are already limited by the server: asking the user before each
+    // one would make them useless. The server itself asks before a thread outside full access
+    // writes the shared memory (`confirmMemoryWrite`) or sends its branch to GitHub
+    // (`openPullRequestForAgent`), whether its agent asked first or not: the agent's own
+    // request for it is let through here, so the user is asked once.
+    // An agent that does not name the tool is taken at its title, for a call of no known kind:
+    // never a change of files nor a command.
+    const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
+    const ownPattern = thread.kind === "coordinator" ? OWN_TOOL : OWN_THREAD_TOOL;
+    const own =
+      !!this.coordinatorUrl &&
+      (named !== undefined
+        ? ownPattern.test(named)
+        : ownPattern.test(request.toolCall.title ?? "") &&
+          (!request.toolCall.kind || request.toolCall.kind === "other"));
+    const allow =
+      request.options.find((o) => o.kind === "allow_once") ??
+      request.options.find((o) => o.kind === "allow_always");
+    // In « Demande d'abord », a call that only reads passes (a review reads thirty files),
+    // and so does one like a call the user allowed « pour ce fil ». In « Éditions auto »,
+    // edits whose every target stays inside the thread's folder pass too (never commands,
+    // never `.git`, never outside a project). A coordinator runs no command, even one that
+    // reads, unless the user gave it « Accès complet »: then a command that only reads
+    // (`git grep`, `git log`) passes, and every other one still waits.
+    const keys = grantKeys(request.toolCall, named);
+    const reads =
+      readOnlyCall(request.toolCall) &&
+      (!readOnlyDenied || (thread.kind === "coordinator" && thread.permissionMode === "full"));
+    const grants = this.threadGrants.get(threadId);
+    const granted = !readOnlyDenied && !!keys?.length && keys.every((k) => grants?.has(k));
+    const autoEdit =
+      thread.permissionMode === "edits" &&
+      !readOnlyDenied &&
+      !this.isDiscussions(thread.projectId) &&
+      editInsideFolder(
+        request.toolCall,
+        folder ?? thread.workspace?.path ?? this.store.getProject(thread.projectId)?.path,
+      );
+    const passes =
+      (thread.permissionMode === "full" && !readOnlyDenied) || autoEdit || own || reads || granted;
+    return passes ? allow?.optionId : undefined;
   }
 
   /**
