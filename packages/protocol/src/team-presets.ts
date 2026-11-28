@@ -1,4 +1,10 @@
-import type { AgentInfo, TeamMember, TeamPreset, TeamRole } from "./index.ts";
+import {
+  type AgentInfo,
+  agentSettingsFor,
+  type TeamMember,
+  type TeamPreset,
+  type TeamRole,
+} from "./index.ts";
 
 export type { TeamPreset, TeamRole } from "./index.ts";
 
@@ -22,6 +28,37 @@ interface PresetSuggestion {
   label: string;
   /** A role left out is not in the team (a second review, a judge). */
   prefer: Partial<Record<TeamRole, RegExp[]>>;
+  /** How hard each role thinks, when its model lets it choose; left out, the agent's own. */
+  effort?: Partial<Record<TeamRole, Level>>;
+}
+
+/** A reasoning level, whatever an agent calls it: `max` is its highest (« UltraMoon »). */
+type Level = "low" | "medium" | "high" | "max";
+const LEVEL_NAMES: Record<Exclude<Level, "max">, RegExp> = {
+  low: /^(low|bas|faible)$/i,
+  medium: /^(medium|moyen)$/i,
+  high: /^(high|haut|élevé|eleve)$/i,
+};
+
+/**
+ * The settings that put `member` on `level`: the agent's effort choice of that name, or its
+ * highest for `max`. None while the agent has not said what it offers, or has no such level.
+ */
+export function effortSettings(
+  agents: AgentInfo[],
+  member: TeamMember,
+  level: Level,
+): Record<string, string> | undefined {
+  const agent = agents.find((a) => a.id === member.agentId);
+  const setting = agentSettingsFor(agent, member.model).find((s) => s.kind === "effort");
+  if (!setting || setting.choices.length < 2) return undefined;
+  const choice =
+    level === "max"
+      ? setting.choices.at(-1)
+      : setting.choices.find(
+          (c) => LEVEL_NAMES[level].test(c.id) || LEVEL_NAMES[level].test(c.name),
+        );
+  return choice ? { [setting.id]: choice.id } : undefined;
 }
 
 const SUGGESTIONS: PresetSuggestion[] = [
@@ -35,6 +72,7 @@ const SUGGESTIONS: PresetSuggestion[] = [
       tester: [/sonnet/i],
       merger: [/haiku/i],
     },
+    effort: { lead: "high", coder: "high", reviewer: "high", tester: "medium", merger: "low" },
   },
   {
     id: "economique",
@@ -46,6 +84,7 @@ const SUGGESTIONS: PresetSuggestion[] = [
       tester: [/hydrogen/i, /sonnet/i],
       merger: [/haiku/i],
     },
+    effort: { lead: "medium", coder: "medium", reviewer: "medium", tester: "low", merger: "low" },
   },
   {
     id: "qualite",
@@ -58,6 +97,15 @@ const SUGGESTIONS: PresetSuggestion[] = [
       judge: [/fable/i],
       tester: [/sonnet/i],
       merger: [/haiku/i],
+    },
+    effort: {
+      lead: "max",
+      coder: "high",
+      reviewer: "high",
+      reviewer2: "high",
+      judge: "max",
+      tester: "high",
+      merger: "medium",
     },
   },
   {
@@ -82,7 +130,10 @@ export function suggestedPresets(agents: AgentInfo[]): TeamPreset[] {
       TEAM_ROLES.flatMap((role) => {
         const prefer = s.prefer[role];
         const member = prefer && pickMember(agents, prefer);
-        return member ? [[role, member]] : [];
+        if (!member) return [];
+        const level = s.effort?.[role];
+        const settings = level && effortSettings(agents, member, level);
+        return [[role, settings ? { ...member, settings } : member]];
       }),
     ),
   }));
@@ -115,13 +166,12 @@ export function presetMembers(
     const agent = chosen && usable.find((a) => a.id === chosen.agentId);
     if (chosen && agent) {
       const known = !agent.models || agent.models.some((m) => m.id === chosen.model);
+      const model = chosen.model && known ? chosen.model : agent.defaultModel;
+      const settings = keptSettings(agent, model, chosen.settings);
       members[role] = {
         agentId: agent.id,
-        ...(chosen.model && known
-          ? { model: chosen.model }
-          : agent.defaultModel
-            ? { model: agent.defaultModel }
-            : {}),
+        ...(model ? { model } : {}),
+        ...(settings ? { settings } : {}),
       };
       continue;
     }
@@ -131,6 +181,24 @@ export function presetMembers(
     }
   }
   return members;
+}
+
+/**
+ * The settings saved for a role that its agent still offers for `model`: all of them while
+ * the agent has not said yet what it offers.
+ */
+function keptSettings(
+  agent: AgentInfo,
+  model: string | undefined,
+  settings: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!settings) return undefined;
+  if (!agent.settings && !agent.modelSettings) return settings;
+  const offered = agentSettingsFor(agent, model);
+  const kept = Object.entries(settings).filter(([id, value]) =>
+    offered.some((s) => s.id === id && s.choices.some((c) => c.id === value)),
+  );
+  return kept.length ? Object.fromEntries(kept) : undefined;
 }
 
 /**

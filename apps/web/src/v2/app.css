@@ -6594,6 +6594,38 @@
 .it.ro .stpr + .tmm {
   margin-left: 8px;
 }
+/* A role's reasoning level on its pill: the wheel's marks, smaller, and its name when roomy. */
+.tmm .mn {
+  white-space: nowrap;
+}
+.tmm .tme {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+}
+.tmm .tme .mg {
+  gap: 4px;
+}
+.tmm .tme .mg i {
+  width: 2.5px;
+  height: 2.5px;
+}
+.tmm .tme .mg i.t {
+  height: 11px;
+  width: 2.5px;
+}
+.tmm .tme.gx .mg i.t {
+  background: var(--gx-ink);
+}
+.tmm .tme .el {
+  font-size: 13px;
+  color: var(--muted);
+}
+.tmm .tme.gx .el {
+  color: var(--gx-ink);
+  font-weight: 500;
+}
 
 /* Renaming a thread: its title in the header becomes the field, an ink ✓ in place of « … ». */
 .ttl.ren {

@@ -2735,13 +2735,13 @@ export class Hub {
   startTeam(input: {
     projectId: string;
     task: string;
-    lead: { agentId: string; model?: string | undefined };
-    coder: { agentId: string; model?: string | undefined };
-    reviewer?: { agentId: string; model?: string | undefined } | undefined;
-    reviewer2?: { agentId: string; model?: string | undefined } | undefined;
-    judge?: { agentId: string; model?: string | undefined } | undefined;
-    tester?: { agentId: string; model?: string | undefined } | undefined;
-    merger?: { agentId: string; model?: string | undefined } | undefined;
+    lead: TeamMember;
+    coder: TeamMember;
+    reviewer?: TeamMember | undefined;
+    reviewer2?: TeamMember | undefined;
+    judge?: TeamMember | undefined;
+    tester?: TeamMember | undefined;
+    merger?: TeamMember | undefined;
     coders: number;
     permissionMode: PermissionMode;
     autoShip?: boolean | undefined;
@@ -2757,9 +2757,13 @@ export class Hub {
       );
     }
     // Checked before anything starts, so a missing agent fails the whole team at once.
-    const member = (m: { agentId: string; model?: string | undefined }): TeamMember => {
+    const member = (m: TeamMember): TeamMember => {
       this.agents.launch(m.agentId);
-      return { agentId: m.agentId, ...(m.model ? { model: m.model } : {}) };
+      return {
+        agentId: m.agentId,
+        ...(m.model ? { model: m.model } : {}),
+        ...(m.settings && Object.keys(m.settings).length ? { settings: m.settings } : {}),
+      };
     };
     return this.teams.start({
       ...input,

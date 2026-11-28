@@ -373,6 +373,7 @@ export function TeamDialog({
                 favorites={favorites}
                 value={member(role)}
                 onChange={choose(role)}
+                effort
                 {...(optional ? { none: "Personne" } : {})}
               />
             </div>
