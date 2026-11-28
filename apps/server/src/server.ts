@@ -162,6 +162,8 @@ server.listen(port, values.host, () => {
   const uiPort = values.dev ? 5173 : typeof address === "object" && address ? address.port : port;
   const host = values.host === "0.0.0.0" ? "localhost" : values.host;
   console.log(`MoonAgentic est prêt : http://${host}:${uiPort}/#token=${token}`);
+  // Once listening, check Hermes's MCP entry and gateway right away instead of waiting 5 min.
+  void hub.hermes.watchGateway();
   // Its supervisor hears from it while it answers: a server stuck in a loop, or stopped,
   // says nothing more, and is started again (N4).
   if (process.send) {
