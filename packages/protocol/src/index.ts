@@ -7,6 +7,7 @@ export {
   type AppUpdate,
   MAX_UPDATE_NOTES,
   UPDATE_EVERY_MS,
+  UPDATE_QUICK_MS,
   type UpdateNote,
 } from "./app-update.ts";
 import type { AppInfo } from "./app-update.ts";

@@ -1111,6 +1111,7 @@ export class Hub {
     };
     this.clients.add(client);
     this.quotas.onClientConnect();
+    this.app.onClientConnect();
     // Sent at each connection, a phone's return to the screen included: each list of `/`
     // commands goes once, not once per thread.
     client.send({ type: "snapshot", snapshot: packSnapshot(this.snapshot(!!client.deviceId)) });
