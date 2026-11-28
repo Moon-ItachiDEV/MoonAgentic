@@ -31,6 +31,7 @@ const SECTIONS: Section<DiscSection>[] = [
 
 const ACCESS: Record<Thread["permissionMode"], string> = {
   supervised: "Demande d'abord",
+  edits: "Éditions auto",
   full: "Accès complet",
 };
 
@@ -327,7 +328,7 @@ function AccessChip({ thread }: { thread: Thread }) {
   return (
     <ChipMenu label="Accès" shown={ACCESS[thread.permissionMode]}>
       {(close) =>
-        (["supervised", "full"] as const).map((mode) => (
+        (["supervised", "edits", "full"] as const).map((mode) => (
           <button
             key={mode}
             type="button"
@@ -496,7 +497,7 @@ function DiscussionMenu(props: Props) {
     body = (
       <>
         {head("Accès")}
-        {(["supervised", "full"] as const).map((mode) => (
+        {(["supervised", "edits", "full"] as const).map((mode) => (
           <button
             key={mode}
             type="button"

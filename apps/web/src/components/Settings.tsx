@@ -673,15 +673,25 @@ function SectionBody(props: PageProps & GithubProps & { section: SettingsSection
             )}
             <div className="it ro col">
               <span className="tx">Autorisations par défaut</span>
-              <div className="seg" role="radiogroup" aria-label="Autorisations par défaut">
+              <div className="seg three" role="radiogroup" aria-label="Autorisations par défaut">
                 <button
                   role="radio"
-                  aria-checked={mode !== "full"}
-                  aria-pressed={mode !== "full"}
+                  aria-checked={mode === "supervised"}
+                  aria-pressed={mode === "supervised"}
                   onClick={() => setDefault({ permissionMode: "supervised" })}
                 >
-                  <I n="hand" s={16} />
+                  <I n="hand" s={15} />
                   Supervisé
+                </button>
+                <button
+                  role="radio"
+                  aria-checked={mode === "edits"}
+                  aria-pressed={mode === "edits"}
+                  title="Modifie les fichiers du fil sans demander ; les commandes demandent encore"
+                  onClick={() => setDefault({ permissionMode: "edits" })}
+                >
+                  <I n="edit" s={15} />
+                  Éditions auto
                 </button>
                 <button
                   className="f"
@@ -690,7 +700,7 @@ function SectionBody(props: PageProps & GithubProps & { section: SettingsSection
                   aria-pressed={mode === "full"}
                   onClick={() => setDefault({ permissionMode: "full" })}
                 >
-                  <I n="bolt" s={16} />
+                  <I n="bolt" s={15} />
                   Accès complet
                 </button>
               </div>

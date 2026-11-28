@@ -7,6 +7,8 @@ import {
   MAX_MAX_TURNS,
   MAX_PARALLEL,
   type ModelChoice,
+  PERMISSION_MODES,
+  type PermissionMode,
   type TeamMember,
   type TeamPreset,
   type TeamSetup,
@@ -77,7 +79,7 @@ const isTeamSetup = (value: unknown): value is TeamSetup =>
   (value.tester === undefined || isTeamMember(value.tester)) &&
   (value.merger === undefined || isTeamMember(value.merger)) &&
   isCount(value.coders, 4) &&
-  (value.permissionMode === "supervised" || value.permissionMode === "full") &&
+  (PERMISSION_MODES as readonly string[]).includes(value.permissionMode as PermissionMode) &&
   (value.autoShip === undefined || typeof value.autoShip === "boolean");
 
 /** How coordinators route work, without what does not read as it should. */

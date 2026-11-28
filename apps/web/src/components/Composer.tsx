@@ -1322,10 +1322,10 @@ export function Composer(props: {
                   return;
                 }
               }
-              // Shift+Tab in the text switches the access mode.
+              // Shift+Tab in the text cycles the access mode.
               if (e.key === "Tab" && e.shiftKey) {
                 e.preventDefault();
-                setMode(full ? "supervised" : "full");
+                setMode(mode === "supervised" ? "edits" : mode === "edits" ? "full" : "supervised");
                 return;
               }
               if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && enterSends()) {
@@ -1340,7 +1340,7 @@ export function Composer(props: {
         <div className="bar">
           {plusButton(22)}
           <span className="acs">
-            {full && (
+            {full ? (
               <button
                 className="accp"
                 aria-label="Accès complet : l'agent agit sans demander"
@@ -1352,7 +1352,19 @@ export function Composer(props: {
                 <I n="bolt" s={13} />
                 Accès complet
               </button>
-            )}
+            ) : mode === "edits" ? (
+              <button
+                className="accp"
+                aria-label="Éditions auto : modifie les fichiers du fil sans demander"
+                onClick={() => {
+                  closeMenus();
+                  setSheet("plus");
+                }}
+              >
+                <I n="edit" s={13} />
+                Éditions auto
+              </button>
+            ) : null}
           </span>
           <span className="sp" />
           {usage && !outside && (

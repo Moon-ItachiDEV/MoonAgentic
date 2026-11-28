@@ -105,8 +105,7 @@ describe("planner", () => {
       .first()
       .click();
     // It asks before it acts: the card is seen at work for as long as it waits.
-    const full = launch.getByRole("switch", { name: "Accès complet, sans rien demander" });
-    if ((await full.getAttribute("aria-checked")) === "true") await full.click();
+    await launch.getByRole("radio", { name: "Me demander" }).click();
     if (shots) {
       // Once the panel has slid in.
       await page.waitForTimeout(400);
