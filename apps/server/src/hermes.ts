@@ -245,13 +245,29 @@ export function discordNotices(
   return lines;
 }
 
+const samePath = (a: unknown, b: string, platform = process.platform): boolean =>
+  typeof a === "string" && (platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+
 /** Whether Hermes's entry starts the same bridge, the same way, as MoonAgentic would write it. */
-function sameEntry(has: Record<string, unknown>, want: ReturnType<Hermes["entry"]>): boolean {
-  const env = has.env as Record<string, unknown> | undefined;
+export function sameEntry(
+  has: Record<string, unknown>,
+  want: ReturnType<Hermes["entry"]>,
+  platform = process.platform,
+): boolean {
+  const env =
+    typeof has.env === "object" && has.env !== null && !Array.isArray(has.env)
+      ? (has.env as Record<string, unknown>)
+      : undefined;
+  const args = Array.isArray(has.args) ? has.args : undefined;
+  const electron = env?.ELECTRON_RUN_AS_NODE === "1" || env?.ELECTRON_RUN_AS_NODE === 1;
   return (
-    has.command === want.command &&
-    JSON.stringify(has.args) === JSON.stringify(want.args) &&
-    !!env?.ELECTRON_RUN_AS_NODE === !!want.env
+    samePath(has.command, want.command, platform) &&
+    !!args &&
+    args.length === want.args.length &&
+    samePath(args[0], want.args[0]!, platform) &&
+    args[1] === want.args[1] &&
+    samePath(args[2], want.args[2]!, platform) &&
+    electron === !!want.env
   );
 }
 
@@ -277,6 +293,7 @@ export class Hermes {
   private watching: Promise<void> | undefined;
   /** MoonAgentic's entry in Hermes's `config.yaml` was looked at since this server started. */
   private entryChecked = false;
+  private closed = false;
   private readonly gatewayTimer: NodeJS.Timeout | undefined;
 
   constructor(
@@ -387,6 +404,7 @@ export class Hermes {
   }
 
   close(): void {
+    this.closed = true;
     clearInterval(this.gatewayTimer);
   }
 
@@ -396,6 +414,7 @@ export class Hermes {
    * page, which may look again sooner.
    */
   watchGateway(asked = false): Promise<void> {
+    if (this.closed) return Promise.resolve();
     if (this.watching) return this.watching;
     if (!this.saved().tokenHash || this.applying) return Promise.resolve();
     if (asked && this.gateway && Date.now() - this.gateway.at < GATEWAY_ASKED_MS) {
@@ -407,7 +426,9 @@ export class Hermes {
       try {
         // Its entry written again when missing or out of date: that restarts the gateway too.
         if (await this.checkEntry(cli)) return;
+        if (this.closed) return;
         const found = await cli.ensureGateway();
+        if (this.closed) return;
         const before = this.gateway;
         this.gateway = { ...found, at: Date.now() };
         if (before?.running !== found.running || before?.reason !== found.reason) this.announce();
@@ -424,14 +445,16 @@ export class Hermes {
    * Once per start, looks at MoonAgentic's entry in Hermes's `config.yaml`, and writes it again
    * when it is missing or not this MoonAgentic's: connected before MoonAgentic could set Hermes
    * up itself, or by a version whose server lived elsewhere, Hermes would never see its tools.
-   * True when it is being written again.
+   * When reading fails transiently (`unknown`), leaves the config untouched and tries again
+   * later. True when it is being written again.
    */
   private async checkEntry(cli: HermesCli): Promise<boolean> {
     if (this.entryChecked || !this.host.url()) return false;
+    const read = await cli.installed();
+    if (this.closed || read.state === "unknown") return false;
     this.entryChecked = true;
-    const has = await cli.installed();
     if (!this.saved().tokenHash || this.applying) return false;
-    if (has && sameEntry(has, this.entry())) return false;
+    if (read.state === "found" && sameEntry(read.entry, this.entry())) return false;
     this.install();
     return true;
   }

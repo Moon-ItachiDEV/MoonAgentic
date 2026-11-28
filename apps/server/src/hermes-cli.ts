@@ -132,6 +132,10 @@ export function modelOf(printed: string): { provider?: string; model: string } |
   return { ...(provider ? { provider } : {}), model: model.trim() };
 }
 
+/** What reading `mcp_servers.moonagentic` from Hermes's `config.yaml` gave. */
+export type InstalledEntry =
+  { state: "found"; entry: Record<string, unknown> } | { state: "missing" } | { state: "unknown" };
+
 /** Hermes's own setup, changed with its commands. */
 export class HermesCli {
   private readonly run: HermesRunner;
@@ -171,17 +175,26 @@ export class HermesCli {
     }
   }
 
-  /** MoonAgentic's entry as Hermes's `config.yaml` has it now; undefined when there is none. */
-  async installed(): Promise<Record<string, unknown> | undefined> {
+  /**
+   * MoonAgentic's entry as Hermes's `config.yaml` has it now: `missing` when the key is unset
+   * or holds a non-object value (like an older Hermes's string), `unknown` when `hermes` itself
+   * failed or timed out so callers do not overwrite a working config.
+   */
+  async installed(): Promise<InstalledEntry> {
     const done = await this.run(["config", "get", "mcp_servers.moonagentic", "--json"], COMMAND_MS);
-    if (done.code !== 0) return undefined;
+    if (done.code !== 0) {
+      return done.code === 1 &&
+        /\b(not set|not found|does not exist)\b/i.test(`${done.err}\n${done.out}`)
+        ? { state: "missing" }
+        : { state: "unknown" };
+    }
     try {
       const value: unknown = JSON.parse(done.out.trim());
       return typeof value === "object" && value !== null && !Array.isArray(value)
-        ? (value as Record<string, unknown>)
-        : undefined;
+        ? { state: "found", entry: value as Record<string, unknown> }
+        : { state: "missing" };
     } catch {
-      return undefined;
+      return { state: "unknown" };
     }
   }
 

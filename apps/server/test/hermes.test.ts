@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import type { ServerMessage } from "@moonagentic/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
-import { dayOf, discordNotices, discordWebhook, timeOf } from "../src/hermes.ts";
+import { dayOf, discordNotices, discordWebhook, sameEntry, timeOf } from "../src/hermes.ts";
 import { BACKUP_SUFFIX, type HermesRun, modelOf, splitModel } from "../src/hermes-cli.ts";
 import { HERMES_PATH, HERMES_TOOLS } from "../src/hermes-tools.ts";
 import { createHttpServer } from "../src/http.ts";
@@ -1190,5 +1190,96 @@ describe("Hermes · entrée de MoonAgentic absente ou périmée dans config.yaml
       "gateway ensure --json --timeout 60",
     ]);
     expect(h.status().gateway).toMatchObject({ running: true });
+  });
+
+  it("une erreur ou un délai dépassé de config get ne réécrit pas config.yaml et réessaie plus tard", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    delete h.cli.config["mcp_servers.moonagentic"];
+    h.cli.calls.length = 0;
+
+    // Transient CLI failure: must not overwrite or restart Hermes, nor lock out future checks.
+    h.cli.fail.on = "config get mcp_servers.moonagentic";
+    await h.hub.hermes.watchGateway();
+    await h.hub.hermes.settled();
+    expect(h.cli.calls.some((c) => c[1] === "set" || c[1] === "restart")).toBe(false);
+    expect(h.status().setup).toMatchObject({ state: "done" });
+
+    // Once Hermes responds normally and reports the key unset, it repairs the entry.
+    delete h.cli.fail.on;
+    h.cli.calls.length = 0;
+    await h.hub.hermes.watchGateway();
+    await h.hub.hermes.settled();
+    expect(h.cli.config["mcp_servers.moonagentic"]).toContain("hermes-bridge");
+    expect(h.cli.calls.some((c) => c.join(" ") === "gateway restart --yes --detach")).toBe(true);
+  });
+
+  it("fermer pendant la lecture de l'entrée ne lance pas d'installation après coup", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    delete h.cli.config["mcp_servers.moonagentic"];
+    h.cli.calls.length = 0;
+    h.cli.hold.on = "config get mcp_servers.moonagentic";
+    const pending = h.hub.hermes.watchGateway();
+    await soon(() => !!h.cli.hold.release).toBe(true);
+    h.hub.hermes.close();
+    h.cli.hold.release!();
+    await pending;
+    await h.hub.hermes.settled();
+    expect(h.cli.calls.map((c) => c.join(" "))).toEqual([
+      "config get mcp_servers.moonagentic --json",
+    ]);
+  });
+
+  it("sameEntry tolère la casse des chemins sous Windows et exige ELECTRON_RUN_AS_NODE à 1", () => {
+    const want = {
+      command: "C:\\App\\MoonAgentic.exe",
+      args: [
+        "C:\\App\\resources\\server\\src\\hermes-bridge.js",
+        "http://127.0.0.1:4747",
+        "C:\\Users\\Me\\AppData\\moon\\hermes-token",
+      ],
+      env: { ELECTRON_RUN_AS_NODE: "1" },
+      timeout: 900,
+      connect_timeout: 60,
+    };
+    expect(
+      sameEntry(
+        {
+          command: "c:\\app\\moonagentic.exe",
+          args: [
+            "c:\\app\\resources\\server\\src\\hermes-bridge.js",
+            "http://127.0.0.1:4747",
+            "c:\\users\\me\\appdata\\moon\\hermes-token",
+          ],
+          env: { ELECTRON_RUN_AS_NODE: "1" },
+        },
+        want,
+        "win32",
+      ),
+    ).toBe(true);
+    expect(
+      sameEntry(
+        { command: want.command, args: want.args, env: { ELECTRON_RUN_AS_NODE: "0" } },
+        want,
+        "win32",
+      ),
+    ).toBe(false);
+    expect(
+      sameEntry({ command: want.command, args: want.args, env: "invalid" }, want, "win32"),
+    ).toBe(false);
+    expect(
+      sameEntry(
+        {
+          command: want.command.toLowerCase(),
+          args: want.args,
+          env: want.env,
+        },
+        want,
+        "linux",
+      ),
+    ).toBe(false);
   });
 });
