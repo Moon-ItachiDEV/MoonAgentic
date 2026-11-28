@@ -492,8 +492,9 @@ const workFolder = (workspace: Workspace) =>
 
 /**
  * What a coordinator may do on its own when granted full access: only strictly read-only
- * inspection (`read`, `search`, `think`). Commands (`execute`), file edits, network fetches
- * and unknown/unspecified (`other`) tools wait on the user.
+ * inspection (`read`, `search`, `think`), plus a command (`execute`) that `readOnlyCall`
+ * proves only reads. Every other command, file edits, network fetches and unknown or
+ * unspecified (`other`) tools wait on the user.
  */
 export const COORDINATOR_ALLOWED = new Set(["read", "search", "think"]);
 /**
@@ -5167,7 +5168,9 @@ export class Hub {
       const thread = this.store.getThread(pending.threadId);
       if (!thread) continue;
       const optionId = this.passesOnItsOwn(thread, pending.asked.request, pending.asked.folder);
-      if (optionId) this.respondToPermission(pending.threadId, itemId, optionId);
+      // An agent's option spelled like « Autoriser pour ce fil » must not grant anything.
+      if (optionId && optionId !== THREAD_GRANT_OPTION)
+        this.respondToPermission(pending.threadId, itemId, optionId);
     }
   }
 

@@ -2462,7 +2462,7 @@ describe("security boundaries", () => {
     expect(hub.snapshot().mcpSecretsError).toBeUndefined();
   });
 
-  it("blocks writes/fetch/other on full-mode reviewers, and also blocks execute on coordinators", async () => {
+  it("blocks writes/fetch/other on full-mode reviewers, and on coordinators every command that does not only read", async () => {
     const { dir, store, hub, projectId } = setup();
     const agent = path.join(dir, "kind-agent.mjs");
     // Mock ACP agent that requests permission for the ToolKind sent in the prompt.
@@ -2559,9 +2559,22 @@ describe("security boundaries", () => {
       await check(reviewerId, blocked, false);
     }
 
+    // A command that does more than read, already shown when the coordinator gets full
+    // access, still waits for the user.
+    const coordinatorId = hub.openCoordinator(projectId, agentId);
+    hub.send(coordinatorId, "execute rm -rf dist");
+    await expect
+      .poll(() => store.getThread(coordinatorId)!.status, { timeout: 10_000 })
+      .toBe("waiting");
+    hub.setPermissionMode(coordinatorId, "full");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(store.getThread(coordinatorId)!.status).toBe("waiting");
+    await hub.cancel(coordinatorId);
+    await hub.whenIdle(coordinatorId);
+    hub.setPermissionMode(coordinatorId, "supervised");
+
     // A coordinator asks before a command, even one that only reads; the user switches to
     // « Accès complet » while it waits: the command that only reads is let through then.
-    const coordinatorId = hub.openCoordinator(projectId, agentId);
     hub.send(coordinatorId, 'execute git grep -n "thought_level\\|effort" apps/server/src/');
     await expect
       .poll(() => store.getThread(coordinatorId)!.status, { timeout: 10_000 })
@@ -2660,12 +2673,14 @@ describe("messages written while the agent works", () => {
     await hub.handle(client, { type: "thread.queue", requestId: "q1", threadId, text: "Ensuite" });
     await hub.handle(client, { type: "thread.queue", requestId: "q2", threadId, text: "Urgent" });
     const urgent = store.getThread(threadId)!.queue![1]!;
+    await hub.handle(client, { type: "thread.queueSend", requestId: "s", threadId, id: urgent.id });
+    // Full access only now: given earlier, it answers the open request and the turn may end
+    // before « Urgent » is sent, which then leaves in line instead of first.
     await hub.handle(client, {
       type: "thread.setPermissionMode",
       threadId,
       permissionMode: "full",
     });
-    await hub.handle(client, { type: "thread.queueSend", requestId: "s", threadId, id: urgent.id });
     // The turn under way is stopped, the chosen message goes, and the other follows it.
     await expect
       .poll(() => texts(store.listItems(threadId)), { timeout: 20_000 })

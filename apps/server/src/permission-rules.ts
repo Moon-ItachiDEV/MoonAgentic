@@ -160,6 +160,9 @@ export function commandOf(call: acp.ToolCallUpdate | acp.ToolCall): string | und
     }
     return unwrap(parts.join(" "));
   }
+  // A command sent in a shape not known here (`{ argv: [...] }`, a number, arguments without
+  // their program) is not one: its title, which may read « git log », says nothing of it.
+  if (command !== undefined || raw?.args !== undefined) return undefined;
   return call.title ? unwrap(call.title) : undefined;
 }
 
