@@ -881,11 +881,61 @@ export function githubRepo(remoteUrl: string): string | undefined {
   return `${owner}/${name}`;
 }
 
+/** How git says it knows no one to sign a commit with. */
+const NO_IDENTITY =
+  /identity unknown|unable to auto-detect email address|empty ident name|no (?:email|name) was given/i;
+
+/** What the user is told then, in place of git's own advice to run commands. */
+export const WHO_SIGNS =
+  "Git ne sait pas qui signe les commits sur cet ordinateur. Connecte MoonAgentic à GitHub (Connexions › GitHub) pour qu'ils portent ton compte, ou règle user.name et user.email dans git.";
+
+/** Git's refusal for want of an author, said in the user's words; anything else as it is. */
+const whoSigns = (message: string): string => (NO_IDENTITY.test(message) ? WHO_SIGNS : message);
+
+/**
+ * Who signs a commit made here when git knows no one: a computer where `user.name` and
+ * `user.email` were never set, and where git cannot make an address up, refuses every commit
+ * (« Author identity unknown »). The account MoonAgentic is signed in to GitHub with then
+ * signs it, for this one command, through its environment: no git setting is written, and
+ * what the user did set (a name without an address, say) is kept. Empty when git has what it
+ * needs, or when MoonAgentic is not signed in.
+ */
+export async function commitIdentity(
+  dir: string,
+  account: Pick<GithubAccount, "identity"> | undefined = githubAccount(),
+): Promise<Record<string, string>> {
+  // Asked of git itself, which reads its settings, its environment and the computer's name.
+  const known = async (role: "AUTHOR" | "COMMITTER") =>
+    (await gitCode(dir, ["var", `GIT_${role}_IDENT`])).code === 0;
+  const [author, committer] = await Promise.all([known("AUTHOR"), known("COMMITTER")]);
+  if (author && committer) return {};
+  const own = await account?.identity().catch(() => undefined);
+  if (!own) return {};
+  const set = async (key: string) => (await gitCode(dir, ["config", "--get", key])).stdout.trim();
+  const [name, email] = await Promise.all([set("user.name"), set("user.email")]);
+  const as = { name: name || own.name, email: email || own.email };
+  return {
+    ...(author ? {} : { GIT_AUTHOR_NAME: as.name, GIT_AUTHOR_EMAIL: as.email }),
+    ...(committer ? {} : { GIT_COMMITTER_NAME: as.name, GIT_COMMITTER_EMAIL: as.email }),
+  };
+}
+
+/** A git command that makes a commit: signed as `commitIdentity` says when git knows no one. */
+async function gitSigned(dir: string, args: string[]): Promise<string> {
+  try {
+    return await git(dir, args, await commitIdentity(dir));
+  } catch (error) {
+    const said = error instanceof Error ? error.message : String(error);
+    if (NO_IDENTITY.test(said)) throw new Error(WHO_SIGNS, { cause: error });
+    throw error;
+  }
+}
+
 /** Commits everything that changed in the folder; false when nothing had. */
 export async function commitAll(dir: string, message: string): Promise<boolean> {
   if (!(await git(dir, ["status", "--porcelain"])).trim()) return false;
   await git(dir, ["add", "-A"]);
-  await git(dir, ["commit", "-q", "-m", message]);
+  await gitSigned(dir, ["commit", "-q", "-m", message]);
   return true;
 }
 
@@ -921,7 +971,7 @@ export async function unfinishedMerge(dir: string): Promise<string[] | undefined
  */
 export async function mergeBranch(dir: string, branch: string, message: string): Promise<string[]> {
   try {
-    await git(dir, ["merge", "--no-ff", "--no-edit", "-m", message, branch]);
+    await gitSigned(dir, ["merge", "--no-ff", "--no-edit", "-m", message, branch]);
     return [];
   } catch (error) {
     const conflicts = await unfinishedMerge(dir);
@@ -1030,7 +1080,7 @@ export async function ship(
     commit = await commitOnly(dir, options.files, options.message);
   } else if ((await git(dir, ["status", "--porcelain"])).trim()) {
     await git(dir, ["add", "-A"]);
-    await git(dir, ["commit", "-q", "-m", options.message]);
+    await gitSigned(dir, ["commit", "-q", "-m", options.message]);
     commit = (await git(dir, ["rev-parse", "HEAD"])).trim();
   }
   const remotes = (await git(dir, ["remote"])).split("\n").filter(Boolean);
@@ -1100,7 +1150,7 @@ async function commitOnly(
       .split("\0")
       .filter((f) => paths.includes(f));
     if (!staged.length) return undefined;
-    await git(dir, [
+    await gitSigned(dir, [
       "--literal-pathspecs",
       "commit",
       "-q",
@@ -1321,7 +1371,7 @@ export async function rejectFile(dir: string, base: string, file: string, from?:
     .filter(Boolean);
   if (!committed.length) return undefined;
   return withPathspecFile(committed, async (list) => {
-    await git(dir, [
+    await gitSigned(dir, [
       "--literal-pathspecs",
       "commit",
       "-q",
@@ -1411,18 +1461,17 @@ export async function mergeForecast(dir: string, target: string): Promise<MergeF
  * undone, so the folder is never left half merged. Returns the new start of the branch.
  */
 export async function syncWithBranch(dir: string, target: string, message: string) {
-  const merged = await gitCode(dir, [
-    "merge",
-    "--no-ff",
-    "--no-edit",
-    "--autostash",
-    "-m",
-    message,
-    target,
-  ]);
+  // The merge is a commit, and so is the work it keeps aside: both need someone to sign them.
+  const merged = await gitCode(
+    dir,
+    ["merge", "--no-ff", "--no-edit", "--autostash", "-m", message, target],
+    await commitIdentity(dir),
+  );
   if (merged.code !== 0) {
     await gitCode(dir, ["merge", "--abort"]);
-    throw new Error(merged.stderr.trim() || "La fusion n'a pas abouti : rien n'a changé.");
+    throw new Error(
+      whoSigns(merged.stderr.trim()) || "La fusion n'a pas abouti : rien n'a changé.",
+    );
   }
   // The merge went through, but putting the work not committed back on top of it may not:
   // git still says 0, leaves the files in conflict and keeps the work in its stash. All is
