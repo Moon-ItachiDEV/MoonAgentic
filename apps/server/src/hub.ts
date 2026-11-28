@@ -2102,6 +2102,10 @@ export class Hub {
         await this.restartCoordinator(message.projectId);
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "coordinator.archive":
+        await this.archiveCoordinator(message.projectId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "coordinator.setParallel":
         this.coordinators.setCoordinatorSettings({
           ...this.coordinators.coordinatorSettings(),
@@ -4417,7 +4421,7 @@ export class Hub {
   async setArchived(threadId: string, archived: boolean): Promise<void> {
     if (archived && this.requireThread(threadId).kind === "coordinator")
       throw new Error(
-        "Le coordinateur ne se résout pas : supprime sa conversation pour repartir de zéro.",
+        "Le coordinateur ne se résout pas : archive sa conversation dans Paramètres du projet › Avancée.",
       );
     if (archived) this.refuseGroupAtWork(threadId);
     // A team goes to the archive whole, and comes back whole: never its lead alone.
@@ -5749,6 +5753,12 @@ export class Hub {
    * message starts a new agent that resumes the conversation.
    */
   private async restartCoordinator(projectId: string): Promise<void> {
+    const coordinator = this.projectCoordinator(projectId);
+    await this.stopCoordinator(coordinator.id);
+  }
+
+  /** The project's coordinator, for a step the user asks on it. */
+  private projectCoordinator(projectId: string): Thread {
     if (this.locks.isLocked(projectId)) {
       throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
     }
@@ -5756,16 +5766,76 @@ export class Hub {
       .listThreads()
       .find((t) => t.projectId === projectId && t.kind === "coordinator");
     if (!coordinator) throw new Error("Ce projet n'a pas encore de coordinateur.");
-    const turn = this.turns.get(coordinator.id);
+    return coordinator;
+  }
+
+  /** Stops the coordinator's turn, then its agent. */
+  private async stopCoordinator(coordinatorId: string): Promise<void> {
+    const turn = this.turns.get(coordinatorId);
     if (turn) {
-      await this.cancel(coordinator.id);
+      await this.cancel(coordinatorId);
       // Its turn ends as stopped; one frozen past this is stopped with its agent below.
       await Promise.race([
         turn.catch(() => undefined),
         new Promise((done) => setTimeout(done, RESTART_WAIT_MS).unref()),
       ]);
     }
-    await this.pool.stop(coordinator.id);
+    await this.pool.stop(coordinatorId);
+  }
+
+  /**
+   * Puts the coordinator's conversation in the archive, as a thread of its own that stays
+   * readable, and gives the project a new coordinator, empty, on the same agent and model.
+   * The threads the old one opened report to the new one, and what waited for it goes there.
+   */
+  private async archiveCoordinator(projectId: string): Promise<void> {
+    const old = this.projectCoordinator(projectId);
+    await this.stopCoordinator(old.id);
+    // A turn its agent's stop did not end yet: the conversation is not moved under it.
+    const turn = this.turns.get(old.id);
+    if (turn)
+      await Promise.race([
+        turn.catch(() => undefined),
+        new Promise((done) => setTimeout(done, RESTART_WAIT_MS).unref()),
+      ]);
+    const threads = await this.exclusive(
+      old.id,
+      "Attends que le coordinateur soit archivé.",
+      async () => {
+        this.settlePermissions(old.id);
+        await this.forgetSession(old.id);
+        this.flushText(old.id);
+        const now = Date.now();
+        const current = this.requireThread(old.id);
+        const next: Thread = {
+          id: randomUUID(),
+          projectId,
+          title: current.title,
+          agentId: current.agentId,
+          status: "idle",
+          permissionMode: current.permissionMode,
+          ...(current.model ? { model: current.model } : {}),
+          ...(current.settings ? { settings: current.settings } : {}),
+          kind: "coordinator",
+          createdAt: now,
+          updatedAt: now,
+        };
+        const changed = this.store.handOverCoordinator(old.id, next);
+        this.dropHeld(old.id);
+        this.dropLog(old.id);
+        this.coordinators.forget(old.id);
+        const told = this.greenTold.get(old.id);
+        this.greenTold.delete(old.id);
+        if (told) this.greenTold.set(next.id, told);
+        return changed;
+      },
+    );
+    // The new coordinator is told first: a screen left without one would open another.
+    for (const thread of threads) {
+      this.broadcast({ type: "thread", thread });
+      this.planner.syncThread(thread);
+    }
+    this.coordinators.drainLine(threads[0]!.id);
   }
 
   private async startSession(

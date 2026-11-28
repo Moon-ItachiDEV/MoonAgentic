@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
-import { ORIGIN_MARK, REPLY_MARK, threadGroup, WORK_KINDS } from "@moonagentic/protocol";
+import {
+  ORIGIN_MARK,
+  REPLY_MARK,
+  type ServerMessage,
+  threadGroup,
+  WORK_KINDS,
+} from "@moonagentic/protocol";
 import { replyGuide } from "../src/coordinator.ts";
 import { COORDINATOR_PATH, COORDINATOR_TOOLS, THREAD_KINDS } from "../src/coordinator-tools.ts";
 import { createHttpServer } from "../src/http.ts";
@@ -502,6 +508,75 @@ describe("a project's coordinator", () => {
     expect(await say("/fils")).toBe("Ce projet a 0 fil.");
     await expect(
       hub.handle(client, { type: "coordinator.restart", requestId: "s", projectId: otherId }),
+    ).rejects.toThrow("pas encore de coordinateur");
+  });
+
+  it("archives its conversation, readable on its own, and goes on with an empty one", async () => {
+    const { hub, store, projectId, otherId, coordinatorId, say, hold } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await say("/ouvre Export Safari");
+    const opened = store.listThreads().find((t) => t.openedBy === coordinatorId)!;
+    const kept = store.listItems(coordinatorId).length;
+    const before = store.getThread(coordinatorId)!;
+    // At work when archived: its turn stops first.
+    await hold();
+    const live = hub.liveAgents;
+    const sent: ServerMessage[] = [];
+    let done = false;
+    const screen: Client = {
+      send: (m) => {
+        sent.push(m);
+        if (m.type === "done" && m.requestId === "a") done = true;
+      },
+    };
+    hub.connect(screen);
+    await hub.handle(screen, { type: "coordinator.archive", requestId: "a", projectId });
+    expect(done).toBe(true);
+    // Its agent stopped; the opened thread's goes on.
+    expect(hub.liveAgents).toBe(live - 1);
+    // The old conversation is a thread of its own now, in the archive, whole.
+    const old = store.getThread(coordinatorId)!;
+    expect(old).toMatchObject({ archived: true, status: "idle" });
+    expect(old.kind).toBeUndefined();
+    expect(store.getSessionId(coordinatorId)).toBeNull();
+    expect(store.listItems(coordinatorId).length).toBeGreaterThanOrEqual(kept);
+    // The project's coordinator is a new one, empty, on the same agent and settings.
+    const next = store
+      .listThreads()
+      .find((t) => t.projectId === projectId && t.kind === "coordinator")!;
+    expect(next.id).not.toBe(coordinatorId);
+    expect(next).toMatchObject({
+      agentId: before.agentId,
+      permissionMode: before.permissionMode,
+      settings: before.settings,
+      status: "idle",
+    });
+    expect(next.archived).toBeUndefined();
+    expect(store.listItems(next.id)).toEqual([]);
+    expect(hub.openCoordinator(projectId, "demo")).toBe(next.id);
+    // The threads the old one opened report to the new one.
+    expect(store.getThread(opened.id)!.openedBy).toBe(next.id);
+    // Screens hear of the new coordinator before the old one leaves.
+    const told = sent.flatMap((m) => (m.type === "thread" ? [m.thread] : []));
+    const gone = told.findIndex((t) => t.id === coordinatorId && !t.kind);
+    expect(told.findIndex((t) => t.id === next.id)).toBeLessThan(gone);
+    // It answers, and sees the project's threads: the old conversation among them, resolved,
+    // so it can look back at what was said there.
+    await hub.handle(client, { type: "thread.send", threadId: next.id, text: "/fils" });
+    await hub.whenIdle(next.id);
+    expect(store.getThread(next.id)!.summary).toBe("Ce projet a 2 fils.");
+    // The old one reads like any archived thread, and coming back keeps it a thread.
+    await hub.handle(client, {
+      type: "thread.setArchived",
+      threadId: coordinatorId,
+      archived: false,
+    });
+    expect(store.getThread(coordinatorId)!.archived).toBeFalsy();
+    expect(
+      store.listThreads().filter((t) => t.projectId === projectId && t.kind === "coordinator"),
+    ).toHaveLength(1);
+    await expect(
+      hub.handle(client, { type: "coordinator.archive", requestId: "b", projectId: otherId }),
     ).rejects.toThrow("pas encore de coordinateur");
   });
 

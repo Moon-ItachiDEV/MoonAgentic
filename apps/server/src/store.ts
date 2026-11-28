@@ -1155,6 +1155,35 @@ export class Store {
     return this.getThread(id)!;
   }
 
+  /**
+   * Hands a project's coordinator over to `next`, a new and empty one: the old conversation
+   * stays as an archived thread of its own, and the threads it opened, with what waited to
+   * be sent to it, go to `next`. All together, or nothing. Returns every thread it changed.
+   */
+  handOverCoordinator(oldId: string, next: Thread): Thread[] {
+    return this.transaction(() => {
+      const old = this.getThread(oldId);
+      if (old?.kind !== "coordinator") throw new Error(`Unknown coordinator ${oldId}`);
+      const { kind: _kind, queue, inLine: _inLine, quietSince: _quiet, ...kept } = old;
+      this.addThread({ ...next, ...(queue?.length ? { queue } : {}) });
+      const write = (thread: Thread) =>
+        this.sql(`UPDATE threads SET status = ?, extra = ? WHERE id = ?`).run(
+          thread.status,
+          extraOf(thread),
+          thread.id,
+        );
+      write({ ...kept, status: "idle", archived: true });
+      for (const t of this.listThreads()) {
+        if (t.openedBy === oldId) write({ ...t, openedBy: next.id });
+      }
+      return [
+        this.getThread(next.id)!,
+        ...this.listThreads().filter((t) => t.openedBy === next.id),
+        this.getThread(oldId)!,
+      ];
+    });
+  }
+
   /** Puts the thread in another project: it then works in that project's folder. */
   moveThread(id: string, projectId: string): Thread {
     this.sql(`UPDATE threads SET project_id = ? WHERE id = ?`).run(projectId, id);

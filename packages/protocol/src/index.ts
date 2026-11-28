@@ -2064,6 +2064,12 @@ export const ClientMessage = z.discriminatedUnion("type", [
    * which resumes its conversation. Answers `done`.
    */
   z.object({ type: z.literal("coordinator.restart"), requestId: id, projectId: id }),
+  /**
+   * Puts the project's coordinator conversation in the archive, where it stays readable as a
+   * thread of its own; the coordinator goes on with an empty one, and the threads it opened
+   * report to it. Answers `done`.
+   */
+  z.object({ type: z.literal("coordinator.archive"), requestId: id, projectId: id }),
   /** How many threads a coordinator runs at once. */
   z.object({
     type: z.literal("coordinator.setParallel"),
