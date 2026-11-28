@@ -345,6 +345,143 @@ describe("Hermes · outils", () => {
     expect(schedule!.nextAt).toBe(new Date(2030, 0, 2, 9, 30).getTime());
   });
 
+  it("pose une carte dans la colonne voulue, avec son échéance", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    const put = async (title: string, column?: string, due?: string) =>
+      await h.result("add_plan_card", {
+        project: "Site vitrine",
+        title,
+        ...(column ? { column } : {}),
+        ...(due ? { due } : {}),
+      });
+    expect((await put("Tester /revue sur le mini-PC")).result).toMatchObject({
+      column: "À faire",
+    });
+    expect((await put("Vérifier les icônes clavier", "En cours")).result).toMatchObject({
+      column: "En cours",
+    });
+    // Any case, any accent, or the column's id.
+    const later = await put("Publier v0.1.19", "reporte", "2026-11-30");
+    expect(later.result).toMatchObject({ column: "Reporté", due: "2026-11-30" });
+    await put("Essai", "test");
+    const cards = h.hub.planner.list();
+    expect(cards.map((c) => [c.title, c.status])).toEqual(
+      expect.arrayContaining([
+        ["Tester /revue sur le mini-PC", "todo"],
+        ["Vérifier les icônes clavier", "doing"],
+        ["Publier v0.1.19", "report"],
+        ["Essai", "test"],
+      ]),
+    );
+    const doing = cards.find((c) => c.status === "doing")!;
+    // Out of « À faire », its work began: the Timeline draws it from today.
+    expect(doing.startedAt).toBeTypeOf("number");
+    expect(cards.find((c) => c.status === "report")!.due).toBe(new Date(2026, 10, 30).getTime());
+
+    const bad = await put("X", "Plus tard");
+    expect(bad.status).toBe(400);
+    expect(bad.error).toContain("En test");
+    expect(h.hub.planner.list()).toHaveLength(4);
+  });
+
+  it("déplace, modifie et supprime une carte par son numéro", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    const card = h.hub.planner.add({
+      projectId: h.projectId,
+      title: "Publier v0.1.19",
+      description: "Après le correctif clavier",
+      start: new Date(2026, 10, 27).getTime(),
+    });
+    const ref = `#${card.number}`;
+
+    const moved = await h.result("update_plan_card", {
+      project: "Site vitrine",
+      card: ref,
+      column: "Reporté",
+      due: "2026-11-30",
+    });
+    expect(moved.status).toBe(200);
+    expect(moved.result).toMatchObject({ column: "Reporté", due: "2026-11-30" });
+    expect(h.hub.planner.list()[0]).toMatchObject({
+      status: "report",
+      due: new Date(2026, 10, 30).getTime(),
+      title: "Publier v0.1.19",
+      description: "Après le correctif clavier",
+    });
+
+    // Only what is given changes; an empty field clears it. The number may come bare.
+    const edited = await h.result("update_plan_card", {
+      project: "Site vitrine",
+      card: String(card.number),
+      title: "Publier la v0.1.19",
+      description: "",
+      start: "",
+    });
+    expect(edited.status).toBe(200);
+    const [now] = h.hub.planner.list();
+    expect(now).toMatchObject({ title: "Publier la v0.1.19", status: "report" });
+    expect(now!.description).toBeUndefined();
+    expect(now!.start).toBeUndefined();
+    expect(now!.due).toBe(new Date(2026, 10, 30).getTime());
+
+    const nothing = await h.result("update_plan_card", { project: "Site vitrine", card: ref });
+    expect(nothing.error).toContain("Rien à changer");
+    const unknown = await h.result("update_plan_card", {
+      project: "Site vitrine",
+      card: "#999",
+      column: "En cours",
+    });
+    expect(unknown.error).toContain("read_planner");
+
+    // A card that follows its thread is not moved by hand.
+    const linked = h.hub.planner.add({ projectId: h.projectId, title: "Page contact" });
+    h.hub.planner.update(linked.id, { threadId: h.coordinatorId });
+    const held = await h.result("update_plan_card", {
+      project: "Site vitrine",
+      card: `#${linked.number}`,
+      column: "Livré",
+    });
+    expect(held.status).toBe(400);
+    expect(held.error).toContain("suit son fil");
+
+    // A card of another project is not found under this one.
+    repoAt(path.join(h.root, "boutique"));
+    const other = h.hub.createProject("Boutique", path.join(h.root, "boutique"));
+    for (const title of ["Panier", "Livraison"]) h.hub.planner.add({ projectId: other, title });
+    const theirs = h.hub.planner.add({ projectId: other, title: "Paiement" });
+    expect(theirs.number).toBe(3);
+    const wrong = await h.result("remove_plan_card", { project: "Site vitrine", card: "#3" });
+    expect(wrong.status).toBe(400);
+
+    const removed = await h.result("remove_plan_card", { project: "Site vitrine", card: ref });
+    expect(removed.result).toMatchObject({ removed: `${ref} Publier la v0.1.19` });
+    expect(
+      h.hub.planner
+        .list()
+        .map((c) => c.title)
+        .sort(),
+    ).toEqual(["Livraison", "Page contact", "Paiement", "Panier"]);
+    expect(h.status().log?.map((l) => l.what)).toEqual(
+      expect.arrayContaining([
+        "Carte déplacée en Reporté · Publier v0.1.19",
+        "Carte modifiée · Publier la v0.1.19",
+        "Carte supprimée du Planner · Publier la v0.1.19",
+      ]),
+    );
+
+    // Turned off in the settings, nothing changes.
+    await h.hub.handle(h.client, { type: "hermes.set", requestId: "r2", allow: { plan: false } });
+    const off = await h.result("remove_plan_card", {
+      project: "Site vitrine",
+      card: `#${linked.number}`,
+    });
+    expect(off.error).toContain("planifier");
+    expect(h.hub.planner.list()).toHaveLength(4);
+  });
+
   it("lit le Planner d'un projet ou de tous, par colonne, sans rien y changer", async () => {
     const h = await withHermes();
     await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });

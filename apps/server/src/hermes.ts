@@ -34,7 +34,7 @@ import {
   type Thread,
 } from "@moonagentic/protocol";
 import type { HermesCli } from "./hermes-cli.ts";
-import { ASK_WAIT_MS } from "./hermes-tools.ts";
+import { ASK_WAIT_MS, PLAN_COLUMNS as COLUMNS } from "./hermes-tools.ts";
 
 const SETTING = "hermes";
 const TOKEN_FILE = "hermes-token";
@@ -98,7 +98,20 @@ export interface HermesHost {
     description?: string;
     start?: number;
     due?: number;
+    status?: PlanStatus;
   }): PlanTask;
+  /** Changes a card; `null` clears its description or a day. */
+  updatePlanCard(
+    id: string,
+    patch: {
+      title?: string;
+      description?: string | null;
+      status?: PlanStatus;
+      start?: number | null;
+      due?: number | null;
+    },
+  ): PlanTask;
+  removePlanCard(id: string): void;
   addSchedule(input: {
     projectId: string;
     title?: string;
@@ -175,15 +188,6 @@ function sameDay(at: number, m: RegExpExecArray): boolean {
     d.getDate() === Number(m[3])
   );
 }
-
-/** The Planner's columns, as the app names them. */
-const COLUMNS: Record<PlanStatus, string> = {
-  todo: "À faire",
-  doing: "En cours",
-  report: "Reporté",
-  test: "En test",
-  live: "Livré",
-};
 
 /** A day as AAAA-MM-JJ, in this computer's time. */
 function dayText(at: number): string {
@@ -680,6 +684,34 @@ export class Hermes {
       return thread;
     };
     const projectNamed = (id: string) => this.host.projects().find((p) => p.id === id);
+    /** A column as the app names it (or its id), any case or accent. */
+    const columnOf = (key: string): PlanStatus | undefined => {
+      const asked = str(key, 20);
+      if (!asked) return undefined;
+      const found = (Object.entries(COLUMNS) as [PlanStatus, string][]).find(
+        ([status, label]) => fold(label) === fold(asked) || status === fold(asked),
+      );
+      if (!found) {
+        throw new Error(`Colonne inconnue. Colonnes : ${Object.values(COLUMNS).join(", ")}.`);
+      }
+      return found[0];
+    };
+    /** A card of the project, by its number as read_planner gives it: « #12 » or « 12 ». */
+    const cardOf = (project: Project) => {
+      const asked = need("card", 20);
+      const m = /^#?\s*(\d+)$/.exec(asked);
+      const card = m
+        ? this.host.planCards().find((c) => c.projectId === project.id && c.number === Number(m[1]))
+        : undefined;
+      if (!card) {
+        throw new Error(
+          `Aucune carte « ${asked} » dans le Planner de « ${project.name} » : lis-le avec read_planner.`,
+        );
+      }
+      return card;
+    };
+    /** Given empty, a field is cleared: `null`. Not given: `undefined`. */
+    const cleared = (key: string) => input[key] === "" || input[key] === null;
 
     switch (tool) {
       case "list_projects":
@@ -778,14 +810,7 @@ export class Hermes {
       case "read_planner": {
         const asked = str("project", 200);
         const projects = asked ? [projectOf()] : open();
-        const column = str("column", 20);
-        const status = column
-          ? (Object.entries(COLUMNS).find(([, label]) => fold(label) === fold(column))?.[0] as
-              PlanStatus | undefined)
-          : undefined;
-        if (column && !status) {
-          throw new Error(`Colonne inconnue. Colonnes : ${Object.values(COLUMNS).join(", ")}.`);
-        }
+        const status = columnOf("column");
         const today = new Date().setHours(0, 0, 0, 0);
         const names = new Map(projects.map((p) => [p.id, p.name]));
         const cards = this.host
@@ -823,18 +848,67 @@ export class Hermes {
         may("plan", "planifier");
         const project = projectOf();
         const title = need("title", 200);
-        const description = str("description", 5_000);
+        const description = str("description", 4_000);
         const start = str("start", 20);
         const due = str("due", 20);
+        const status = columnOf("column");
         const card = this.host.addPlanCard({
           projectId: project.id,
           title,
           ...(description ? { description } : {}),
           ...(start ? { start: dayOf(start, "start") } : {}),
           ...(due ? { due: dayOf(due, "due") } : {}),
+          ...(status ? { status } : {}),
         });
         this.record(`Carte ajoutée au Planner · ${title}`, project);
-        return { added: `#${card.number} ${card.title}`, project: project.name };
+        return {
+          added: `#${card.number} ${card.title}`,
+          project: project.name,
+          column: COLUMNS[card.status],
+          ...(card.due ? { due: dayText(card.due) } : {}),
+        };
+      }
+      case "update_plan_card": {
+        may("plan", "planifier");
+        const project = projectOf();
+        const card = cardOf(project);
+        const title = str("title", 200);
+        const description = str("description", 4_000);
+        const start = str("start", 20);
+        const due = str("due", 20);
+        const status = columnOf("column");
+        const patch = {
+          ...(title ? { title } : {}),
+          ...(description ? { description } : cleared("description") ? { description: null } : {}),
+          ...(start ? { start: dayOf(start, "start") } : cleared("start") ? { start: null } : {}),
+          ...(due ? { due: dayOf(due, "due") } : cleared("due") ? { due: null } : {}),
+          ...(status ? { status } : {}),
+        };
+        if (!Object.keys(patch).length) {
+          throw new Error("Rien à changer : donne column, title, description, start ou due.");
+        }
+        const next = this.host.updatePlanCard(card.id, patch);
+        this.record(
+          status && status !== card.status
+            ? `Carte déplacée en ${COLUMNS[next.status]} · ${next.title}`
+            : `Carte modifiée · ${next.title}`,
+          project,
+        );
+        return {
+          updated: `#${next.number} ${next.title}`,
+          project: project.name,
+          column: COLUMNS[next.status],
+          ...(next.start ? { start: dayText(next.start) } : {}),
+          ...(next.due ? { due: dayText(next.due) } : {}),
+        };
+      }
+      case "remove_plan_card": {
+        may("plan", "planifier");
+        const project = projectOf();
+        const card = cardOf(project);
+        this.host.removePlanCard(card.id);
+        this.record(`Carte supprimée du Planner · ${card.title}`, project);
+        return { removed: `#${card.number} ${card.title}`, project: project.name };
       }
       case "schedule_task": {
         may("plan", "planifier");
