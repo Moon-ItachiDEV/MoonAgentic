@@ -362,8 +362,18 @@ describe("Hermes · outils", () => {
       column: "En cours",
     });
     // Any case, any accent, or the column's id.
-    const later = await put("Publier v0.1.19", "reporte", "2026-11-30");
-    expect(later.result).toMatchObject({ column: "Reporté", due: "2026-11-30" });
+    const later = await h.result("add_plan_card", {
+      project: "Site vitrine",
+      title: "Publier v0.1.19",
+      column: "reporte",
+      start: "2026-11-28",
+      due: "2026-11-30",
+    });
+    expect(later.result).toMatchObject({
+      column: "Reporté",
+      start: "2026-11-28",
+      due: "2026-11-30",
+    });
     await put("Essai", "test");
     const cards = h.hub.planner.list();
     expect(cards.map((c) => [c.title, c.status])).toEqual(
@@ -397,28 +407,37 @@ describe("Hermes · outils", () => {
     });
     const ref = `#${card.number}`;
 
+    // Models that send `null` for untouched optional fields must not wipe existing values.
     const moved = await h.result("update_plan_card", {
       project: "Site vitrine",
       card: ref,
       column: "Reporté",
+      title: null,
+      description: null,
+      start: null,
       due: "2026-11-30",
     });
     expect(moved.status).toBe(200);
-    expect(moved.result).toMatchObject({ column: "Reporté", due: "2026-11-30" });
+    expect(moved.result).toMatchObject({
+      column: "Reporté",
+      start: "2026-11-27",
+      due: "2026-11-30",
+    });
     expect(h.hub.planner.list()[0]).toMatchObject({
       status: "report",
+      start: new Date(2026, 10, 27).getTime(),
       due: new Date(2026, 10, 30).getTime(),
       title: "Publier v0.1.19",
       description: "Après le correctif clavier",
     });
 
-    // Only what is given changes; an empty field clears it. The number may come bare.
+    // Only what is given changes; an empty or blank string clears it. The number may come bare or numeric.
     const edited = await h.result("update_plan_card", {
       project: "Site vitrine",
-      card: String(card.number),
+      card: card.number,
       title: "Publier la v0.1.19",
       description: "",
-      start: "",
+      start: "   ",
     });
     expect(edited.status).toBe(200);
     const [now] = h.hub.planner.list();
@@ -427,6 +446,13 @@ describe("Hermes · outils", () => {
     expect(now!.start).toBeUndefined();
     expect(now!.due).toBe(new Date(2026, 10, 30).getTime());
 
+    const emptyTitle = await h.result("update_plan_card", {
+      project: "Site vitrine",
+      card: String(card.number),
+      title: "",
+    });
+    expect(emptyTitle.status).toBe(400);
+    expect(emptyTitle.error).toContain("vide");
     const nothing = await h.result("update_plan_card", { project: "Site vitrine", card: ref });
     expect(nothing.error).toContain("Rien à changer");
     const unknown = await h.result("update_plan_card", {
@@ -474,6 +500,12 @@ describe("Hermes · outils", () => {
 
     // Turned off in the settings, nothing changes.
     await h.hub.handle(h.client, { type: "hermes.set", requestId: "r2", allow: { plan: false } });
+    const offUpdate = await h.result("update_plan_card", {
+      project: "Site vitrine",
+      card: `#${linked.number}`,
+      title: "Autre",
+    });
+    expect(offUpdate.error).toContain("planifier");
     const off = await h.result("remove_plan_card", {
       project: "Site vitrine",
       card: `#${linked.number}`,

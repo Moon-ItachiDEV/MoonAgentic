@@ -696,9 +696,13 @@ export class Hermes {
       }
       return found[0];
     };
-    /** A card of the project, by its number as read_planner gives it: « #12 » or « 12 ». */
+    /** A card of the project, by its number as read_planner gives it: « #12 », « 12 » or 12. */
     const cardOf = (project: Project) => {
-      const asked = need("card", 20);
+      const raw = input.card;
+      const asked =
+        typeof raw === "number" && Number.isInteger(raw) && raw > 0
+          ? String(raw)
+          : need("card", 20);
       const m = /^#?\s*(\d+)$/.exec(asked);
       const card = m
         ? this.host.planCards().find((c) => c.projectId === project.id && c.number === Number(m[1]))
@@ -710,8 +714,8 @@ export class Hermes {
       }
       return card;
     };
-    /** Given empty, a field is cleared: `null`. Not given: `undefined`. */
-    const cleared = (key: string) => input[key] === "" || input[key] === null;
+    /** Only an explicit empty string clears a field; `null` is treated as omitted. */
+    const cleared = (key: string) => typeof input[key] === "string" && !input[key].trim();
 
     switch (tool) {
       case "list_projects":
@@ -865,6 +869,7 @@ export class Hermes {
           added: `#${card.number} ${card.title}`,
           project: project.name,
           column: COLUMNS[card.status],
+          ...(card.start ? { start: dayText(card.start) } : {}),
           ...(card.due ? { due: dayText(card.due) } : {}),
         };
       }
@@ -872,6 +877,7 @@ export class Hermes {
         may("plan", "planifier");
         const project = projectOf();
         const card = cardOf(project);
+        if (cleared("title")) throw new Error("« title » ne peut pas être vide.");
         const title = str("title", 200);
         const description = str("description", 4_000);
         const start = str("start", 20);
