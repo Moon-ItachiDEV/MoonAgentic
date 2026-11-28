@@ -306,6 +306,8 @@ export function ReviewCard({
   const ruled = points.filter((p) => p.ruling).length;
   const debated = review.phase !== "debating" && points.some((p) => p.outcome);
   const fixable = !atWork && standing.length > 0 && !!owner;
+  // Failed before any reviewer started: the pull request could not be read, say.
+  const restartable = review.phase === "failed" && !thread.workspace;
 
   return (
     <section className="tmc" aria-label={`Revue de la PR #${review.number}`}>
@@ -508,6 +510,24 @@ export function ReviewCard({
             onClick={() => connection.send({ type: "review.stop", threadId: thread.id })}
           >
             Arrêter la revue
+          </button>
+        </div>
+      ) : restartable ? (
+        <div className="pra">
+          <button
+            type="button"
+            className="b2 ink press"
+            onClick={() =>
+              act(
+                connection.request({
+                  type: "review.restart",
+                  requestId: newId(),
+                  threadId: thread.id,
+                }),
+              )
+            }
+          >
+            Relancer la revue
           </button>
         </div>
       ) : (

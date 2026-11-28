@@ -671,10 +671,18 @@ describe("a review without GitHub CLI", { timeout: 40_000 }, () => {
     expect(readFileSync(path.join(workspace.path, "README.md"), "utf8")).toContain("answer = 42");
   });
 
-  it("says how to make it work when neither MoonAgentic nor gh can ask GitHub", async () => {
-    const { hub, store, projectId, client } = repository({
-      pullRequests: () => localPullRequests({ account: () => undefined, gh: () => undefined }),
+  it("says how to make it work when neither MoonAgentic nor gh can ask GitHub, then starts over", async () => {
+    let signedIn = false;
+    const fake = await fakeGithubApi(() => ({
+      data: { repository: { pullRequest: graphqlPull({ headRefOid: made.head }) } },
+    }));
+    cleanups.push(fake.close);
+    const account = signedInAccount(fake.url);
+    const made = repository({
+      pullRequests: () =>
+        localPullRequests({ account: () => (signedIn ? account : undefined), gh: () => undefined }),
     });
+    const { hub, store, projectId, client } = made;
     await hub.handle(client, {
       type: "review.start",
       requestId: "r1",
@@ -686,6 +694,24 @@ describe("a review without GitHub CLI", { timeout: 40_000 }, () => {
     await expect
       .poll(() => store.getThread(thread.id)!.prReview?.phase, { timeout: 10_000 })
       .toBe("failed");
-    expect(store.getThread(thread.id)!.prReview?.error).toContain("Connecte MoonAgentic à GitHub");
+    const failed = store.getThread(thread.id)!.prReview!;
+    expect(failed.error).toContain("Connecte MoonAgentic à GitHub");
+    // Its thread's own agent is told the review failed, and not to review the PR itself.
+    const told = reviewStatus(failed);
+    expect(told).toContain("La revue a échoué avant que les relecteurs ne commencent");
+    expect(told).toContain("Ne relis pas la PR toi-même");
+
+    // Once signed in, « Relancer la revue » starts it over in the same thread.
+    signedIn = true;
+    await hub.handle(client, { type: "review.restart", requestId: "r2", threadId: thread.id });
+    await expect
+      .poll(() => store.getThread(thread.id)!.prReview?.phase, { timeout: 30_000 })
+      .toBe("done");
+    expect(store.getThread(thread.id)!.prReview?.error).toBeUndefined();
+    expect(store.getThread(thread.id)!.workspace).toBeDefined();
+    // A review that got past that cannot be started over this way.
+    await expect(
+      hub.handle(client, { type: "review.restart", requestId: "r3", threadId: thread.id }),
+    ).rejects.toThrow("Seule une revue qui a échoué avant de commencer");
   });
 });

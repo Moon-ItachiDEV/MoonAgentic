@@ -2147,6 +2147,10 @@ export class Hub {
         this.reviews.retry(message.threadId, message.index);
         client.send({ type: "done", requestId: message.requestId });
         return;
+      case "review.restart":
+        this.restartPrReview(message.threadId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
       case "team.ship":
         await this.teams.ship(message.threadId);
         client.send({ type: "done", requestId: message.requestId });
@@ -2839,7 +2843,13 @@ export class Hub {
         startedAt: Date.now(),
       },
     });
-    const step = this.prepareReview(id, project, number, at?.repo).catch((error: unknown) => {
+    this.prepareInBackground(id, project, number, at?.repo);
+    return id;
+  }
+
+  /** Fetches the pull request, then starts the reviewers; what goes wrong is kept on the review. */
+  private prepareInBackground(id: string, project: Project, number: number, asked?: string) {
+    const step = this.prepareReview(id, project, number, asked).catch((error: unknown) => {
       const review = this.store.getThread(id)?.prReview;
       if (!review || this.closed) return;
       this.updateThread(id, {
@@ -2853,7 +2863,36 @@ export class Hub {
     });
     this.steps.add(step);
     void step.finally(() => this.steps.delete(step));
-    return id;
+  }
+
+  /**
+   * « Relancer la revue »: a review that failed before any reviewer started (the pull request
+   * could not be read, say) starts over in its own thread, with the same reviewers.
+   */
+  restartPrReview(threadId: string): void {
+    const thread = this.requireThread(threadId);
+    const review = thread.prReview;
+    if (!review || review.phase !== "failed" || thread.workspace) {
+      throw new Error("Seule une revue qui a échoué avant de commencer peut être relancée ici.");
+    }
+    const project = this.store.getProject(thread.projectId);
+    if (!project) throw new Error("Projet introuvable.");
+    for (const r of review.reviewers) this.agents.launch(r.agentId);
+    if (review.judge) this.agents.launch(review.judge.agentId);
+    const { error: _error, endedAt: _endedAt, ...rest } = review;
+    this.updateThread(threadId, {
+      prReview: {
+        ...rest,
+        phase: "preparing",
+        reviewers: review.reviewers.map((r) => ({
+          agentId: r.agentId,
+          ...(r.model ? { model: r.model } : {}),
+          status: "waiting" as const,
+        })),
+        startedAt: Date.now(),
+      },
+    });
+    this.prepareInBackground(threadId, project, review.number, review.repo || undefined);
   }
 
   /** Fetches the pull request into a folder of the review's own, then starts its reviewers. */

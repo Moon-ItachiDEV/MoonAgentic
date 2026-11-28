@@ -2252,6 +2252,8 @@ export const ClientMessage = z.discriminatedUnion("type", [
   }),
   /** Stops every reviewer still reading. */
   z.object({ type: z.literal("review.stop"), threadId: id }),
+  /** Starts a review that failed before its reviewers started over, in the same thread. */
+  z.object({ type: z.literal("review.restart"), requestId: id, threadId: id }),
   /** Starts a reviewer that failed or was stopped again, in its own thread. */
   z.object({
     type: z.literal("review.retry"),
