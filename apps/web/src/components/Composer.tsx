@@ -703,7 +703,12 @@ export function Composer(props: {
       return;
     }
     const rest = text.slice(trigger.end).trim();
-    if (command.action) {
+    if (command.action === "team" && !rest) {
+      // The team's task is written here first, where the keyboard already is: sending the line
+      // then opens the team's sheet with it.
+      const next = `/${command.name} `;
+      putText(next, next.length);
+    } else if (command.action) {
       putText(rest, rest.length);
       runAction(command.action, rest);
     } else if (command.template && !(command.template.includes("$ARGUMENTS") && !rest)) {

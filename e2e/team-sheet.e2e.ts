@@ -117,8 +117,11 @@ describe("team sheet on a phone", () => {
     await expect.poll(() => composer(page).isEnabled()).toBe(true);
 
     // « /equipe » alone: the sheet opens with no task, only the example in grey.
+    // Chosen in the list, it waits for a task; sent with none, it opens the sheet anyway.
     await composer(page).fill("/equipe");
     await composer(page).press("Enter");
+    await expect.poll(() => composer(page).inputValue()).toBe("/equipe ");
+    await page.getByRole("button", { name: "Envoyer" }).tap();
     const task = sheet(page).getByLabel("Tâche");
     await task.waitFor();
     expect(await task.inputValue()).toBe("");
@@ -145,5 +148,52 @@ describe("team sheet on a phone", () => {
     await page.getByRole("region", { name: "Équipe", exact: true }).waitFor();
     expect(errors).toEqual([]);
     await context.close();
+  });
+
+  it("picked from the list with nothing after it, « /equipe » waits for the task in the composer", async () => {
+    const context = await browser.newContext({
+      viewport: { width: 390, height: 844 },
+      isMobile: true,
+      hasTouch: true,
+    });
+    const page = await context.newPage();
+    await page.goto(url);
+    await page.locator(".scr").waitFor();
+    await directThread(page);
+    await expect.poll(() => composer(page).isEnabled()).toBe(true);
+
+    // Tapped in the list of commands: the sheet does not open yet, the task is written first,
+    // with the keyboard still up.
+    await composer(page).fill("/equi");
+    await page.getByRole("option", { name: /^\/equipe/ }).tap();
+    await expect.poll(() => composer(page).inputValue()).toBe("/equipe ");
+    await expect
+      .poll(() => composer(page).evaluate((el) => el === document.activeElement))
+      .toBe(true);
+    expect(await sheet(page).count()).toBe(0);
+    await composer(page).pressSequentially("Ajoute l'export CSV");
+    await page.getByRole("button", { name: "Envoyer" }).tap();
+    await expect
+      .poll(() => sheet(page).getByLabel("Tâche").inputValue())
+      .toBe("Ajoute l'export CSV");
+    await context.close();
+  });
+
+  it("chosen with Enter in the list, « /equipe » waits for the task the same way", async () => {
+    const page = await browser.newPage({ viewport: { width: 1280, height: 820 } });
+    await page.goto(url);
+    await directThread(page);
+    await expect.poll(() => composer(page).isEnabled()).toBe(true);
+    await composer(page).fill("/equipe");
+    await page.getByRole("option", { name: /^\/equipe/ }).waitFor();
+    await composer(page).press("Enter");
+    await expect.poll(() => composer(page).inputValue()).toBe("/equipe ");
+    expect(await sheet(page).count()).toBe(0);
+    // Sent again with no task, the sheet opens all the same, its field asking for one.
+    await composer(page).press("Enter");
+    await expect
+      .poll(() => sheet(page).getByLabel("Tâche").getAttribute("placeholder"))
+      .toBe("Que doit faire l'équipe ?");
+    await page.close();
   });
 });

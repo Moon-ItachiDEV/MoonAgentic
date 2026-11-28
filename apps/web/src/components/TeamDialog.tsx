@@ -326,7 +326,7 @@ export function TeamDialog({
             aria-invalid={missing !== null && !task.trim()}
             rows={3}
             value={task}
-            placeholder="Ajoute l'export CSV aux rapports"
+            placeholder="Que doit faire l'équipe ?"
             onChange={(e) => {
               setTask(e.target.value);
               setMissing(null);
