@@ -81,6 +81,7 @@ type ThreadExtra = Pick<
   | "worksIn"
   | "team"
   | "prReview"
+  | "plan"
 >;
 
 /** Why a turn found at work on start is over: the server stopped under it. */
@@ -118,6 +119,7 @@ const extraOf = (thread: ThreadExtra): string | null => {
     ...(thread.worksIn ? { worksIn: thread.worksIn } : {}),
     ...(thread.team ? { team: thread.team } : {}),
     ...(thread.prReview ? { prReview: thread.prReview } : {}),
+    ...(thread.plan?.entries.length ? { plan: thread.plan } : {}),
   };
   return Object.keys(extra).length ? JSON.stringify(extra) : null;
 };
@@ -1080,6 +1082,7 @@ export class Store {
         | "team"
         | "prReview"
         | "summary"
+        | "plan"
       >
     > & {
       held?: string | null;

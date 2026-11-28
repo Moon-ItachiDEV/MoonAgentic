@@ -266,6 +266,13 @@ const titleFrom = (text: string, images = 0) => {
 export const ARTIFACT_HINT =
   "Pour montrer à l'utilisateur quelque chose à regarder (maquette, design, présentation de code, schéma, rapport), publie-le avec l'outil publish_artifact de MoonAgentic : il l'ouvre d'un geste sur son téléphone, son iPad ou son ordinateur.";
 
+/**
+ * What a project thread's agent is told when it starts: the plan at the top of its thread is
+ * its to keep.
+ */
+export const PLAN_HINT =
+  "Tiens le plan de ton travail avec l'outil update_plan de MoonAgentic : il s'affiche en haut du fil. Donne-le dès le début, en 3 à 7 étapes courtes en français, puis rappelle-le chaque fois qu'une étape commence ou se termine.";
+
 /** What an agent is told when the message is images alone: it needs some words to answer. */
 const IMAGES_ONLY = "(Message sans texte : regarde l'image jointe.)";
 
@@ -5349,7 +5356,9 @@ export class Hub {
       // Told once, when its agent starts: what it shows the user goes through its tool.
       const showing =
         !continuing && session.fresh && this.coordinatorUrl && thread.kind !== "coordinator"
-          ? ARTIFACT_HINT
+          ? shares
+            ? `${ARTIFACT_HINT}\n\n${PLAN_HINT}`
+            : ARTIFACT_HINT
           : undefined;
       const preamble = [memory, history, showing].filter(Boolean).join("\n\n") || undefined;
       const said = text.trim() || !images.length ? text : IMAGES_ONLY;
@@ -5904,20 +5913,20 @@ export class Hub {
         const id = `plan:${this.turnIds.get(threadId) ?? "late"}`;
         const before = this.itemOf(threadId, id);
         const now = Date.now();
-        this.putItem(
-          threadId,
-          {
-            id,
-            kind: "plan",
-            entries: mergePlan(
-              before?.kind === "plan" ? before.entries : undefined,
-              update.entries.map((e) => ({ content: e.content, status: e.status })),
-              now,
-            ),
-            at: before?.at ?? now,
-          },
-          true,
+        const entries = mergePlan(
+          before?.kind === "plan" ? before.entries : undefined,
+          update.entries.map((e) => ({ content: e.content, status: e.status })),
+          now,
         );
+        this.putItem(threadId, { id, kind: "plan", entries, at: before?.at ?? now }, true);
+        // The thread's plan follows the agent's own, unless its agent or its coordinator
+        // keeps one with MoonAgentic's tool.
+        const kept = this.store.getThread(threadId)?.plan;
+        if (kept?.from !== "tool" && JSON.stringify(kept?.entries) !== JSON.stringify(entries)) {
+          this.wrote(() =>
+            this.updateThread(threadId, { plan: { entries, from: "agent", item: id } }),
+          );
+        }
         return;
       }
       default:

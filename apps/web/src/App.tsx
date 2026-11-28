@@ -45,6 +45,7 @@ import { Sidebar as PlainSidebar } from "./components/Sidebar.tsx";
 import { TabBar, type TabPop, TabPopover } from "./components/TabBar.tsx";
 import { teamActive } from "./team-rows.ts";
 import { ReviewDialog } from "./components/ReviewDialog.tsx";
+import { PlanPanel, PlanPill } from "./components/ThreadPlan.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { DecisionCard } from "./components/DecisionCard.tsx";
 import { connection, newId } from "./connection.ts";
@@ -181,6 +182,8 @@ export function App() {
     const timer = setTimeout(() => setThreadMenuOut(false), 230);
     return () => clearTimeout(timer);
   }, [threadMenuOut]);
+  /** The open thread's plan, opened from its pill at the top of the page. */
+  const [planOpen, setPlanOpen] = useState(false);
   /** The thread being renamed from its « … » menu, and the name typed so far. */
   /** The conversation being renamed; `loose` for one outside any project (« Discussions »). */
   const [renaming, setRenaming] = useState<{ id: string; title: string; loose: boolean } | null>(
@@ -340,6 +343,7 @@ export function App() {
   const routeThreadId = route.name === "thread" ? route.threadId : undefined;
   useEffect(() => {
     setRenaming((was) => (was && was.id !== routeThreadId ? null : was));
+    setPlanOpen(false);
   }, [routeThreadId]);
   if (state.status === "unauthorized") return <PairGate />;
 
@@ -348,6 +352,11 @@ export function App() {
   /** A chat outside any project (« Discussions »): no changes to look at, no « <> ». */
   const looseThread =
     !!thread && isDiscussionsProject(state.projects.find((p) => p.id === thread.projectId));
+  /**
+   * The open thread's plan, as its pill and panel show it: none until it has a step, nor for
+   * a chat outside any project, whose name opens its menu.
+   */
+  const threadPlan = thread?.plan?.entries.length && !looseThread ? thread.plan.entries : undefined;
   // A project's page shows that project; elsewhere, the open thread's or the one last picked.
   const routeProject =
     route.name === "project" ? state.projects.find((p) => p.id === route.projectId) : undefined;
@@ -1090,6 +1099,13 @@ export function App() {
                 sub={thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}
                 onDone={finishRename}
               />
+            ) : thread && threadPlan ? (
+              <PlanPill
+                thread={thread}
+                entries={threadPlan}
+                open={planOpen}
+                onOpen={() => setPlanOpen(true)}
+              />
             ) : (
               thread && (
                 <div
@@ -1463,6 +1479,15 @@ export function App() {
               else setCreatingProject(true);
             }}
             onOpenArtifacts={() => go({ name: "artifacts" })}
+          />
+        )}
+        {thread && threadPlan && !screen.roomy && route.name === "thread" && (
+          <PlanPanel
+            key={thread.id}
+            thread={thread}
+            entries={threadPlan}
+            open={planOpen}
+            onClose={() => setPlanOpen(false)}
           />
         )}
         {(threadMenu || threadMenuOut) && thread && (

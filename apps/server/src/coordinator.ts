@@ -16,6 +16,7 @@ import {
 import type {
   CoordinatorSettings,
   Item,
+  PlanEntry,
   PendingRequest,
   PermissionMode,
   ServerMessage,
@@ -32,14 +33,17 @@ import {
   COORDINATOR_TOOLS,
   MAX_ARTIFACT_TEXT,
   MEMORY_MODES,
+  MAX_PLAN_STEPS,
   MESSAGE_MODES,
+  PLAN_STATUSES,
   THREAD_KINDS,
   toolsForBridgeMode,
 } from "./coordinator-tools.ts";
 import type { Hub } from "./hub.ts";
 import type { McpServerRecord } from "./mcp.ts";
+import { mergePlan } from "./plan-steps.ts";
 import { coordinatorSettingsOf, isTeamPreset } from "./saved-shapes.ts";
-import { fold, type Store } from "./store.ts";
+import { fold, isRecord, type Store } from "./store.ts";
 
 /** Threads a coordinator may open while answering one message, so a mistake cannot flood. */
 const MAX_OPENED_PER_TURN = 4;
@@ -94,7 +98,31 @@ const WRITES = new Set([
   "resolve_thread",
   "save_memory",
   "publish_artifact",
+  "update_plan",
 ]);
+
+type PlanStatus = PlanEntry["status"];
+/** The words of a plan's step, at most. */
+const PLAN_STEP_MAX = 200;
+
+/** A plan given to `update_plan` or `open_thread`: its steps, checked. */
+function planInput(raw: unknown, plain: boolean): { content: string; status: PlanStatus }[] {
+  if (!Array.isArray(raw)) throw new Error("« steps » doit être une liste.");
+  if (raw.length > MAX_PLAN_STEPS) throw new Error(`« steps » a au plus ${MAX_PLAN_STEPS} étapes.`);
+  return raw.map((step, i) => {
+    const title = plain ? step : isRecord(step) ? (step.title ?? step.content) : undefined;
+    const status = plain ? "pending" : isRecord(step) ? step.status : undefined;
+    if (typeof title !== "string" || !title.trim() || title.length > PLAN_STEP_MAX)
+      throw new Error(
+        `L'étape ${i + 1} doit avoir un titre d'au plus ${PLAN_STEP_MAX} caractères.`,
+      );
+    if (!(PLAN_STATUSES as readonly unknown[]).includes(status))
+      throw new Error(
+        `L'état de l'étape ${i + 1} doit être l'un de : ${PLAN_STATUSES.join(", ")}.`,
+      );
+    return { content: title.trim().replace(/\s+/g, " "), status: status as PlanStatus };
+  });
+}
 const BRIDGE = fileURLToPath(new URL("./coordinator-bridge.ts", import.meta.url));
 
 type BridgeScope = { projectId: string; threadId: string; mode: BridgeMode };
@@ -115,7 +143,7 @@ export const coordinatorPrompt = (project: string) =>
 Ce que tu fais :
 - Une question rapide ou un point d'avancement : tu réponds toi-même, en quelques phrases. Pour l'avancement, lis l'état réel avec list_threads, puis read_thread si on te demande le détail d'un fil. Pour retrouver une décision ou un sujet passé, utilise search_threads. N'invente jamais un état.
 - Pour la mémoire durable du projet (partagée entre tous les agents, fils et branches), utilise read_memory et save_memory pour noter les décisions, conventions ou pièges durables.
-- Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne claire, car l'agent du fil ne voit pas cette conversation. La consigne s'affiche dans le fil sous « Coordinateur » : écris-la en français, en deux à quatre phrases simples (ce qu'il faut faire, où, et ce qui est attendu), sans liste de commandes, sans titres ni notes internes, sans recopier le message de l'utilisateur (MoonAgentic le joint déjà). Donne toujours kind : les réglages de l'utilisateur en déduisent l'agent. Si l'outil répond que le fil est en file, dis-le : il démarrera seul.
+- Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne claire, car l'agent du fil ne voit pas cette conversation. La consigne s'affiche dans le fil sous « Coordinateur » : écris-la en français, en deux à quatre phrases simples (ce qu'il faut faire, où, et ce qui est attendu), sans liste de commandes, sans titres ni notes internes, sans recopier le message de l'utilisateur (MoonAgentic le joint déjà). Donne toujours kind : les réglages de l'utilisateur en déduisent l'agent. Donne aussi steps, le plan du fil en 3 à 6 étapes courtes, verbe en tête : il s'affiche en haut du fil et son agent le tient à jour. Si l'outil répond que le fil est en file, dis-le : il démarrera seul.
 - Une tâche trop grosse pour un seul fil, avec plusieurs morceaux indépendants, ou quand l'utilisateur demande une équipe : start_team.
 - Un sujet qui a déjà son fil : tu le relances avec message_thread plutôt que d'en ouvrir un second. Si son agent travaille, ton message attend la fin de son tour ; mode steer seulement pour une correction urgente, car il coupe le travail en cours.
 - resolve_thread seulement quand l'utilisateur dit que le sujet est clos.
@@ -482,6 +510,9 @@ export class Coordinators {
         : {}),
       ...(t.workspace?.base ? { branch: t.workspace.branch } : {}),
       ...(t.summary ? { last_said: t.summary } : {}),
+      ...(t.plan?.entries.length
+        ? { plan: t.plan.entries.map((e) => ({ title: e.content, status: e.status })) }
+        : {}),
       ...(t.queue?.length ? { queued_messages: t.queue.length } : {}),
       updated: new Date(t.updatedAt).toISOString(),
     };
@@ -701,6 +732,20 @@ export class Coordinators {
               max_bytes: MAX_PROJECT_MEMORY,
             };
       }
+      case "update_plan": {
+        // The coordinator keeps the plan of a thread of its project, a thread its own.
+        const target = mode === "coordinator" ? one() : caller;
+        const steps = planInput(input.steps, false);
+        if (steps.filter((s) => s.status === "in_progress").length > 1)
+          throw new Error("Une seule étape peut être in_progress à la fois.");
+        const entries = mergePlan(target.plan?.entries, steps, Date.now());
+        this.host.updateThread(target.id, { plan: { entries, from: "tool" } });
+        return {
+          saved: true,
+          done: entries.filter((e) => e.status === "completed").length,
+          steps: entries.length,
+        };
+      }
       case "save_memory": {
         const saveMode = str("mode", 20) ?? "append";
         if (!(MEMORY_MODES as readonly string[]).includes(saveMode)) {
@@ -759,6 +804,8 @@ export class Coordinators {
         const kind = str("kind", 40);
         if (kind && !(THREAD_KINDS as readonly string[]).includes(kind))
           throw new Error(`« kind » doit être l'un de : ${THREAD_KINDS.join(", ")}.`);
+        const steps =
+          input.steps === undefined || input.steps === null ? [] : planInput(input.steps, true);
         // A retry, or the same subject asked twice: the thread already open, not a second one.
         const known = mine().find(
           (t) => t.openedBy === coordinator.id && t.taskKey === taskKey && !t.archived,
@@ -803,6 +850,11 @@ export class Coordinators {
           held: this.atWork(coordinator.id) >= this.parallel(),
         });
         this.openedThisTurn.set(coordinator.id, opened + 1);
+        // Its plan is there before its agent starts: the agent keeps it from then on.
+        if (steps.length)
+          this.host.updateThread(id, {
+            plan: { entries: mergePlan(undefined, steps, Date.now()), from: "tool" },
+          });
         this.host.putItem(coordinator.id, {
           id: `opened:${id}`,
           kind: "opened",

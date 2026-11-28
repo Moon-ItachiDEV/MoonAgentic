@@ -1346,3 +1346,229 @@ kbd {
   flex: none;
   color: var(--faint);
 }
+
+/* Le plan du fil, en haut sur le téléphone : une pastille, puis la liste de ses étapes. */
+.ttl.plp {
+  flex-direction: row;
+  gap: 9px;
+  padding: 0 16px 0 13px;
+  font: inherit;
+  color: var(--fg);
+  border: 0;
+  cursor: pointer;
+}
+.ttl.plp b,
+.plhd b {
+  min-width: 0;
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 16px;
+  font-weight: 600;
+}
+.pln {
+  flex: none;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.ttl.plp .pln {
+  font-size: 15px;
+  color: var(--muted);
+  line-height: 1.2;
+}
+.plr {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+.plr .trk {
+  stroke: var(--track);
+}
+.plr .arc {
+  stroke: var(--ok);
+  transition: stroke-dasharray 420ms var(--spring);
+}
+.plr.all {
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--ok);
+  color: #fff;
+}
+
+.plscrim {
+  position: absolute;
+  inset: 0;
+  z-index: 23;
+  animation: plfade 260ms var(--out) both;
+}
+.plscrim.out {
+  animation: plfade 200ms var(--out) reverse both;
+  pointer-events: none;
+}
+.scr.pl .view,
+.scr.pl .bottom {
+  opacity: 0.35;
+  filter: blur(4px);
+}
+.plpan {
+  position: absolute;
+  z-index: 24;
+  top: calc(var(--st) + 2px);
+  left: 12px;
+  right: 12px;
+  max-height: calc(100% - var(--st) - 96px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 24px;
+  background: var(--surface);
+  box-shadow:
+    var(--lift),
+    0 0 0 0.5px var(--glass-ring);
+  overflow: hidden;
+  transform-origin: 50% 22px;
+  animation: plin 460ms var(--spring) both;
+}
+.plpan.out {
+  animation: plout 200ms cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+.plhd {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 60px;
+  padding: 6px 8px 6px 20px;
+  box-shadow: inset 0 -0.5px 0 var(--cring);
+}
+.plhd b {
+  max-width: none;
+  flex: 0 1 auto;
+}
+.plhd .pln {
+  margin-right: auto;
+}
+.plx {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 22px;
+  color: var(--fg);
+}
+.plst {
+  list-style: none;
+  margin: 0;
+  padding: 18px 20px 22px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.plst li {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px 1fr;
+  gap: 14px;
+  padding-bottom: 24px;
+  font-size: 16px;
+  line-height: 22px;
+  color: var(--muted);
+  animation: pmit 380ms var(--spring) both;
+  animation-delay: calc(60ms + var(--i, 0) * 24ms);
+}
+.plst li:last-child {
+  padding-bottom: 0;
+}
+/* La ligne qui relie les étapes, sous chaque repère sauf le dernier. */
+.plst li:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 10.25px;
+  top: 25px;
+  bottom: 3px;
+  width: 1.5px;
+  border-radius: 1px;
+  background: var(--track);
+}
+.plst li.c {
+  color: var(--fg);
+  font-weight: 500;
+}
+.plm {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--faint) 45%, transparent);
+  font-style: normal;
+}
+.plm.h {
+  box-shadow: inset 0 0 0 1.5px var(--fg);
+}
+.plm.d {
+  box-shadow: inset 0 0 0 1.5px var(--ok);
+  color: var(--ok);
+}
+.plm.c {
+  box-shadow: none;
+}
+.plspin {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  animation: plspin 800ms steps(8) infinite;
+}
+.plspin b {
+  position: absolute;
+  left: 9px;
+  top: 1px;
+  width: 2px;
+  height: 5.5px;
+  border-radius: 1px;
+  background: var(--muted);
+  transform-origin: 1px 9px;
+}
+@keyframes plspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes plin {
+  from {
+    opacity: 0;
+    transform: scale(0.72, 0.4);
+    border-radius: 30px;
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+    border-radius: 24px;
+  }
+}
+@keyframes plout {
+  to {
+    opacity: 0;
+    transform: scale(0.8, 0.5);
+  }
+}
+@keyframes plfade {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plpan,
+  .plpan.out,
+  .plst li,
+  .plspin {
+    animation: none;
+  }
+}

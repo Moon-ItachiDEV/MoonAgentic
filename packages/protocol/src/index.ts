@@ -800,10 +800,26 @@ export interface Thread {
   team?: Team;
   /** The review of a pull request by several agents this thread runs, set with « /revue ». */
   prReview?: PrReview;
+  /** The steps its work goes through, shown at its top; see `ThreadPlan`. */
+  plan?: ThreadPlan;
   /** Set when the last turn ended with an error. */
   error?: string;
   createdAt: number;
   updatedAt: number;
+}
+
+/**
+ * A thread's plan: the steps of its work, as a pill at the top of the thread that opens on the
+ * whole list. Its agent keeps it with MoonAgentic's `update_plan`, its coordinator may lay it
+ * down when it opens the thread; an agent that keeps a plan of its own (Claude Code's todo
+ * list, Codex's plan…) fills it with that one, unless the tool was used.
+ */
+export interface ThreadPlan {
+  entries: PlanEntry[];
+  /** `tool`: set with `update_plan` or by the coordinator. `agent`: the agent's own plan. */
+  from: "tool" | "agent";
+  /** For the agent's own plan: the timeline item it shows. */
+  item?: string;
 }
 
 /** What lists of threads need of a thread's pull request. */
