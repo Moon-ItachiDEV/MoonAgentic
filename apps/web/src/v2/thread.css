@@ -1346,3 +1346,111 @@ kbd {
   flex: none;
   color: var(--faint);
 }
+
+/* Inline HTML artifact preview: same sandbox as the sheet, compact header and bounded height. */
+.artbox {
+  width: min(640px, 100%);
+  max-width: 100%;
+  min-width: 0;
+  border-radius: 16px;
+  background: var(--card);
+  box-shadow: 0 0 0 0.5px var(--glass-ring);
+  overflow: hidden;
+  margin: 4px 0;
+}
+.artbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 6px;
+  min-width: 0;
+}
+.artc-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 6px 2px 2px;
+  border-radius: 11px;
+  text-align: left;
+  transition: background-color 160ms var(--out);
+}
+.artc-open:hover {
+  background: var(--hover);
+}
+.artc-open .thumb {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  background: var(--sunken);
+  box-shadow: 0 0 0 0.5px var(--glass-ring);
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+.artc-open .tx {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.artc-open b {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.artc-open small {
+  font-size: 12px;
+  color: var(--muted);
+}
+.artact {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.artbtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  transition:
+    background-color 160ms var(--out),
+    color 160ms var(--out);
+}
+.artbtn:hover {
+  background: var(--hover);
+  color: var(--fg);
+}
+.artin {
+  height: clamp(240px, 42vh, 380px);
+  border-top: 0.5px solid var(--glass-ring);
+  background: var(--sunken);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.artin iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  display: block;
+  background: #fff;
+}
+.artin-st {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+}
