@@ -311,6 +311,8 @@ export function TeamDialog({
             setPresetId(presets[i]?.id);
             setChoices({});
             setKeptFor(undefined);
+            // Another team has its own roles: what was said missing may no longer be.
+            setMissing(null);
           }}
         />
         <div className="ins stw">

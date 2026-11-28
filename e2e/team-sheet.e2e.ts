@@ -139,6 +139,11 @@ describe("team sheet on a phone", () => {
     await expect.poll(() => task.evaluate((el) => el === document.activeElement)).toBe(true);
     expect(await sheet(page).isVisible()).toBe(true);
     if (shots) await page.screenshot({ path: path.join(shots, "equipe-tache-manquante.png") });
+    // Another team picked on the slider: the message about the last tap goes with it.
+    await sheet(page).getByRole("slider", { name: "Équipe" }).press("ArrowRight");
+    await expect.poll(() => sheet(page).getByRole("alert").count()).toBe(0);
+    for (const role of ["Chef", "Codeurs"]) await giveRole(page, role, "demo");
+    for (const role of ["Relecture", "Tests", "Fusion"]) await giveRole(page, role, "none");
 
     // Once written, the hint goes and the same button launches the team.
     await task.fill("Corrige answer");
