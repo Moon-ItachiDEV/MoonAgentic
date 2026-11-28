@@ -11,7 +11,9 @@ export function localDefaults(): Partial<Defaults> {
   const mode = readPref("permissionMode");
   const isolated = readPref("isolated");
   return {
-    ...(mode === "full" || mode === "supervised" ? { permissionMode: mode } : {}),
+    ...(mode === "full" || mode === "edits" || mode === "supervised"
+      ? { permissionMode: mode }
+      : {}),
     ...(isolated === "true" || isolated === "false" ? { isolated: isolated === "true" } : {}),
   };
 }

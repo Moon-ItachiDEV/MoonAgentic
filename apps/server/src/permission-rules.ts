@@ -1,9 +1,14 @@
+import { realpathSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type * as acp from "@agentclientprotocol/sdk";
 
 /**
- * What passes without asking in « Demande d'abord », and what « Autoriser pour ce fil »
- * remembers. Reading a project never changes it: a review that reads thirty files must not
- * ask thirty times. A command passes only when every part of it is known to only read.
+ * What passes without asking in « Demande d'abord » and « Éditions auto », and what
+ * « Autoriser pour ce fil » remembers. Reading a project never changes it: a review that reads
+ * thirty files must not ask thirty times. A command passes only when every part of it is known
+ * to only read, and in « Éditions auto » a file edit passes only when every target path stays
+ * inside the thread's folder.
  */
 
 /** The option MoonAgentic adds to a request: allow this call and every similar one in the thread. */
@@ -458,6 +463,169 @@ function readOnlyGit(args: string[]): boolean {
 export function readOnlyCall(call: acp.ToolCallUpdate | acp.ToolCall): boolean {
   if (READ_KINDS.has(call.kind ?? "")) return true;
   return call.kind === "execute" && readOnlyCommand(commandOf(call));
+}
+
+const EDIT_PATH_KEYS = [
+  "file_path",
+  "filePath",
+  "path",
+  "target_file",
+  "targetFile",
+  "notebook_path",
+  "notebookPath",
+  "filename",
+  "file",
+  "old_path",
+  "new_path",
+  "oldPath",
+  "newPath",
+  "source",
+  "destination",
+  "target",
+  "dest",
+  "uri",
+] as const;
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+function decodePathValue(key: string, value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (key === "uri") {
+    if (!trimmed.startsWith("file://")) return undefined;
+    try {
+      return fileURLToPath(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+  return trimmed;
+}
+
+/** Collects every target path named by an edit tool call; undefined if any path field is malformed. */
+function editPathsOf(call: acp.ToolCallUpdate | acp.ToolCall): string[] | undefined {
+  const paths: string[] = [];
+  if (call.locations !== undefined && call.locations !== null) {
+    if (!Array.isArray(call.locations)) return undefined;
+    for (const loc of call.locations) {
+      if (!isRecord(loc) || typeof loc.path !== "string" || !loc.path.trim()) return undefined;
+      paths.push(loc.path.trim());
+    }
+  }
+  if (Array.isArray(call.content)) {
+    for (const entry of call.content) {
+      if (!isRecord(entry) || entry.type !== "diff") continue;
+      if (typeof entry.path !== "string" || !entry.path.trim()) return undefined;
+      paths.push(entry.path.trim());
+    }
+  }
+  if (isRecord(call.rawInput)) {
+    const raw = call.rawInput;
+    for (const key of EDIT_PATH_KEYS) {
+      const value = raw[key];
+      if (value === undefined || value === null) continue;
+      const decoded = decodePathValue(key, value);
+      if (!decoded) return undefined;
+      paths.push(decoded);
+    }
+    for (const listKey of ["paths", "files"] as const) {
+      const list = raw[listKey];
+      if (list === undefined || list === null) continue;
+      if (!Array.isArray(list)) return undefined;
+      for (const item of list) {
+        if (typeof item === "string") {
+          if (!item.trim()) return undefined;
+          paths.push(item.trim());
+        } else if (isRecord(item)) {
+          const found = EDIT_PATH_KEYS.filter((k) => item[k] !== undefined && item[k] !== null);
+          if (!found.length) return undefined;
+          for (const k of found) {
+            const decoded = decodePathValue(k, item[k]);
+            if (!decoded) return undefined;
+            paths.push(decoded);
+          }
+        } else {
+          return undefined;
+        }
+      }
+    }
+    if (Array.isArray(raw.edits)) {
+      for (const edit of raw.edits) {
+        if (!isRecord(edit)) continue;
+        for (const key of EDIT_PATH_KEYS) {
+          const value = edit[key];
+          if (value === undefined || value === null) continue;
+          const decoded = decodePathValue(key, value);
+          if (!decoded) return undefined;
+          paths.push(decoded);
+        }
+      }
+    }
+    if (isRecord(raw.changes)) {
+      for (const key of Object.keys(raw.changes)) {
+        if (!key.trim()) return undefined;
+        paths.push(key.trim());
+      }
+    }
+  }
+  return paths;
+}
+
+/** Resolves symlinks up to the nearest existing ancestor so new files under symlinked dirs are caught. */
+function resolveWithMissing(target: string): string | undefined {
+  const tail: string[] = [];
+  let cur = path.resolve(target);
+  for (;;) {
+    try {
+      const real = realpathSync(cur);
+      return tail.length ? path.join(real, ...tail.reverse()) : real;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+      const parent = path.dirname(cur);
+      if (parent === cur) return undefined;
+      tail.push(path.basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+function pathInsideFolder(root: string, folder: string, rawPath: string): boolean {
+  if (!rawPath || rawPath.includes("\0")) return false;
+  const candidate = path.isAbsolute(rawPath)
+    ? path.resolve(rawPath)
+    : path.resolve(folder, rawPath);
+  const resolved = resolveWithMissing(candidate);
+  if (!resolved) return false;
+  const rel = path.relative(root, resolved);
+  if (!rel || rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
+    return false;
+  }
+  // Never auto-edit `.git` metadata or hooks inside the workspace.
+  return !rel.split(/[\\/]/).some((part) => part.toLowerCase() === ".git");
+}
+
+/**
+ * True when a call is strictly a file edit (`kind === "edit"`) whose every named target stays
+ * inside `folder` (symlinks resolved, `.git` excluded). Fail-closed: if no path is named, or
+ * any path escapes `folder`, returns false so the user is asked.
+ */
+export function editInsideFolder(
+  call: acp.ToolCallUpdate | acp.ToolCall,
+  folder: string | undefined,
+): boolean {
+  if (call.kind !== "edit" || !folder) return false;
+  let root: string;
+  try {
+    root = realpathSync(folder);
+  } catch {
+    return false;
+  }
+  const paths = editPathsOf(call);
+  if (!paths?.length) return false;
+  return paths.every((p) => pathInsideFolder(root, folder, p));
 }
 
 /** Key for a single non-read-only command segment, or undefined if it must not be blanket-granted. */

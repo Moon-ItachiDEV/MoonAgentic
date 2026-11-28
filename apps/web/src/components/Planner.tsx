@@ -860,16 +860,42 @@ function Launch({
             : {})}
           onPick={(v) => setPick(parseRouteValue(v))}
         />
-        <div className="it ro">
-          <span className="tx">Accès complet</span>
-          <button
-            type="button"
-            className="tog"
-            role="switch"
-            aria-checked={mode === "full"}
-            aria-label="Accès complet, sans rien demander"
-            onClick={() => setMode(mode === "full" ? "supervised" : "full")}
-          />
+        <div className="it ro col">
+          <span className="tx">Accès</span>
+          <div className="seg three" role="radiogroup" aria-label="Accès de la tâche">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={mode === "supervised"}
+              aria-pressed={mode === "supervised"}
+              onClick={() => setMode("supervised")}
+            >
+              <I n="hand" s={15} />
+              Me demander
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={mode === "edits"}
+              aria-pressed={mode === "edits"}
+              title="Modifie les fichiers du fil sans demander ; les commandes demandent encore"
+              onClick={() => setMode("edits")}
+            >
+              <I n="edit" s={15} />
+              Éditions auto
+            </button>
+            <button
+              type="button"
+              role="radio"
+              className="f"
+              aria-checked={mode === "full"}
+              aria-pressed={mode === "full"}
+              onClick={() => setMode("full")}
+            >
+              <I n="bolt" s={15} />
+              Accès complet
+            </button>
+          </div>
         </div>
         {project.git && (
           <div className="it ro">

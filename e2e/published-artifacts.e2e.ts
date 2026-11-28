@@ -97,7 +97,20 @@ describe("published artifacts", () => {
     await card.waitFor();
     threadPath = new URL(page.url()).pathname;
     expect(await card.textContent()).toContain("Page HTML");
+    // HTML artifacts preview inline in the thread with the same opaque-origin sandbox.
+    const inlineFrame = page.frameLocator(`iframe[title="Aperçu de ${TITLE}"]`);
+    await inlineFrame.getByRole("heading", { name: TITLE }).waitFor();
+    await inlineFrame.getByRole("button", { name: "Toucher" }).click();
+    await inlineFrame.getByRole("button", { name: "Touché" }).waitFor();
+    const inlineOrigin = page.frames().find((f) => f.url().includes("/api/artifacts/"))!;
+    expect(await inlineOrigin.evaluate(() => window.origin)).toBe("null");
     if (shots) await page.screenshot({ path: path.join(shots, "publie-carte.png") });
+
+    // Folding unmounts the inline preview; unfolding brings it back.
+    await page.getByRole("button", { name: `Réduire l'aperçu de ${TITLE}` }).click();
+    await page.locator(`iframe[title="Aperçu de ${TITLE}"]`).waitFor({ state: "detached" });
+    await page.getByRole("button", { name: `Afficher l'aperçu de ${TITLE}` }).click();
+    await inlineFrame.getByRole("heading", { name: TITLE }).waitFor();
 
     await card.click();
     const { sheet, frame } = await shownPage(page);

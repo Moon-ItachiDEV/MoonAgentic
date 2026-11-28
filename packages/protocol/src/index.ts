@@ -7,6 +7,7 @@ export {
   type AppUpdate,
   MAX_UPDATE_NOTES,
   UPDATE_EVERY_MS,
+  UPDATE_QUICK_MS,
   type UpdateNote,
 } from "./app-update.ts";
 import type { AppInfo } from "./app-update.ts";
@@ -450,7 +451,9 @@ export interface ReviewFile {
 
 export type ThreadStatus = "idle" | "running" | "waiting" | "error";
 
-export type PermissionMode = "supervised" | "full";
+/** `edits`: file edits inside the thread's folder pass on their own; commands and outside paths still ask. */
+export const PERMISSION_MODES = ["supervised", "edits", "full"] as const;
+export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
 /** `reviewer2`: a second review of each piece, beside the first; `judge`: weighs the reviews. */
 export type TeamRole = "lead" | "coder" | "reviewer" | "reviewer2" | "judge" | "tester" | "merger";
@@ -1987,7 +1990,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
       requestId: id,
       projectId: id,
       agentId: id,
-      permissionMode: z.enum(["supervised", "full"]),
+      permissionMode: z.enum(PERMISSION_MODES),
       model: id.optional(),
       settings: z
         .record(id, id)
@@ -2201,7 +2204,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("thread.setPermissionMode"),
     threadId: id,
-    permissionMode: z.enum(["supervised", "full"]),
+    permissionMode: z.enum(PERMISSION_MODES),
   }),
   z.object({ type: z.literal("thread.setModel"), threadId: id, model: id }),
   z.object({ type: z.literal("thread.setSetting"), threadId: id, settingId: id, value: id }),
@@ -2228,7 +2231,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     tester: z.object({ agentId: id, model: id.optional(), settings: memberSettings }).optional(),
     merger: z.object({ agentId: id, model: id.optional(), settings: memberSettings }).optional(),
     coders: z.number().int().min(1).max(4),
-    permissionMode: z.enum(["supervised", "full"]),
+    permissionMode: z.enum(PERMISSION_MODES),
     /** Opens the pull request by itself once done; true when left out. */
     autoShip: z.boolean().optional(),
   }),
@@ -2327,7 +2330,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     requestId: id,
     id,
     agentId: id,
-    permissionMode: z.enum(["supervised", "full"]),
+    permissionMode: z.enum(PERMISSION_MODES),
     model: id.optional(),
     /** Gives the thread its own branch and worktree, when the project is a git repository. */
     isolated: z.boolean().optional(),
@@ -2341,7 +2344,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
     text: z.string().trim().min(1).max(200_000),
     agentId: id,
     model: id.optional(),
-    permissionMode: z.enum(["supervised", "full"]),
+    permissionMode: z.enum(PERMISSION_MODES),
     isolated: z.boolean().optional(),
     repeat: z.enum(SCHEDULE_REPEATS),
     at: z.number().int().positive(),
@@ -2379,7 +2382,7 @@ export const ClientMessage = z.discriminatedUnion("type", [
   /** Changes the defaults of every device: those not given stay. */
   z.object({
     type: z.literal("defaults.set"),
-    permissionMode: z.enum(["supervised", "full"]).optional(),
+    permissionMode: z.enum(PERMISSION_MODES).optional(),
     isolated: z.boolean().optional(),
   }),
   /** One role's mascot in teams and reviews, for every device; null puts back its own. */

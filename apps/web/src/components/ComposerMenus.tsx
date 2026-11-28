@@ -253,15 +253,25 @@ export function PlusSheet(
           </button>
         </div>
         <div className="gl2">Accès</div>
-        <div className="seg" role="radiogroup" aria-label="Mode d'accès">
+        <div className="seg three" role="radiogroup" aria-label="Mode d'accès">
           <button
             role="radio"
-            aria-checked={props.mode !== "full"}
-            aria-pressed={props.mode !== "full"}
+            aria-checked={props.mode === "supervised"}
+            aria-pressed={props.mode === "supervised"}
             onClick={() => props.onMode("supervised")}
           >
-            <I n="hand" s={16} />
+            <I n="hand" s={15} />
             Demande d'abord
+          </button>
+          <button
+            role="radio"
+            aria-checked={props.mode === "edits"}
+            aria-pressed={props.mode === "edits"}
+            title="Modifie les fichiers du fil sans demander ; les commandes demandent encore"
+            onClick={() => props.onMode("edits")}
+          >
+            <I n="edit" s={15} />
+            Éditions auto
           </button>
           <button
             className="f"
@@ -270,7 +280,7 @@ export function PlusSheet(
             aria-pressed={props.mode === "full"}
             onClick={() => props.onMode("full")}
           >
-            <I n="bolt" s={16} />
+            <I n="bolt" s={15} />
             Accès complet
           </button>
         </div>

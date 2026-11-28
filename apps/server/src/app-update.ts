@@ -11,6 +11,7 @@ import {
   MAX_UPDATE_NOTES,
   type ServerMessage,
   UPDATE_EVERY_MS,
+  UPDATE_QUICK_MS,
   type UpdateNote,
 } from "@moonagentic/protocol";
 import { git } from "./git.ts";
@@ -203,6 +204,8 @@ export interface AppUpdatesOptions {
   /** The server's own version, when nothing else says one. */
   version?: string;
   everyMs?: number;
+  /** See `UPDATE_QUICK_MS`. */
+  quickMs?: number;
   tickMs?: number;
   now?: () => number;
 }
@@ -408,18 +411,41 @@ export class AppUpdates {
       );
     }
     void this.evaluate();
+    this.lookIfOlder(this.options.everyMs ?? UPDATE_EVERY_MS);
+  }
+
+  /**
+   * A device opened the app: a look that is no longer fresh is done again, so that a version
+   * published since shows without waiting for the next one, nor for « Vérifier ».
+   */
+  onClientConnect(): void {
+    if (this.closed) return;
+    this.lookIfOlder(this.options.quickMs ?? UPDATE_QUICK_MS);
+  }
+
+  /**
+   * Looks when the last look is older than `maxAge`. One that failed before reaching GitHub
+   * (no network yet when the computer starts) is tried again sooner: waiting the whole
+   * interval left the app blind for it.
+   */
+  private lookIfOlder(maxAge: number): void {
     if (!this.settings().checks || this.phase) return;
     const kind = this.kind();
-    const every = this.options.everyMs ?? UPDATE_EVERY_MS;
+    const quick = this.options.quickMs ?? UPDATE_QUICK_MS;
     const now = this.now();
+    const due = (u: AppUpdate) => {
+      if (u.checkedAt === undefined) return true;
+      const age =
+        u.state === "failed" && u.version === undefined ? Math.min(maxAge, quick) : maxAge;
+      return now - u.checkedAt >= age;
+    };
     if (kind === "windows" || kind === "mac") {
       const u = this.desktop!.update;
       if (u.state === "checking" || u.state === "downloading") return;
       if (this.askedAt !== undefined && now - this.askedAt < ASK_AGAIN_MS) return;
-      if (u.checkedAt === undefined || now - u.checkedAt >= every) this.check();
+      if (due(u)) this.check();
     } else if (kind === "git") {
-      const at = this.gitUpdate.checkedAt;
-      if (!this.gitChecking && (at === undefined || now - at >= every)) void this.checkGit();
+      if (!this.gitChecking && due(this.gitUpdate)) void this.checkGit();
     }
   }
 

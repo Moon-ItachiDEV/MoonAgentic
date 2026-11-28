@@ -874,6 +874,11 @@ export class Coordinators {
             throw new Error("L'utilisateur a refusé de lancer l'équipe en accès complet.");
           }
           permissionMode = chosen;
+        } else if (
+          coordinator.permissionMode === "supervised" &&
+          setup.permissionMode === "edits"
+        ) {
+          permissionMode = "supervised";
         }
         const id = this.host.startTeam({
           ...setup,
