@@ -39,6 +39,11 @@ const WAIT = 1500;
 /** When a keyboard on its way is looked for, in ms after the touch or the focus. */
 const RISE = [200, 400, 700, 1100, 1600, 2300, 3200];
 const KEY = "moonagentic.keyboard";
+/**
+ * A finger let go this long ago (ms) may still have its click to come: a phone sends it after
+ * the focus has left the field.
+ */
+const CLICK_DUE = 400;
 
 /** The page with its keyboard, the composer and the greeting: one spring, no bounce. */
 const FOLLOW: Spring = { duration: 0.42, bounce: 0 };
@@ -102,6 +107,12 @@ let trail = false;
 /** A finger is on a draft of several lines: nothing moves before the keyboard is there. */
 let handsOff = false;
 let fieldWatch: ReturnType<typeof setInterval> | undefined;
+/** A finger is on the screen. */
+let pressing = false;
+/** When the last finger left the screen (ms). */
+let releasedAt = -Infinity;
+/** The field the focus left during a press: the page waits for that press's click to land. */
+let leaving: HTMLTextAreaElement | null = null;
 const listeners = new Set<() => void>();
 
 const reduced = () =>
@@ -480,7 +491,34 @@ function severalLines(text: HTMLTextAreaElement): boolean {
   return text.scrollHeight - padding > line * 1.5;
 }
 
+/**
+ * The focus left the field under a finger, on a button of the composer (its model, « + ») or
+ * anywhere else: a phone takes the focus at the touch and sends the click after it, where the
+ * finger was. The page stays where it is until that click has landed, then goes back down:
+ * moved at once, it would have put something else under the finger, and the press was lost
+ * (the model's menu never opened from the composer with the keyboard up).
+ */
+function leaveAfterClick(left: HTMLTextAreaElement): void {
+  leaving = left;
+  let done = false;
+  const go = () => {
+    if (done) return;
+    done = true;
+    document.removeEventListener("click", clicked, true);
+    clearTimeout(late);
+    if (leaving === left) leaving = null;
+    // Back in the field meanwhile: nothing leaves.
+    if (field === left && document.activeElement !== left) leave();
+  };
+  // After every handler of that click: what it opened is on the page by then.
+  const clicked = () => setTimeout(go, 0);
+  document.addEventListener("click", clicked, true);
+  // No click comes (the finger slid away): the page goes all the same.
+  const late = setTimeout(go, CLICK_DUE);
+}
+
 function checkField(): void {
+  if (leaving) return;
   if (field && (!field.isConnected || document.activeElement !== field)) leave();
 }
 
@@ -532,6 +570,20 @@ export function watchKeyboard(): void {
     },
     true,
   );
+  for (const [type, down] of [
+    ["pointerdown", true],
+    ["pointerup", false],
+    ["pointercancel", false],
+  ] as const)
+    document.addEventListener(
+      type,
+      (e) => {
+        if (e.pointerType === "mouse") return;
+        pressing = down;
+        if (!down) releasedAt = performance.now();
+      },
+      true,
+    );
   document.addEventListener(
     "mouseup",
     () => {
@@ -566,8 +618,11 @@ export function watchKeyboard(): void {
   document.addEventListener(
     "focusout",
     (e) => {
-      // The keyboard goes with the focus: the page goes back with it, not after it.
-      if (field && e.target === field) leave();
+      // The keyboard goes with the focus: the page goes back with it, not after it, unless a
+      // finger's click is still to land where it pressed.
+      if (!field || e.target !== field) return;
+      if (pressing || performance.now() - releasedAt < CLICK_DUE) leaveAfterClick(field);
+      else leave();
     },
     true,
   );

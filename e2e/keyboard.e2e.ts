@@ -818,6 +818,24 @@ describe.each(WINDOWS)("the phone's keyboard, in a window that $says", ({ shrink
     await context.close();
   });
 
+  it("lets a press on the composer's model land with the keyboard up", async () => {
+    const { context, page } = await phone();
+    await composer(page).tap();
+    await keyboard(page, KEYBOARD);
+    await atRest(page);
+    // A phone takes the focus at the touch and sends the click after, where the finger was: the
+    // page went down in between, and the press fell on what came under it (the model's menu
+    // never opened from a composer with the keyboard up).
+    const chip = await page.getByRole("button", { name: /^Agent : / }).boundingBox();
+    await page.touchscreen.tap(chip!.x + chip!.width / 2, chip!.y + chip!.height / 2);
+    await page.getByRole("dialog", { name: "Modèle", exact: true }).waitFor();
+    // The click landed: the page then goes back down with the keyboard.
+    await keyboard(page, 0);
+    await atRest(page);
+    expect((await look(page)).keyboard).toBe(false);
+    await context.close();
+  });
+
   it("changes at once for who asked for less motion", async () => {
     const { context, page } = await phone({ reducedMotion: "reduce" });
     await composer(page).tap();
