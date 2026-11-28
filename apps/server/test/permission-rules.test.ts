@@ -1,11 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   commandOf,
+  editInsideFolder,
   grantKey,
   grantKeys,
   readOnlyCall,
   readOnlyCommand,
 } from "../src/permission-rules.ts";
+
+const tempDirs: string[] = [];
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 describe("permission rules", () => {
   it("lets commands that only read pass", () => {
@@ -193,5 +203,138 @@ describe("permission rules", () => {
     expect(grantKeys(run("GIT_PAGER=sh git push"))).toBeUndefined();
     expect(grantKeys(run("bash script.sh"))).toBeUndefined();
     expect(grantKeys(run("sudo rm -rf /"))).toBeUndefined();
+  });
+
+  it("auto-approves only edits whose every named path stays inside the thread folder", () => {
+    const base = mkdtempSync(path.join(os.tmpdir(), "moon-edits-"));
+    tempDirs.push(base);
+    const work = path.join(base, "work");
+    const outside = path.join(base, "work-evil");
+    mkdirSync(path.join(work, "src"), { recursive: true });
+    mkdirSync(path.join(work, ".git", "hooks"), { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(path.join(work, "src", "app.ts"), "export const x = 1;\n");
+    writeFileSync(path.join(outside, "secret.txt"), "nope\n");
+    symlinkSync(
+      outside,
+      path.join(work, "escape-dir"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    let hasFileSymlink = false;
+    try {
+      symlinkSync(path.join(outside, "secret.txt"), path.join(work, "src", "escape-file.ts"));
+      hasFileSymlink = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+    }
+
+    const edit = (patch: Partial<Parameters<typeof editInsideFolder>[0]> = {}) => ({
+      toolCallId: "e",
+      title: "Modifier",
+      kind: "edit" as const,
+      ...patch,
+    });
+
+    // Valid edits inside the folder (relative, absolute, new nested file, locations, Codex changes, diff content, file:// URI).
+    expect(editInsideFolder(edit({ rawInput: { file_path: "src/app.ts" } }), work)).toBe(true);
+    expect(
+      editInsideFolder(edit({ rawInput: { file_path: path.join(work, "src", "app.ts") } }), work),
+    ).toBe(true);
+    expect(editInsideFolder(edit({ rawInput: { file_path: "src/new/deep/file.ts" } }), work)).toBe(
+      true,
+    );
+    expect(editInsideFolder(edit({ locations: [{ path: "src/app.ts" }] }), work)).toBe(true);
+    expect(
+      editInsideFolder(
+        edit({ rawInput: { changes: { "src/app.ts": {}, "src/other.ts": {} } } }),
+        work,
+      ),
+    ).toBe(true);
+    expect(
+      editInsideFolder(
+        edit({ content: [{ type: "diff", path: "src/app.ts", newText: "x" }] }),
+        work,
+      ),
+    ).toBe(true);
+    expect(
+      editInsideFolder(
+        edit({ rawInput: { uri: pathToFileURL(path.join(work, "src", "app.ts")).href } }),
+        work,
+      ),
+    ).toBe(true);
+    expect(
+      editInsideFolder(
+        edit({
+          rawInput: {
+            file_path: "src/app.ts",
+            edits: [{ old_string: "1", new_string: "2" }],
+          },
+        }),
+        work,
+      ),
+    ).toBe(true);
+
+    // Rejects escapes, symlinks, `.git`, missing paths, mixed good+bad payloads, and non-edit kinds.
+    expect(
+      editInsideFolder(edit({ rawInput: { file_path: "../work-evil/secret.txt" } }), work),
+    ).toBe(false);
+    expect(
+      editInsideFolder(edit({ rawInput: { file_path: path.join(outside, "secret.txt") } }), work),
+    ).toBe(false);
+    if (hasFileSymlink) {
+      expect(editInsideFolder(edit({ rawInput: { file_path: "src/escape-file.ts" } }), work)).toBe(
+        false,
+      );
+    }
+    expect(editInsideFolder(edit({ rawInput: { file_path: "escape-dir/new.ts" } }), work)).toBe(
+      false,
+    );
+    expect(editInsideFolder(edit({ rawInput: { file_path: ".git/hooks/pre-push" } }), work)).toBe(
+      false,
+    );
+    expect(editInsideFolder(edit({ rawInput: { file_path: ".git/config" } }), work)).toBe(false);
+    expect(editInsideFolder(edit({ rawInput: { file_path: "." } }), work)).toBe(false);
+    expect(editInsideFolder(edit({ rawInput: { file_path: "src/a.ts\0.txt" } }), work)).toBe(false);
+    expect(editInsideFolder(edit({}), work)).toBe(false);
+    expect(
+      editInsideFolder(edit({ rawInput: { patch: "*** Update File: src/app.ts" } }), work),
+    ).toBe(false);
+    // A valid location cannot hide an outside path in rawInput.
+    expect(
+      editInsideFolder(
+        edit({
+          locations: [{ path: "src/app.ts" }],
+          rawInput: { file_path: path.join(outside, "secret.txt") },
+        }),
+        work,
+      ),
+    ).toBe(false);
+    // Non-edit kinds never pass here.
+    expect(
+      editInsideFolder(
+        {
+          toolCallId: "x",
+          title: "Run",
+          kind: "execute",
+          locations: [{ path: "src/app.ts" }],
+          rawInput: { command: "rm -rf src/app.ts" },
+        },
+        work,
+      ),
+    ).toBe(false);
+    expect(
+      editInsideFolder(
+        {
+          toolCallId: "d",
+          title: "Delete",
+          kind: "delete",
+          locations: [{ path: "src/app.ts" }],
+        },
+        work,
+      ),
+    ).toBe(false);
+    expect(editInsideFolder(edit({ rawInput: { file_path: "src/app.ts" } }), undefined)).toBe(
+      false,
+    );
   });
 });

@@ -234,7 +234,11 @@ export function ScheduleDialog({
               <div className="it ro">
                 <span className="tx">Accès</span>
                 <span className="rt">
-                  {schedule.permissionMode === "full" ? "Accès complet" : "Me demander"}
+                  {schedule.permissionMode === "full"
+                    ? "Accès complet"
+                    : schedule.permissionMode === "edits"
+                      ? "Éditions auto"
+                      : "Me demander"}
                 </span>
               </div>
             </>
@@ -272,7 +276,7 @@ export function ScheduleDialog({
         {!schedule && (
           <>
             <div className="gl2">Accès</div>
-            <div className="seg" role="radiogroup" aria-label="Accès de l'agent">
+            <div className="seg three" role="radiogroup" aria-label="Accès de l'agent">
               <button
                 type="button"
                 role="radio"
@@ -280,8 +284,19 @@ export function ScheduleDialog({
                 aria-pressed={mode === "supervised"}
                 onClick={() => setMode("supervised")}
               >
-                <I n="hand" s={16} />
+                <I n="hand" s={15} />
                 Me demander
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={mode === "edits"}
+                aria-pressed={mode === "edits"}
+                title="Modifie les fichiers du fil sans demander ; les commandes demandent encore"
+                onClick={() => setMode("edits")}
+              >
+                <I n="edit" s={15} />
+                Éditions auto
               </button>
               <button
                 type="button"
@@ -291,7 +306,7 @@ export function ScheduleDialog({
                 aria-pressed={mode === "full"}
                 onClick={() => setMode("full")}
               >
-                <I n="bolt" s={16} />
+                <I n="bolt" s={15} />
                 Accès complet
               </button>
             </div>

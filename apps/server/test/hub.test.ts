@@ -372,6 +372,101 @@ describe("Hub with the demo agent", () => {
     expect(store.listItems(threadId).filter((i) => i.kind === "permission")).toHaveLength(4);
   });
 
+  it("lets in-folder edits pass in « Éditions auto » while still asking for commands and outside paths", async () => {
+    const { hub, store, projectId, dir } = setup();
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "edits",
+      text: "Bonjour",
+    });
+    await hub.whenIdle(threadId);
+    const ask = (
+      id: string,
+      toolCall: Record<string, unknown>,
+      folder?: string,
+      signal = new AbortController().signal,
+    ) =>
+      (
+        hub as unknown as {
+          requestPermission: (
+            threadId: string,
+            request: {
+              sessionId: string;
+              toolCall: Record<string, unknown>;
+              options: { optionId: string; name: string; kind: string }[];
+            },
+            signal: AbortSignal,
+            folder?: string,
+          ) => Promise<{ outcome: { outcome: string; optionId?: string } }>;
+        }
+      ).requestPermission(
+        id,
+        {
+          sessionId: "s",
+          toolCall,
+          options: [
+            { optionId: "allow", name: "Autoriser", kind: "allow_once" },
+            { optionId: "reject", name: "Refuser", kind: "reject_once" },
+          ],
+        },
+        signal,
+        folder,
+      );
+
+    // Edit inside the thread folder passes without asking.
+    const inFolder = await ask(
+      threadId,
+      {
+        toolCallId: "t1",
+        title: "Modifier README.md",
+        kind: "edit",
+        locations: [{ path: path.join(dir, "README.md") }],
+      },
+      dir,
+    );
+    expect(inFolder).toEqual({ outcome: { outcome: "selected", optionId: "allow" } });
+    expect(store.listItems(threadId).filter((i) => i.kind === "permission")).toHaveLength(0);
+
+    // Edit outside the folder still asks the user.
+    const outsideAbort = new AbortController();
+    const outsideAsk = ask(
+      threadId,
+      {
+        toolCallId: "t2",
+        title: "Modifier ../dehors.txt",
+        kind: "edit",
+        rawInput: { file_path: "../dehors.txt" },
+      },
+      dir,
+      outsideAbort.signal,
+    );
+    await expect
+      .poll(() => store.listItems(threadId).filter((i) => i.kind === "permission" && !i.outcome))
+      .toHaveLength(1);
+    outsideAbort.abort();
+    expect(await outsideAsk).toEqual({ outcome: { outcome: "cancelled" } });
+
+    // Shell commands still ask the user.
+    const cmdAbort = new AbortController();
+    const cmdAsk = ask(
+      threadId,
+      {
+        toolCallId: "t3",
+        title: "npm test",
+        kind: "execute",
+        rawInput: { command: "npm test" },
+      },
+      dir,
+      cmdAbort.signal,
+    );
+    await expect
+      .poll(() => store.listItems(threadId).filter((i) => i.kind === "permission" && !i.outcome))
+      .toHaveLength(1);
+    cmdAbort.abort();
+    expect(await cmdAsk).toEqual({ outcome: { outcome: "cancelled" } });
+  });
+
   it("keeps the mascot the user picked for a role, for every device, until put back", async () => {
     const { hub, client } = setup();
     await hub.handle(client, {

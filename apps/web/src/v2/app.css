@@ -4094,6 +4094,14 @@
   box-shadow: var(--glass-sh);
 }
 
+.seg.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+.seg.three button {
+  font-size: 13px;
+  gap: 5px;
+  padding: 0 6px;
+}
 .seg.four {
   grid-template-columns: repeat(4, 1fr);
 }

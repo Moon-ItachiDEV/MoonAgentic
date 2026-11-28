@@ -1,4 +1,9 @@
-import { grantKeys, readOnlyCall, THREAD_GRANT_OPTION } from "./permission-rules.ts";
+import {
+  editInsideFolder,
+  grantKeys,
+  readOnlyCall,
+  THREAD_GRANT_OPTION,
+} from "./permission-rules.ts";
 import { AttachmentRefused, Attachments } from "./attachments.ts";
 import { ArtifactLinks, artifactKind, artifactUrl, findArtifacts } from "./artifacts.ts";
 import { ArtifactRefused, fileSlug, listed, PublishedArtifacts } from "./published-artifacts.ts";
@@ -5750,7 +5755,8 @@ export class Hub {
           if (this.closed || !this.store.getThread(thread.id)) return;
           this.wrote(() => this.updateThread(thread.id, { quietSince: since ?? null }));
         },
-        requestPermission: (request, signal) => this.requestPermission(thread.id, request, signal),
+        requestPermission: (request, signal) =>
+          this.requestPermission(thread.id, request, signal, cwd),
         elicit: (request, signal) => this.requestForm(thread.id, request, signal),
         onExit: (reason) => {
           if (!owns()) return;
@@ -6267,6 +6273,7 @@ export class Hub {
     threadId: string,
     request: acp.RequestPermissionRequest,
     signal: AbortSignal,
+    folder?: string,
   ): Promise<acp.RequestPermissionResponse> {
     const thread = this.requireThread(threadId);
     // « Arrêter » already pressed: a request that crossed it gets the answer the ones open then
@@ -6301,13 +6308,28 @@ export class Hub {
       request.options.find((o) => o.kind === "allow_once") ??
       request.options.find((o) => o.kind === "allow_always");
     // In « Demande d'abord », a call that only reads passes (a review reads thirty files),
-    // and so does one like a call the user allowed « pour ce fil ». A coordinator runs no
-    // command, even one that reads.
+    // and so does one like a call the user allowed « pour ce fil ». In « Éditions auto »,
+    // edits whose every target stays inside the thread's folder pass too (never commands,
+    // never `.git`, never outside a project). A coordinator runs no command, even one that reads.
     const keys = grantKeys(request.toolCall, named);
     const reads = readOnlyCall(request.toolCall) && !readOnlyDenied;
     const grants = this.threadGrants.get(threadId);
     const granted = !readOnlyDenied && !!keys?.length && keys.every((k) => grants?.has(k));
-    if ((thread.permissionMode === "full" && !readOnlyDenied) || own || reads || granted) {
+    const autoEdit =
+      thread.permissionMode === "edits" &&
+      !readOnlyDenied &&
+      !this.isDiscussions(thread.projectId) &&
+      editInsideFolder(
+        request.toolCall,
+        folder ?? thread.workspace?.path ?? this.store.getProject(thread.projectId)?.path,
+      );
+    if (
+      (thread.permissionMode === "full" && !readOnlyDenied) ||
+      autoEdit ||
+      own ||
+      reads ||
+      granted
+    ) {
       if (allow)
         return Promise.resolve({ outcome: { outcome: "selected", optionId: allow.optionId } });
     }
