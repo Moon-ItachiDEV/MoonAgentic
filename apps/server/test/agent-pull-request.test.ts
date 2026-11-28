@@ -8,7 +8,7 @@ import { Agents } from "../src/agents.ts";
 import { toolsForBridgeMode } from "../src/coordinator-tools.ts";
 import { setGithubAccount } from "../src/github-account.ts";
 import { createHttpServer } from "../src/http.ts";
-import { ARTIFACT_HINT, type Client, Hub, PULL_REQUEST_HINT } from "../src/hub.ts";
+import { ARTIFACT_HINT, type Client, Hub, PLAN_HINT, PULL_REQUEST_HINT } from "../src/hub.ts";
 import { Store } from "../src/store.ts";
 import { type ApiAnswer, type ApiCall, fakeGithubApi, signedInAccount } from "./fake-github-api.ts";
 import { removeTempDir } from "./temp-dir.ts";
@@ -166,14 +166,14 @@ describe("a pull request opened by the thread's own agent", () => {
   it("tells the agent of a thread with a branch of its own how to send it", async () => {
     const { hub, thread, lastReply, say } = await setup();
     const own = await thread();
-    expect(lastReply(own)).toBe(`${ARTIFACT_HINT}\n\n${PULL_REQUEST_HINT}`);
+    expect(lastReply(own)).toBe(`${ARTIFACT_HINT}\n\n${PLAN_HINT}\n\n${PULL_REQUEST_HINT}`);
     // Told once, as its agent starts.
     await say(own, "/consignes");
     expect(lastReply(own)).toBe("Aucune consigne.");
     // In the project's folder there is no branch to send: nothing is promised.
     const direct = await thread({ isolated: false });
-    expect(lastReply(direct)).toBe(ARTIFACT_HINT);
-    // Nor outside any project.
+    expect(lastReply(direct)).toBe(`${ARTIFACT_HINT}\n\n${PLAN_HINT}`);
+    // Nor outside any project, which keeps no plan at the top of its threads.
     const outside = await thread({ projectId: hub.discussionsProject(), isolated: false });
     expect(lastReply(outside)).toBe(ARTIFACT_HINT);
   });
