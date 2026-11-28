@@ -1084,9 +1084,10 @@ export class Hermes {
     signal?: AbortSignal,
   ): Promise<unknown> {
     const deadline = asked + ASK_WAIT_MS;
+    let currentId = threadId;
     /** Hermes's message and what came after it, up to the next message to the agent. */
-    const mine = () => {
-      const items = this.host.items(threadId);
+    const mine = (id = currentId) => {
+      const items = this.host.items(id);
       const index = items.findLastIndex(
         (i) => i.kind === "user" && i.from === "hermes" && i.text === text && i.at >= asked - 1000,
       );
@@ -1108,8 +1109,34 @@ export class Hermes {
     const queuedNote = how === "queued" ? { waited_for_previous_turn: true } : {};
     for (;;) {
       if (signal?.aborted) return { stopped: true };
-      const thread = this.host.thread(threadId);
+      const thread = this.host.thread(currentId);
       if (!thread) throw new Error("Le coordinateur a été supprimé.");
+      if (thread.archived || thread.kind !== "coordinator") {
+        // The coordinator's conversation was archived and handed over: follow a queued
+        // message onto the new coordinator instead of hanging for 13 minutes, and never
+        // mutate or fabricate an answer from the archived thread.
+        const successor = this.host
+          .threads()
+          .find(
+            (t) =>
+              t.projectId === thread.projectId &&
+              t.kind === "coordinator" &&
+              t.id !== currentId &&
+              !t.archived,
+          );
+        if (
+          successor &&
+          (successor.queue?.some((m) => m.from === "hermes" && m.text === text) ||
+            mine(successor.id))
+        ) {
+          currentId = successor.id;
+          continue;
+        }
+        return {
+          archived: true,
+          note: "La conversation du coordinateur a été archivée pendant l'attente : renvoie ton message au nouveau coordinateur si besoin.",
+        };
+      }
       if (thread.status === "waiting") {
         return {
           waiting_for_user: true,
@@ -1120,7 +1147,7 @@ export class Hermes {
         };
       }
       // The timeline is read only once the coordinator stops: not each second of its turn.
-      if (!this.host.running(threadId)) {
+      if (!this.host.running(currentId)) {
         const found = mine();
         if (found) {
           if (thread.status === "error") {
@@ -1136,7 +1163,7 @@ export class Hermes {
           const opened = found.after.flatMap((i) =>
             i.kind === "opened" ? [{ thread_id: i.threadId, title: i.title }] : [],
           );
-          this.host.markRelayed(threadId, found.message.id);
+          this.host.markRelayed(currentId, found.message.id);
           return {
             answer: clip(answer || "(pas de réponse écrite)", ANSWER_CLIP),
             ...(opened.length ? { opened_threads: opened } : {}),

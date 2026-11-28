@@ -238,6 +238,7 @@ export function ProjectSettings(props: {
         threads={props.threads}
         agents={props.agents}
         onLock={props.onLock}
+        onConfirm={setConfirm}
       />
     );
   }
@@ -1127,12 +1128,17 @@ function Usage(props: {
   );
 }
 
+/** « 24 nov. » */
+const dayOf = (at: number) =>
+  new Date(at).toLocaleDateString("fr-FR", { day: "numeric", month: "short" });
+
 function Advanced(props: {
   project: Project;
   coordinator: Thread | undefined;
   threads: Thread[];
   agents: AgentInfo[];
   onLock: () => void;
+  onConfirm: (confirm: Confirmation) => void;
 }) {
   const { project, coordinator } = props;
   const { roomy } = useScreen();
@@ -1204,6 +1210,37 @@ function Advanced(props: {
             onClick={() => void restart()}
           >
             {restarting ? "Redémarrage…" : "Redémarrer"}
+          </button>
+        </div>
+        <div className="ppi">
+          <span className="ppii">
+            <I n="archive" s={16} />
+          </span>
+          <span className="ppit">
+            Archiver la conversation
+            <small>
+              {coordinator ? `Depuis le ${dayOf(coordinator.createdAt)}` : "Pas encore lancé"}
+            </small>
+          </span>
+          <button
+            type="button"
+            className="ppbt act"
+            disabled={!coordinator}
+            onClick={() =>
+              props.onConfirm({
+                title: "Archiver la conversation ?",
+                text: "",
+                action: "Archiver",
+                run: async () => {
+                  await connection.ask(
+                    { type: "coordinator.archive", requestId: newId(), projectId: project.id },
+                    30_000,
+                  );
+                },
+              })
+            }
+          >
+            Archiver
           </button>
         </div>
         <div className="ppi">

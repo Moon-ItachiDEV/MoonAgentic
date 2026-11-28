@@ -777,12 +777,14 @@ export class Hub {
         thread: (id) => store.getThread(id),
         items: (id) => this.items(id),
         markRelayed: (threadId, itemId) => {
+          const thread = this.store.getThread(threadId);
+          if (!thread || thread.archived) return;
           const item = this.store.getItem(threadId, itemId);
           if (item?.kind === "user" && !item.relayed) {
             this.putItem(threadId, { ...item, relayed: true });
           }
         },
-        running: (id) => this.turns.has(id),
+        running: (id) => this.turns.has(id) || this.busy.has(id),
         whenIdle: (id) => this.whenIdle(id),
         sendFromHermes: (id, text) => this.sendFromHermes(id, text),
         planCards: () => this.planner.list(),
@@ -2100,6 +2102,10 @@ export class Hub {
       }
       case "coordinator.restart":
         await this.restartCoordinator(message.projectId);
+        client.send({ type: "done", requestId: message.requestId });
+        return;
+      case "coordinator.archive":
+        await this.archiveCoordinator(message.projectId);
         client.send({ type: "done", requestId: message.requestId });
         return;
       case "coordinator.setParallel":
@@ -3421,6 +3427,8 @@ export class Hub {
    */
   sendQueuedNow(threadId: string, id?: string): void {
     const queue = this.requireLiveThread(threadId).queue ?? [];
+    const busy = this.busy.get(threadId);
+    if (busy) throw new Error(busy);
     if (id) {
       const chosen = queue.find((m) => m.id === id);
       if (!chosen) throw new Error("Ce message est déjà parti.");
@@ -3654,11 +3662,15 @@ export class Hub {
     const summary = last?.kind === "agent" ? leadOf(last.text, 2, RESULT_LIMIT) : "";
     if (!summary) return;
     const changed = await this.review(threadId).catch(() => undefined);
-    // Meanwhile the thread may have started again, or gone with its coordinator.
-    if (this.closed || this.turns.has(threadId) || !this.store.getThread(thread.openedBy)) return;
+    // Meanwhile the thread may have started again, or gone with its coordinator, or its
+    // coordinator's conversation gone to the archive: the result goes to the one now.
+    if (this.closed || this.turns.has(threadId)) return;
+    const coordinatorId = this.store.getThread(threadId)?.openedBy;
+    if (!coordinatorId) return;
+    if (this.store.getThread(coordinatorId)?.kind !== "coordinator") return;
     const files = changed?.files.map((f) => f.path) ?? [];
     const more = Math.max(0, files.length - RESULT_FILES) + (changed?.omitted ?? 0);
-    this.putItem(thread.openedBy, {
+    this.putItem(coordinatorId, {
       id: `result:${threadId}:${asked.id}`,
       kind: "result",
       threadId,
@@ -4166,9 +4178,9 @@ export class Hub {
     let told = this.greenTold.get(coordinatorId);
     if (!told) {
       told = new Set<string>();
-      for (const item of this.store.listItems(coordinatorId)) {
-        if (item.kind !== "agent" || !item.id.startsWith("green:")) continue;
-        for (const m of item.text.matchAll(/\]\(fil:([\w-]+)\) : sa PR (\S+) /g))
+      // Its conversations put in the archive said some too.
+      for (const text of this.store.greenNotes(thread.projectId)) {
+        for (const m of text.matchAll(/\]\(fil:([\w-]+)\) : sa PR (\S+) /g))
           told.add(`${m[1]} ${m[2]}`);
       }
       this.greenTold.set(coordinatorId, told);
@@ -4417,7 +4429,7 @@ export class Hub {
   async setArchived(threadId: string, archived: boolean): Promise<void> {
     if (archived && this.requireThread(threadId).kind === "coordinator")
       throw new Error(
-        "Le coordinateur ne se résout pas : supprime sa conversation pour repartir de zéro.",
+        "Le coordinateur ne se résout pas : archive sa conversation dans Paramètres du projet › Avancée.",
       );
     if (archived) this.refuseGroupAtWork(threadId);
     // A team goes to the archive whole, and comes back whole: never its lead alone.
@@ -5749,23 +5761,135 @@ export class Hub {
    * message starts a new agent that resumes the conversation.
    */
   private async restartCoordinator(projectId: string): Promise<void> {
+    const coordinator = this.projectCoordinator(projectId);
+    await this.stopCoordinator(coordinator.id);
+  }
+
+  /** The project's coordinator, for a step the user asks on it. */
+  private projectCoordinator(projectId: string): Thread {
     if (this.locks.isLocked(projectId)) {
       throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+    }
+    if (this.removingProjects.has(projectId)) {
+      throw new Error("Ce projet est en cours de retrait.");
     }
     const coordinator = this.store
       .listThreads()
       .find((t) => t.projectId === projectId && t.kind === "coordinator");
     if (!coordinator) throw new Error("Ce projet n'a pas encore de coordinateur.");
-    const turn = this.turns.get(coordinator.id);
+    return coordinator;
+  }
+
+  /** Stops the coordinator's turn, then its agent. */
+  private async stopCoordinator(coordinatorId: string): Promise<void> {
+    const turn = this.turns.get(coordinatorId);
     if (turn) {
-      await this.cancel(coordinator.id);
+      // A connection already closed as the agent exits or the server stops needs no cancel.
+      await this.cancel(coordinatorId).catch(() => undefined);
       // Its turn ends as stopped; one frozen past this is stopped with its agent below.
       await Promise.race([
         turn.catch(() => undefined),
         new Promise((done) => setTimeout(done, RESTART_WAIT_MS).unref()),
       ]);
     }
-    await this.pool.stop(coordinator.id);
+    await this.pool.stop(coordinatorId);
+  }
+
+  /**
+   * Puts the coordinator's conversation in the archive, as a thread of its own that stays
+   * readable, and gives the project a new coordinator, empty, on the same agent and model.
+   * The threads the old one opened report to the new one, and what waited for it goes there.
+   */
+  private async archiveCoordinator(projectId: string): Promise<void> {
+    if (this.closed) throw new Error("MoonAgentic s'arrête.");
+    const old = this.projectCoordinator(projectId);
+    if (this.storageDown || this.heldIn(old.id)) {
+      throw new StorageRefused(this.storageDown ?? "Base de données");
+    }
+    const checkStillOpen = () => {
+      if (this.closed) throw new Error("MoonAgentic s'arrête.");
+      if (this.locks.isLocked(projectId)) {
+        throw new Error("Ce projet est verrouillé : saisis le code pour l'ouvrir.");
+      }
+      if (this.removingProjects.has(projectId)) {
+        throw new Error("Ce projet est en cours de retrait.");
+      }
+      if (this.turns.has(old.id)) {
+        throw new Error("Attends la fin de la réponse de l'agent.");
+      }
+    };
+    // Hold `busy` and `steps` across stopping the turn too, so close() awaits us and neither a
+    // concurrent archive nor sendAfterStop / a new message can race with the handover.
+    const threads = await this.exclusive(
+      old.id,
+      "Attends que le coordinateur soit archivé.",
+      async () => {
+        this.sendAfterStop.delete(old.id);
+        this.followUps.delete(old.id);
+        await this.stopCoordinator(old.id);
+        if (this.closed) throw new Error("MoonAgentic s'arrête.");
+        // A turn its agent's stop did not end yet: the conversation is not moved under it.
+        const turn = this.turns.get(old.id);
+        if (turn)
+          await Promise.race([
+            turn.catch(() => undefined),
+            new Promise((done) => setTimeout(done, RESTART_WAIT_MS).unref()),
+          ]);
+        checkStillOpen();
+        this.sendAfterStop.delete(old.id);
+        this.followUps.delete(old.id);
+        this.settlePermissions(old.id);
+        // Revoke the old bridge token and make sure no residual process lingers before handover.
+        this.coordinators.dropCoordinatorAccess(old.id);
+        await this.pool.stop(old.id);
+        checkStillOpen();
+        this.flushText(old.id);
+        if (this.storageDown || this.heldIn(old.id)) {
+          throw new StorageRefused(this.storageDown ?? "Base de données");
+        }
+        const current = this.store.getThread(old.id);
+        if (current?.kind !== "coordinator") {
+          throw new Error("Ce projet n'a pas encore de coordinateur.");
+        }
+        const now = Date.now();
+        const next: Thread = {
+          id: randomUUID(),
+          projectId,
+          title: current.title,
+          agentId: current.agentId,
+          status: "idle",
+          permissionMode: current.permissionMode,
+          ...(current.model ? { model: current.model } : {}),
+          ...(current.settings ? { settings: current.settings } : {}),
+          kind: "coordinator",
+          createdAt: now,
+          updatedAt: now,
+        };
+        const changed = this.store.handOverCoordinator(old.id, next);
+        this.unsettled.delete(old.id);
+        this.threadGrants.delete(old.id);
+        this.quotaThreads.delete(old.id);
+        const retryAt = this.quotaRetryAt.get(old.id);
+        this.quotaRetryAt.delete(old.id);
+        if (changed[0]!.quota) {
+          this.quotaThreads.add(next.id);
+          if (retryAt !== undefined) this.quotaRetryAt.set(next.id, retryAt);
+        }
+        this.dropLog(old.id);
+        this.coordinators.forget(old.id);
+        const told = this.greenTold.get(old.id);
+        this.greenTold.delete(old.id);
+        if (told) this.greenTold.set(next.id, told);
+        return changed;
+      },
+      true,
+    );
+    // The new coordinator is told first: a screen left without one would open another.
+    for (const thread of threads) {
+      this.broadcast({ type: "thread", thread });
+      this.planner.syncThread(thread);
+    }
+    if (!this.closed) this.coordinators.drainLine(threads[0]!.id);
   }
 
   private async startSession(

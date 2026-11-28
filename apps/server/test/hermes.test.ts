@@ -851,6 +851,73 @@ describe("Hermes · relecture de Neon", () => {
     expect(answer.error).toContain("n'attend plus");
     expect(answered).toEqual([]);
   });
+
+  it("suit un message en file transféré quand le coordinateur est archivé sans attendre 13 minutes", async () => {
+    const h = await withHermes();
+    h.hub.hermes.connect();
+    // Coordinator is busy on a long running turn (not waiting for permission).
+    await h.hub.handle(h.client, {
+      type: "thread.send",
+      threadId: h.coordinatorId,
+      text: "Travail en 5 étapes",
+    });
+    await soon(() => h.store.getThread(h.coordinatorId)!.status).toBe("running");
+
+    const asked = h.hub.hermes.call(h.token(), "ask_coordinator", {
+      project: "Site vitrine",
+      message: "/fils",
+    });
+    await soon(() => h.store.getThread(h.coordinatorId)!.queue?.length ?? 0).toBe(1);
+
+    await h.hub.handle(h.client, {
+      type: "coordinator.archive",
+      requestId: "arch1",
+      projectId: h.projectId,
+    });
+
+    const outcome = (await Promise.race([
+      asked,
+      new Promise((r) => setTimeout(() => r("toujours en attente"), 5_000)),
+    ])) as Record<string, unknown> | string;
+    expect(outcome).not.toBe("toujours en attente");
+    expect(outcome).toMatchObject({ message_queued: true });
+    const next = h.store
+      .listThreads()
+      .find((t) => t.projectId === h.projectId && t.kind === "coordinator")!;
+    expect(next.queue?.map((m) => m.text)).toEqual(["/fils"]);
+  }, 20_000);
+
+  it("rend la main sans modifier le fil archivé quand le coordinateur est archivé pendant son tour", async () => {
+    const h = await withHermes();
+    h.hub.hermes.connect();
+    const asked = h.hub.hermes.call(h.token(), "ask_coordinator", {
+      project: "Site vitrine",
+      message: "Travail en 5 étapes",
+    });
+    await soon(() => h.store.getThread(h.coordinatorId)!.status).toBe("running");
+    await soon(() =>
+      h.store.listItems(h.coordinatorId).some((i) => i.kind === "user" && i.from === "hermes"),
+    ).toBe(true);
+
+    await h.hub.handle(h.client, {
+      type: "coordinator.archive",
+      requestId: "arch2",
+      projectId: h.projectId,
+    });
+
+    const outcome = (await Promise.race([
+      asked,
+      new Promise((r) => setTimeout(() => r("toujours en attente"), 5_000)),
+    ])) as Record<string, unknown> | string;
+    expect(outcome).not.toBe("toujours en attente");
+    expect(outcome).toMatchObject({ archived: true });
+    expect(outcome).not.toHaveProperty("answer");
+    const mine = h.store
+      .listItems(h.coordinatorId)
+      .find((i) => i.kind === "user" && i.from === "hermes");
+    expect(mine).toBeDefined();
+    expect(mine).not.toHaveProperty("relayed");
+  }, 20_000);
 });
 
 describe("Hermes · Discord", () => {

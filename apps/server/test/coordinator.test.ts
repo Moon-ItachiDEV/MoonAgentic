@@ -3,9 +3,16 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { Agents } from "../src/agents.ts";
-import { ORIGIN_MARK, REPLY_MARK, threadGroup, WORK_KINDS } from "@moonagentic/protocol";
+import {
+  ORIGIN_MARK,
+  REPLY_MARK,
+  type ServerMessage,
+  threadGroup,
+  WORK_KINDS,
+} from "@moonagentic/protocol";
 import { replyGuide } from "../src/coordinator.ts";
 import { COORDINATOR_PATH, COORDINATOR_TOOLS, THREAD_KINDS } from "../src/coordinator-tools.ts";
 import { createHttpServer } from "../src/http.ts";
@@ -36,7 +43,7 @@ function repoAt(dir: string) {
 }
 
 /** The real server, a project with its coordinator on the demo agent, and a second project. */
-async function coordinated() {
+async function coordinated(options?: { storageRetryMs?: number }) {
   const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-coord-"));
   repoAt(path.join(root, "a"));
   repoAt(path.join(root, "b"));
@@ -44,6 +51,7 @@ async function coordinated() {
   const hub = new Hub(store, new Agents({ demo: true }), {
     worktreesDir: path.join(root, "worktrees"),
     prWatchMs: 0,
+    ...(options?.storageRetryMs !== undefined ? { storageRetryMs: options.storageRetryMs } : {}),
   });
   // The tokens the bridge really came in with, to try them by hand afterwards.
   const tokens: string[] = [];
@@ -503,6 +511,308 @@ describe("a project's coordinator", () => {
     await expect(
       hub.handle(client, { type: "coordinator.restart", requestId: "s", projectId: otherId }),
     ).rejects.toThrow("pas encore de coordinateur");
+  });
+
+  it("archives its conversation, readable on its own, and goes on with an empty one", async () => {
+    const { hub, store, projectId, otherId, coordinatorId, say, hold } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await say("/ouvre Export Safari");
+    const opened = store.listThreads().find((t) => t.openedBy === coordinatorId)!;
+    const kept = store.listItems(coordinatorId).length;
+    const before = store.getThread(coordinatorId)!;
+    // At work when archived: its turn stops first.
+    await hold();
+    const live = hub.liveAgents;
+    const sent: ServerMessage[] = [];
+    let done = false;
+    const screen: Client = {
+      send: (m) => {
+        sent.push(m);
+        if (m.type === "done" && m.requestId === "a") done = true;
+      },
+    };
+    hub.connect(screen);
+    await hub.handle(screen, { type: "coordinator.archive", requestId: "a", projectId });
+    expect(done).toBe(true);
+    // Its agent stopped; the opened thread's goes on.
+    expect(hub.liveAgents).toBe(live - 1);
+    // The old conversation is a thread of its own now, in the archive, whole.
+    const old = store.getThread(coordinatorId)!;
+    expect(old).toMatchObject({ archived: true, status: "idle" });
+    expect(old.kind).toBeUndefined();
+    expect(store.getSessionId(coordinatorId)).toBeNull();
+    expect(store.listItems(coordinatorId).length).toBeGreaterThanOrEqual(kept);
+    // The project's coordinator is a new one, empty, on the same agent and settings.
+    const next = store
+      .listThreads()
+      .find((t) => t.projectId === projectId && t.kind === "coordinator")!;
+    expect(next.id).not.toBe(coordinatorId);
+    expect(next).toMatchObject({
+      agentId: before.agentId,
+      permissionMode: before.permissionMode,
+      settings: before.settings,
+      status: "idle",
+    });
+    expect(next.archived).toBeUndefined();
+    expect(store.listItems(next.id)).toEqual([]);
+    expect(hub.openCoordinator(projectId, "demo")).toBe(next.id);
+    // The threads the old one opened report to the new one.
+    expect(store.getThread(opened.id)!.openedBy).toBe(next.id);
+    // Screens hear of the new coordinator before the old one leaves.
+    const told = sent.flatMap((m) => (m.type === "thread" ? [m.thread] : []));
+    const gone = told.findIndex((t) => t.id === coordinatorId && !t.kind);
+    expect(told.findIndex((t) => t.id === next.id)).toBeLessThan(gone);
+    // It answers, and sees the project's threads: the old conversation among them, resolved,
+    // so it can look back at what was said there.
+    await hub.handle(client, { type: "thread.send", threadId: next.id, text: "/fils" });
+    await hub.whenIdle(next.id);
+    expect(store.getThread(next.id)!.summary).toBe("Ce projet a 2 fils.");
+    // The old one reads like any archived thread, and coming back keeps it a thread.
+    await hub.handle(client, {
+      type: "thread.setArchived",
+      threadId: coordinatorId,
+      archived: false,
+    });
+    expect(store.getThread(coordinatorId)!.archived).toBeFalsy();
+    expect(
+      store.listThreads().filter((t) => t.projectId === projectId && t.kind === "coordinator"),
+    ).toHaveLength(1);
+    await expect(
+      hub.handle(client, { type: "coordinator.archive", requestId: "b", projectId: otherId }),
+    ).rejects.toThrow("pas encore de coordinateur");
+  });
+
+  it("downgrades an archived full-access coordinator to supervised and clears its grants", async () => {
+    const { hub, store, projectId, coordinatorId, say } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await say("/ouvre Export Safari");
+    const opened = store.listThreads().find((t) => t.openedBy === coordinatorId)!;
+    // Both the coordinator and the child thread it opened run in full access.
+    await hub.handle(client, {
+      type: "thread.setPermissionMode",
+      threadId: opened.id,
+      permissionMode: "full",
+    });
+    await hub.handle(client, {
+      type: "thread.setPermissionMode",
+      threadId: coordinatorId,
+      permissionMode: "full",
+    });
+    // Simulate a prior per-thread grant recorded on the coordinator.
+    const grants = (hub as unknown as { threadGrants: Map<string, Set<string>> }).threadGrants;
+    grants.set(coordinatorId, new Set(["edit"]));
+
+    await hub.handle(client, { type: "coordinator.archive", requestId: "a", projectId });
+
+    const old = store.getThread(coordinatorId)!;
+    const next = store
+      .listThreads()
+      .find((t) => t.projectId === projectId && t.kind === "coordinator")!;
+    // Old conversation lost its coordinator guard, so it must downgrade to supervised and drop grants.
+    expect(old.permissionMode).toBe("supervised");
+    expect(grants.has(coordinatorId)).toBe(false);
+    // New coordinator and child thread keep their configured permission modes.
+    expect(next.permissionMode).toBe("full");
+    expect(store.getThread(opened.id)!.permissionMode).toBe("full");
+
+    // Reopening the archived thread must still ask before editing directly in the project folder.
+    await hub.handle(client, {
+      type: "thread.setArchived",
+      threadId: coordinatorId,
+      archived: false,
+    });
+    await hub.handle(client, { type: "thread.send", threadId: coordinatorId, text: "Regarde" });
+    await soon(() => store.getThread(coordinatorId)!.status).toBe("waiting");
+    await hub.cancel(coordinatorId);
+    await hub.whenIdle(coordinatorId);
+  });
+
+  it("refuses to archive while storage is down or items are buffered, preserving every item", async () => {
+    const { hub, store, projectId, coordinatorId } = await coordinated({ storageRetryMs: 120 });
+    const notices: (string | null)[] = [];
+    const screen: Client = {
+      send: (m) => {
+        if (m.type === "storage") notices.push(m.error);
+      },
+    };
+    hub.connect(screen);
+    const diskFull = (): Error => {
+      const db = new DatabaseSync(":memory:");
+      try {
+        db.exec("CREATE TABLE t (x TEXT); PRAGMA max_page_count = 2");
+        db.prepare("INSERT INTO t VALUES (?)").run("x".repeat(1_000_000));
+      } catch (error) {
+        return error as Error;
+      } finally {
+        db.close();
+      }
+      throw new Error("Expected disk full error.");
+    };
+    const write = store.putItem.bind(store);
+    let full = true;
+    store.putItem = (threadId, item) => {
+      if (full && threadId === coordinatorId && item.kind === "agent") {
+        throw diskFull();
+      }
+      return write(threadId, item);
+    };
+
+    await hub.handle(screen, { type: "thread.send", threadId: coordinatorId, text: "/fils" });
+    await hub.whenIdle(coordinatorId);
+    expect(notices).toContain("Disque plein : plus rien n'est enregistré");
+    // The agent's reply is held in memory (`unsaved`) and not written to SQLite yet.
+    expect(store.listItems(coordinatorId).filter((i) => i.kind === "agent")).toEqual([]);
+
+    // Recover SQLite before the retry tick fires: archive must refuse instead of dropping buffered items.
+    full = false;
+    await expect(
+      hub.handle(screen, { type: "coordinator.archive", requestId: "a1", projectId }),
+    ).rejects.toThrow("Disque plein : rien n'a été enregistré.");
+    expect(store.getThread(coordinatorId)!.kind).toBe("coordinator");
+    expect(store.getThread(coordinatorId)!.archived).toBeFalsy();
+
+    // Once storage recovery flushes buffered items, archiving succeeds with the full answer intact.
+    await soon(() => notices.at(-1)).toBeNull();
+    await hub.handle(screen, { type: "coordinator.archive", requestId: "a2", projectId });
+    const text = store
+      .listItems(coordinatorId)
+      .filter((i) => i.kind === "agent")
+      .map((i) => i.text)
+      .join("");
+    expect(text).toContain("Ce projet a 0 fil.");
+  });
+
+  it("serializes concurrent archive requests cleanly without leaking internal errors", async () => {
+    const { hub, store, projectId, coordinatorId, hold } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await hold();
+    const [first, second] = await Promise.allSettled([
+      hub.handle(client, { type: "coordinator.archive", requestId: "a1", projectId }),
+      hub.handle(client, { type: "coordinator.archive", requestId: "a2", projectId }),
+    ]);
+    const ok = [first, second].filter((r) => r.status === "fulfilled");
+    const bad = [first, second].filter((r): r is PromiseRejectedResult => r.status === "rejected");
+    expect(ok).toHaveLength(1);
+    expect(bad).toHaveLength(1);
+    expect((bad[0]!.reason as Error).message).toBe("Attends que le coordinateur soit archivé.");
+    expect(store.getThread(coordinatorId)!.archived).toBe(true);
+    expect(
+      store.listThreads().filter((t) => t.projectId === projectId && t.kind === "coordinator"),
+    ).toHaveLength(1);
+  });
+
+  it("ignores pending sendAfterStop from queueSend when archiving the coordinator", async () => {
+    const { hub, store, projectId, coordinatorId, hold } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await hold();
+    await hub.handle(client, {
+      type: "thread.queue",
+      requestId: "q1",
+      threadId: coordinatorId,
+      text: "Message en file",
+    });
+    // queueSend arms sendAfterStop and begins cancelling the running turn; archive starts right away.
+    await hub.handle(client, {
+      type: "thread.queueSend",
+      requestId: "q2",
+      threadId: coordinatorId,
+    });
+    await hub.handle(client, { type: "coordinator.archive", requestId: "a", projectId });
+    const next = store
+      .listThreads()
+      .find((t) => t.projectId === projectId && t.kind === "coordinator")!;
+    expect(next.id).not.toBe(coordinatorId);
+    expect(next.queue?.map((m) => m.text)).toEqual(["Message en file"]);
+    expect(store.getThread(coordinatorId)!.archived).toBe(true);
+  });
+
+  it("refuses archiving if the project is locked while stopping the coordinator", async () => {
+    const { hub, store, projectId, coordinatorId, hold } = await coordinated();
+    const client: Client = { send: () => undefined };
+    hub.locks.setPin("123456");
+    await hold();
+    const archiving = hub.handle(client, {
+      type: "coordinator.archive",
+      requestId: "a",
+      projectId,
+    });
+    await hub.handle(client, { type: "lock.project", requestId: "l", projectId });
+    await expect(archiving).rejects.toThrow("verrouillé");
+    expect(store.getThread(coordinatorId)!.kind).toBe("coordinator");
+    expect(store.getThread(coordinatorId)!.archived).toBeFalsy();
+    expect(
+      store.listThreads().filter((t) => t.projectId === projectId && t.kind === "coordinator"),
+    ).toHaveLength(1);
+  });
+
+  it("waits for an in-flight archive during hub.close without hitting a closed database", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "moonagentic-coord-close-"));
+    repoAt(path.join(root, "a"));
+    const store = new Store(path.join(root, "state.sqlite"));
+    const hub = new Hub(store, new Agents({ demo: true }), {
+      worktreesDir: path.join(root, "worktrees"),
+      prWatchMs: 0,
+    });
+    cleanups.push(() =>
+      rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }),
+    );
+    const projectId = hub.createProject("a", path.join(root, "a"));
+    const coordinatorId = hub.openCoordinator(projectId, "demo");
+    const client: Client = { send: () => undefined };
+    await hub.handle(client, { type: "thread.send", threadId: coordinatorId, text: "Regarde" });
+    await soon(() => store.getThread(coordinatorId)!.status).toBe("waiting");
+
+    const escaped: string[] = [];
+    const onUnhandled = (error: unknown) =>
+      escaped.push(error instanceof Error ? error.message : String(error));
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const archiving = hub
+        .handle(client, { type: "coordinator.archive", requestId: "a", projectId })
+        .then(
+          () => undefined,
+          (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        );
+      await hub.close();
+      store.close();
+      const failure = await archiving;
+      if (failure !== undefined) {
+        expect(failure).not.toContain("database is not open");
+        expect(failure).toContain("arrête");
+      }
+      await new Promise((r) => setTimeout(r, 50));
+      expect(escaped).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("archives a coordinator on a fallback model: the fallback goes on, the old error goes", async () => {
+    const { hub, store, projectId, coordinatorId } = await coordinated();
+    const client: Client = { send: () => undefined };
+    const relief = {
+      state: "relief" as const,
+      from: { agentId: "demo", model: "precis" },
+      to: { agentId: "demo", model: "rapide" },
+      since: Date.now(),
+    };
+    store.updateThread(coordinatorId, { quota: relief, error: "Quota épuisé." });
+    store.putItem(coordinatorId, {
+      id: "green:1",
+      kind: "agent",
+      text: "PR vertes : [A](fil:abc) : sa PR https://x/pr/1 attend.",
+      at: Date.now(),
+    });
+    await hub.handle(client, { type: "coordinator.archive", requestId: "a", projectId });
+    const next = store
+      .listThreads()
+      .find((t) => t.projectId === projectId && t.kind === "coordinator")!;
+    expect(next.quota).toEqual(relief);
+    const old = store.getThread(coordinatorId)!;
+    expect(old.quota).toBeUndefined();
+    expect(old.error).toBeUndefined();
+    // What the old conversation said of green pull requests is still known after a restart.
+    expect(store.greenNotes(projectId).join("")).toContain("fil:abc");
   });
 
   it("sends each kind of work where the settings say, and starts the team the user set up", async () => {
