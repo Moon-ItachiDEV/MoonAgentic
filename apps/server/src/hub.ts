@@ -3201,7 +3201,10 @@ export class Hub {
     return this.scheduler.add({
       ...input,
       agentId,
-      model: route ? route.model : coordinator?.model,
+      // A coordinator's orchestrator hands work out: the schedule runs on a model that does it.
+      model: route
+        ? route.model
+        : coordinator && this.coordinators.workerModel(coordinator.agentId, coordinator.model),
       permissionMode: "supervised",
       isolated: !!project.git,
       by: "hermes",
