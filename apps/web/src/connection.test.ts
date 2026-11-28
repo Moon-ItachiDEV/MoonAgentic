@@ -7,6 +7,7 @@ import {
   Connection,
   DEVICE_REMOVED,
   NOT_SENT,
+  noticeMs,
   PING_MS,
   PONG_TIMEOUT_MS,
   readTokens,
@@ -424,6 +425,28 @@ describe("Connection heartbeat", () => {
     expect(conn.getState().status).toBe("open");
   });
 
+  it("takes a notice away by itself once read, and a newer one starts its own time", async () => {
+    const { conn } = await setupConnection();
+    conn.notify("MoonAgentic verrouillé");
+    await vi.advanceTimersByTimeAsync(noticeMs("MoonAgentic verrouillé") - 1);
+    expect(conn.getState().notice).toBe("MoonAgentic verrouillé");
+    conn.notify("secret verrouillé");
+    await vi.advanceTimersByTimeAsync(noticeMs("secret verrouillé") - 1);
+    expect(conn.getState().notice).toBe("secret verrouillé");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(conn.getState().notice).toBeNull();
+    // Closed by hand, a later notice is not cut short by the earlier one's time.
+    conn.notify("Branche poussée");
+    await vi.advanceTimersByTimeAsync(1_000);
+    conn.dismissNotice();
+    conn.notify("Déverrouillé");
+    await vi.advanceTimersByTimeAsync(noticeMs("Déverrouillé") - 1);
+    expect(conn.getState().notice).toBe("Déverrouillé");
+    // A long one stays longer, never more than ten seconds.
+    expect(noticeMs("x".repeat(200))).toBe(10_000);
+    expect(noticeMs("x".repeat(80))).toBeGreaterThan(noticeMs("x"));
+  });
+
   it("says when an action could not leave, and takes it back once connected again", async () => {
     const { conn, socket } = await setupConnection();
     socket.open();
@@ -594,6 +617,9 @@ describe("Connection", () => {
     await expect(
       conn.ask({ type: "search", requestId: "req-offline", query: "w" }),
     ).rejects.toThrow(NOT_SENT);
+    // Only the notice that says so waits, to go by itself.
+    expect(conn.getState().notice).toBe(NOT_SENT);
+    conn.dismissNotice();
     expect(vi.getTimerCount()).toBe(before);
   });
 

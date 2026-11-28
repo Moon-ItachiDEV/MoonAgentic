@@ -1107,7 +1107,7 @@ describe("composer", () => {
     // A year half typed in the date field is not sent, so nothing complains.
     await detail.getByLabel("Échéance").fill("0002-01-15");
     await detail.getByLabel("Échéance").fill("2020-01-15");
-    expect(await page.locator(".toast").count()).toBe(0);
+    expect(await page.locator(".toast.on").count()).toBe(0);
     await detail.getByRole("button", { name: "Fermer", exact: true }).click();
     await column("En test").locator(".pcl").getByText("en retard · 15 janv").waitFor();
     await shot(page, "c14-planner");

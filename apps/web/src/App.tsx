@@ -1783,11 +1783,25 @@ export function App() {
           {state.storageError}
         </div>
       )}
-      {state.notice && (
-        <div className="toast on" role="status">
-          <span>{state.notice}</span>
-          <button onClick={() => connection.dismissNotice()}>Fermer</button>
-        </div>
+      <Toast notice={state.notice} />
+    </div>
+  );
+}
+
+/**
+ * The notice at the top of every page. It stays in the page once gone, so it fades out with
+ * what it said, and a new one slides in.
+ */
+function Toast({ notice }: { notice: string | null }) {
+  const said = useRef(notice);
+  if (notice) said.current = notice;
+  return (
+    <div className={notice ? "toast on" : "toast"} role="status" aria-hidden={!notice}>
+      <span>{said.current}</span>
+      {said.current && (
+        <button tabIndex={notice ? 0 : -1} onClick={() => connection.dismissNotice()}>
+          Fermer
+        </button>
       )}
     </div>
   );

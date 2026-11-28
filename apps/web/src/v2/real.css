@@ -179,8 +179,12 @@ samp {
   color: var(--faint);
 }
 
-/* The notice at the top: what the server says, with a way to close it. */
-.toast.on button {
+/* The notice at the top: what the server says, with a way to close it. Shown, it takes the
+   taps on it: « Fermer » is pressed, not the row under it. */
+.toast.on {
+  pointer-events: auto;
+}
+.toast button {
   margin-left: 6px;
   font-weight: 500;
   opacity: 0.75;

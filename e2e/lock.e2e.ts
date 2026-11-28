@@ -97,6 +97,10 @@ describe("/lock", () => {
     if (shots) await page.screenshot({ path: path.join(shots, "lock-code.png") });
     await page.keyboard.type("123456");
     await page.getByText("secret verrouillé").waitFor();
+    // Its « Fermer » takes the tap, not the page under it, and the notice is gone.
+    const notice = page.locator(".toast.on");
+    await notice.getByRole("button", { name: "Fermer" }).click({ timeout: 5_000 });
+    await expect.poll(() => notice.count()).toBe(0);
     // Nothing of it is left on either screen: its page says so, and asks for the code.
     await menu.getByRole("img", { name: "Verrouillé" }).waitFor();
     await expect.poll(() => page.getByText(ANSWER).count()).toBe(0);
@@ -126,6 +130,9 @@ describe("/lock", () => {
     await composer.press("Enter");
     await menu.getByRole("img", { name: "Verrouillé" }).waitFor();
     await expect.poll(() => other.getByText(ANSWER).count()).toBe(0);
+    // Left alone, the notice that says so goes by itself instead of following every page.
+    await notice.getByText("secret verrouillé").waitFor();
+    await expect.poll(() => notice.count(), { timeout: 12_000 }).toBe(0);
     // Réglages show it among the locked ones.
     await page.goto(new URL("/reglages/general", url).toString());
     await page.getByRole("button", { name: "Changer le code" }).waitFor();
