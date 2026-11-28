@@ -166,6 +166,16 @@ describe("permission rules", () => {
       commandOf(call({ command: 'powershell.exe -NoProfile -Command "Get-Content a.ts"' })),
     ).toBe("Get-Content a.ts");
     expect(commandOf(call(undefined, "git show HEAD"))).toBe("git show HEAD");
+    // A command of an unknown shape is not taken at its title, which may read as one that reads.
+    for (const rawInput of [
+      { command: { argv: ["rm", "-rf", "/"] } },
+      { command: ["rm", 1] },
+      { cmd: 5 },
+      { args: ["-rf", "/"] },
+    ]) {
+      expect(commandOf(call(rawInput, "git log")), JSON.stringify(rawInput)).toBeUndefined();
+      expect(readOnlyCall(call(rawInput, "git log")), JSON.stringify(rawInput)).toBe(false);
+    }
     // Never unwrap across embedded quotes into trailing chained commands.
     expect(readOnlyCall(call({ command: "bash -lc 'git status' && rm -rf / && echo 'x'" }))).toBe(
       false,
