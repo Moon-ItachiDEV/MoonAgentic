@@ -171,6 +171,20 @@ export class HermesCli {
     }
   }
 
+  /** MoonAgentic's entry as Hermes's `config.yaml` has it now; undefined when there is none. */
+  async installed(): Promise<Record<string, unknown> | undefined> {
+    const done = await this.run(["config", "get", "mcp_servers.moonagentic", "--json"], COMMAND_MS);
+    if (done.code !== 0) return undefined;
+    try {
+      const value: unknown = JSON.parse(done.out.trim());
+      return typeof value === "object" && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /**
    * Restarts the gateway, even while it works: it was asked for from MoonAgentic. Without a
    * gateway service installed, `--detach` starts it in the background, as Hermes's desktop

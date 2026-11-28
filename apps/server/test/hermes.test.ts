@@ -977,3 +977,49 @@ describe("Hermes · relecture de Neon (réglage depuis MoonAgentic)", () => {
     expect(h.status().gateway).toMatchObject({ running: true });
   });
 });
+
+describe("Hermes · entrée de MoonAgentic absente ou périmée dans config.yaml", () => {
+  it("connecté sans entrée (avant que MoonAgentic sache régler Hermes) : l'écrit et relance la passerelle", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    // As on the mini-PC: connected, but nothing under `mcp_servers` in Hermes's config.yaml.
+    delete h.cli.config["mcp_servers.moonagentic"];
+    h.cli.calls.length = 0;
+    await h.hub.hermes.watchGateway();
+    await h.hub.hermes.settled();
+    expect(h.cli.config["mcp_servers.moonagentic"]).toContain("hermes-bridge");
+    expect(h.cli.calls.some((c) => c.join(" ") === "gateway restart --yes --detach")).toBe(true);
+    expect(h.status().setup).toMatchObject({ state: "done" });
+    // Looked at once per start: the next look only watches the gateway.
+    h.cli.calls.length = 0;
+    await h.hub.hermes.watchGateway();
+    expect(h.cli.calls.map((c) => c.join(" "))).toEqual(["gateway ensure --json --timeout 60"]);
+  });
+
+  it("une entrée qui lance un autre pont (ancien chemin) est réécrite", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    const entry = JSON.parse(h.cli.config["mcp_servers.moonagentic"]!) as { args: string[] };
+    entry.args[0] = "C:\\ailleurs\\server\\src\\hermes-bridge.ts";
+    h.cli.config["mcp_servers.moonagentic"] = JSON.stringify(entry);
+    await h.hub.hermes.watchGateway();
+    await h.hub.hermes.settled();
+    expect(h.cli.config["mcp_servers.moonagentic"]).not.toContain("ailleurs");
+  });
+
+  it("une entrée déjà juste ne relance pas Hermes", async () => {
+    const h = await withHermes();
+    await h.hub.handle(h.client, { type: "hermes.connect", requestId: "r1" });
+    await h.hub.hermes.settled();
+    h.cli.calls.length = 0;
+    await h.hub.hermes.watchGateway();
+    await h.hub.hermes.settled();
+    expect(h.cli.calls.map((c) => c.join(" "))).toEqual([
+      "config get mcp_servers.moonagentic --json",
+      "gateway ensure --json --timeout 60",
+    ]);
+    expect(h.status().gateway).toMatchObject({ running: true });
+  });
+});

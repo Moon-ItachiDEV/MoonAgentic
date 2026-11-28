@@ -177,21 +177,20 @@ export function HermesSettings({ hermes }: { hermes: HermesStatus | null }) {
                 <span className="tx">Démarrer la passerelle</span>
               </button>
             )}
-            {hermes.setup && (
-              <button
-                className="it acc"
-                disabled={busy || running}
-                onClick={() => void request({ type: "hermes.install", requestId: newId() })}
-              >
-                <span className="tx">
-                  {connecting
-                    ? "Réglage en cours…"
-                    : hermes.setup.state === "failed"
-                      ? "Réessayer"
-                      : "Réappliquer le réglage"}
-                </span>
-              </button>
-            )}
+            {/* Also when Hermes was connected before MoonAgentic could set it up itself. */}
+            <button
+              className="it acc"
+              disabled={busy || running}
+              onClick={() => void request({ type: "hermes.install", requestId: newId() })}
+            >
+              <span className="tx">
+                {connecting
+                  ? "Réglage en cours…"
+                  : hermes.setup?.state === "failed"
+                    ? "Réessayer"
+                    : "Réappliquer le réglage"}
+              </span>
+            </button>
             {(!hermes.setup || hermes.setup.state === "failed") && (
               <button className="it acc" onClick={() => void copy()}>
                 <span className="tx">
