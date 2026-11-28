@@ -24,12 +24,34 @@ describe("the effort level a coordinator asks for", () => {
     // « UltraMoon » is the highest the model has.
     expect(pickEffort(settings, "UltraMoon", "Neon").choice.id).toBe("max");
     expect(effortLevels(settings)).toEqual(["Low", "Medium", "High", "X High", "Max (UltraMoon)"]);
+    // Every label shown by `effortLevels()` (including « Max (UltraMoon) ») round-trips back.
+    for (const label of effortLevels(settings)) {
+      expect(pickEffort(settings, label, "Neon").choice).toBeTruthy();
+    }
+    expect(pickEffort(levels("Low", "High", "Max"), "Max (UltraMoon)", "Neon").choice.id).toBe(
+      "max",
+    );
   });
 
   it("is never a nearby level: one the model lacks is an error naming those it has", () => {
     expect(() => pickEffort(levels("Low", "Medium", "High"), "xhigh", "Neon")).toThrow(
       "Neon ne propose pas l'effort « xhigh ». Niveaux disponibles : Low, Medium, High (UltraMoon).",
     );
+    // Empty or punctuation-only input is rejected even when a choice has an empty display name.
+    const withBlankName: AgentSetting[] = [
+      {
+        id: "reasoning",
+        kind: "effort",
+        choices: [
+          { id: "low", name: "" },
+          { id: "high", name: "High" },
+        ],
+        current: "low",
+      },
+    ];
+    for (const blank of ["", "   ", "---", "..."]) {
+      expect(() => pickEffort(withBlankName, blank, "Neon")).toThrow("ne propose pas l'effort");
+    }
     expect(() => pickEffort([], "high", "Neon")).toThrow("pas encore connus");
     expect(() => pickEffort([levels("Low")[0]!], "high", "Neon")).toThrow(
       "ne propose pas de niveau d'effort",
