@@ -787,6 +787,34 @@ describe("a project's coordinator", () => {
     }
   });
 
+  it("archives a coordinator on a fallback model: the fallback goes on, the old error goes", async () => {
+    const { hub, store, projectId, coordinatorId } = await coordinated();
+    const client: Client = { send: () => undefined };
+    const relief = {
+      state: "relief" as const,
+      from: { agentId: "demo", model: "precis" },
+      to: { agentId: "demo", model: "rapide" },
+      since: Date.now(),
+    };
+    store.updateThread(coordinatorId, { quota: relief, error: "Quota épuisé." });
+    store.putItem(coordinatorId, {
+      id: "green:1",
+      kind: "agent",
+      text: "PR vertes : [A](fil:abc) : sa PR https://x/pr/1 attend.",
+      at: Date.now(),
+    });
+    await hub.handle(client, { type: "coordinator.archive", requestId: "a", projectId });
+    const next = store
+      .listThreads()
+      .find((t) => t.projectId === projectId && t.kind === "coordinator")!;
+    expect(next.quota).toEqual(relief);
+    const old = store.getThread(coordinatorId)!;
+    expect(old.quota).toBeUndefined();
+    expect(old.error).toBeUndefined();
+    // What the old conversation said of green pull requests is still known after a restart.
+    expect(store.greenNotes(projectId).join("")).toContain("fil:abc");
+  });
+
   it("sends each kind of work where the settings say, and starts the team the user set up", async () => {
     const { hub, store, projectId, coordinatorId, tokens, post, say, hold, release } =
       await coordinated();

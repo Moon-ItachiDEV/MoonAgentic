@@ -3662,11 +3662,15 @@ export class Hub {
     const summary = last?.kind === "agent" ? leadOf(last.text, 2, RESULT_LIMIT) : "";
     if (!summary) return;
     const changed = await this.review(threadId).catch(() => undefined);
-    // Meanwhile the thread may have started again, or gone with its coordinator.
-    if (this.closed || this.turns.has(threadId) || !this.store.getThread(thread.openedBy)) return;
+    // Meanwhile the thread may have started again, or gone with its coordinator, or its
+    // coordinator's conversation gone to the archive: the result goes to the one now.
+    if (this.closed || this.turns.has(threadId)) return;
+    const coordinatorId = this.store.getThread(threadId)?.openedBy;
+    if (!coordinatorId) return;
+    if (this.store.getThread(coordinatorId)?.kind !== "coordinator") return;
     const files = changed?.files.map((f) => f.path) ?? [];
     const more = Math.max(0, files.length - RESULT_FILES) + (changed?.omitted ?? 0);
-    this.putItem(thread.openedBy, {
+    this.putItem(coordinatorId, {
       id: `result:${threadId}:${asked.id}`,
       kind: "result",
       threadId,
@@ -4174,9 +4178,9 @@ export class Hub {
     let told = this.greenTold.get(coordinatorId);
     if (!told) {
       told = new Set<string>();
-      for (const item of this.store.listItems(coordinatorId)) {
-        if (item.kind !== "agent" || !item.id.startsWith("green:")) continue;
-        for (const m of item.text.matchAll(/\]\(fil:([\w-]+)\) : sa PR (\S+) /g))
+      // Its conversations put in the archive said some too.
+      for (const text of this.store.greenNotes(thread.projectId)) {
+        for (const m of text.matchAll(/\]\(fil:([\w-]+)\) : sa PR (\S+) /g))
           told.add(`${m[1]} ${m[2]}`);
       }
       this.greenTold.set(coordinatorId, told);
@@ -5864,6 +5868,13 @@ export class Hub {
         const changed = this.store.handOverCoordinator(old.id, next);
         this.unsettled.delete(old.id);
         this.threadGrants.delete(old.id);
+        this.quotaThreads.delete(old.id);
+        const retryAt = this.quotaRetryAt.get(old.id);
+        this.quotaRetryAt.delete(old.id);
+        if (changed[0]!.quota) {
+          this.quotaThreads.add(next.id);
+          if (retryAt !== undefined) this.quotaRetryAt.set(next.id, retryAt);
+        }
         this.dropLog(old.id);
         this.coordinators.forget(old.id);
         const told = this.greenTold.get(old.id);
