@@ -127,6 +127,68 @@ describe("a project's coordinator", () => {
     expect(await say("/fils")).toBe("Ce projet a 1 fil.");
   });
 
+  it("lays down the plan of a thread it opens, and changes it later", async () => {
+    const { store, tokens, post, say, hold } = await coordinated();
+    await say("/fils");
+    await hold();
+    const call = async (tool: string, args: unknown) =>
+      (await (await post(tokens[0]!, { tool, args })).json()) as {
+        result?: { opened: { id: string; plan?: unknown } };
+        error?: string;
+      };
+    const opened = await call("open_thread", {
+      task_key: "menu",
+      title: "Menu",
+      brief: "B",
+      steps: ["Trouver la cause", "  Corriger   le menu ", "Ouvrir la PR"],
+    });
+    const id = opened.result!.opened.id;
+    expect(store.getThread(id)!.plan).toMatchObject({
+      from: "tool",
+      entries: [
+        { content: "Trouver la cause", status: "pending" },
+        { content: "Corriger le menu", status: "pending" },
+        { content: "Ouvrir la PR", status: "pending" },
+      ],
+    });
+    // list_threads tells it how far each thread is.
+    expect(opened.result!.opened.plan).toHaveLength(3);
+    // It changes a thread's plan by its id; a step done keeps its place.
+    expect(
+      await call("update_plan", {
+        thread_id: id,
+        steps: [
+          { title: "Trouver la cause", status: "completed" },
+          { title: "Corriger le menu", status: "in_progress" },
+        ],
+      }),
+    ).toMatchObject({ result: { saved: true, done: 1, steps: 2 } });
+    expect(store.getThread(id)!.plan!.entries.map((e) => e.status)).toEqual([
+      "completed",
+      "in_progress",
+    ]);
+    // What is not a plan is refused, the plan left as it was.
+    for (const steps of [
+      "Corriger",
+      [{ title: "", status: "pending" }],
+      [{ title: "A", status: "fini" }],
+      [
+        { title: "A", status: "in_progress" },
+        { title: "B", status: "in_progress" },
+      ],
+      Array.from({ length: 13 }, () => ({ title: "A", status: "pending" })),
+    ]) {
+      expect((await call("update_plan", { thread_id: id, steps })).error).toBeTruthy();
+    }
+    expect((await call("update_plan", { thread_id: "autre", steps: [] })).error).toBe(
+      "Ce fil n'existe pas dans ce projet.",
+    );
+    expect(store.getThread(id)!.plan!.entries).toHaveLength(2);
+    // An empty list takes the plan away.
+    await call("update_plan", { thread_id: id, steps: [] });
+    expect(store.getThread(id)!.plan).toBeUndefined();
+  });
+
   it("stops opening threads past a few for one message", async () => {
     const { tokens, post, say, hold, release } = await coordinated();
     await say("/fils");
@@ -223,8 +285,11 @@ describe("a project's coordinator", () => {
     ).toBe(403);
 
     // Another project's thread does not exist for it, to read or to change.
-    for (const tool of ["read_thread", "resolve_thread", "message_thread"]) {
-      const reply = await post(token, { tool, args: { thread_id: elsewhere, text: "x" } });
+    for (const tool of ["read_thread", "resolve_thread", "message_thread", "update_plan"]) {
+      const reply = await post(token, {
+        tool,
+        args: { thread_id: elsewhere, text: "x", steps: [] },
+      });
       expect(reply.status).toBe(400);
       expect(((await reply.json()) as { error: string }).error).toContain("n'existe pas");
     }
@@ -237,6 +302,7 @@ describe("a project's coordinator", () => {
       "read_memory",
       "save_memory",
       "publish_artifact",
+      "update_plan",
       "open_thread",
       "start_team",
       "message_thread",

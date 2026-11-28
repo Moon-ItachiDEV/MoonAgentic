@@ -1,15 +1,21 @@
 // What a project's coordinator or thread can do in MoonAgentic, as the MCP tools its agent
 // is given. Kept apart from the server so the small bridge the agent starts loads nothing else.
 
+/** One field of a tool's input, as JSON Schema says it. */
+export interface ToolField {
+  type: string;
+  description?: string;
+  enum?: string[];
+  maxItems?: number;
+  items?: ToolField | { type: "object"; properties: Record<string, ToolField>; required: string[] };
+}
+
 export interface CoordinatorTool {
   name: string;
   description: string;
   inputSchema: {
     type: "object";
-    properties: Record<
-      string,
-      { type: string; description: string; enum?: string[]; items?: { type: string } }
-    >;
+    properties: Record<string, ToolField>;
     required?: string[];
   };
 }
@@ -151,6 +157,60 @@ export const MEMORY_WRITE_TOOL: CoordinatorTool = {
   },
 };
 
+/** The states of a step of a thread's plan, as agents name them (ACP). */
+export const PLAN_STATUSES = ["pending", "in_progress", "completed"] as const;
+/** At most this many steps in a thread's plan. */
+export const MAX_PLAN_STEPS = 12;
+
+const planSteps: ToolField = {
+  type: "array",
+  maxItems: MAX_PLAN_STEPS,
+  description:
+    "Toutes les étapes, dans l'ordre, à chaque appel : la liste remplace la précédente. Une seule in_progress à la fois.",
+  items: {
+    type: "object",
+    properties: {
+      title: {
+        type: "string",
+        description: "L'étape en quelques mots, en français, verbe en tête (Corriger le menu).",
+      },
+      status: {
+        type: "string",
+        description: "pending : pas commencée ; in_progress : en cours ; completed : faite.",
+        enum: [...PLAN_STATUSES],
+      },
+    },
+    required: ["title", "status"],
+  },
+};
+
+/** A thread's agent keeps the plan shown at the top of its thread. */
+export const UPDATE_PLAN_TOOL: CoordinatorTool = {
+  name: "update_plan",
+  description:
+    "Tient le plan de ton travail, affiché en haut du fil sur l'écran de l'utilisateur. Donne-le dès le début (3 à 7 étapes courtes), puis rappelle-le avec la liste entière chaque fois qu'une étape commence ou se termine. Il ne remplace pas ta réponse.",
+  inputSchema: {
+    type: "object",
+    properties: { steps: planSteps },
+    required: ["steps"],
+  },
+};
+
+/** The coordinator keeps the plan of one of the threads it opened. */
+const UPDATE_THREAD_PLAN_TOOL: CoordinatorTool = {
+  name: "update_plan",
+  description:
+    "Change le plan affiché en haut d'un fil du projet, quand l'utilisateur change ce qu'il attend de ce fil. L'agent du fil le tient à jour pendant son travail.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      thread_id: { type: "string", description: "L'identifiant du fil." },
+      steps: planSteps,
+    },
+    required: ["thread_id", "steps"],
+  },
+};
+
 /**
  * Commits what the thread's agent changed, pushes the thread's branch and opens its pull
  * request, as « Envoyer » does in the Code panel: with MoonAgentic's own GitHub sign-in, so
@@ -191,12 +251,14 @@ export const THREAD_TOOLS: CoordinatorTool[] = [
   MEMORY_WRITE_TOOL,
   PUBLISH_ARTIFACT_TOOL,
   OPEN_PULL_REQUEST_TOOL,
+  UPDATE_PLAN_TOOL,
 ];
 
 /** Tools available to read-only team members (reviewer, tester, merger): they may still show. */
 export const READONLY_THREAD_TOOLS: CoordinatorTool[] = [
   ...PROJECT_READ_TOOLS,
   PUBLISH_ARTIFACT_TOOL,
+  UPDATE_PLAN_TOOL,
 ];
 
 /** A conversation outside any project: nothing to share, only what it shows. */
@@ -209,6 +271,7 @@ export const COORDINATOR_TOOLS: CoordinatorTool[] = [
   ...PROJECT_READ_TOOLS,
   MEMORY_WRITE_TOOL,
   PUBLISH_ARTIFACT_TOOL,
+  UPDATE_THREAD_PLAN_TOOL,
   {
     name: "open_thread",
     description:
@@ -231,6 +294,13 @@ export const COORDINATOR_TOOLS: CoordinatorTool[] = [
           type: "string",
           description: "Le type de travail.",
           enum: [...THREAD_KINDS],
+        },
+        steps: {
+          type: "array",
+          maxItems: MAX_PLAN_STEPS,
+          description:
+            "Le plan du fil, affiché en haut de celui-ci : 3 à 6 étapes courtes en français, verbe en tête, dans l'ordre. L'agent du fil les tient à jour.",
+          items: { type: "string" },
         },
         agent: {
           type: "string",

@@ -8,7 +8,7 @@ import {
   imageInProgress,
   imagesMarkdown,
   isImageGeneration,
-  isPlanModeSwitch,
+  shownElsewhere,
   unshownImages,
 } from "./activity.ts";
 import { Marked } from "marked";
@@ -85,12 +85,29 @@ describe("activityFeed", () => {
       tool("p2", { title: "Run enter_plan_mode", toolKind: "other" }),
       agent("done"),
     ];
-    expect(isPlanModeSwitch(items[1])).toBe(true);
+    expect(shownElsewhere(items[1])).toBe(true);
     expect(activityFeed(items)).toEqual([
       { kind: "item", index: 0 },
       { kind: "detail", key: "r", indices: [2] },
       { kind: "item", index: 4 },
     ]);
+  });
+
+  it("leaves out the plan kept with MoonAgentic's tool: its pill shows it", () => {
+    const items = [
+      user("a"),
+      tool("p1", { title: "Run mcp_moonagentic_update_plan", toolKind: "other" }),
+      tool("r"),
+      tool("p2", { title: "mcp__moonagentic__update_plan", toolKind: "other" }),
+      agent("done"),
+    ];
+    expect(activityFeed(items)).toEqual([
+      { kind: "item", index: 0 },
+      { kind: "detail", key: "r", indices: [2] },
+      { kind: "item", index: 4 },
+    ]);
+    // Another tool of the same name is shown.
+    expect(shownElsewhere(tool("x", { title: "update_plan", toolKind: "other" }))).toBe(false);
   });
 });
 

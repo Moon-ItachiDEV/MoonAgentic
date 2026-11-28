@@ -30,6 +30,7 @@ import { messageTokens } from "../commands.ts";
 import { imageBlob } from "../attachments.ts";
 import { fillComposer, openComposerPicker } from "../composer-fill.ts";
 import { connection, newId } from "../connection.ts";
+import { isDiscussionsProject } from "../default-models.ts";
 import { openQuestion as askedQuestion } from "../decision.ts";
 import { answerHead } from "../long-answer.ts";
 import { hasFocus, onFocusRequest, takeFocus } from "../focus.ts";
@@ -38,6 +39,7 @@ import type { Held } from "../state.ts";
 import { useThreadTimeline } from "../use-store.ts";
 import { AgentPlan } from "./AgentPlan.tsx";
 import { Glyph, I } from "../v2/I.tsx";
+import { useScreen } from "../v2/use-screen.ts";
 import { GROUP_LABEL, threadLine } from "../project-threads.ts";
 import { prParts } from "../pr-links.ts";
 import { PrChip } from "./PrChip.tsx";
@@ -57,7 +59,7 @@ import {
   activitySteps,
   imageInProgress,
   imagesMarkdown,
-  isPlanModeSwitch,
+  shownElsewhere,
   unshownImages,
 } from "../activity.ts";
 import { ImageDraft } from "./ImageDraft.tsx";
@@ -117,6 +119,11 @@ function Conversation({
   intro,
 }: ThreadViewProps) {
   const timeline = useThreadTimeline(thread.id);
+  // On the phone a project thread's plan is its pill at the top: not drawn a second time below.
+  const loose = isDiscussionsProject(
+    connection.getState().projects.find((p) => p.id === thread.projectId),
+  );
+  const pillPlan = useScreen().roomy || loose ? undefined : thread.plan?.item;
   const items = itemsProp ?? timeline.items;
   const held = heldProp ?? timeline.held;
   const lead = thread.parentId ? threads.find((t) => t.id === thread.parentId) : undefined;
@@ -393,7 +400,7 @@ function Conversation({
   const relayed = useMemo(() => (items ? relayedAnswers(items) : new Set<number>()), [items]);
 
   // What the agent does now, from the last item shown (plan mode switches are not shown).
-  const lastItem = items?.findLast((i) => !isPlanModeSwitch(i));
+  const lastItem = items?.findLast((i) => !shownElsewhere(i));
   const lastGlyph = activityGlyph(lastItem);
   const mascot = agent?.mascot;
   const mascotBadge = useMemo(
@@ -404,6 +411,7 @@ function Conversation({
 
   const renderItem = (i: number, clamp?: boolean, showBy?: boolean) => {
     const item = items![i]!;
+    if (item.id === pillPlan && i !== firstNew) return null;
     return (
       <div key={item.id} className="item" data-item={item.id}>
         {i === firstNew && (

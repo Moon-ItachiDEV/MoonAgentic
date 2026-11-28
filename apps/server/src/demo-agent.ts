@@ -586,6 +586,30 @@ const app = acp
       await say(said, "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
+    // `/etapes <n> A; B; C`: the plan atop its thread, kept with MoonAgentic's tool; the first
+    // n steps done, the next one under way.
+    const planning = ask.trim().match(/(?:^|\n)\/etapes (\d+) (.+)$/);
+    if (planning) {
+      const done = Number(planning[1]);
+      const steps = planning[2]!
+        .split(";")
+        .map((t) => t.trim())
+        .filter(Boolean)
+        .map((title, i) => ({
+          title,
+          status: i < done ? "completed" : i === done ? "in_progress" : "pending",
+        }));
+      const call = {
+        toolCallId: `plan-${randomUUID()}`,
+        title: "Run mcp_moonagentic_update_plan",
+        kind: "other" as const,
+      };
+      await update({ sessionUpdate: "tool_call", ...call, status: "in_progress" });
+      const said = await callMoonAgentic(sessionId, "update_plan", { steps });
+      await update({ sessionUpdate: "tool_call_update", ...call, status: "completed" });
+      await say(said, "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
     if (/(?:^|\n)\/memoire$/.test(ask.trim())) {
       const said = await callMoonAgentic(sessionId, "read_memory", {});
       await say(said, "agent_message_chunk");

@@ -1,5 +1,5 @@
 import type { Item, Thread } from "@moonagentic/protocol";
-import { isPlanModeSwitch } from "./activity.ts";
+import { shownElsewhere } from "./activity.ts";
 
 /** What a team's thread shows: some items as they are, the rest folded into a detail. */
 export type FeedBlock =
@@ -33,7 +33,7 @@ export function teamFeed(thread: Thread, items: Item[], partial = false): FeedBl
     // it, or opens one. Turns with nothing to show thus fold into one detail.
     for (const i of turn) {
       const item = items[i]!;
-      if (isPlanModeSwitch(item)) continue;
+      if (shownElsewhere(item)) continue;
       const keep =
         (item.kind === "user" && !byTeam) ||
         item.kind === "permission" ||

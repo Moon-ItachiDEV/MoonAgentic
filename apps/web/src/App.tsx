@@ -44,7 +44,7 @@ import { coordinatorOf, listedThreads, waitingCount } from "./project-threads.ts
 import { Sidebar as PlainSidebar } from "./components/Sidebar.tsx";
 import { TabBar, type TabPop, TabPopover } from "./components/TabBar.tsx";
 import { teamActive } from "./team-rows.ts";
-import { ReviewDialog } from "./components/ReviewDialog.tsx";
+import { PlanPill } from "./components/ThreadPlan.tsx";
 import { ThreadView } from "./components/ThreadView.tsx";
 import { DecisionCard } from "./components/DecisionCard.tsx";
 import { connection, newId } from "./connection.ts";
@@ -85,6 +85,10 @@ const DiscussionSettings = lazy(() =>
 const ProjectSettings = lazy(() =>
   import("./components/ProjectSettings.tsx").then((m) => ({ default: m.ProjectSettings })),
 );
+// A thread's whole plan, loaded the first time its pill is touched.
+const PlanPanel = lazy(() =>
+  import("./components/PlanPanel.tsx").then((m) => ({ default: m.PlanPanel })),
+);
 const Artifacts = lazy(() =>
   import("./components/Artifacts.tsx").then((m) => ({ default: m.Artifacts })),
 );
@@ -94,6 +98,9 @@ const SettingsLayer = lazy(() =>
 // Opened now and then too: loaded the first time, then kept for their closing animation.
 const TeamDialog = lazy(() =>
   import("./components/TeamDialog.tsx").then((m) => ({ default: m.TeamDialog })),
+);
+const ReviewDialog = lazy(() =>
+  import("./components/ReviewDialog.tsx").then((m) => ({ default: m.ReviewDialog })),
 );
 const ScheduleDialog = lazy(() =>
   import("./components/ScheduleDialog.tsx").then((m) => ({ default: m.ScheduleDialog })),
@@ -181,6 +188,14 @@ export function App() {
     const timer = setTimeout(() => setThreadMenuOut(false), 230);
     return () => clearTimeout(timer);
   }, [threadMenuOut]);
+  /** The open thread's plan, opened from its pill at the top of the page. */
+  const [planOpen, setPlanOpenNow] = useState(false);
+  /** Opened once: its panel is loaded, and stays on the page for its closing. */
+  const [planLoaded, setPlanLoaded] = useState(false);
+  const setPlanOpen = (on: boolean) => {
+    if (on) setPlanLoaded(true);
+    setPlanOpenNow(on);
+  };
   /** The thread being renamed from its « … » menu, and the name typed so far. */
   /** The conversation being renamed; `loose` for one outside any project (« Discussions »). */
   const [renaming, setRenaming] = useState<{ id: string; title: string; loose: boolean } | null>(
@@ -220,6 +235,9 @@ export function App() {
   if (teamTask !== null) teamOnce.current = true;
   const scheduleOnce = useRef(false);
   if (scheduling !== null) scheduleOnce.current = true;
+  /** « Lancer la revue » is loaded the first time it is asked for, then kept for its closing. */
+  const reviewOnce = useRef(false);
+  if (reviewPr !== null) reviewOnce.current = true;
 
   // Ctrl K (⌘ K on a Mac) opens the quick search from anywhere, even while typing.
   useEffect(() => {
@@ -340,6 +358,7 @@ export function App() {
   const routeThreadId = route.name === "thread" ? route.threadId : undefined;
   useEffect(() => {
     setRenaming((was) => (was && was.id !== routeThreadId ? null : was));
+    setPlanOpenNow(false);
   }, [routeThreadId]);
   if (state.status === "unauthorized") return <PairGate />;
 
@@ -348,6 +367,11 @@ export function App() {
   /** A chat outside any project (« Discussions »): no changes to look at, no « <> ». */
   const looseThread =
     !!thread && isDiscussionsProject(state.projects.find((p) => p.id === thread.projectId));
+  /**
+   * The open thread's plan, as its pill and panel show it: none until it has a step, nor for
+   * a chat outside any project, whose name opens its menu.
+   */
+  const threadPlan = thread?.plan?.entries.length && !looseThread ? thread.plan.entries : undefined;
   // A project's page shows that project; elsewhere, the open thread's or the one last picked.
   const routeProject =
     route.name === "project" ? state.projects.find((p) => p.id === route.projectId) : undefined;
@@ -1090,6 +1114,13 @@ export function App() {
                 sub={thread.team ? "Équipe" : (threadAgent?.name ?? "Agent retiré")}
                 onDone={finishRename}
               />
+            ) : thread && threadPlan ? (
+              <PlanPill
+                thread={thread}
+                entries={threadPlan}
+                open={planOpen}
+                onOpen={() => setPlanOpen(true)}
+              />
             ) : (
               thread && (
                 <div
@@ -1465,6 +1496,17 @@ export function App() {
             onOpenArtifacts={() => go({ name: "artifacts" })}
           />
         )}
+        {thread && threadPlan && planLoaded && !screen.roomy && route.name === "thread" && (
+          <Suspense fallback={null}>
+            <PlanPanel
+              key={thread.id}
+              thread={thread}
+              entries={threadPlan}
+              open={planOpen}
+              onClose={() => setPlanOpen(false)}
+            />
+          </Suspense>
+        )}
         {(threadMenu || threadMenuOut) && thread && (
           <div
             ref={threadMenuRef}
@@ -1716,21 +1758,25 @@ export function App() {
           />
         </Suspense>
       )}
-      <ReviewDialog
-        open={reviewPr !== null && !!project}
-        project={project}
-        agents={state.agents}
-        favorites={state.favorites}
-        threads={state.threads}
-        saved={state.coordinator.review}
-        savedJudge={state.coordinator.reviewJudge}
-        pr={reviewPr ?? ""}
-        onClose={() => setReviewPr(null)}
-        onStarted={(id) => {
-          setReviewPr(null);
-          navigate({ name: "thread", threadId: id });
-        }}
-      />
+      {reviewOnce.current && (
+        <Suspense fallback={null}>
+          <ReviewDialog
+            open={reviewPr !== null && !!project}
+            project={project}
+            agents={state.agents}
+            favorites={state.favorites}
+            threads={state.threads}
+            saved={state.coordinator.review}
+            savedJudge={state.coordinator.reviewJudge}
+            pr={reviewPr ?? ""}
+            onClose={() => setReviewPr(null)}
+            onStarted={(id) => {
+              setReviewPr(null);
+              navigate({ name: "thread", threadId: id });
+            }}
+          />
+        </Suspense>
+      )}
       {scheduleOnce.current && (
         <Suspense fallback={null}>
           <ScheduleDialog

@@ -8,6 +8,12 @@ import { refName } from "./local-files.ts";
  * reads, so they are not shown at all.
  */
 const PLAN_MODE = /^(?:run\s+)?(?:enter|exit)_plan_mode$/i;
+/**
+ * The plan a thread's agent keeps with MoonAgentic's `update_plan`, as Claude Code
+ * (`mcp__moonagentic__update_plan`) or Antigravity (`Run mcp_moonagentic_update_plan`) name
+ * it: its pill at the top of the thread shows it, not a line per call.
+ */
+const PLAN_TOOL = /^(?:run\s+)?mcp_{1,2}moonagentic_{1,2}update_plan\b/i;
 
 /** A command that runs tests: `pnpm test`, `vitest`, `pytest`, `jest`, `cargo test`… */
 export const TEST_CMD = /\b(?:test\w*|vitest|pytest|jest|rspec|mocha|playwright)\b/i;
@@ -67,8 +73,9 @@ export function unshownImages(items: Item[], indices: number[]): string[] {
 export const imagesMarkdown = (refs: string[]) =>
   refs.map((ref) => `![${refName(ref).replace(/[[\]\\]/g, "")}](<${ref}>)`).join("\n\n");
 
-export const isPlanModeSwitch = (item: Item | undefined) =>
-  item?.kind === "tool" && PLAN_MODE.test(item.title.trim());
+/** A tool that changes nothing the timeline reads: a plan mode switch, the plan kept atop. */
+export const shownElsewhere = (item: Item | undefined) =>
+  item?.kind === "tool" && (PLAN_MODE.test(item.title.trim()) || PLAN_TOOL.test(item.title.trim()));
 
 /**
  * What a thread shows: the user's messages, each turn's last answer and what waits on the
@@ -86,7 +93,7 @@ export function activityFeed(items: Item[]): FeedBlock[] {
     const lastAgent = turn.findLast((i) => items[i]?.kind === "agent");
     for (const i of turn) {
       const item = items[i]!;
-      if (isPlanModeSwitch(item)) continue;
+      if (shownElsewhere(item)) continue;
       const fold =
         item.kind === "thought" ||
         (item.kind === "tool" && !item.questions) ||
