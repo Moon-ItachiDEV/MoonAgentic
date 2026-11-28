@@ -76,6 +76,22 @@ export function send(track: Track, target: number, spring: Spring, start: number
 export const settle = (position: number, speed: number, spring: Spring, start: number): Track =>
   send({ at: () => [position, speed], end: start }, 0, spring, start);
 
+/** The same value, `by` seconds later. */
+export const later = (track: Track, by: number): Track =>
+  by === 0 ? track : { at: (t) => track.at(t - by), end: track.end + by };
+
+/**
+ * The time, in seconds, on the clock the browser draws its animations by. Tracks are timed on
+ * that one, not on the wall's: a picture is drawn for a time of this clock, and a busy page
+ * draws it well after the wall's has passed it. Picked up where the wall's clock has it, a
+ * move would be further on than its last picture showed it: seen, a jump. (The wall's all the
+ * same where a browser has no such clock.)
+ */
+export function clock(): number {
+  const drawn = typeof document === "undefined" ? null : document.timeline?.currentTime;
+  return (typeof drawn === "number" ? drawn : performance.now()) / 1000;
+}
+
 /**
  * The times to draw a motion at, from `now` until `end`: one every 1/90 s, and a last one
  * late enough for everything to be exactly at rest.
@@ -87,4 +103,18 @@ export function frames(now: number, end: number): { times: number[]; duration: n
   for (let i = 0; i < count; i++) times.push(now + (duration * i) / count);
   times.push(now + duration + 1000);
   return { times, duration };
+}
+
+/**
+ * The time on its tracks a motion is seen at when the clock says `now`. Its keyframes were
+ * drawn from `since` on, but the browser plays them from the picture it starts them at, one
+ * or more after they were made, and shows the first of them until then: what is on screen is
+ * that far behind the clock. A change of mind leaves from what is on screen. With nothing
+ * `playing`, the clock is right.
+ */
+export function seenAt(now: number, since: number, playing: readonly Animation[]): number {
+  if (!playing.length) return now;
+  for (const { startTime } of playing)
+    if (typeof startTime === "number") return Math.max(since, since + now - startTime / 1000);
+  return since;
 }

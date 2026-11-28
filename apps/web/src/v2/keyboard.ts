@@ -16,7 +16,18 @@
 
 import { useSyncExternalStore } from "react";
 import { touchScreen } from "../touch.ts";
-import { frames, type Motion, send, settle, type Spring, still, type Track } from "./spring.ts";
+import {
+  clock,
+  frames,
+  later,
+  type Motion,
+  seenAt,
+  send,
+  settle,
+  type Spring,
+  still,
+  type Track,
+} from "./spring.ts";
 
 /** Less than this hidden at the bottom of the page is a browser's bar, not a keyboard. */
 const MIN = 80;
@@ -93,7 +104,6 @@ let handsOff = false;
 let fieldWatch: ReturnType<typeof setInterval> | undefined;
 const listeners = new Set<() => void>();
 
-const clock = () => performance.now() / 1000;
 const reduced = () =>
   typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
 
@@ -237,6 +247,8 @@ let tabs: Track[] = [still(0), still(0), still(0), still(0)];
 /** Where `depth` and `tabs` were last sent. */
 let up = false;
 let running: Animation[] = [];
+/** The time the keyframes of `running` were drawn from. */
+let since = 0;
 
 function stop(): void {
   for (const animation of running) animation.cancel();
@@ -255,6 +267,8 @@ function rest(): void {
 
 /** The page as it is seen before a change: where each part is and how it moves. */
 interface Seen {
+  /** The time on the tracks all of it was seen at. */
+  at: number;
   moving: Map<string, Motion>;
   places: Map<string, number>;
   /** The reader was at the end of the thread: they stay there. */
@@ -264,15 +278,17 @@ interface Seen {
 let pending: Seen | null = null;
 
 function see(): Seen {
-  const now = clock();
+  // Where the browser has each move, not where the clock would.
+  const at = seenAt(clock(), since, running);
   const moving = new Map<string, Motion>();
-  for (const [name, track] of offsets) moving.set(name, track.at(now));
+  for (const [name, track] of offsets) moving.set(name, track.at(at));
   // Without its animations, each part is where the layout puts it.
   stop();
   const places = new Map<string, number>();
   for (const part of parts()) places.set(part.name, place(part));
   const view = document.querySelector<HTMLElement>("#main > .view");
   return {
+    at,
     moving,
     places,
     pinned: !!view && view.scrollHeight - view.scrollTop - view.clientHeight < 80,
@@ -341,6 +357,9 @@ function land(): void {
       next.set(part.name, settle(offset, v, FOLLOW, now));
   }
   offsets = next;
+  // What goes on its way does so from where it was seen.
+  depth = later(depth, now - was.at);
+  tabs = tabs.map((track) => later(track, now - was.at));
   if (open !== up) {
     up = open;
     depth = send(depth, open ? 1 : 0, FOLLOW, now);
@@ -396,6 +415,7 @@ function play(list: Part[], now: number): void {
     ]);
   });
   if (!jobs.length) return rest();
+  since = now;
   running = jobs.map(([el, keyframes]) =>
     el.animate(keyframes, { duration: duration * 1000, fill: "both", easing: "linear" }),
   );
