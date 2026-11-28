@@ -42,6 +42,7 @@ import {
 } from "./coordinator-tools.ts";
 import type { Hub } from "./hub.ts";
 import type { McpServerRecord } from "./mcp.ts";
+import { effortLevels, effortOfValues, pickEffort } from "./effort-level.ts";
 import { mergePlan } from "./plan-steps.ts";
 import { coordinatorSettingsOf, isTeamPreset } from "./saved-shapes.ts";
 import { fold, isRecord, type Store } from "./store.ts";
@@ -146,7 +147,7 @@ export const coordinatorPrompt = (project: string) =>
 Ce que tu fais :
 - Une question rapide ou un point d'avancement : tu réponds toi-même, en quelques phrases. Pour l'avancement, lis l'état réel avec list_threads, puis read_thread si on te demande le détail d'un fil. Pour retrouver une décision ou un sujet passé, utilise search_threads. N'invente jamais un état.
 - Pour la mémoire durable du projet (partagée entre tous les agents, fils et branches), utilise read_memory et save_memory pour noter les décisions, conventions ou pièges durables.
-- Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne claire, car l'agent du fil ne voit pas cette conversation. La consigne s'affiche dans le fil sous « Coordinateur » : écris-la en français, en deux à quatre phrases simples (ce qu'il faut faire, où, et ce qui est attendu), sans liste de commandes, sans titres ni notes internes, sans recopier le message de l'utilisateur (MoonAgentic le joint déjà). Donne toujours kind : les réglages de l'utilisateur en déduisent l'agent. Donne aussi steps, le plan du fil en 3 à 6 étapes courtes, verbe en tête : il s'affiche en haut du fil et son agent le tient à jour. Si l'outil répond que le fil est en file, dis-le : il démarrera seul.
+- Un bug, une fonctionnalité, une relecture, toute tâche qui demande du travail : tu ne la fais pas toi-même et tu ne modifies aucun fichier. Tu ouvres un fil avec open_thread, avec un titre court et une consigne claire, car l'agent du fil ne voit pas cette conversation. La consigne s'affiche dans le fil sous « Coordinateur » : écris-la en français, en deux à quatre phrases simples (ce qu'il faut faire, où, et ce qui est attendu), sans liste de commandes, sans titres ni notes internes, sans recopier le message de l'utilisateur (MoonAgentic le joint déjà). Donne toujours kind : les réglages de l'utilisateur en déduisent l'agent. Si l'utilisateur demande un agent, un modèle ou un niveau d'effort précis, lis list_agents puis donne agent, model et effort à open_thread : un niveau ou un modèle absent est refusé, dis-le sans en choisir un autre. La réponse donne effort, et effort_applied devient vrai quand l'agent a démarré dessus (list_threads ou read_thread pour le confirmer). Donne aussi steps, le plan du fil en 3 à 6 étapes courtes, verbe en tête : il s'affiche en haut du fil et son agent le tient à jour. Si l'outil répond que le fil est en file, dis-le : il démarrera seul.
 - Une tâche trop grosse pour un seul fil, avec plusieurs morceaux indépendants, ou quand l'utilisateur demande une équipe : start_team.
 - Un sujet qui a déjà son fil : tu le relances avec message_thread plutôt que d'en ouvrir un second. Si son agent travaille, ton message attend la fin de son tour ; mode steer seulement pour une correction urgente, car il coupe le travail en cours.
 - resolve_thread seulement quand l'utilisateur dit que le sujet est clos.
@@ -490,11 +491,46 @@ export class Coordinators {
    * else the agent's.
    */
   private speaker(t: Thread): string {
-    const agent = this.host.catalog.list().find((a) => a.id === t.agentId);
-    if (!agent) return t.agentId;
-    const id = t.model ?? agent.defaultModel;
+    return this.speakerOf(t.agentId, t.model);
+  }
+
+  private speakerOf(agentId: string, model: string | undefined): string {
+    const agent = this.host.catalog.list().find((a) => a.id === agentId);
+    if (!agent) return agentId;
+    const id = model ?? agent.defaultModel;
     const name = agent.models?.find((m) => m.id === id)?.name.trim();
     return name && !/^default\b/i.test(name) ? name : agent.name;
+  }
+
+  /**
+   * The model the coordinator asked for, by its id or its name (« Gemini 4 Neon »). One the
+   * agent does not offer is an error: it would start on another, unseen.
+   */
+  private modelAsked(agentId: string, asked: string): string {
+    const agent = this.host.catalog.list().find((a) => a.id === agentId);
+    const models = agent?.models;
+    // Not listed yet: the agent says at its start whether it has it.
+    if (!models?.length) return asked;
+    const lower = asked.toLowerCase();
+    const found =
+      models.find((m) => m.id === asked) ??
+      models.find((m) => m.id.toLowerCase() === lower || m.name.trim().toLowerCase() === lower);
+    if (!found) {
+      throw new Error(
+        `${agent?.name ?? agentId} ne propose pas le modèle « ${asked} ». Modèles disponibles : ${models.map((m) => m.name).join(", ")}. Dis-le à l'utilisateur sans ouvrir le fil ni choisir un autre modèle à sa place.`,
+      );
+    }
+    return found.id;
+  }
+
+  /**
+   * The thread's reasoning effort, by its level's name, and whether its agent really runs on
+   * it: once started, the thread keeps the values the agent itself reports.
+   */
+  private effortShown(t: Thread): { effort?: string; effort_applied?: boolean } {
+    const effort = effortOfValues(this.host.catalog.settingsFor(t.agentId, t.model), t.settings);
+    if (!effort) return {};
+    return { effort, effort_applied: !t.held && this.store.getSessionId(t.id) !== null };
   }
 
   /** What a bridge caller is shown of a thread: its real state, nothing made up. */
@@ -519,6 +555,7 @@ export class Coordinators {
       agent: t.agentId,
       ...(t.model ? { model: t.model } : {}),
       agent_name: this.speaker(t),
+      ...this.effortShown(t),
       ...(asking ? { waits_on: "une réponse de l'utilisateur" } : {}),
       ...(t.error ? { error: t.error } : {}),
       ...(t.team
@@ -658,6 +695,34 @@ export class Coordinators {
           signal,
         );
       }
+      case "list_agents":
+        return this.host.catalog
+          .list()
+          .filter((a) => a.available)
+          .map((a) => {
+            const levels = (model?: string) =>
+              effortLevels(this.host.catalog.settingsFor(a.id, model));
+            return {
+              id: a.id,
+              name: a.name,
+              ...(a.models?.length
+                ? {
+                    models: a.models.map((m) => {
+                      const efforts = levels(m.id);
+                      return {
+                        id: m.id,
+                        name: m.name,
+                        ...(m.id === a.defaultModel ? { default: true } : {}),
+                        ...(efforts.length ? { efforts } : {}),
+                      };
+                    }),
+                  }
+                : {
+                    models: "pas encore connus : l'agent doit avoir démarré une fois",
+                    ...(levels().length ? { efforts: levels() } : {}),
+                  }),
+            };
+          });
       case "list_threads": {
         const all = this.store.listThreads();
         return mine().map((t) => this.threadForCoordinator(t, all, scope.threadId));
@@ -877,19 +942,34 @@ export class Coordinators {
         // The coordinator's own model, when the thread falls back on it: never its orchestrator,
         // which hands work out rather than doing it.
         const inherited = asked ? asked === coordinator.agentId : !route;
+        const askedModel = str("model", 200);
         const model =
-          str("model", 200) ??
+          (askedModel && this.modelAsked(agentId, askedModel)) ??
           (inherited
             ? this.workerModel(coordinator.agentId, coordinator.model)
             : asked
               ? undefined
               : route?.model);
+        // The route's settings come with its agent and model, asked by name or not.
+        const routed =
+          route?.settings && route.agentId === agentId && (route.model ?? undefined) === model
+            ? route.settings
+            : undefined;
+        // An effort asked for is the agent's level of that name, or no thread at all.
+        const askedEffort = str("effort", 40);
+        const effort =
+          askedEffort &&
+          pickEffort(
+            this.host.catalog.settingsFor(agentId, model),
+            askedEffort,
+            this.speakerOf(agentId, model),
+          );
+        const settings = effort ? { ...routed, [effort.setting.id]: effort.choice.id } : routed;
         const id = this.host.createThread({
           projectId: scope.projectId,
           agentId,
           model,
-          // The route's effort comes with its model, not with one asked by name.
-          ...(!asked && route?.settings ? { settings: route.settings } : {}),
+          ...(settings ? { settings } : {}),
           permissionMode: coordinator.permissionMode,
           isolated: true,
           title,

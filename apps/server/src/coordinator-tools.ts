@@ -269,6 +269,12 @@ export const READ_ONLY_TOOL_NAMES = new Set(PROJECT_READ_TOOLS.map((t) => t.name
 
 export const COORDINATOR_TOOLS: CoordinatorTool[] = [
   ...PROJECT_READ_TOOLS,
+  {
+    name: "list_agents",
+    description:
+      "Les agents prêts, leurs modèles et les niveaux d'effort de chaque modèle, pour donner à open_thread l'agent, le modèle et l'effort que l'utilisateur demande. Lecture seule.",
+    inputSchema: { type: "object", properties: {} },
+  },
   MEMORY_WRITE_TOOL,
   PUBLISH_ARTIFACT_TOOL,
   UPDATE_THREAD_PLAN_TOOL,
@@ -304,11 +310,18 @@ export const COORDINATOR_TOOLS: CoordinatorTool[] = [
         },
         agent: {
           type: "string",
-          description: "Identifiant d'un agent précis, seulement si l'utilisateur l'a demandé.",
+          description:
+            "Identifiant d'un agent précis (list_agents), seulement si l'utilisateur l'a demandé.",
         },
         model: {
           type: "string",
-          description: "Modèle précis de cet agent, seulement si l'utilisateur l'a demandé.",
+          description:
+            "Modèle précis de cet agent (son identifiant ou son nom, comme dans list_agents), seulement si l'utilisateur l'a demandé.",
+        },
+        effort: {
+          type: "string",
+          description:
+            "Niveau d'effort (raisonnement) précis, seulement si l'utilisateur l'a demandé : le nom d'un niveau de ce modèle dans list_agents (par exemple high, xhigh, UltraMoon pour le plus haut). Un niveau que le modèle n'a pas est refusé, jamais remplacé.",
         },
       },
       required: ["task_key", "title", "brief"],

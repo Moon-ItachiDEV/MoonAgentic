@@ -300,6 +300,7 @@ describe("a project's coordinator", () => {
       "search_threads",
       "read_thread",
       "read_memory",
+      "list_agents",
       "save_memory",
       "publish_artifact",
       "update_plan",
@@ -504,6 +505,113 @@ describe("a project's coordinator", () => {
       hub.handle(client, { type: "coordinator.restart", requestId: "s", projectId: otherId }),
     ).rejects.toThrow("pas encore de coordinateur");
   });
+
+  it("opens a thread on the effort the user asked for, never another, and says it runs on it", async () => {
+    const { hub, store, tokens, post, say, hold } = await coordinated();
+    const client: Client = { send: () => undefined };
+    await say("/fils");
+    await hold();
+    const call = async (tool: string, args: unknown = {}) =>
+      (await (await post(tokens[0]!, { tool, args })).json()) as {
+        result?: unknown;
+        error?: string;
+      };
+    type Shown = { id: string; model?: string; effort?: string; effort_applied?: boolean };
+    // It reads which agents, models and levels there are.
+    const agents = (await call("list_agents")).result as {
+      id: string;
+      models: { id: string; name: string; efforts?: string[] }[];
+    }[];
+    const demo = agents.find((a) => a.id === "demo")!;
+    expect(demo.models.find((m) => m.id === "rapide")?.efforts).toEqual([
+      "Bas",
+      "Moyen",
+      "Haut (UltraMoon)",
+    ]);
+
+    // A level the model does not have: refused, with the ones it has, and no thread.
+    const before = store.listThreads().length;
+    const refused = await call("open_thread", {
+      task_key: "xhigh",
+      title: "Relecture",
+      brief: "B",
+      agent: "demo",
+      model: "rapide",
+      effort: "xhigh",
+    });
+    expect(refused.error).toContain("ne propose pas l'effort « xhigh »");
+    expect(refused.error).toContain("Bas, Moyen, Haut (UltraMoon)");
+    // So is a model the agent does not offer, rather than starting on its default.
+    const noModel = await call("open_thread", {
+      task_key: "neon",
+      title: "Relecture",
+      brief: "B",
+      agent: "demo",
+      model: "Neon",
+    });
+    expect(noModel.error).toContain("ne propose pas le modèle « Neon »");
+    expect(store.listThreads()).toHaveLength(before);
+
+    // The model by its name, the level by the English word for the agent's « Haut ».
+    const opened = (
+      (await call("open_thread", {
+        task_key: "revue",
+        title: "Relecture",
+        brief: "B",
+        agent: "demo",
+        model: "Démo précis",
+        effort: "high",
+      })) as { result: { opened: Shown } }
+    ).result.opened;
+    expect(store.getThread(opened.id)).toMatchObject({
+      model: "precis",
+      settings: { effort: "haut" },
+    });
+    expect(opened.effort).toMatch(/^Haut/);
+    // Once its agent started, what it says is what the agent itself reports. (Supervised, it
+    // then waits for a permission: its turn is not waited for.)
+    await soon(() => store.getSessionId(opened.id)).not.toBeNull();
+    expect(store.getThread(opened.id)!.settings).toMatchObject({ effort: "haut" });
+    const listed = (await call("list_threads")).result as Shown[];
+    expect(listed.find((t) => t.id === opened.id)).toMatchObject({
+      model: "precis",
+      // The precise model offers a level above: « Haut » is no longer its highest.
+      effort: "Haut",
+      effort_applied: true,
+    });
+    // « UltraMoon » is the model's highest level, which this one has learnt is « Max ».
+    const ultra = (
+      (await call("open_thread", {
+        task_key: "ultra",
+        title: "Ultra",
+        brief: "B",
+        agent: "demo",
+        model: "precis",
+        effort: "UltraMoon",
+      })) as { result: { opened: Shown } }
+    ).result.opened;
+    expect(store.getThread(ultra.id)!.settings).toEqual({ effort: "max" });
+
+    // The route's effort comes with its agent and model, even when they are asked by name.
+    await hub.handle(client, {
+      type: "coordinator.setRoute",
+      kind: "relecture",
+      agentId: "demo",
+      model: "rapide",
+      settings: { effort: "bas" },
+    });
+    const routed = (
+      (await call("open_thread", {
+        task_key: "route",
+        title: "Route",
+        brief: "B",
+        kind: "relecture",
+        agent: "demo",
+        model: "rapide",
+      })) as { result: { opened: Shown } }
+    ).result.opened;
+    expect(store.getThread(routed.id)!.settings).toEqual({ effort: "bas" });
+  }, 90_000);
 
   it("sends each kind of work where the settings say, and starts the team the user set up", async () => {
     const { hub, store, projectId, coordinatorId, tokens, post, say, hold, release } =
