@@ -9,7 +9,17 @@
 // height is never held: what is written, pasted or attached meanwhile has its room at once.
 
 import { type RefObject, useLayoutEffect, useRef } from "react";
-import { frames, send, settle, type Spring, still, type Track } from "./spring.ts";
+import {
+  clock,
+  frames,
+  later,
+  seenAt,
+  send,
+  settle,
+  type Spring,
+  still,
+  type Track,
+} from "./spring.ts";
 
 const MORPH: Spring = { duration: 0.42, bounce: 0 };
 
@@ -35,6 +45,8 @@ interface Memo {
   x: Track;
   y: Track;
   running: Animation[];
+  /** The time the keyframes of `running` were drawn from. */
+  since: number;
 }
 
 /** The composer, its text, and the empty first child whose margin makes it look taller. */
@@ -50,7 +62,6 @@ function partsOf(card: HTMLElement | null, text: HTMLElement | null): Parts | nu
 }
 
 const unit = (x: number) => (x < 0 ? 0 : x > 1 ? 1 : x);
-const clock = () => performance.now() / 1000;
 
 /**
  * The layout's own shape, whatever is being drawn: measured on the composer itself (what is
@@ -106,11 +117,13 @@ function park(m: Memo): void {
 function change(parts: Parts, m: Memo, open: boolean): void {
   const { card, text, grow } = parts;
   const now = clock();
-  // What was seen: the layout's shape at the last picture, and what a move under way adds.
+  // What was seen: the layout's shape at the last picture, and what a move under way adds
+  // where the browser has it, not where the clock would.
   const was = m.rest;
-  const [tall, tallSpeed] = m.tall.at(now);
-  const [x, xSpeed] = m.x.at(now);
-  const [y, ySpeed] = m.y.at(now);
+  const seen = seenAt(now, m.since, m.running);
+  const [tall, tallSpeed] = m.tall.at(seen);
+  const [x, xSpeed] = m.x.at(seen);
+  const [y, ySpeed] = m.y.at(seen);
   clear(parts, m);
   const next = measure(parts);
   m.open = open;
@@ -130,7 +143,7 @@ function change(parts: Parts, m: Memo, open: boolean): void {
     y: was.text && next.text ? next.text.up - was.text.up + y : 0,
   };
   if (Math.abs(from.tall) < 0.5 && Math.abs(from.x) < 0.5 && Math.abs(from.y) < 0.5) return park(m);
-  m.shape = send(m.shape, open ? 1 : 0, MORPH, now);
+  m.shape = send(later(m.shape, now - seen), open ? 1 : 0, MORPH, now);
   m.tall = settle(from.tall, tallSpeed, MORPH, now);
   m.x = settle(from.x, xSpeed, MORPH, now);
   m.y = settle(from.y, ySpeed, MORPH, now);
@@ -160,6 +173,7 @@ function change(parts: Parts, m: Memo, open: boolean): void {
   }
   card.dataset.morph = open ? "open" : "fold";
   sayRest(card, next.height);
+  m.since = now;
   m.running = jobs.map(([part, keyframes]) =>
     part.animate(keyframes, { duration: duration * 1000, fill: "both", easing: "linear" }),
   );
@@ -202,6 +216,7 @@ export function useComposerMorph(
       x: still(0),
       y: still(0),
       running: [],
+      since: 0,
     };
   }, [box, field, open]);
   // The shape a change will leave from is the one of the last picture: read when the browser

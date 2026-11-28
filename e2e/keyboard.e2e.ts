@@ -1,6 +1,7 @@
 // The phone's keyboard, followed (apps/web/src/v2/keyboard.ts): the built app, the real server,
-// on a touch screen the size of an iPhone. The keyboard itself is played: the window keeps its
-// height and what is seen of it shrinks, which is all a page ever learns of a real one.
+// on a touch screen the size of an iPhone. The keyboard itself is played, the two ways a page
+// learns of a real one: what is seen of the window shrinks, and the window's own height either
+// stays (an iPhone until iOS 18, Android) or shrinks with it (an iPhone since iOS 26).
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -60,6 +61,18 @@ afterAll(async () => {
   }
 });
 
+/**
+ * What a phone's window says of its own height while its keyboard is up. An iPhone on iOS 26
+ * shrinks it with what is seen: a page that measured the keyboard against it found none, and
+ * nothing followed (the tabs stayed, the composer was left where the system pushed it).
+ */
+const WINDOWS = [
+  { says: "keeps its height", shrinks: false },
+  { says: "shrinks with the keyboard", shrinks: true },
+];
+/** The one being played. */
+let windowShrinks = false;
+
 const PHONE = { width: 393, height: 852 };
 /** An iPhone's keyboard with the bar above it, and the room the composer keeps over it. */
 const KEYBOARD = 336;
@@ -82,21 +95,32 @@ interface Played {
   keyboard(height: number, top?: number): void;
   film(): void;
   cut(): Frame[];
+  /** The page is at something else for that long (ms): nothing is handled or drawn meanwhile. */
+  busy(ms: number): void;
 }
 /** The page, with them. */
 type Stage = Window & { played: Played };
 
-/** In the page, before the app: a keyboard to show and hide, and a camera. */
-function play() {
+/**
+ * In the page, before the app: a keyboard to show and hide, and a camera. With `shrinks`, the
+ * window says it is no taller than what is seen of it while the keyboard is up.
+ */
+function play(shrinks: boolean) {
   let shown: { height: number; top: number } | null = null;
   const vv = window.visualViewport!;
   const real = (name: "height" | "offsetTop") =>
     Object.getOwnPropertyDescriptor(VisualViewport.prototype, name)!.get!;
   const height = real("height");
   const offsetTop = real("offsetTop");
+  const whole = Object.getOwnPropertyDescriptor(window, "innerHeight")!.get!;
   Object.defineProperty(vv, "height", {
-    get: () => (shown ? innerHeight - shown.height : height.call(vv)),
+    get: () => (shown ? whole.call(window) - shown.height : height.call(vv)),
   });
+  if (shrinks) {
+    Object.defineProperty(window, "innerHeight", {
+      get: () => whole.call(window) - (shown ? shown.height : 0),
+    });
+  }
   Object.defineProperty(vv, "offsetTop", {
     get: () => (shown ? shown.top : offsetTop.call(vv)),
   });
@@ -141,6 +165,9 @@ function play() {
       frames = null;
       return out;
     },
+    busy(ms) {
+      for (const end = performance.now() + ms; performance.now() < end;);
+    },
   };
   (window as unknown as Stage).played = tools;
 }
@@ -156,7 +183,7 @@ async function phone(
     deviceScaleFactor: shots ? 3 : 1,
     ...options,
   });
-  await context.addInitScript(play);
+  await context.addInitScript(play, windowShrinks);
   const page = await context.newPage();
   // Once to pair the device, then each page by its address.
   await page.goto(url);
@@ -275,7 +302,11 @@ const look = (page: Page) =>
     };
   });
 
-describe("the phone's keyboard", () => {
+describe.each(WINDOWS)("the phone's keyboard, in a window that $says", ({ shrinks }) => {
+  beforeAll(() => {
+    windowShrinks = shrinks;
+  });
+
   it("rests the composer on the keyboard and puts the tabs away, then gives the page back", async () => {
     const { context, page } = await phone();
     const before = await look(page);
@@ -391,6 +422,53 @@ describe("the phone's keyboard", () => {
     await context.close();
   });
 
+  it("goes back from its last picture when the page was too busy to draw the next in time", async () => {
+    const { context, page } = await phone();
+    await composer(page).tap();
+    await keyboard(page, KEYBOARD);
+    await atRest(page);
+    await composer(page).blur();
+    await keyboard(page, 0);
+    await atRest(page);
+    const before = await look(page);
+
+    await film(page);
+    // The focus goes while the composer is at its fastest on the way up, and the page is at
+    // something else: it learns of it 80 ms late, as on a slow phone.
+    const turned = page.evaluate(async () => {
+      const card = document.querySelector("#bottom .cmp")!;
+      const bottom = () => card.getBoundingClientRect().bottom;
+      const from = bottom();
+      // Pictures go by until it is well on its way. It is looked at between two of them, as a
+      // finger acts, and as it was drawn: while a picture is prepared, it is not yet there.
+      for (let i = 0; i < 600 && bottom() > from - 60; i++) {
+        await new Promise((done) => requestAnimationFrame(done));
+        await new Promise((done) => setTimeout(done, 0));
+      }
+      const at = bottom();
+      (window as unknown as Stage).played.busy(80);
+      card.querySelector("textarea")!.blur();
+      return { from, at };
+    });
+    await composer(page).tap();
+    const { from, at } = await turned;
+    await atRest(page);
+    const frames = await cut(page);
+    // It was well on its way, and not there yet.
+    expect(at).toBeLessThan(from - 60);
+    expect(at).toBeGreaterThan(PHONE.height - KEYBOARD - GAP + 5);
+    // The composer is where its last picture showed it, not where the time that went by since
+    // would have taken it: it goes back from there no faster than a spring does (1.4 px/ms at
+    // most). Sent back from where the wall's clock had it, it was seen to jump (about 6 px/ms).
+    expect(fastest(frames, (f) => f.bottom)).toBeLessThan(3);
+    const bottoms = frames.map((f) => f.bottom);
+    expect(Math.min(...bottoms)).toBeGreaterThan(PHONE.height - KEYBOARD - GAP - 1);
+    expect(Math.max(...bottoms)).toBeLessThan(before.composer!.bottom + 1);
+    const after = await look(page);
+    expect(after).toEqual({ ...before, greeting: after.greeting });
+    await context.close();
+  });
+
   it("forgets a keyboard that never shows", async () => {
     const { context, page } = await phone();
     await page.evaluate(
@@ -490,6 +568,34 @@ describe("the phone's keyboard", () => {
     await context.close();
   });
 
+  it("finds the page where it is seen when the window does not say how far it was pushed", async () => {
+    const { context, page } = await phone();
+    const before = await look(page);
+    await composer(page).tap();
+    // On iOS 26 the window has been reported not to say how far the page was pushed, while
+    // the page is found where it was pushed to: it is drawn 430 px up, and the window is silent.
+    await page.evaluate(() => {
+      document.documentElement.style.transform = "translateY(-430px)";
+    });
+    await keyboard(page, 386);
+    await atRest(page);
+    const up = await look(page);
+    expect(up.keyboard).toBe(true);
+    // As it is seen: the page fills the window from its top down to the keyboard.
+    expect(up.shell).toEqual({ top: 0, bottom: PHONE.height - 386 });
+    expect(up.top!.top).toBe(0);
+    expect(up.composer!.bottom).toBe(PHONE.height - 386 - GAP);
+    expect(up.tabs).toEqual({ seen: 0, reached: false, front: false });
+    // The keyboard goes, the system lets the page down: all is back in place.
+    await composer(page).blur();
+    await page.evaluate(() => document.documentElement.style.removeProperty("transform"));
+    await keyboard(page, 0);
+    await atRest(page);
+    const after = await look(page);
+    expect(after).toEqual({ ...before, greeting: after.greeting });
+    await context.close();
+  });
+
   it("lets what is written grow while the composer changes shape", async () => {
     const { context, page } = await phone();
     await film(page);
@@ -527,10 +633,15 @@ describe("the phone's keyboard", () => {
     await context.close();
   });
 
-  it("turns back from where it is when the mind changes while the composer changes shape", async () => {
+  /**
+   * The composer takes the focus, loses it once it has started to grow, and has it back once
+   * it comes down. With `busy`, the page is at something else for that long (ms) when each
+   * change of mind comes, as on a slow phone: it learns of it late, and draws later still.
+   */
+  async function turnsBack(busy: number) {
     const { context, page } = await phone();
     await film(page);
-    const turns = await page.evaluate(async () => {
+    const turns = await page.evaluate(async (hold) => {
       const text = document.querySelector<HTMLTextAreaElement>("#bottom .cmp textarea")!;
       const card = document.querySelector("#bottom .cmp")!;
       const height = () => card.getBoundingClientRect().height;
@@ -539,7 +650,9 @@ describe("the phone's keyboard", () => {
         for (let i = 0; i < 300 && !reached(); i++)
           await new Promise((done) => requestAnimationFrame(done));
         await new Promise((done) => setTimeout(done, 0));
-        return height();
+        const at = height();
+        (window as unknown as Stage).played.busy(hold);
+        return at;
       };
       const line = height();
       text.focus();
@@ -554,7 +667,7 @@ describe("the phone's keyboard", () => {
       });
       text.focus();
       return { line, first, second };
-    });
+    }, busy);
     await atRest(page);
     const frames = await cut(page);
     const whole = frames.at(-1)!.height;
@@ -575,7 +688,15 @@ describe("the phone's keyboard", () => {
       ),
     ).toBeLessThan(0.5);
     await context.close();
-  });
+  }
+
+  it("turns back from where it is when the mind changes while the composer changes shape", () =>
+    turnsBack(0));
+
+  // The card is where its last picture showed it, not where the time that went by since would
+  // have taken it: turned back from there, it was seen to jump (1 px/ms and more).
+  it("turns back from its last picture when the page was too busy to draw the next in time", () =>
+    turnsBack(80));
 
   it("moves its text from where it was seen, whatever came above the composer", async () => {
     const { context, page } = await phone();

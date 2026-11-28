@@ -34,6 +34,16 @@ describe("keyboardOf", () => {
     });
   });
 
+  it("counts on the page as it is laid out, whatever the window says of its own height", () => {
+    // An iPhone on iOS 26, as captured: 428 points seen, the page pushed 424 points up. Its
+    // window then says it is 428 tall too, which is why no part of this reads it.
+    expect(keyboardOf({ ...page, visible: 428, offsetTop: 424 })).toEqual({
+      height: 424,
+      top: 424,
+      inset: 0,
+    });
+  });
+
   it("says nothing of a page zoomed with two fingers", () => {
     expect(keyboardOf({ ...page, visible: 426, offsetTop: 120, scale: 2 })).toBeNull();
   });
