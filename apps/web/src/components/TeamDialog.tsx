@@ -411,7 +411,7 @@ export function TeamDialog({
             )}
           </button>
         )}
-        <div className="seg" role="radiogroup" aria-label="Accès des codeurs">
+        <div className="seg three" role="radiogroup" aria-label="Accès des codeurs">
           <button
             type="button"
             role="radio"
@@ -419,8 +419,19 @@ export function TeamDialog({
             aria-pressed={mode === "supervised"}
             onClick={() => setMode("supervised")}
           >
-            <I n="hand" s={16} />
+            <I n="hand" s={15} />
             Me demander
+          </button>
+          <button
+            type="button"
+            role="radio"
+            aria-checked={mode === "edits"}
+            aria-pressed={mode === "edits"}
+            title="Modifie les fichiers du fil sans demander ; les commandes demandent encore"
+            onClick={() => setMode("edits")}
+          >
+            <I n="edit" s={15} />
+            Éditions auto
           </button>
           <button
             type="button"
@@ -430,7 +441,7 @@ export function TeamDialog({
             aria-pressed={mode === "full"}
             onClick={() => setMode("full")}
           >
-            <I n="bolt" s={16} />
+            <I n="bolt" s={15} />
             Accès complet
           </button>
         </div>

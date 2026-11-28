@@ -49,8 +49,11 @@ const text = (value: string, isError = false) => ({
   ...(isError ? { isError: true } : {}),
 });
 
-/** Calls that may wait for the user's answer in MoonAgentic, and how long they are given. */
-const WAITS_FOR_USER = new Set(["start_team", "save_memory"]);
+/**
+ * Calls that may wait for the user's answer in MoonAgentic, and how long they are given. A
+ * pull request also waits for the branch to reach GitHub.
+ */
+const WAITS_FOR_USER = new Set(["start_team", "save_memory", "open_pull_request"]);
 const USER_ANSWER_TIMEOUT_MS = 15 * 60_000;
 
 async function call(tool: string, args: unknown, cancelled: AbortSignal) {

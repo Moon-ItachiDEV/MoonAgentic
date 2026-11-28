@@ -572,6 +572,20 @@ const app = acp
       await say(said, "agent_message_chunk");
       return { stopReason: "end_turn" };
     }
+    // `/pr <titre>`: its work sent to GitHub with MoonAgentic's own tool, as a real agent
+    // does when asked for a pull request: no `gh`, no git command of its own.
+    const sending = ask.trim().match(/(?:^|\n)\/pr (.+)$/);
+    if (sending) {
+      const call = { toolCallId: `pr-${randomUUID()}`, title: "open_pull_request" };
+      await update({ sessionUpdate: "tool_call", ...call, kind: "other", status: "in_progress" });
+      const said = await callMoonAgentic(sessionId, "open_pull_request", {
+        title: sending[1],
+        body: "Ouverte par l'agent de démonstration.",
+      });
+      await update({ sessionUpdate: "tool_call_update", ...call, status: "completed" });
+      await say(said, "agent_message_chunk");
+      return { stopReason: "end_turn" };
+    }
     // `/etapes <n> A; B; C`: the plan atop its thread, kept with MoonAgentic's tool; the first
     // n steps done, the next one under way.
     const planning = ask.trim().match(/(?:^|\n)\/etapes (\d+) (.+)$/);

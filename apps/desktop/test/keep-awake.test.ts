@@ -38,22 +38,27 @@ describe.runIf(process.platform === "win32")("on a real Windows", () => {
     const { file, args, options } = keepAwakeSpawn(60);
     const child = spawn(file, args, { ...options, detached: false });
     try {
-      // Time for PowerShell to start and set its state.
-      await new Promise((r) => setTimeout(r, 8_000));
-      const { stdout } = await promisify(execFile)("powercfg", ["/requests"], {
-        windowsHide: true,
-      });
-      // « DISPLAY: », « SYSTEM: »… each followed by what holds it, or « None. ».
-      const sections = new Map<string, string>();
-      let current = "";
-      for (const line of stdout.split(/\r?\n/)) {
-        const head = /^([A-Z]+):\s*$/.exec(line);
-        if (head?.[1]) current = head[1];
-        else if (current) sections.set(current, `${sections.get(current) ?? ""}${line}\n`);
-      }
-      const section = (name: string) => (sections.get(name) ?? "").toLowerCase();
-      expect(section("DISPLAY")).toContain("powershell.exe");
-      expect(section("SYSTEM")).toContain("powershell.exe");
+      /** What holds each of Windows's requests now: « DISPLAY: », « SYSTEM: »… then who, or « None. ». */
+      const held = async () => {
+        const { stdout } = await promisify(execFile)("powercfg", ["/requests"], {
+          windowsHide: true,
+        });
+        const sections = new Map<string, string>();
+        let current = "";
+        for (const line of stdout.split(/\r?\n/)) {
+          const head = /^([A-Z]+):\s*$/.exec(line);
+          if (head?.[1]) current = head[1];
+          else if (current) sections.set(current, `${sections.get(current) ?? ""}${line}\n`);
+        }
+        return (name: string) => (sections.get(name) ?? "").toLowerCase();
+      };
+      // PowerShell has to start and compile its call first: a few seconds on a free computer,
+      // and it seems more than the eight once waited here on a runner busy with another test
+      // file (CI, 2026-11-28: « None. » after 8 s). Asked again until it holds, not once.
+      await expect
+        .poll(async () => (await held())("DISPLAY"), { timeout: 45_000, interval: 1_000 })
+        .toContain("powershell.exe");
+      expect((await held())("SYSTEM")).toContain("powershell.exe");
     } finally {
       child.kill();
     }

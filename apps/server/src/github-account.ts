@@ -68,6 +68,9 @@ export class GithubAccount {
   private token: string | null | undefined;
   private loading: Promise<string | null> | undefined;
   private login: string | undefined;
+  /** The account's number and the name on its profile, as GitHub gave them with its login. */
+  private userId: number | undefined;
+  private profileName: string | undefined;
   /** When GitHub last confirmed the account, so a token revoked there is noticed. */
   private checkedAt = 0;
   /** Bumped by each sign-in and sign-out, so a slow vault read never undoes one. */
@@ -232,12 +235,30 @@ export class GithubAccount {
       const body = await asJson(await this.api("/user", token));
       if (typeof body.login !== "string") throw new Error("GitHub n'a pas donné le compte.");
       this.login = body.login;
+      this.userId = typeof body.id === "number" ? body.id : undefined;
+      this.profileName =
+        typeof body.name === "string" && body.name.trim() ? body.name.trim() : undefined;
       this.checkedAt = Date.now();
       return { login: body.login };
     } catch (error) {
       if (!(error instanceof Unauthorized) && this.login) return { login: this.login };
       return this.forgetIfRevoked(error);
     }
+  }
+
+  /**
+   * Who signs a commit made with this account, for a computer where git was never told: the
+   * name on its GitHub profile, else its login, and the address GitHub keeps for it, which
+   * shows none of the user's own and ties the commit to the account. Undefined when
+   * MoonAgentic is not signed in, or GitHub has not said who the account is yet.
+   */
+  async identity(): Promise<{ name: string; email: string } | undefined> {
+    const account = await this.account();
+    if (!account || this.userId === undefined) return undefined;
+    return {
+      name: this.profileName ?? account.login,
+      email: `${this.userId}+${account.login}@users.noreply.github.com`,
+    };
   }
 
   /** The repositories the account can reach, last pushed first. */

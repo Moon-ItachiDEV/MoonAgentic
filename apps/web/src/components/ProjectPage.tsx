@@ -150,7 +150,11 @@ function Context(props: {
           <div className="it ro">
             <span className="tx">Accès des fils</span>
             <span className="rt">
-              {props.coordinator.permissionMode === "full" ? "Complet" : "Supervisé"}
+              {props.coordinator.permissionMode === "full"
+                ? "Complet"
+                : props.coordinator.permissionMode === "edits"
+                  ? "Éditions"
+                  : "Supervisé"}
             </span>
           </div>
           <div className="it ro">

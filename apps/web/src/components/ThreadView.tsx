@@ -775,15 +775,21 @@ const FeedItem = memo(function FeedItem({
       const group = threadGroup(opened, members);
       // What it waits for, in its own words: a state alone would not say what to do.
       const why = group === "waiting" ? threadLine(opened, members) : "";
+      // Who the work went to, as its answers are signed, even after a handoff.
+      const to = speakerName(
+        agents.find((a) => a.id === opened.agentId),
+        opened,
+      );
       return (
         <button
           className="hook"
           data-group={group}
-          aria-label={`Ouvrir le fil ${opened.title}`}
+          aria-label={`Ouvrir le fil ${opened.title}, confié à ${to}`}
           onClick={() => onOpenThread(opened.id)}
         >
           <I n="hook" s={18} className="hk" />
           <span className="t">{opened.title}</span>
+          <span className="to">{to}</span>
           <span
             className={`st${opened.status === "error" ? " er" : group === "waiting" ? " w" : group === "running" ? " ac" : ""}`}
           >

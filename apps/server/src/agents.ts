@@ -175,7 +175,13 @@ const definitions: AgentDefinition[] = [
     }),
   },
   nativeAcp(
-    { id: "antigravity", name: "Antigravity", short: "Ag", preferredModel: /neon/i },
+    {
+      id: "antigravity",
+      name: "Antigravity",
+      short: "Ag",
+      // Gemini 4 Neon, not the orchestrator named after it.
+      preferredModel: /^(?!.*orchestrat).*neon/i,
+    },
     ["agy"],
     {
       hint: "Installe Antigravity CLI (commande agy), puis lance « agy » une fois pour te connecter.",

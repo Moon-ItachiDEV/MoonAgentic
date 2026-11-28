@@ -528,6 +528,8 @@ describe("a project's coordinator", () => {
       };
     const bug = await call("open_thread", { task_key: "b", title: "Bug", brief: "B", kind: "bug" });
     expect(store.getThread(bug.result!.opened.id)).toMatchObject({ model: "precis" });
+    // The coordinator is told who got the work, by the name its answers are signed with.
+    expect(bug.result!.opened).toMatchObject({ agent_name: "Démo précis" });
     // A kind with no route keeps the coordinator's own agent.
     const other = await call("open_thread", {
       task_key: "t",

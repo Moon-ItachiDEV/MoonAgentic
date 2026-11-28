@@ -63,5 +63,14 @@ export interface AppInfo {
 
 /** At most this many notes are kept for a version. */
 export const MAX_UPDATE_NOTES = 20;
-/** How often to look for a newer version. */
-export const UPDATE_EVERY_MS = 6 * 60 * 60_000;
+/**
+ * How often to look for a newer version. Releases come several times a day: every 6 h, one
+ * published just after a look waited hours unseen. GitHub lets an address ask 60 times an
+ * hour without signing in; this is 2, plus the looks of `UPDATE_QUICK_MS`.
+ */
+export const UPDATE_EVERY_MS = 30 * 60_000;
+/**
+ * A device that opens the app finds a look older than this done again, and a look that
+ * failed (GitHub not reached, often right after the computer starts) is tried again after it.
+ */
+export const UPDATE_QUICK_MS = 10 * 60_000;
