@@ -568,6 +568,8 @@ export class Hub {
       resolve: (r: acp.RequestPermissionResponse) => void;
       /** « Autoriser pour ce fil »: what it remembers, and the agent's own option it answers. */
       grant?: { key: string; optionId: string };
+      /** The agent's own request, weighed again when the thread's access changes. */
+      asked?: { request: acp.RequestPermissionRequest; folder?: string };
     }
   >();
   /**
@@ -5141,12 +5143,31 @@ export class Hub {
   setPermissionMode(threadId: string, permissionMode: PermissionMode): void {
     const thread = this.requireThread(threadId);
     this.updateThread(threadId, { permissionMode });
+    const changed = [threadId];
     // A team's lead speaks for its team: its agents, and those it starts later, follow.
-    if (thread.role !== "lead" || !thread.team) return;
-    this.teams.setPermissionMode(threadId, permissionMode);
-    for (const member of this.store.listThreads()) {
-      if (member.parentId === threadId && member.permissionMode !== permissionMode)
-        this.updateThread(member.id, { permissionMode });
+    if (thread.role === "lead" && thread.team) {
+      this.teams.setPermissionMode(threadId, permissionMode);
+      for (const member of this.store.listThreads()) {
+        if (member.parentId === threadId && member.permissionMode !== permissionMode) {
+          this.updateThread(member.id, { permissionMode });
+          changed.push(member.id);
+        }
+      }
+    }
+    // What already waits is weighed again: a request the new access lets through is answered
+    // now, as it would have been had it been asked after the change, instead of being shown
+    // to the user again.
+    this.answerWhatNowPasses(changed);
+  }
+
+  /** Answers the open requests of these threads that their access now lets through. */
+  private answerWhatNowPasses(threadIds: string[]): void {
+    for (const [itemId, pending] of this.pendingPermissions) {
+      if (!pending.asked || !threadIds.includes(pending.threadId)) continue;
+      const thread = this.store.getThread(pending.threadId);
+      if (!thread) continue;
+      const optionId = this.passesOnItsOwn(thread, pending.asked.request, pending.asked.folder);
+      if (optionId) this.respondToPermission(pending.threadId, itemId, optionId);
     }
   }
 
@@ -6323,60 +6344,17 @@ export class Hub {
     // got, as ACP asks, instead of waiting for the user until the agent is killed.
     if (this.cancelled.has(threadId)) return Promise.resolve({ outcome: { outcome: "cancelled" } });
     if (request.toolCall.title) this.upsertTool(threadId, request.toolCall);
-    // A coordinator only reads and routes; a team reviewer may also run read-only shell checks
-    // (Codex reads files via execute), while file edits, fetches and unknown tools wait on the user.
-    const allowed =
-      thread.kind === "coordinator"
-        ? COORDINATOR_ALLOWED
-        : thread.role === "reviewer" || thread.role === "reviewer2" || thread.role === "judge"
-          ? REVIEWER_ALLOWED
-          : undefined;
-    const readOnlyDenied = !!allowed && !allowed.has(request.toolCall.kind ?? "");
-    // MoonAgentic's own tools are already limited by the server: asking the user before each
-    // one would make them useless. The server itself asks before a thread outside full access
-    // writes the shared memory (`confirmMemoryWrite`) or sends its branch to GitHub
-    // (`openPullRequestForAgent`), whether its agent asked first or not: the agent's own
-    // request for it is let through here, so the user is asked once.
     this.noteToolName(threadId, request.toolCall);
-    // An agent that does not name the tool is taken at its title, for a call of no known kind:
-    // never a change of files nor a command.
-    const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
-    const ownPattern = thread.kind === "coordinator" ? OWN_TOOL : OWN_THREAD_TOOL;
-    const own =
-      !!this.coordinatorUrl &&
-      (named !== undefined
-        ? ownPattern.test(named)
-        : ownPattern.test(request.toolCall.title ?? "") &&
-          (!request.toolCall.kind || request.toolCall.kind === "other"));
+    const passes = this.passesOnItsOwn(thread, request, folder);
+    if (passes) return Promise.resolve({ outcome: { outcome: "selected", optionId: passes } });
     const allow =
       request.options.find((o) => o.kind === "allow_once") ??
       request.options.find((o) => o.kind === "allow_always");
-    // In « Demande d'abord », a call that only reads passes (a review reads thirty files),
-    // and so does one like a call the user allowed « pour ce fil ». In « Éditions auto »,
-    // edits whose every target stays inside the thread's folder pass too (never commands,
-    // never `.git`, never outside a project). A coordinator runs no command, even one that reads.
-    const keys = grantKeys(request.toolCall, named);
-    const reads = readOnlyCall(request.toolCall) && !readOnlyDenied;
-    const grants = this.threadGrants.get(threadId);
-    const granted = !readOnlyDenied && !!keys?.length && keys.every((k) => grants?.has(k));
-    const autoEdit =
-      thread.permissionMode === "edits" &&
-      !readOnlyDenied &&
-      !this.isDiscussions(thread.projectId) &&
-      editInsideFolder(
-        request.toolCall,
-        folder ?? thread.workspace?.path ?? this.store.getProject(thread.projectId)?.path,
-      );
-    if (
-      (thread.permissionMode === "full" && !readOnlyDenied) ||
-      autoEdit ||
-      own ||
-      reads ||
-      granted
-    ) {
-      if (allow)
-        return Promise.resolve({ outcome: { outcome: "selected", optionId: allow.optionId } });
-    }
+    const readOnlyDenied = this.readOnlyDenied(thread, request);
+    const keys = grantKeys(
+      request.toolCall,
+      this.toolNames.get(threadId)?.get(request.toolCall.toolCallId),
+    );
     // Only offer « Autoriser pour ce fil » for a single non-read-only action so a chained
     // command (`npm test && rm -rf dist`) cannot silently grant multiple programs at once.
     const grant =
@@ -6422,10 +6400,79 @@ export class Hub {
         threadId,
         resolve,
         ...(grant ? { grant } : {}),
+        asked: { request, ...(folder !== undefined ? { folder } : {}) },
       });
       this.broadcastRequests();
       signal.addEventListener("abort", () => this.settlePermission(id), { once: true });
     });
+  }
+
+  /**
+   * A coordinator only reads and routes; a team reviewer may also run read-only shell checks
+   * (Codex reads files via execute). For them, what is not in their list waits on the user.
+   */
+  private readOnlyDenied(thread: Thread, request: acp.RequestPermissionRequest): boolean {
+    const allowed =
+      thread.kind === "coordinator"
+        ? COORDINATOR_ALLOWED
+        : thread.role === "reviewer" || thread.role === "reviewer2" || thread.role === "judge"
+          ? REVIEWER_ALLOWED
+          : undefined;
+    return !!allowed && !allowed.has(request.toolCall.kind ?? "");
+  }
+
+  /**
+   * The agent's own option that answers this request without asking the user, given the
+   * thread's access as it is now; `undefined` when the user decides.
+   */
+  private passesOnItsOwn(
+    thread: Thread,
+    request: acp.RequestPermissionRequest,
+    folder?: string,
+  ): string | undefined {
+    const threadId = thread.id;
+    const readOnlyDenied = this.readOnlyDenied(thread, request);
+    // MoonAgentic's own tools are already limited by the server: asking the user before each
+    // one would make them useless. The server itself asks before a thread outside full access
+    // writes the shared memory (`confirmMemoryWrite`) or sends its branch to GitHub
+    // (`openPullRequestForAgent`), whether its agent asked first or not: the agent's own
+    // request for it is let through here, so the user is asked once.
+    // An agent that does not name the tool is taken at its title, for a call of no known kind:
+    // never a change of files nor a command.
+    const named = this.toolNames.get(threadId)?.get(request.toolCall.toolCallId);
+    const ownPattern = thread.kind === "coordinator" ? OWN_TOOL : OWN_THREAD_TOOL;
+    const own =
+      !!this.coordinatorUrl &&
+      (named !== undefined
+        ? ownPattern.test(named)
+        : ownPattern.test(request.toolCall.title ?? "") &&
+          (!request.toolCall.kind || request.toolCall.kind === "other"));
+    const allow =
+      request.options.find((o) => o.kind === "allow_once") ??
+      request.options.find((o) => o.kind === "allow_always");
+    // In « Demande d'abord », a call that only reads passes (a review reads thirty files),
+    // and so does one like a call the user allowed « pour ce fil ». In « Éditions auto »,
+    // edits whose every target stays inside the thread's folder pass too (never commands,
+    // never `.git`, never outside a project). A coordinator runs no command, even one that
+    // reads, unless the user gave it « Accès complet »: then a command that only reads
+    // (`git grep`, `git log`) passes, and every other one still waits.
+    const keys = grantKeys(request.toolCall, named);
+    const reads =
+      readOnlyCall(request.toolCall) &&
+      (!readOnlyDenied || (thread.kind === "coordinator" && thread.permissionMode === "full"));
+    const grants = this.threadGrants.get(threadId);
+    const granted = !readOnlyDenied && !!keys?.length && keys.every((k) => grants?.has(k));
+    const autoEdit =
+      thread.permissionMode === "edits" &&
+      !readOnlyDenied &&
+      !this.isDiscussions(thread.projectId) &&
+      editInsideFolder(
+        request.toolCall,
+        folder ?? thread.workspace?.path ?? this.store.getProject(thread.projectId)?.path,
+      );
+    const passes =
+      (thread.permissionMode === "full" && !readOnlyDenied) || autoEdit || own || reads || granted;
+    return passes ? allow?.optionId : undefined;
   }
 
   /**

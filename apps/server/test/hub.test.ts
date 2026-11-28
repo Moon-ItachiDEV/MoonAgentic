@@ -292,6 +292,40 @@ describe("Hub with the demo agent", () => {
     expect(client.messages.some((m) => m.type === "append")).toBe(true);
   });
 
+  it("answers the request already waiting when the user switches to full access", async () => {
+    const { hub, store, client, projectId } = setup();
+    const asked = client.next(isPermissionRequest);
+    const threadId = hub.createThread({
+      projectId,
+      agentId: "demo",
+      permissionMode: "supervised",
+      text: "Corrige la réponse",
+    });
+    client.openThreadIds = new Set([threadId]);
+    const request = await asked;
+    if (request.type !== "item") throw new Error("unreachable");
+    expect(store.getThread(threadId)?.status).toBe("waiting");
+
+    // The user switches to « Accès complet » while the request is shown: it is answered as
+    // it would have been had it been asked after the change, not left for the user to tap.
+    await hub.handle(client, {
+      type: "thread.setPermissionMode",
+      threadId,
+      permissionMode: "full",
+    });
+    await expect
+      .poll(() => {
+        const item = store.listItems(threadId).find((i) => i.id === request.item.id);
+        return item?.kind === "permission" ? item.outcome : undefined;
+      })
+      .toBe("allow");
+    await hub.whenIdle(threadId);
+
+    expect(store.getThread(threadId)?.status).toBe("idle");
+    const last = client.messages.findLast((m) => m.type === "requests");
+    expect(last?.type === "requests" && last.requests).toEqual([]);
+  });
+
   it("sends what the user says with a refusal once the turn that asked is over", async () => {
     const { hub, store, client, projectId } = setup();
     const asked = client.next(isPermissionRequest);
@@ -2449,11 +2483,14 @@ describe("security boundaries", () => {
         } else if (method === "session/new") {
           send({ id, result: { sessionId: "s1" } });
         } else if (method === "session/prompt") {
-          const kind = (params.prompt.at(-1)?.text ?? "").trim();
+          // "execute git grep -n x": the kind, then the command it runs, if any.
+          const [kind, ...words] = (params.prompt.at(-1)?.text ?? "").trim().split(" ");
+          const command = words.join(" ");
           const toolCall = {
             toolCallId: "tc-" + kind,
             title: "Tool " + kind,
             ...(kind === "missing" ? {} : { kind }),
+            ...(command ? { rawInput: { command } } : {}),
             status: "pending",
           };
           pending = (result) => {
@@ -2522,13 +2559,26 @@ describe("security boundaries", () => {
       await check(reviewerId, blocked, false);
     }
 
-    // Coordinator switched to full permissionMode: execute/other/fetch/edits still wait on user.
+    // A coordinator asks before a command, even one that only reads; the user switches to
+    // « Accès complet » while it waits: the command that only reads is let through then.
     const coordinatorId = hub.openCoordinator(projectId, agentId);
+    hub.send(coordinatorId, 'execute git grep -n "thought_level\\|effort" apps/server/src/');
+    await expect
+      .poll(() => store.getThread(coordinatorId)!.status, { timeout: 10_000 })
+      .toBe("waiting");
     hub.setPermissionMode(coordinatorId, "full");
-    for (const allowed of ["read", "search", "think"]) {
+    await expect
+      .poll(() => store.getThread(coordinatorId)!.status, { timeout: 10_000 })
+      .toBe("idle");
+    const answered = store.listItems(coordinatorId).findLast((i) => i.kind === "agent");
+    expect(answered && "text" in answered ? answered.text : "").toBe("AUTO");
+
+    // Coordinator in full permissionMode: a command that only reads passes; other commands,
+    // a command it does not show, other/fetch/edits still wait on user.
+    for (const allowed of ["read", "search", "think", "execute git log --oneline -5"]) {
       await check(coordinatorId, allowed, true);
     }
-    for (const blocked of ["execute", "other", "fetch", "edit"]) {
+    for (const blocked of ["execute", "execute rm -rf dist", "other", "fetch", "edit"]) {
       await check(coordinatorId, blocked, false);
     }
   }, 60_000);
